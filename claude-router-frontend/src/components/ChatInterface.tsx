@@ -250,10 +250,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
         setMessages(prev => {
           const updated = [...prev];
-          updated[updated.length - 1] = {
-            ...updated[updated.length - 1],
-            content: assistantContent
-          };
+          const lastMessage = updated[updated.length - 1];
+          if (lastMessage) {
+            updated[updated.length - 1] = {
+              ...lastMessage,
+              content: assistantContent
+            };
+          }
           return updated;
         });
       }
@@ -433,7 +436,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             setMessages([]);
             resetConversation();
           }}
-          onDismiss={() => {}}
         />
       )}
 
