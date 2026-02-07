@@ -156,8 +156,8 @@ export async function askClaude(
       }));
       
       // Also send first image in legacy format for backwards compatibility
-      payload.imageData = imageAttachments[0].imageData;
-      payload.mediaType = imageAttachments[0].mediaType || 'image/png';
+      payload.imageData = imageAttachments[0]?.imageData;
+      payload.mediaType = imageAttachments[0]?.mediaType || 'image/png';
     }
 
     // Add manual model override if specified

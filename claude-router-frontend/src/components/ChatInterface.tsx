@@ -428,7 +428,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       {shouldShowWarning && contextStatus && (
         <ContextWarning
           contextStatus={contextStatus}
-          onCreateNewChat={() => {
+          onNewChat={() => {
             createNewChatWithContext();
             setMessages([]);
             resetConversation();
