@@ -2,12 +2,12 @@
 
 export const CONFIG = {
   // Supabase Configuration
-  SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL || 'https://sqjfbqjogylkfwzsyprd.supabase.co',
+  SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL || 'https://sqjfbqjogy1kfwzsyprd.supabase.co',
   SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
   
-  // Router Endpoint
-  ROUTER_ENDPOINT: import.meta.env.VITE_ROUTER_ENDPOINT || 
-    'https://sqjfbqjogylkfwzsyprd.functions.supabase.co/router',
+  // Router Endpoint (modern format: https://[PROJECT_ID].supabase.co/functions/v1/[function-name])
+  ROUTER_ENDPOINT: import.meta.env.VITE_ROUTER_ENDPOINT ||
+    'https://sqjfbqjogylkfwzsyprd.supabase.co/functions/v1/router',
   
   // Platform Detection
   PLATFORM: (() => {
