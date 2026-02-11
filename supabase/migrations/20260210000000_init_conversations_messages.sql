@@ -9,6 +9,9 @@ create table if not exists public.conversations (
   created_at timestamptz not null default now()
 );
 
+alter table public.conversations
+  add column if not exists total_tokens bigint not null default 0;
+
 create table if not exists public.messages (
   id uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references public.conversations (id) on delete cascade,
@@ -19,6 +22,11 @@ create table if not exists public.messages (
   image_url text,
   created_at timestamptz not null default now()
 );
+
+alter table public.messages
+  add column if not exists token_count integer not null default 0,
+  add column if not exists model_used text,
+  add column if not exists image_url text;
 
 create index if not exists messages_conversation_id_created_at_idx
   on public.messages (conversation_id, created_at desc);
@@ -82,4 +90,3 @@ $$;
 
 revoke all on function public.increment_token_count(uuid, integer) from public;
 grant execute on function public.increment_token_count(uuid, integer) to authenticated;
-
