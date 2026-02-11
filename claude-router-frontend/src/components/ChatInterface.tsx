@@ -1,19 +1,14 @@
 // src/components/ChatInterface.tsx
 // Main chat interface with multi-file upload support and model selector
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useContextManager } from '../hooks/useContextManager';
 import { ContextWarning } from './ContextWarning';
 import { ContextStatus } from './ContextStatus';
 import { FileUpload } from './FileUpload';
 import { askClaude, resetConversation } from '../smartFetch';
 import { uploadAttachment } from '../services/storageService';
-import type {
-  FileUploadPayload,
-  GeminiFlashThinkingLevel,
-  Message,
-  RouterModel,
-} from '../types';
+import type { FileUploadPayload, GeminiFlashThinkingLevel, Message, RouterModel } from '../types';
 import { MODEL_CATALOG, MODEL_ORDER } from '../modelCatalog';
 import type { User } from '@supabase/supabase-js';
 
@@ -28,13 +23,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isWaitingFirstToken, setIsWaitingFirstToken] = useState(false);
   const [currentModel, setCurrentModel] = useState<RouterModel>('gemini-3-flash');
   const [currentComplexity, setCurrentComplexity] = useState<number>(50);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [manualModelOverride, setManualModelOverride] = useState<RouterModel | null>(null);
-  const [geminiFlashThinkingLevel, setGeminiFlashThinkingLevel] = useState<GeminiFlashThinkingLevel>('high');
-  
+  const [geminiFlashThinkingLevel, setGeminiFlashThinkingLevel] = useState<
+    GeminiFlashThinkingLevel
+  >('high');
+
   // ✅ FIX: Changed from single attachment to ARRAY of attachments
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
 
@@ -42,18 +40,43 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const {
     contextStatus,
     shouldShowWarning,
-    createNewChatWithContext
+    createNewChatWithContext,
   } = useContextManager(messages, true);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const chatMessagesRef = useRef<HTMLElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const waitingFirstTokenRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const modelSelectorRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll
+  const updateStickyScrollState = () => {
+    const container = chatMessagesRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop -
+      container.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom <= 32;
+  };
+
+  // Scroll only when a new message bubble is created, and only if user is near bottom.
   useEffect(() => {
+    if (messages.length === 0) return;
+    if (!shouldStickToBottomRef.current) return;
+    const lastMessage = messageRefs.current[messages.length - 1];
+    if (lastMessage) {
+      lastMessage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, draftAttachments]);
+  }, [messages.length]);
+
+  // Keep attachment preview visible when user is already at bottom.
+  useEffect(() => {
+    if (!shouldStickToBottomRef.current) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [draftAttachments.length]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -79,20 +102,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // ✅ FIX: Handle single file - ADD to array instead of replace
   const handleFileSelect = (file: FileUploadPayload) => {
     console.log('[ChatInterface] File added:', file.name, file.isImage ? 'image' : 'text');
-    setDraftAttachments(prev => [...prev, file]);
+    setDraftAttachments((prev) => [...prev, file]);
     inputRef.current?.focus();
   };
 
   // ✅ FIX: Handle multiple files at once - ADD all to array
   const handleMultipleFiles = (files: FileUploadPayload[]) => {
     console.log('[ChatInterface] Multiple files added:', files.length);
-    setDraftAttachments(prev => [...prev, ...files]);
+    setDraftAttachments((prev) => [...prev, ...files]);
     inputRef.current?.focus();
   };
 
   // ✅ FIX: Remove specific attachment by index
   const removeAttachment = (index: number) => {
-    setDraftAttachments(prev => prev.filter((_, i) => i !== index));
+    setDraftAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
   // Clear all attachments
@@ -119,11 +142,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (!hasContent || isStreaming) return;
 
     // Build query text
-    const hasImages = draftAttachments.some(f => f.isImage);
-    const hasTextFiles = draftAttachments.some(f => !f.isImage);
-    
+    const hasImages = draftAttachments.some((f) => f.isImage);
+    const hasTextFiles = draftAttachments.some((f) => !f.isImage);
+
     let queryText = input.trim();
-    
+
     // If no text but has attachments, use default prompts
     if (!queryText) {
       if (hasImages && hasTextFiles) {
@@ -146,15 +169,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       content: input.trim() || attachmentSummary,
       timestamp: Date.now(),
       // Store first image for display (UI limitation)
-      ...(draftAttachments.find(f => f.isImage)?.imageData && {
-        imageData: draftAttachments.find(f => f.isImage)?.imageData,
-        mediaType: draftAttachments.find(f => f.isImage)?.mediaType
+      ...(draftAttachments.find((f) => f.isImage)?.imageData && {
+        imageData: draftAttachments.find((f) => f.isImage)?.imageData,
+        mediaType: draftAttachments.find((f) => f.isImage)?.mediaType,
       }),
       // Store all attachments for reference
-      attachments: draftAttachments.length > 0 ? [...draftAttachments] : undefined
+      attachments: draftAttachments.length > 0 ? [...draftAttachments] : undefined,
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage]);
 
     // Clear inputs
     setInput('');
@@ -163,6 +186,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
     setIsStreaming(true);
+    setIsWaitingFirstToken(true);
+    waitingFirstTokenRef.current = true;
 
     try {
       // Upload image attachments (graceful failure)
@@ -212,7 +237,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       const decoder = new TextDecoder();
       let assistantContent = '';
 
-      setMessages(prev => [...prev, {
+      setMessages((prev) => [...prev, {
         role: 'assistant',
         content: '',
         model,
@@ -220,7 +245,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         modelId,
         modelOverride: appliedOverride,
         geminiFlashThinkingLevel: appliedGeminiThinkingLevel,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       }]);
 
       // Stream loop
@@ -237,10 +262,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               if (line.startsWith('data: ')) {
                 const json = JSON.parse(line.slice(6));
                 if (json.type === 'content_block_delta') {
-                  assistantContent += json.delta?.text || '';
+                  const deltaText = json.delta?.text || '';
+                  if (deltaText) {
+                    assistantContent += deltaText;
+                    if (waitingFirstTokenRef.current) {
+                      waitingFirstTokenRef.current = false;
+                      setIsWaitingFirstToken(false);
+                    }
+                  }
                 }
               } else if (!line.startsWith('event:')) {
-                assistantContent += line;
+                if (line) {
+                  assistantContent += line;
+                  if (waitingFirstTokenRef.current) {
+                    waitingFirstTokenRef.current = false;
+                    setIsWaitingFirstToken(false);
+                  }
+                }
               }
             } catch {
               // Ignore partial JSON
@@ -248,28 +286,33 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           }
         }
 
-        setMessages(prev => {
+        setMessages((prev) => {
           const updated = [...prev];
           const lastMessage = updated[updated.length - 1];
           if (lastMessage) {
             updated[updated.length - 1] = {
               ...lastMessage,
-              content: assistantContent
+              content: assistantContent,
             };
           }
           return updated;
         });
-      }
 
+        if (shouldStickToBottomRef.current) {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+        }
+      }
     } catch (error) {
       console.error('Stream error:', error);
-      setMessages(prev => [...prev, {
+      setMessages((prev) => [...prev, {
         role: 'assistant',
         content: `⚠️ Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       }]);
     } finally {
       setIsStreaming(false);
+      setIsWaitingFirstToken(false);
+      waitingFirstTokenRef.current = false;
     }
   };
 
@@ -289,6 +332,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       setDraftAttachments([]);
       setManualModelOverride(null);
       setGeminiFlashThinkingLevel('high');
+      setIsWaitingFirstToken(false);
+      waitingFirstTokenRef.current = false;
     }
   };
 
@@ -305,76 +350,80 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const modelConfig = MODEL_CONFIG[currentModel];
 
   return (
-    <div className="chat-container">
+    <div className='chat-container'>
       {/* Header */}
-      <header className="chat-header">
-        <div className="header-content">
-          <div className="header-title">
-            <h1>Claude Router</h1>
-            <span className="header-subtitle">Intelligent Model Selection</span>
+      <header className='chat-header'>
+        <div className='header-content'>
+          <div className='header-title'>
+            <h1>Prismatix</h1>
+            <span className='header-subtitle'>Adaptive Model Orchestration</span>
           </div>
-          <div className="header-actions">
+          <div className='header-actions'>
             {contextStatus && <ContextStatus contextStatus={contextStatus} />}
-            
+
             {/* Model Selector - CLICKABLE */}
-            <div className="model-selector-container" ref={modelSelectorRef}>
+            <div className='model-selector-container' ref={modelSelectorRef}>
               <button
-                type="button"
-                className="model-indicator-button"
+                type='button'
+                className='model-indicator-button'
                 onClick={() => setShowModelSelector(!showModelSelector)}
                 style={{ '--model-color': modelConfig.color } as React.CSSProperties}
-                title={manualModelOverride ? `Manual: ${modelConfig.name}` : `Auto: ${modelConfig.name}`}
+                title={manualModelOverride
+                  ? `Manual: ${modelConfig.name}`
+                  : `Auto: ${modelConfig.name}`}
               >
-                <span className="model-icon">{modelConfig.icon}</span>
-                <div className="model-info">
-                  <span className="model-name">{modelConfig.name}</span>
-                  <span className="model-description">{modelConfig.description}</span>
+                <span className='model-icon'>{modelConfig.icon}</span>
+                <div className='model-info'>
+                  <span className='model-name'>{modelConfig.name}</span>
+                  <span className='model-description'>{modelConfig.description}</span>
                 </div>
-                <div className="complexity-score">
-                  <div className="complexity-bar">
-                    <div 
-                      className="complexity-fill"
+                <div className='complexity-score'>
+                  <div className='complexity-bar'>
+                    <div
+                      className='complexity-fill'
                       style={{ width: `${currentComplexity}%` }}
                     />
                   </div>
-                  <span className="complexity-label">{currentComplexity}</span>
+                  <span className='complexity-label'>{currentComplexity}</span>
                 </div>
-                {manualModelOverride && <span className="manual-badge">Manual</span>}
-                {isStreaming && <div className="model-pulse" />}
+                {manualModelOverride && <span className='manual-badge'>Manual</span>}
+                {isWaitingFirstToken && <div className='model-pulse' />}
               </button>
 
               {/* Model Dropdown */}
               {showModelSelector && (
-                <div className="model-dropdown">
-                  <div className="dropdown-header">
+                <div className='model-dropdown'>
+                  <div className='dropdown-header'>
                     <span>Select Model</span>
                     {manualModelOverride && (
-                      <button 
-                        type="button" 
-                        className="auto-mode-btn"
+                      <button
+                        type='button'
+                        className='auto-mode-btn'
                         onClick={clearModelOverride}
                       >
                         Use Auto
                       </button>
                     )}
                   </div>
-                  <div className="model-options">
+                  <div className='model-options'>
                     {MODEL_ORDER.map((key) => {
                       const config = MODEL_CONFIG[key];
                       return (
-                      <button
-                        key={key}
-                        type="button"
-                        className={`model-option ${currentModel === key ? 'active' : ''} ${manualModelOverride === key ? 'manual' : ''}`}
-                        onClick={() => handleModelSelect(key)}
-                        style={{ '--option-color': config.color } as React.CSSProperties}
-                      >
-                        <span className="option-icon">{config.icon}</span>
-                        <div className="option-info">
-                          <span className="option-name">{config.shortName}</span>
-                          <span className="option-desc">{config.description}</span>
-                        </div>
-                      </button>
+                        <button
+                          key={key}
+                          type='button'
+                          className={`model-option ${currentModel === key ? 'active' : ''} ${
+                            manualModelOverride === key ? 'manual' : ''
+                          }`}
+                          onClick={() => handleModelSelect(key)}
+                          style={{ '--option-color': config.color } as React.CSSProperties}
+                        >
+                          <span className='option-icon'>{config.icon}</span>
+                          <div className='option-info'>
+                            <span className='option-name'>{config.shortName}</span>
+                            <span className='option-desc'>{config.description}</span>
+                          </div>
+                        </button>
                       );
                     })}
                   </div>
@@ -382,19 +431,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               )}
             </div>
 
-            <div className="thinking-toggle-container" title="Applies when Gemini Flash is selected">
-              <span className="thinking-toggle-label">Flash Thinking</span>
-              <div className="thinking-toggle-buttons">
+            <div
+              className='thinking-toggle-container'
+              title='Applies when Gemini Flash is selected'
+            >
+              <span className='thinking-toggle-label'>Flash Thinking</span>
+              <div className='thinking-toggle-buttons'>
                 <button
-                  type="button"
-                  className={`thinking-toggle-button ${geminiFlashThinkingLevel === 'low' ? 'active' : ''}`}
+                  type='button'
+                  className={`thinking-toggle-button ${
+                    geminiFlashThinkingLevel === 'low' ? 'active' : ''
+                  }`}
                   onClick={() => setGeminiFlashThinkingLevel('low')}
                 >
                   Low
                 </button>
                 <button
-                  type="button"
-                  className={`thinking-toggle-button ${geminiFlashThinkingLevel === 'high' ? 'active' : ''}`}
+                  type='button'
+                  className={`thinking-toggle-button ${
+                    geminiFlashThinkingLevel === 'high' ? 'active' : ''
+                  }`}
                   onClick={() => setGeminiFlashThinkingLevel('high')}
                 >
                   High
@@ -403,44 +459,58 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             </div>
 
             <button
-              type="button"
+              type='button'
               onClick={handleReset}
-              className="header-button"
-              title="Reset conversation"
+              className='header-button'
+              title='Reset conversation'
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                <path d="M21 3v5h-5" />
-                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                <path d="M3 21v-5h5" />
+              <svg
+                width='18'
+                height='18'
+                viewBox='0 0 24 24'
+                fill='none'
+                stroke='currentColor'
+                strokeWidth='2'
+              >
+                <path d='M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8' />
+                <path d='M21 3v5h-5' />
+                <path d='M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16' />
+                <path d='M3 21v-5h5' />
               </svg>
             </button>
-            
+
             {/* User Menu */}
-            <div className="user-menu-container" ref={userMenuRef}>
+            <div className='user-menu-container' ref={userMenuRef}>
               <button
-                type="button"
+                type='button'
                 onClick={() => setShowUserMenu(!showUserMenu)}
-                className="user-button"
+                className='user-button'
                 title={user?.email || 'User menu'}
               >
-                <span className="user-avatar">
+                <span className='user-avatar'>
                   {getUserDisplay().charAt(0).toUpperCase()}
                 </span>
               </button>
-              
+
               {showUserMenu && (
-                <div className="user-dropdown">
-                  <div className="user-info">
-                    <span className="user-name">{getUserDisplay()}</span>
-                    <span className="user-email">{user?.email}</span>
+                <div className='user-dropdown'>
+                  <div className='user-info'>
+                    <span className='user-name'>{getUserDisplay()}</span>
+                    <span className='user-email'>{user?.email}</span>
                   </div>
-                  <div className="dropdown-divider" />
-                  <button type="button" onClick={handleSignOut} className="dropdown-item">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                      <polyline points="16 17 21 12 16 7" />
-                      <line x1="21" y1="12" x2="9" y2="12" />
+                  <div className='dropdown-divider' />
+                  <button type='button' onClick={handleSignOut} className='dropdown-item'>
+                    <svg
+                      width='16'
+                      height='16'
+                      viewBox='0 0 24 24'
+                      fill='none'
+                      stroke='currentColor'
+                      strokeWidth='2'
+                    >
+                      <path d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4' />
+                      <polyline points='16 17 21 12 16 7' />
+                      <line x1='21' y1='12' x2='9' y2='12' />
                     </svg>
                     Sign Out
                   </button>
@@ -464,130 +534,157 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       )}
 
       {/* Messages Area */}
-      <main className="chat-messages">
-        {messages.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon">🤖</div>
-            <h2>Welcome, {getUserDisplay()}!</h2>
-            <p>The router will automatically select the best model based on your query complexity</p>
-            <div className="model-grid">
-              {MODEL_ORDER.map((key) => {
-                const config = MODEL_CONFIG[key];
-                return (
-                <div 
-                  key={key} 
-                  className="model-card"
-                  style={{ '--card-color': config.color } as React.CSSProperties}
-                >
-                  <span className="card-icon">{config.icon}</span>
-                  <span className="card-name">{config.shortName}</span>
-                  <span className="card-desc">{config.description}</span>
-                </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
-          <div className="messages-list">
-            {messages.map((msg, idx) => (
-              <div key={idx} className={`message message-${msg.role}`}>
-                <div className="message-avatar">
-                  {msg.role === 'user' ? '👤' : '🤖'}
-                </div>
-                <div className="message-content">
-                  <div className="message-header">
-                    <span className="message-role">
-                      {msg.role === 'user' ? 'You' : 'Assistant'}
-                    </span>
-                    {msg.model && (
-                      <span className="message-model" title={msg.modelId || msg.model}>
-                        {msg.modelId || msg.model}
-                      </span>
-                    )}
-                    {msg.provider && (
-                      <span className="message-model-override">{msg.provider}</span>
-                    )}
-                    {msg.modelOverride && msg.modelOverride !== 'auto' && (
-                      <span className="message-model-override">manual</span>
-                    )}
-                    {msg.geminiFlashThinkingLevel && (
-                      <span className="message-model-override">thinking:{msg.geminiFlashThinkingLevel}</span>
-                    )}
-                    <span className="message-time">
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  {/* Render images if present */}
-                  {msg.imageData && (
-                    <div className="message-image-container">
-                      <img 
-                        src={`data:${msg.mediaType || 'image/png'};base64,${msg.imageData}`}
-                        alt="Uploaded content"
-                        className="message-image"
-                      />
+      <main
+        className='chat-messages'
+        ref={(el) => {
+          chatMessagesRef.current = el;
+        }}
+        onScroll={updateStickyScrollState}
+      >
+        {messages.length === 0
+          ? (
+            <div className='empty-state'>
+              <div className='empty-icon'>🤖</div>
+              <h2>Welcome, {getUserDisplay()}!</h2>
+              <p>
+                Prismatix will automatically select the best model based on your query complexity
+              </p>
+              <div className='model-grid'>
+                {MODEL_ORDER.map((key) => {
+                  const config = MODEL_CONFIG[key];
+                  return (
+                    <div
+                      key={key}
+                      className='model-card'
+                      style={{ '--card-color': config.color } as React.CSSProperties}
+                    >
+                      <span className='card-icon'>{config.icon}</span>
+                      <span className='card-name'>{config.shortName}</span>
+                      <span className='card-desc'>{config.description}</span>
                     </div>
-                  )}
-                  {/* Show attachment count if multiple */}
-                  {(msg as any).attachments?.length > 1 && (
-                    <div className="message-attachments-badge">
-                      📎 {(msg as any).attachments.length} files attached
-                    </div>
-                  )}
-                  <div className="message-text">
-                    {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
-                    {isStreaming && idx === messages.length - 1 && msg.role === 'assistant' && (
-                      <span className="cursor-blink">▊</span>
-                    )}
-                  </div>
-                </div>
+                  );
+                })}
               </div>
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
+            </div>
+          )
+          : (
+            <div className='messages-list'>
+              {messages.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`message message-${msg.role}`}
+                  ref={(el) => {
+                    messageRefs.current[idx] = el;
+                  }}
+                >
+                  <div className='message-avatar'>
+                    {msg.role === 'user' ? '👤' : '🤖'}
+                  </div>
+                  <div className='message-content'>
+                    <div className='message-header'>
+                      <span className='message-role'>
+                        {msg.role === 'user' ? 'You' : 'Assistant'}
+                      </span>
+                      {msg.model && (
+                        <span className='message-model' title={msg.modelId || msg.model}>
+                          {msg.modelId || msg.model}
+                        </span>
+                      )}
+                      {msg.provider && (
+                        <span className='message-model-override'>{msg.provider}</span>
+                      )}
+                      {msg.modelOverride && msg.modelOverride !== 'auto' && (
+                        <span className='message-model-override'>manual</span>
+                      )}
+                      {msg.geminiFlashThinkingLevel && (
+                        <span className='message-model-override'>
+                          thinking:{msg.geminiFlashThinkingLevel}
+                        </span>
+                      )}
+                      <span className='message-time'>
+                        {new Date(msg.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
+                    {/* Render images if present */}
+                    {msg.imageData && (
+                      <div className='message-image-container'>
+                        <img
+                          src={`data:${msg.mediaType || 'image/png'};base64,${msg.imageData}`}
+                          alt='Uploaded content'
+                          className='message-image'
+                        />
+                      </div>
+                    )}
+                    {/* Show attachment count if multiple */}
+                    {(msg as any).attachments?.length > 1 && (
+                      <div className='message-attachments-badge'>
+                        📎 {(msg as any).attachments.length} files attached
+                      </div>
+                    )}
+                    <div className='message-text'>
+                      {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
+                      {isStreaming && idx === messages.length - 1 && msg.role === 'assistant' && (
+                        <span className='cursor-blink'>▊</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
       </main>
 
       {/* Input Area */}
-      <div className="chat-input-container">
-        <div className="input-wrapper">
+      <div className='chat-input-container'>
+        <div className='input-wrapper'>
           {/* ✅ FIX: Multi-file preview */}
           {draftAttachments.length > 0 && (
-            <div className="draft-preview-container">
-              <div className="draft-preview-header">
-                <span>{draftAttachments.length} file{draftAttachments.length > 1 ? 's' : ''} attached</span>
-                <button 
-                  type="button"
+            <div className='draft-preview-container'>
+              <div className='draft-preview-header'>
+                <span>
+                  {draftAttachments.length} file{draftAttachments.length > 1 ? 's' : ''} attached
+                </span>
+                <button
+                  type='button'
                   onClick={clearAllAttachments}
-                  className="clear-all-btn"
-                  title="Remove all attachments"
+                  className='clear-all-btn'
+                  title='Remove all attachments'
                 >
                   Clear all
                 </button>
               </div>
-              <div className="draft-files-list">
+              <div className='draft-files-list'>
                 {draftAttachments.map((file, index) => (
-                  <div key={index} className="draft-file-item">
-                    {file.isImage && file.imageData ? (
-                      <img 
-                        src={`data:${file.mediaType};base64,${file.imageData}`}
-                        alt={file.name}
-                        className="draft-thumbnail"
-                      />
-                    ) : (
-                      <div className="draft-file-icon">📄</div>
-                    )}
-                    <span className="draft-filename" title={file.name}>
+                  <div key={index} className='draft-file-item'>
+                    {file.isImage && file.imageData
+                      ? (
+                        <img
+                          src={`data:${file.mediaType};base64,${file.imageData}`}
+                          alt={file.name}
+                          className='draft-thumbnail'
+                        />
+                      )
+                      : <div className='draft-file-icon'>📄</div>}
+                    <span className='draft-filename' title={file.name}>
                       {file.name.length > 20 ? file.name.slice(0, 17) + '...' : file.name}
                     </span>
-                    <button 
-                      type="button"
+                    <button
+                      type='button'
                       onClick={() => removeAttachment(index)}
-                      className="draft-remove-btn"
-                      title="Remove this file"
+                      className='draft-remove-btn'
+                      title='Remove this file'
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
+                      <svg
+                        width='14'
+                        height='14'
+                        viewBox='0 0 24 24'
+                        fill='none'
+                        stroke='currentColor'
+                        strokeWidth='2'
+                      >
+                        <line x1='18' y1='6' x2='6' y2='18' />
+                        <line x1='6' y1='6' x2='18' y2='18' />
                       </svg>
                     </button>
                   </div>
@@ -597,9 +694,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           )}
 
           {/* Input Row */}
-          <div className="input-row">
+          <div className='input-row'>
             {/* ✅ FIX: Now passing BOTH handlers */}
-            <FileUpload 
+            <FileUpload
               onFileContent={handleFileSelect}
               onMultipleFiles={handleMultipleFiles}
               disabled={isStreaming}
@@ -610,24 +707,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder={draftAttachments.length > 0 ? "Add a message (optional)..." : "Ask anything... (Shift+Enter for new line)"}
-              className="chat-input"
+              placeholder={draftAttachments.length > 0
+                ? 'Add a message (optional)...'
+                : 'Ask anything... (Shift+Enter for new line)'}
+              className='chat-input'
               disabled={isStreaming}
               rows={1}
             />
             <button
-              type="button"
+              type='button'
               onClick={handleSend}
               disabled={(!input.trim() && draftAttachments.length === 0) || isStreaming}
-              className="send-button"
-              title="Send message"
+              className='send-button'
+              title='Send message'
             >
-              {isStreaming ? (
-                <div className="loading-spinner" />
-              ) : (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="22" y1="2" x2="11" y2="13" />
-                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              {isWaitingFirstToken ? <div className='loading-spinner' /> : (
+                <svg
+                  width='20'
+                  height='20'
+                  viewBox='0 0 24 24'
+                  fill='none'
+                  stroke='currentColor'
+                  strokeWidth='2'
+                >
+                  <line x1='22' y1='2' x2='11' y2='13' />
+                  <polygon points='22 2 15 22 11 13 2 9 22 2' />
                 </svg>
               )}
             </button>
@@ -635,7 +739,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         </div>
       </div>
 
-      <style>{`
+      <style>
+        {`
         .chat-container {
           display: flex;
           flex-direction: column;
@@ -1049,7 +1154,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           .model-grid { grid-template-columns: 1fr; max-width: 200px; }
           .model-info { display: none; }
         }
-      `}</style>
+      `}
+      </style>
     </div>
   );
 };

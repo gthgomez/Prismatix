@@ -1,4 +1,4 @@
-# Claude Router V2
+# Prismatix
 
 Intelligent multi-provider model router with streaming support and React frontend.
 

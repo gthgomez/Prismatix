@@ -102,8 +102,8 @@ export const Auth: React.FC<AuthProps> = ({
         {/* Header */}
         <div className="auth-header">
           <div className="auth-logo">🤖</div>
-          <h1>Claude Router</h1>
-          <p>Intelligent Model Selection</p>
+          <h1>Prismatix</h1>
+          <p>Adaptive Model Selection</p>
         </div>
 
         {/* Tab Switcher */}

@@ -1,6 +1,6 @@
-# Claude Router Frontend
+# Prismatix Frontend
 
-A production-ready React frontend for Claude Router V2 with intelligent multi-provider model selection, streaming responses, and a distinctive technical aesthetic.
+A production-ready React frontend for Prismatix with intelligent multi-provider model selection, streaming responses, and a distinctive technical aesthetic.
 
 ## Features
 

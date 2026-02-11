@@ -62,7 +62,7 @@ function App() {
         <div className="loading-content">
           <div className="loading-logo">🤖</div>
           <div className="loading-spinner-large" />
-          <p>Initializing Claude Router...</p>
+          <p>Initializing Prismatix...</p>
         </div>
 
         <style>{`
