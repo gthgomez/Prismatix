@@ -1,10 +1,10 @@
 # Claude Router Frontend
 
-A production-ready React frontend for the Claude Router V2 system with intelligent model selection, streaming responses, and a distinctive technical aesthetic.
+A production-ready React frontend for Claude Router V2 with intelligent multi-provider model selection, streaming responses, and a distinctive technical aesthetic.
 
 ## Features
 
-- **🧠 Intelligent Model Routing**: Automatically selects the optimal Claude model (Opus, Sonnet, or Haiku) based on query complexity
+- **🧠 Intelligent Model Routing**: Automatically selects the optimal provider/model (Claude, GPT, Gemini) based on query complexity
 - **⚡ Real-time Streaming**: Letter-by-letter response rendering using native ReadableStream
 - **🎨 Technical Aesthetic**: Dark-themed, monospace interface designed for developers
 - **🔒 Secure**: Built-in Supabase authentication with conversation ownership validation
@@ -55,24 +55,12 @@ pnpm dev
 
 ## Model Selection Logic
 
-The router automatically selects models based on:
+The router can choose across:
+- Claude tiers (`opus-4.5`, `sonnet-4.5`, `haiku-4.5`)
+- OpenAI (`gpt-5-mini`)
+- Google (`gemini-3-flash`, `gemini-3-pro`)
 
-### Opus 4.5 (🧠 Deep Research)
-- Complexity score > 70
-- Keywords: "deep research", "comprehensive analysis", "detailed report"
-- Context length > 150k tokens
-- **Use case**: Complex reasoning, research, in-depth analysis
-
-### Sonnet 4.5 (⚡ Balanced)
-- Default tier for most queries
-- Keywords: "code", "implement", "debug", "explain"
-- **Use case**: Coding, medium complexity tasks, balanced performance
-
-### Haiku 4.5 (🚀 Fast & Efficient)
-- Simple queries, greetings
-- Mobile platform optimization
-- Low complexity scores
-- **Use case**: Quick answers, simple tasks, cost optimization
+Manual override is supported per request via `modelOverride`.
 
 ## API Integration
 
@@ -93,13 +81,16 @@ interface RouterRequest {
 ### Response Headers
 
 ```
-X-Claude-Model: opus-4.5 | sonnet-4.5 | haiku-4.5
+X-Router-Model: model key selected by router
+X-Router-Model-Id: provider model identifier
+X-Provider: anthropic | openai | google
+X-Claude-Model: legacy compatibility alias
 X-Complexity-Score: 0-100
 ```
 
 ### Streaming Response
 
-The router returns a `ReadableStream` that streams the Claude response in real-time.
+The router returns a `ReadableStream` that streams normalized SSE chunks in real-time.
 
 ## Usage Examples
 
@@ -169,7 +160,7 @@ Visual indicator for active model.
 ```
 
 **Props:**
-- `model`: Current Claude model
+- `model`: Current router model key
 - `complexityScore?`: Query complexity (0-100)
 - `isLoading?`: Show pulsing animation
 
@@ -243,7 +234,7 @@ The router validates that the authenticated user owns the conversation ID via RL
 - Check for ad blockers interfering with streams
 
 ### No model indicator showing
-- Verify router returns `X-Claude-Model` header
+- Verify router returns `X-Router-Model` (or legacy `X-Claude-Model`) header
 - Check browser console for errors
 
 ## Performance

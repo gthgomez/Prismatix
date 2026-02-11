@@ -1,11 +1,11 @@
-// ModelIndicator.tsx - Visual indicator for active Claude model
+// ModelIndicator.tsx - Visual indicator for active router model
 
 import React from 'react';
-import { CONFIG } from './config';
-import type { ClaudeModel } from './types';
+import { MODEL_CATALOG } from './modelCatalog';
+import type { RouterModel } from './types';
 
 interface ModelIndicatorProps {
-  model: ClaudeModel;
+  model: RouterModel;
   complexityScore?: number;
   isLoading?: boolean;
 }
@@ -15,7 +15,7 @@ export const ModelIndicator: React.FC<ModelIndicatorProps> = ({
   complexityScore,
   isLoading = false 
 }) => {
-  const modelConfig = CONFIG.MODELS[model];
+  const modelConfig = MODEL_CATALOG[model];
 
   return (
     <div 

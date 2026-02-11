@@ -35,7 +35,13 @@ export const useAuth = (): UseAuthReturn => {
         const { data: { session }, error } = await supabase.auth.getSession();
         
         if (error) {
-          console.error('[useAuth] Session fetch error:', error);
+          const lowered = String(error.message || '').toLowerCase();
+          if (lowered.includes('invalid refresh token') || lowered.includes('refresh token not found')) {
+            console.warn('[useAuth] Clearing stale local auth session');
+            await supabase.auth.signOut({ scope: 'local' });
+          } else {
+            console.error('[useAuth] Session fetch error:', error);
+          }
           setAuthState({
             session: null,
             user: null,

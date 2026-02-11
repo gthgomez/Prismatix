@@ -56,13 +56,13 @@ export const MODEL_REGISTRY = {
   },
   'gemini-3-flash': {
     provider: 'google',
-    modelId: 'gemini-3.0-flash-preview-05-20',
+    modelId: 'gemini-3-flash',
     budgetCap: 8192,
     supportsImages: true,
   },
   'gemini-3-pro': {
     provider: 'google',
-    modelId: 'gemini-3.0-pro-preview-05-20',
+    modelId: 'gemini-3-pro',
     budgetCap: 16384,
     supportsImages: true,
   },

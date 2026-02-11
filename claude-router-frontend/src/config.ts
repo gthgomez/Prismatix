@@ -1,13 +1,38 @@
 // config.ts - Configuration and environment variables
+import { MODEL_CATALOG } from './modelCatalog';
+
+const ENV_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const ENV_ROUTER_ENDPOINT = import.meta.env.VITE_ROUTER_ENDPOINT || '';
+const DERIVED_SUPABASE_URL = ENV_ROUTER_ENDPOINT
+  ? String(ENV_ROUTER_ENDPOINT).replace(/\/functions\/v1\/router$/, '')
+  : '';
+
+function hostOf(value: string): string {
+  try {
+    return new URL(value).host;
+  } catch {
+    return '';
+  }
+}
+
+const SUPABASE_URL = ENV_SUPABASE_URL || DERIVED_SUPABASE_URL;
+const ROUTER_ENDPOINT = (() => {
+  if (ENV_ROUTER_ENDPOINT && hostOf(ENV_ROUTER_ENDPOINT) === hostOf(SUPABASE_URL)) {
+    return ENV_ROUTER_ENDPOINT;
+  }
+  if (SUPABASE_URL) {
+    return `${String(SUPABASE_URL).replace(/\/$/, '')}/functions/v1/router`;
+  }
+  return '';
+})();
 
 export const CONFIG = {
   // Supabase Configuration
-  SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL || 'https://sqjfbqjogy1kfwzsyprd.supabase.co',
+  SUPABASE_URL,
   SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
   
   // Router Endpoint (modern format: https://[PROJECT_ID].supabase.co/functions/v1/[function-name])
-  ROUTER_ENDPOINT: import.meta.env.VITE_ROUTER_ENDPOINT ||
-    'https://sqjfbqjogylkfwzsyprd.supabase.co/functions/v1/router',
+  ROUTER_ENDPOINT,
   
   // Platform Detection
   PLATFORM: (() => {
@@ -18,29 +43,19 @@ export const CONFIG = {
   })() as 'web' | 'mobile' | 'desktop',
   
   // Model Configuration
-  MODELS: {
-    'opus-4.5': {
-      name: 'Claude Opus 4.5',
-      color: '#FF6B6B',
-      description: 'Deep research & complex reasoning',
-      icon: '🧠'
-    },
-    'sonnet-4.5': {
-      name: 'Claude Sonnet 4.5',
-      color: '#4ECDC4',
-      description: 'Balanced performance & coding',
-      icon: '⚡'
-    },
-    'haiku-4.5': {
-      name: 'Claude Haiku 4.5',
-      color: '#95E1D3',
-      description: 'Fast & efficient responses',
-      icon: '🚀'
-    }
-  }
+  MODELS: MODEL_CATALOG
 } as const;
 
 // Validate required config
+if (!CONFIG.SUPABASE_URL) {
+  console.warn('⚠️ VITE_SUPABASE_URL not set. Supabase client initialization will fail.');
+}
 if (!CONFIG.SUPABASE_ANON_KEY) {
   console.warn('⚠️ VITE_SUPABASE_ANON_KEY not set. Router requests will fail.');
+}
+if (!CONFIG.ROUTER_ENDPOINT) {
+  console.warn('⚠️ VITE_ROUTER_ENDPOINT not set. Router requests will fail.');
+}
+if (ENV_ROUTER_ENDPOINT && hostOf(ENV_ROUTER_ENDPOINT) !== hostOf(CONFIG.SUPABASE_URL)) {
+  console.warn('⚠️ VITE_ROUTER_ENDPOINT host does not match VITE_SUPABASE_URL. Using SUPABASE_URL for router.');
 }

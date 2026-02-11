@@ -1,6 +1,6 @@
 # Claude Router V2
 
-Intelligent Claude model router with streaming support and React frontend.
+Intelligent multi-provider model router with streaming support and React frontend.
 
 ## Project Structure
 
@@ -47,7 +47,7 @@ supabase functions deploy
 
 ## Features
 
-- 🧠 Intelligent Model Routing (Opus, Sonnet, Haiku)
+- 🧠 Intelligent Model Routing (Claude, GPT, Gemini)
 - ⚡ Real-time Streaming Responses
 - 🎨 Technical Developer UI
 - 🔒 Supabase Authentication

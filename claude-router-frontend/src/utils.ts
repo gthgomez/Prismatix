@@ -1,6 +1,7 @@
 // utils.ts - Utility functions for Claude Router Frontend
 
-import type { Message, ClaudeModel } from './types';
+import type { Message, RouterModel } from './types';
+import { MODEL_CATALOG } from './modelCatalog';
 
 /**
  * Formats timestamp to readable time
@@ -92,7 +93,7 @@ export function downloadConversation(messages: Message[]): void {
   
   const a = document.createElement('a');
   a.href = url;
-  a.download = `claude-conversation-${Date.now()}.json`;
+  a.download = `router-conversation-${Date.now()}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -139,25 +140,15 @@ export function sanitizeHTML(html: string): string {
 /**
  * Gets model color for UI theming
  */
-export function getModelColor(model: ClaudeModel): string {
-  const colors = {
-    'opus-4.5': '#FF6B6B',
-    'sonnet-4.5': '#4ECDC4',
-    'haiku-4.5': '#95E1D3'
-  };
-  return colors[model] || '#4ECDC4';
+export function getModelColor(model: RouterModel): string {
+  return MODEL_CATALOG[model]?.color || '#4ECDC4';
 }
 
 /**
  * Gets model emoji icon
  */
-export function getModelIcon(model: ClaudeModel): string {
-  const icons = {
-    'opus-4.5': '🧠',
-    'sonnet-4.5': '⚡',
-    'haiku-4.5': '🚀'
-  };
-  return icons[model] || '⚡';
+export function getModelIcon(model: RouterModel): string {
+  return MODEL_CATALOG[model]?.icon || '⚡';
 }
 
 /**

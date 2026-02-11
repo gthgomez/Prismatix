@@ -9,6 +9,7 @@ import { FileUpload } from './FileUpload';
 import { askClaude, resetConversation } from '../smartFetch';
 import { uploadAttachment } from '../services/storageService';
 import type { Message, RouterModel, FileUploadPayload } from '../types';
+import { MODEL_CATALOG, MODEL_ORDER } from '../modelCatalog';
 import type { User } from '@supabase/supabase-js';
 
 interface ChatInterfaceProps {
@@ -16,45 +17,7 @@ interface ChatInterfaceProps {
   onSignOut: () => Promise<void>;
 }
 
-// Model configuration
-const MODEL_CONFIG: Record<RouterModel, { name: string; icon: string; description: string; color: string }> = {
-  'opus-4.5': {
-    name: 'Claude Opus 4.5',
-    icon: '🧠',
-    description: 'Deep research',
-    color: '#FF6B6B'
-  },
-  'sonnet-4.5': {
-    name: 'Claude Sonnet 4.5',
-    icon: '⚡',
-    description: 'Balanced performance & coding',
-    color: '#4ECDC4'
-  },
-  'haiku-4.5': {
-    name: 'Claude Haiku 4.5',
-    icon: '🚀',
-    description: 'Fast & efficient',
-    color: '#FFE66D'
-  },
-  'gpt-5-mini': {
-    name: 'GPT-5 mini',
-    icon: '🧩',
-    description: 'Low-latency general tasks',
-    color: '#F4A261'
-  },
-  'gemini-3-flash': {
-    name: 'Gemini 3 Flash',
-    icon: '✨',
-    description: 'Fast multimodal inference',
-    color: '#2A9D8F'
-  },
-  'gemini-3-pro': {
-    name: 'Gemini 3 Pro',
-    icon: '🔬',
-    description: 'Advanced multimodal reasoning',
-    color: '#1D3557'
-  }
-};
+const MODEL_CONFIG = MODEL_CATALOG;
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut }) => {
   const [input, setInput] = useState('');
@@ -379,7 +342,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     )}
                   </div>
                   <div className="model-options">
-                    {(Object.entries(MODEL_CONFIG) as [RouterModel, typeof MODEL_CONFIG['sonnet-4.5']][]).map(([key, config]) => (
+                    {MODEL_ORDER.map((key) => {
+                      const config = MODEL_CONFIG[key];
+                      return (
                       <button
                         key={key}
                         type="button"
@@ -389,11 +354,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                       >
                         <span className="option-icon">{config.icon}</span>
                         <div className="option-info">
-                          <span className="option-name">{config.name.replace('Claude ', '')}</span>
+                          <span className="option-name">{config.shortName}</span>
                           <span className="option-desc">{config.description}</span>
                         </div>
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -468,17 +434,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <h2>Welcome, {getUserDisplay()}!</h2>
             <p>The router will automatically select the best model based on your query complexity</p>
             <div className="model-grid">
-              {(Object.entries(MODEL_CONFIG) as [RouterModel, typeof MODEL_CONFIG['sonnet-4.5']][]).map(([key, config]) => (
+              {MODEL_ORDER.map((key) => {
+                const config = MODEL_CONFIG[key];
+                return (
                 <div 
                   key={key} 
                   className="model-card"
                   style={{ '--card-color': config.color } as React.CSSProperties}
                 >
                   <span className="card-icon">{config.icon}</span>
-                  <span className="card-name">{config.name.replace('Claude ', '')}</span>
+                  <span className="card-name">{config.shortName}</span>
                   <span className="card-desc">{config.description}</span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ) : (

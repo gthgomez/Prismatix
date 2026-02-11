@@ -43,6 +43,12 @@ interface MessageRecord {
 interface UpstreamCallResult {
   response: Response;
   extractDeltas: (payload: unknown) => string[];
+  effectiveModelId: string;
+}
+
+interface GoogleModelRecord {
+  name: string;
+  supportedGenerationMethods: string[];
 }
 
 // ============================================================================
@@ -81,6 +87,9 @@ function envFlag(name: string, defaultValue: boolean): boolean {
 const ENABLE_ANTHROPIC = envFlag('ENABLE_ANTHROPIC', true);
 const ENABLE_OPENAI = envFlag('ENABLE_OPENAI', true);
 const ENABLE_GOOGLE = envFlag('ENABLE_GOOGLE', true);
+
+const GOOGLE_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
+let googleModelsCache: { fetchedAt: number; models: GoogleModelRecord[] } | null = null;
 
 // ============================================================================
 // PROVIDER HELPERS
@@ -229,6 +238,105 @@ function extractGoogleDeltas(payload: unknown): string[] {
   return deltas;
 }
 
+function normalizeGoogleModelName(rawName: string): string {
+  return rawName.startsWith('models/') ? rawName.slice('models/'.length) : rawName;
+}
+
+function hasGenerateContentSupport(model: GoogleModelRecord): boolean {
+  return model.supportedGenerationMethods.includes('generateContent');
+}
+
+async function listGoogleModels(signal: AbortSignal): Promise<GoogleModelRecord[]> {
+  const now = Date.now();
+  if (googleModelsCache && now - googleModelsCache.fetchedAt < GOOGLE_MODELS_CACHE_TTL_MS) {
+    return googleModelsCache.models;
+  }
+
+  const endpoint =
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(GOOGLE_API_KEY)}`;
+  const response = await fetch(endpoint, { method: 'GET', signal });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Google ListModels failed (${response.status}): ${responseText}`);
+  }
+
+  let payload: { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }> } = {};
+  try {
+    payload = JSON.parse(responseText) as typeof payload;
+  } catch {
+    throw new Error('Google ListModels returned invalid JSON payload');
+  }
+
+  const models = (payload.models || [])
+    .filter((item): item is { name: string; supportedGenerationMethods?: string[] } =>
+      typeof item?.name === 'string' && item.name.length > 0
+    )
+    .map((item) => ({
+      name: normalizeGoogleModelName(item.name),
+      supportedGenerationMethods: Array.isArray(item.supportedGenerationMethods)
+        ? item.supportedGenerationMethods
+        : [],
+    }))
+    .filter(hasGenerateContentSupport);
+
+  googleModelsCache = { fetchedAt: now, models };
+  return models;
+}
+
+function googleAliasScore(alias: string, modelName: string): number {
+  const normalizedAlias = alias.toLowerCase();
+  const normalizedName = modelName.toLowerCase();
+
+  let score = 0;
+
+  if (normalizedAlias === normalizedName) score += 1000;
+  if (normalizedName.includes(normalizedAlias)) score += 500;
+
+  if (normalizedAlias === 'gemini-3-flash') {
+    if (normalizedName.includes('flash')) score += 300;
+    if (normalizedName.includes('gemini-3')) score += 200;
+    if (normalizedName.includes('gemini-2.5')) score += 100;
+    if (!normalizedName.includes('flash')) score -= 400;
+  }
+
+  if (normalizedAlias === 'gemini-3-pro') {
+    if (normalizedName.includes('pro')) score += 300;
+    if (normalizedName.includes('gemini-3')) score += 200;
+    if (normalizedName.includes('gemini-2.5')) score += 100;
+    if (!normalizedName.includes('pro')) score -= 400;
+  }
+
+  if (normalizedName.includes('preview')) score -= 10;
+  if (normalizedName.includes('exp')) score -= 15;
+
+  return score;
+}
+
+async function resolveGoogleModelAlias(alias: string, signal: AbortSignal): Promise<string> {
+  const models = await listGoogleModels(signal);
+  if (models.length === 0) {
+    throw new Error('Google ListModels returned no models with generateContent support');
+  }
+
+  const exact = models.find((m) => m.name.toLowerCase() === alias.toLowerCase());
+  if (exact) return exact.name;
+
+  const ranked = models
+    .map((model) => ({ model, score: googleAliasScore(alias, model.name) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (ranked.length > 0) {
+    return ranked[0]!.model.name;
+  }
+
+  throw new Error(
+    `No Google model available for alias '${alias}'. ` +
+      `Query ListModels and verify current Gemini model naming.`,
+  );
+}
+
 // ============================================================================
 // UPSTREAM CALLS
 // ============================================================================
@@ -258,6 +366,7 @@ async function callAnthropic(
   return {
     response: anthropicResponse,
     extractDeltas: extractAnthropicDeltas,
+    effectiveModelId: decision.model,
   };
 }
 
@@ -308,6 +417,7 @@ async function callOpenAI(
   return {
     response: openaiResponse,
     extractDeltas: extractOpenAIDeltas,
+    effectiveModelId: decision.model,
   };
 }
 
@@ -317,8 +427,10 @@ async function callGoogle(
   images: ImageAttachment[],
   signal: AbortSignal,
 ): Promise<UpstreamCallResult> {
+  const resolvedModel = await resolveGoogleModelAlias(decision.model, signal);
+
   const endpoint =
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(decision.model)}` +
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(resolvedModel)}` +
     `:streamGenerateContent?alt=sse&key=${encodeURIComponent(GOOGLE_API_KEY)}`;
 
   const googleResponse = await fetch(endpoint, {
@@ -338,6 +450,7 @@ async function callGoogle(
   return {
     response: googleResponse,
     extractDeltas: extractGoogleDeltas,
+    effectiveModelId: resolvedModel,
   };
 }
 
@@ -738,7 +851,23 @@ Deno.serve(async (req: Request) => {
 
     const allMessages = [...history, userMsg];
 
-    const upstream = await callProviderStream(decision, allMessages, imageAttachments, controller.signal);
+    let upstream: UpstreamCallResult;
+    try {
+      upstream = await callProviderStream(decision, allMessages, imageAttachments, controller.signal);
+    } catch (upstreamError) {
+      const message = upstreamError instanceof Error ? upstreamError.message : String(upstreamError);
+      return new Response(
+        JSON.stringify({
+          error: 'Upstream provider error',
+          provider: decision.provider,
+          details: message,
+        }),
+        {
+          status: 502,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
 
     if (!upstream.response.ok) {
       const errorBody = await upstream.response.text();
@@ -756,6 +885,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    const effectiveModelId = upstream.effectiveModelId || decision.model;
+
     const userTokenCount = countTokens(query) + countImageTokens(imageAttachments);
     persistMessageAsync(
       supabaseClient as unknown as ReturnType<typeof createClient>,
@@ -763,7 +894,7 @@ Deno.serve(async (req: Request) => {
       'user',
       query,
       userTokenCount,
-      `${decision.provider}:${decision.model}`,
+      `${decision.provider}:${effectiveModelId}`,
       imageStorageUrl,
     );
 
@@ -791,7 +922,7 @@ Deno.serve(async (req: Request) => {
             'assistant',
             assistantText,
             assistantTokenCount,
-            `${decision.provider}:${decision.model}`,
+            `${decision.provider}:${effectiveModelId}`,
           );
         }
       },
@@ -803,9 +934,9 @@ Deno.serve(async (req: Request) => {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'X-Claude-Model': decision.modelTier,
-        'X-Claude-Model-Id': decision.model,
+        'X-Claude-Model-Id': effectiveModelId,
         'X-Router-Model': decision.modelTier,
-        'X-Router-Model-Id': decision.model,
+        'X-Router-Model-Id': effectiveModelId,
         'X-Provider': decision.provider,
         'X-Model-Override': normalizedOverride || 'auto',
         'X-Router-Rationale': decision.rationaleTag,

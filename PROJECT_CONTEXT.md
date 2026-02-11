@@ -3,89 +3,83 @@
 Last updated: 2026-02-11
 Repository root: `C:\Users\icbag\Desktop\Project_SaaS\Claude_Router`
 
-## 1) Project Scope
-Claude Router is a full-stack chat app that currently routes requests across Claude 4.5 tiers (Haiku, Sonnet, Opus) based on query complexity, token context, and image usage.
+## 1) Scope
+Claude Router is a full-stack chat application that routes each request to an LLM across multiple providers (Anthropic, OpenAI, Google) based on query complexity, history size, and optional image input. It supports manual model override and server-side streaming.
 
 ## 2) Tech Stack
 - Frontend: React 18 + Vite + TypeScript (`claude-router-frontend`)
 - Backend: Supabase Edge Function on Deno (`supabase/functions/router`)
-- Database: Supabase Postgres (`conversations`, `messages`, `increment_token_count` RPC)
+- Data: Supabase Postgres (`conversations`, `messages`, `increment_token_count`)
 - Auth: Supabase Auth JWT
-- Storage: Supabase Storage bucket `chat-uploads` (optional/non-blocking)
-- Upstream LLM provider (current): Anthropic Messages API
+- Storage: Supabase Storage bucket `chat-uploads` for optional file/image upload paths
 
-## 3) Current Runtime Architecture
-- Client sends `query`, `history`, optional image attachments, and optional manual `modelOverride`.
-- Edge Function validates auth token, validates/creates conversation ownership, computes route decision, calls Anthropic stream API, proxies SSE back to client.
-- Request and response text are persisted to `messages`; tokens are rolled up to `conversations.total_tokens`.
+## 3) Current Model Catalog
+Router model keys:
+- Claude: `haiku-4.5`, `sonnet-4.5`, `opus-4.5`
+- OpenAI: `gpt-5-mini`
+- Google: `gemini-3-flash`, `gemini-3-pro`
 
-## 4) Key Directories
-- `claude-router-frontend/src/components/ChatInterface.tsx`: main chat UI, model selector, streaming rendering
-- `claude-router-frontend/src/smartFetch.ts`: auth-aware router calls, payload construction, response-header parsing
-- `claude-router-frontend/src/types.ts`: shared frontend model/types contract
-- `supabase/functions/router/router_logic.ts`: routing algorithm + model map + override normalization + multimodal transforms
-- `supabase/functions/router/index.ts`: edge function entrypoint, auth/DB checks, upstream call, SSE proxy
-- `supabase/migrations/20260210000000_init_conversations_messages.sql`: schema, RLS, token RPC
-- `Tests/Router_test_v2.ts`: routing logic tests
+Provider model IDs:
+- Claude IDs are pinned in `router_logic.ts`
+- OpenAI currently uses alias `gpt-5-mini`
+- Gemini aliases resolve dynamically at runtime via Google `GET /v1beta/models` filtered by `supportedGenerationMethods` including `generateContent`
 
-## 5) Current Model Routing (As Implemented)
-Model keys in router logic:
-- `haiku-4.5` -> `claude-haiku-4-5-20251001`
-- `sonnet-4.5` -> `claude-sonnet-4-5-20250929`
-- `opus-4.5` -> `claude-opus-4-5-20251101`
+## 4) Runtime Flow
+1. Frontend sends `query`, `history`, `conversationId`, optional `images`, optional `modelOverride`.
+2. Edge function validates JWT and conversation ownership.
+3. Router chooses model (or uses override), with provider availability fallback when needed.
+4. Provider adapter calls Anthropic/OpenAI/Google stream API.
+5. Stream is normalized into consistent SSE chunks for frontend.
+6. User/assistant messages and token counts are persisted.
 
-Behavior summary:
-- Manual override wins when valid.
-- Images bias toward Sonnet/Opus depending on complexity and token load.
-- High complexity or very high context routes to Opus.
-- Low complexity/short prompts can route to Haiku.
-- Default fallback is Sonnet.
+## 5) Response Contract
+Headers emitted by router:
+- `X-Router-Model`: router key selected
+- `X-Router-Model-Id`: effective provider model ID actually used
+- `X-Provider`: `anthropic | openai | google`
+- `X-Model-Override`: override used or `auto`
+- `X-Router-Rationale`: route rationale tag
+- `X-Complexity-Score`: numeric complexity
+- Legacy compatibility: `X-Claude-Model`, `X-Claude-Model-Id`
 
-## 6) Contracts to Preserve
-Backend response headers currently consumed by frontend:
-- `X-Claude-Model`
-- `X-Claude-Model-Id`
-- `X-Model-Override`
-- `X-Router-Rationale`
-- `X-Complexity-Score`
+## 6) Key Files
+- `supabase/functions/router/router_logic.ts`: route policy, model registry, override normalization, provider payload transforms
+- `supabase/functions/router/index.ts`: auth, ownership validation, provider calls, SSE normalization, persistence, headers
+- `claude-router-frontend/src/smartFetch.ts`: authenticated fetch, 401 retry policy, header parsing
+- `claude-router-frontend/src/hooks/useAuth.ts`: auth session state and stale refresh token handling
+- `claude-router-frontend/src/modelCatalog.ts`: shared frontend model metadata
+- `claude-router-frontend/src/components/ChatInterface.tsx`: chat UI + manual model selector
 
-Frontend type coupling:
-- `ClaudeModel` union in `src/types.ts`
-- `MODEL_CONFIG` map in `ChatInterface.tsx`
-- `askClaude()` return model typing in `smartFetch.ts`
+## 7) Recent Fixes (This Iteration)
+- Gemini robust alias resolution:
+  - Removed brittle dated Gemini IDs.
+  - Added dynamic model discovery with cache and alias-to-valid-model resolution.
+  - Added structured 502 upstream error details on provider failures.
+- Auth refresh/signout hardening:
+  - Removed aggressive manual refresh loop.
+  - Rely on SDK session handling.
+  - Retry router call once on 401; only then local sign-out.
+  - Clear stale local session on invalid refresh token errors.
+- Frontend cleanup:
+  - Unified model metadata in `src/modelCatalog.ts`.
+  - Updated UI/components/utilities to use router-generic model catalog.
+  - Updated docs to multi-provider naming and headers.
 
-## 7) Data + Security Constraints
-- Conversations/messages enforce RLS by `auth.uid()` ownership.
-- Edge function currently uses service role for DB operations and validates ownership in code.
-- Function rejects missing auth, missing conversation ID, invalid JSON, oversized query.
-- Image storage upload failure is non-blocking (chat still works via base64 payload).
+## 8) Root Causes for Reported Errors
+- `502` with Gemini overrides was caused by stale hardcoded model IDs no longer available in Google v1beta.
+- `Invalid Refresh Token: Refresh Token Not Found` sign-out churn was caused by stale local auth state plus aggressive refresh/signout handling.
 
-## 8) Known Gaps / Technical Debt
-- Provider naming is Claude-specific in both types and headers (`ClaudeModel`, `X-Claude-*`).
-- Router currently hardwired to Anthropic endpoint and message schema.
-- No provider abstraction layer (transform + stream parser + error mapping).
-- Test coverage is mostly routing logic; limited provider-integration coverage.
-- Existing root `CONTEXT_OPTIMIZED_PATCHED.json` contains stale/duplicated sections and should not be treated as canonical source without refresh.
+## 9) Deployment State (2026-02-11)
+- Supabase Edge Function `router` deployed to project `sqjfbqjogylkfwzsyprd`.
+- Frontend deployed on Vercel:
+  - Production alias: `https://claude-router-frontend.vercel.app`
 
-## 9) Planned Expansion Context (Next Milestone)
-Goal: add multi-provider routing with Gemini 3 family and latest GPT mini while keeping current Claude path stable.
+## 10) Validation Commands
+- Frontend build: `npm run build` (pass)
+- Router type check: `deno check supabase/functions/router/index.ts` (pass)
+- Router tests: `deno test Tests/Router_test_v2.ts` (pass)
 
-As of 2026-02-11, provider docs indicate:
-- Gemini 3 Pro / Gemini 3 Flash are available as preview models.
-- GPT-5 mini exists in OpenAI model docs with current snapshot notation.
-
-Action implication:
-- Keep Claude path as baseline.
-- Add provider registry + adapters.
-- Preserve existing frontend contract first, then introduce provider-generic naming.
-
-## 10) New Chat Onboarding Checklist
-If starting a fresh coding session, do this first:
-1. Read `supabase/functions/router/router_logic.ts` and `supabase/functions/router/index.ts`.
-2. Read `claude-router-frontend/src/types.ts`, `claude-router-frontend/src/smartFetch.ts`, and `claude-router-frontend/src/components/ChatInterface.tsx`.
-3. Confirm which contract changes are allowed (headers, model enum, override format).
-4. Run focused tests (`Tests/Router_test_v2.ts`) before and after routing changes.
-5. Keep backward compatibility for existing frontend parsing unless explicitly migrating to v2 contract.
-
-## 11) Suggested Prompt For A New Chat
-"Use `PROJECT_CONTEXT.md` as source-of-truth. Plan and implement multi-provider routing in Claude Router with backward-compatible response headers, adding Gemini 3 (preview family) and GPT-5 mini. Start with contract-safe backend adapter architecture, then update frontend model typing and selector. Include tests and migration notes."
+## 11) Open Items / Optional Cleanup
+- Add resolver-focused unit tests (mock `ListModels` ranking/selection paths).
+- Decide deprecation timeline for legacy `X-Claude-*` headers.
+- Optional: add ESLint config so `npm run lint` is actionable (currently no config file).

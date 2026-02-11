@@ -1,7 +1,7 @@
-# React Hook Context: useRouterStream for Claude AI Router
+# React Hook Context: useRouterStream for Multi-Provider Router
 
 ## Project Overview
-Custom React hook for a **Claude AI model routing system** built on Supabase Edge Functions. Routes user queries to appropriate Claude models (Haiku/Sonnet/Opus) based on complexity analysis.
+Custom React hook for a **multi-provider model routing system** built on Supabase Edge Functions. Routes user queries across Claude/GPT/Gemini models based on complexity analysis.
 
 ## Current Status
 ✅ Fixed TypeScript/Deno linting errors  
@@ -74,8 +74,8 @@ export function useRouterStream() {
       throw new Error(err.error || 'Router failed');
     }
 
-    const model = res.headers.get('X-Router-Model');
-    const rationale = res.headers.get('X-Rationale');
+    const model = res.headers.get('X-Router-Model') || res.headers.get('X-Claude-Model');
+    const rationale = res.headers.get('X-Router-Rationale');
     const score = Number(res.headers.get('X-Complexity-Score') || 0);
 
     setState((prev: StreamState) => ({ ...prev, modelUsed: model, rationale, complexityScore: score }));
@@ -154,8 +154,11 @@ Anthropic API Stream → Real-time UI Updates
 
 ### Router Edge Function Contract
 **Expected Headers Returned**:
-- `X-Router-Model`: Which Claude model was selected (haiku/sonnet/opus)
-- `X-Rationale`: Human-readable explanation for model choice
+- `X-Router-Model`: Router model key selected for the request
+- `X-Router-Model-Id`: Provider-native model identifier
+- `X-Provider`: `anthropic` | `openai` | `google`
+- `X-Claude-Model`: Legacy compatibility alias
+- `X-Router-Rationale`: Human-readable tag explaining model choice
 - `X-Complexity-Score`: Numeric score (0-100) from analysis
 
 **Request Body**:
@@ -206,5 +209,5 @@ Anthropic API Stream → Real-time UI Updates
 ---
 
 **Developer**: Jonathan (Chicago-based software engineer, SNHU student)  
-**Tech Stack**: Deno, TypeScript, React, Supabase, Anthropic Claude API  
-**Project**: Claude Router - Multi-model AI routing SaaS
+**Tech Stack**: Deno, TypeScript, React, Supabase, Anthropic/OpenAI/Google APIs  
+**Project**: Claude Router - Multi-provider AI routing SaaS

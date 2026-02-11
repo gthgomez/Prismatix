@@ -32,6 +32,15 @@ function hostOf(value: string): string {
   }
 }
 
+async function signOutLocal(context: string): Promise<void> {
+  try {
+    console.warn('[smartFetch] Local sign-out:', context);
+    await supabase.auth.signOut({ scope: 'local' });
+  } catch (err) {
+    console.warn('[smartFetch] Local sign-out failed:', err);
+  }
+}
+
 /**
  * Generates a valid UUID v4
  */
@@ -99,11 +108,16 @@ function getEnvVar(key: string): string {
  * Gets the current user's access token from Supabase session
  * Includes automatic token refresh if expired or expiring soon
  */
-async function getAccessToken(forceRefresh = false): Promise<string> {
+async function getAccessToken(): Promise<string> {
   const { data: { session }, error } = await supabase.auth.getSession();
   
   if (error) {
     console.error('[smartFetch] Session error:', error);
+    const lowered = String(error.message || '').toLowerCase();
+    if (lowered.includes('invalid refresh token') || lowered.includes('refresh token not found')) {
+      await signOutLocal('invalid-refresh-token');
+      throw new Error('Session expired. Please sign in again.');
+    }
     throw new Error('Failed to get session: ' + error.message);
   }
   
@@ -118,43 +132,11 @@ async function getAccessToken(forceRefresh = false): Promise<string> {
 
   if (expectedHost && issuerHost && expectedHost !== issuerHost) {
     console.error('[smartFetch] Token issuer mismatch:', { issuerHost, expectedHost });
-    await supabase.auth.signOut();
+    await signOutLocal('token-issuer-mismatch');
     throw new Error(
       `Session token is for ${issuerHost}, but app is configured for ${expectedHost}. ` +
       'Clear site data and sign in again.'
     );
-  }
-  
-  let shouldRefresh = forceRefresh;
-
-  // Check if token is expired or about to expire (less than 60 seconds remaining)
-  if (session.expires_at) {
-    const expiresIn = session.expires_at * 1000 - Date.now();
-    if (expiresIn < 60000) {
-      shouldRefresh = true;
-    }
-  }
-
-  if (!shouldRefresh) {
-    const { error: userError } = await supabase.auth.getUser();
-    if (userError) {
-      console.warn('[smartFetch] Session validation failed, refreshing token:', userError.message);
-      shouldRefresh = true;
-    }
-  }
-
-  if (shouldRefresh) {
-    console.log('[smartFetch] Refreshing session...');
-    const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession();
-
-    if (refreshError || !refreshedSession?.access_token) {
-      console.error('[smartFetch] Token refresh failed:', refreshError);
-      await supabase.auth.signOut();
-      throw new Error('Session expired. Please sign in again.');
-    }
-
-    console.log('[smartFetch] Token refreshed successfully');
-    return refreshedSession.access_token;
   }
 
   return session.access_token;
@@ -257,36 +239,48 @@ export async function askClaude(
       console.error('[smartFetch] Router Error:', response.status, errorText);
       
       if (response.status === 401) {
-        if (errorText.includes('Invalid JWT')) {
-          console.warn('[smartFetch] Invalid JWT detected, attempting refresh + retry');
+        console.warn('[smartFetch] 401 from router, retrying once with latest session');
+        accessToken = await getAccessToken();
+        response = await doFetch(accessToken);
+
+        if (!response.ok) {
+          const retryText = await response.text();
+          console.error('[smartFetch] Router Error (after retry):', response.status, retryText);
+          if (response.status === 401) {
+            await signOutLocal('router-401-after-retry');
+            throw new Error('Session expired. Please sign in again.');
+          }
           try {
-            accessToken = await getAccessToken(true);
-            response = await doFetch(accessToken);
-            if (response.ok) {
-              // continue to success path below
-            } else {
-              const retryText = await response.text();
-              console.error('[smartFetch] Router Error (after refresh):', response.status, retryText);
-              await supabase.auth.signOut();
-              throw new Error('Invalid JWT. Clear site data and sign in again.');
+            const errorJson = JSON.parse(retryText);
+            throw new Error(errorJson.error || `Router returned ${response.status}`);
+          } catch (e) {
+            if (e instanceof SyntaxError) {
+              throw new Error(`Router returned ${response.status}: ${retryText}`);
             }
-          } catch (refreshErr) {
-            await supabase.auth.signOut();
-            throw refreshErr;
+            throw e;
           }
         } else {
-          throw new Error('Session expired. Please sign in again.');
+          // proceed to success path
+        }
+      } else {
+        try {
+          const errorJson = JSON.parse(errorText);
+          throw new Error(errorJson.error || `Router returned ${response.status}`);
+        } catch (e) {
+          if (e instanceof SyntaxError) {
+            throw new Error(`Router returned ${response.status}: ${errorText}`);
+          }
+          throw e;
         }
       }
       
-      try {
-        const errorJson = JSON.parse(errorText);
-        throw new Error(errorJson.error || `Router returned ${response.status}`);
-      } catch (e) {
-        if (e instanceof SyntaxError) {
-          throw new Error(`Router returned ${response.status}: ${errorText}`);
+      if (!response.ok) {
+        // Should be unreachable, but keep a final guard.
+        if (response.status === 401) {
+          await signOutLocal('router-401-guard');
+          throw new Error('Session expired. Please sign in again.');
         }
-        throw e;
+        throw new Error(`Router returned ${response.status}`);
       }
     }
 

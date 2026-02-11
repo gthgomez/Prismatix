@@ -4,7 +4,21 @@
 import React from 'react';
 import { ChatInterface } from './components/ChatInterface';
 import { Auth } from './components/Auth';
+import { ResetPassword } from './components/ResetPassword';
 import { useAuth } from './hooks/useAuth';
+
+function isRecoveryFlow(): boolean {
+  const { pathname, search, hash } = window.location;
+  if (pathname === '/reset-password') return true;
+
+  const searchParams = new URLSearchParams(search);
+  if (searchParams.get('type') === 'recovery') return true;
+
+  const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+  if (hashParams.get('type') === 'recovery') return true;
+
+  return false;
+}
 
 function App() {
   const { 
@@ -16,6 +30,30 @@ function App() {
     signOut,
     signInWithProvider 
   } = useAuth();
+
+  // Password recovery flow (bypass normal auth gating)
+  if (isRecoveryFlow()) {
+    return (
+      <div className="app">
+        <ResetPassword />
+
+        <style>{`
+          html, body, #root {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+          }
+
+          .app {
+            height: 100%;
+            width: 100%;
+          }
+
+        `}</style>
+      </div>
+    );
+  }
 
   // Loading state while checking auth
   if (isLoading) {
@@ -99,7 +137,6 @@ function App() {
             width: 100%;
           }
 
-          @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
         `}</style>
       </div>
     );
@@ -126,7 +163,6 @@ function App() {
           width: 100%;
         }
 
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
       `}</style>
     </div>
   );
