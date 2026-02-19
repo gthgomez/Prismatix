@@ -17,6 +17,15 @@ interface FinanceStore {
   };
 }
 
+export interface SpendStats {
+  today: number;
+  thisWeek: number;
+  thisMonth: number;
+  allTime: number;
+  lastMessageCost: number;
+  messageCount: number;
+}
+
 const EMPTY_STORE: FinanceStore = {
   history: [],
   totals: { week: 0, month: 0 },
@@ -94,4 +103,29 @@ export function recordCost(entry: {
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(nextStore));
   return nextStore;
+}
+
+export function getSpendStats(date = currentDate()): SpendStats {
+  const store = getFinanceStore();
+  const history = store.history;
+
+  const today = roundUsd(
+    history
+      .filter((entry) => entry.date === date)
+      .reduce((sum, entry) => sum + entry.cost, 0),
+  );
+
+  const thisWeek = roundUsd(store.totals.week);
+  const thisMonth = roundUsd(store.totals.month);
+  const allTime = roundUsd(history.reduce((sum, entry) => sum + entry.cost, 0));
+  const lastEntry = history[history.length - 1];
+
+  return {
+    today,
+    thisWeek,
+    thisMonth,
+    allTime,
+    lastMessageCost: roundUsd(lastEntry?.cost || 0),
+    messageCount: history.length,
+  };
 }

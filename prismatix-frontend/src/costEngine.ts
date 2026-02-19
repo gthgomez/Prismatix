@@ -26,6 +26,20 @@ export interface FinalCostResult {
   pricingVersion: string;
 }
 
+export interface UsageEstimate {
+  promptTokens: number;
+  completionTokens: number;
+  thinkingTokens?: number;
+}
+
+export interface CostBreakdown {
+  inputCost: number;
+  outputCost: number;
+  thinkingCost: number;
+  totalCost: number;
+  pricingVersion: string;
+}
+
 export function calculatePreFlightCost(
   model: RouterModel,
   contextText: string,
@@ -60,6 +74,32 @@ export function calculateFinalCost(
 
   return {
     finalUsd: roundUsd(inputCost + outputCost + reasoningCost),
+    pricingVersion: PRICING_VERSION,
+  };
+}
+
+export function calculateCostBreakdown(
+  model: RouterModel,
+  usage: UsageEstimate,
+): CostBreakdown {
+  const pricing = PRICING_REGISTRY[model];
+  const reasoningRate = pricing.reasoningRatePer1M ?? pricing.outputRatePer1M;
+
+  const inputCost = roundUsd(
+    (Math.max(0, usage.promptTokens) / TOKENS_PER_MILLION) * pricing.inputRatePer1M,
+  );
+  const outputCost = roundUsd(
+    (Math.max(0, usage.completionTokens) / TOKENS_PER_MILLION) * pricing.outputRatePer1M,
+  );
+  const thinkingCost = roundUsd(
+    (Math.max(0, usage.thinkingTokens || 0) / TOKENS_PER_MILLION) * reasoningRate,
+  );
+
+  return {
+    inputCost,
+    outputCost,
+    thinkingCost,
+    totalCost: roundUsd(inputCost + outputCost + thinkingCost),
     pricingVersion: PRICING_VERSION,
   };
 }

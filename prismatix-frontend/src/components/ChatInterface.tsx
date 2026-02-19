@@ -12,16 +12,26 @@ import { CostBadge } from './CostBadge';
 import { PrismatixPulse } from './PrismatixPulse';
 import { SpendTracker } from './SpendTracker';
 import { ThinkingProcess } from './ThinkingProcess';
-import { askPrismatix, resetConversation } from '../smartFetch';
+import { askPrismatix, getConversationId, resetConversation } from '../smartFetch';
+import { useAutoScroll } from '../hooks/useAutoScroll';
 import {
   calculateFinalCost,
   calculatePreFlightCost,
   estimateTokenCount,
   type UsageEstimate,
 } from '../costEngine';
-import { uploadAttachment } from '../services/storageService';
+import {
+  uploadAttachment,
+  uploadVideoAttachment,
+  waitForVideoReady,
+} from '../services/storageService';
 import { getDailyTotal, recordCost } from '../services/financeTracker';
-import type { FileUploadPayload, GeminiFlashThinkingLevel, Message, RouterModel } from '../types';
+import type {
+  FileUploadPayload,
+  GeminiFlashThinkingLevel,
+  Message,
+  RouterModel,
+} from '../types';
 import { MODEL_CATALOG, MODEL_ORDER } from '../modelCatalog';
 import type { User } from '@supabase/supabase-js';
 
@@ -59,6 +69,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   // ✅ FIX: Changed from single attachment to ARRAY of attachments
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
+  const hasPendingVideoUploads = draftAttachments.some(
+    (file) => file.kind === 'video' && file.status !== 'ready',
+  );
 
   // Context Manager
   const {
@@ -70,20 +83,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const chatMessagesRef = useRef<HTMLElement | null>(null);
-  const shouldStickToBottomRef = useRef(true);
+  const {
+    shouldStickToBottomRef,
+    updateStickyScrollState,
+    markUserInterruption,
+    resetAutoScroll,
+  } = useAutoScroll(32);
   const waitingFirstTokenRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const modelSelectorRef = useRef<HTMLDivElement>(null);
   const costEstimatorHideTimeoutRef = useRef<number | null>(null);
-
-  const updateStickyScrollState = () => {
-    const container = chatMessagesRef.current;
-    if (!container) return;
-    const distanceFromBottom = container.scrollHeight - container.scrollTop -
-      container.clientHeight;
-    shouldStickToBottomRef.current = distanceFromBottom <= 32;
-  };
 
   // Scroll only when a new message bubble is created, and only if user is near bottom.
   useEffect(() => {
@@ -125,9 +135,79 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   // ✅ FIX: Handle single file - ADD to array instead of replace
+  const updateDraftAttachment = (
+    targetClientId: string,
+    updater: (file: FileUploadPayload) => FileUploadPayload,
+  ) => {
+    setDraftAttachments((prev) =>
+      prev.map((file) => (file.clientId === targetClientId ? updater(file) : file))
+    );
+  };
+
+  const startVideoUpload = async (file: FileUploadPayload) => {
+    if (!file.file || file.kind !== 'video' || !file.clientId) return;
+    const conversationId = getConversationId();
+
+    try {
+      updateDraftAttachment(file.clientId, (current) => ({
+        ...current,
+        status: 'pending_upload',
+        uploadProgress: 0,
+        errorCode: undefined,
+      }));
+
+      const uploaded = await uploadVideoAttachment(
+        file.file,
+        conversationId,
+        (progressPercent) => {
+          updateDraftAttachment(file.clientId!, (current) => ({
+            ...current,
+            uploadProgress: progressPercent,
+            status: progressPercent >= 100 ? 'uploaded' : 'pending_upload',
+          }));
+        },
+      );
+
+      updateDraftAttachment(file.clientId, (current) => ({
+        ...current,
+        videoAssetId: uploaded.assetId,
+        status: 'processing',
+      }));
+
+      const finalStatus = await waitForVideoReady(uploaded.assetId, (statusUpdate) => {
+        updateDraftAttachment(file.clientId!, (current) => ({
+          ...current,
+          videoAssetId: uploaded.assetId,
+          status: statusUpdate.status,
+          durationMs: statusUpdate.durationMs || current.durationMs,
+          uploadProgress: statusUpdate.progress,
+          errorCode: statusUpdate.error?.code || undefined,
+        }));
+      });
+
+      if (finalStatus.status !== 'ready') {
+        updateDraftAttachment(file.clientId, (current) => ({
+          ...current,
+          status: finalStatus.status,
+          errorCode: finalStatus.error?.code || 'video_processing_failed',
+        }));
+      }
+    } catch (error) {
+      console.error('[ChatInterface] Video upload failed:', error);
+      updateDraftAttachment(file.clientId, (current) => ({
+        ...current,
+        status: 'failed',
+        errorCode: error instanceof Error ? error.message : 'video_upload_failed',
+      }));
+    }
+  };
+
   const handleFileSelect = (file: FileUploadPayload) => {
     console.log('[ChatInterface] File added:', file.name, file.isImage ? 'image' : 'text');
     setDraftAttachments((prev) => [...prev, file]);
+    if (file.kind === 'video') {
+      void startVideoUpload(file);
+    }
     inputRef.current?.focus();
   };
 
@@ -135,6 +215,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const handleMultipleFiles = (files: FileUploadPayload[]) => {
     console.log('[ChatInterface] Multiple files added:', files.length);
     setDraftAttachments((prev) => [...prev, ...files]);
+    files.forEach((file) => {
+      if (file.kind === 'video') {
+        void startVideoUpload(file);
+      }
+    });
     inputRef.current?.focus();
   };
 
@@ -185,7 +270,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const handleSend = async (skipBudgetCheck = false) => {
     // Allow send if there's text OR attachments
     const hasContent = input.trim() || draftAttachments.length > 0;
-    if (!hasContent || isStreaming) return;
+    if (!hasContent || isStreaming || hasPendingVideoUploads) return;
+    resetAutoScroll();
 
     // Build query text
     const hasImages = draftAttachments.some((f) => f.isImage);
@@ -195,7 +281,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
     // If no text but has attachments, use default prompts
     if (!queryText) {
-      if (hasImages && hasTextFiles) {
+      const hasVideos = draftAttachments.some((f) => f.kind === 'video');
+      if (hasImages && hasTextFiles && hasVideos) {
+        queryText = 'Analyze these videos, files, and images.';
+      } else if (hasVideos && hasImages) {
+        queryText = 'Analyze this video and related images.';
+      } else if (hasVideos && hasTextFiles) {
+        queryText = 'Analyze this video with the attached text files.';
+      } else if (hasVideos) {
+        queryText = draftAttachments.length === 1 ? 'Analyze this video.' : 'Analyze these videos.';
+      } else if (hasImages && hasTextFiles) {
         queryText = 'Analyze these files and images.';
       } else if (hasImages) {
         queryText = draftAttachments.length === 1 ? 'Analyze this image.' : 'Analyze these images.';
@@ -306,7 +401,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       const result = await askPrismatix(
         queryText,
         messages,
-        attachmentsToProcess, // Now passing array!
+      attachmentsToProcess,
         manualModelOverride,
         geminiFlashThinkingLevel,
       );
@@ -534,6 +629,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       setShowCostEstimator(false);
       setFinalMessageCost(null);
       clearCostEstimatorHideTimer();
+      resetAutoScroll();
       setIsWaitingFirstToken(false);
       waitingFirstTokenRef.current = false;
     }
@@ -741,7 +837,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         ref={(el) => {
           chatMessagesRef.current = el;
         }}
-        onScroll={updateStickyScrollState}
+        onScroll={(e) => updateStickyScrollState(e.currentTarget)}
+        onTouchMove={markUserInterruption}
+        onWheel={markUserInterruption}
       >
         {messages.length === 0
           ? (
@@ -874,7 +972,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </div>
               <div className='draft-files-list'>
                 {draftAttachments.map((file, index) => (
-                  <div key={index} className='draft-file-item'>
+                  <div key={file.clientId || `${file.name}-${index}`} className='draft-file-item'>
                     {file.isImage && file.imageData
                       ? (
                         <img
@@ -883,10 +981,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                           className='draft-thumbnail'
                         />
                       )
-                      : <div className='draft-file-icon'>📄</div>}
+                      : <div className='draft-file-icon'>{file.kind === 'video' ? '🎬' : '📄'}</div>}
                     <span className='draft-filename' title={file.name}>
                       {file.name.length > 20 ? file.name.slice(0, 17) + '...' : file.name}
                     </span>
+                    {file.kind === 'video' && (
+                      <span className='draft-video-status'>
+                        {file.status === 'ready'
+                          ? 'ready'
+                          : file.status === 'failed'
+                          ? file.errorCode || 'failed'
+                          : `${file.uploadProgress || 0}%`}
+                      </span>
+                    )}
                     <button
                       type='button'
                       onClick={() => removeAttachment(index)}
@@ -926,7 +1033,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               placeholder={draftAttachments.length > 0
-                ? 'Add a message (optional)...'
+                ? hasPendingVideoUploads
+                  ? 'Video is processing... sending is disabled until ready.'
+                  : 'Add a message (optional)...'
                 : 'Ask anything... (Shift+Enter for new line)'}
               className='chat-input'
               disabled={isStreaming}
@@ -937,9 +1046,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               onClick={() => {
                 void handleSend();
               }}
-              disabled={(!input.trim() && draftAttachments.length === 0) || isStreaming}
+              disabled={(!input.trim() && draftAttachments.length === 0) || isStreaming || hasPendingVideoUploads}
               className='send-button'
-              title='Send message'
+              title={hasPendingVideoUploads ? 'Video processing in progress' : 'Send message'}
             >
               {isWaitingFirstToken ? <div className='loading-spinner' /> : (
                 <svg
@@ -982,7 +1091,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         .chat-container {
           display: flex;
           flex-direction: column;
-          height: 100vh;
+          height: calc(var(--app-vh, 1vh) * 100);
+          min-height: 100dvh;
           background: #0a0a0a;
           font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', monospace;
           color: #fff;
@@ -1026,7 +1136,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         .header-actions { display: flex; align-items: center; gap: 0.75rem; }
 
         .header-button {
-          width: 40px; height: 40px;
+          width: 44px; height: 44px;
           border-radius: 0.5rem;
           background: rgba(255, 255, 255, 0.05);
           border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1067,7 +1177,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           background: rgba(255, 255, 255, 0.04);
           color: rgba(255, 255, 255, 0.7);
           border-radius: 0.4rem;
-          padding: 0.22rem 0.5rem;
+          min-height: 44px;
+          padding: 0.25rem 0.6rem;
           font-size: 0.72rem;
           cursor: pointer;
         }
@@ -1206,7 +1317,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         .user-menu-container { position: relative; }
 
         .user-button {
-          width: 40px; height: 40px;
+          width: 44px; height: 44px;
           border-radius: 50%;
           background: linear-gradient(135deg, #4ECDC4, #44A3B3);
           border: none; cursor: pointer;
@@ -1331,6 +1442,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           justify-content: space-between;
           align-items: center;
           padding: 0.45rem 0.6rem;
+          min-height: 44px;
           font-size: 0.72rem;
           cursor: pointer;
         }
@@ -1348,7 +1460,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         .chat-input-container {
           background: rgba(20, 20, 20, 0.95);
           border-top: 1px solid rgba(255, 255, 255, 0.1);
-          padding: 1.25rem 1.5rem;
+          padding: 1.25rem 1.5rem calc(1.25rem + env(safe-area-inset-bottom));
         }
 
         .input-wrapper { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 0.75rem; }
@@ -1371,7 +1483,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           background: transparent;
           border: 1px solid rgba(255, 107, 107, 0.3);
           color: #FF6B6B;
-          padding: 0.25rem 0.5rem;
+          min-height: 44px;
+          padding: 0.25rem 0.7rem;
           border-radius: 0.25rem;
           font-size: 0.7rem;
           cursor: pointer;
@@ -1390,11 +1503,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         .draft-thumbnail { width: 28px; height: 28px; border-radius: 0.25rem; object-fit: cover; }
         .draft-file-icon { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; }
         .draft-filename { font-size: 0.75rem; color: rgba(255, 255, 255, 0.8); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .draft-video-status {
+          font-size: 0.65rem;
+          color: rgba(255, 255, 255, 0.7);
+          padding: 0.15rem 0.35rem;
+          border-radius: 0.25rem;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          background: rgba(255, 255, 255, 0.06);
+        }
 
         .draft-remove-btn {
           background: transparent; border: none;
           color: rgba(255, 255, 255, 0.4);
           cursor: pointer;
+          min-width: 44px;
+          min-height: 44px;
           padding: 0.25rem;
           border-radius: 0.25rem;
         }
@@ -1487,7 +1610,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         .cost-estimator {
           position: fixed;
           right: 1rem;
-          bottom: 5.5rem;
+          bottom: calc(5.5rem + var(--kb-offset, 0px) + env(safe-area-inset-bottom));
           width: 230px;
           z-index: 1200;
           border: 1px solid rgba(255, 255, 255, 0.14);
@@ -1582,7 +1705,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           cursor: pointer;
           padding: 0.42rem 0.62rem;
           font-family: inherit;
-          min-height: 40px;
+          min-height: 44px;
         }
 
         .spend-pill-value {
@@ -1723,7 +1846,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           .cost-estimator {
             right: 0.75rem;
             left: 0.75rem;
-            bottom: 5.25rem;
+            bottom: calc(5.25rem + var(--kb-offset, 0px) + env(safe-area-inset-bottom));
             width: auto;
           }
         }

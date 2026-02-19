@@ -44,36 +44,29 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
       return null;
     }
 
+    const base = CONFIG.SUPABASE_URL.replace(/\/$/, '');
+    const endpoint = `${base}/functions/v1/spend_stats`;
+
     try {
-      const base = CONFIG.SUPABASE_URL.replace(/\/$/, '');
-      const endpoints = [
-        `${base}/functions/v1/spend-stats`,
-        `${base}/functions/v1/spend_stats`,
-      ];
+      const response = await fetch(endpoint, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          ...(CONFIG.SUPABASE_ANON_KEY ? { apikey: CONFIG.SUPABASE_ANON_KEY } : {}),
+        },
+      });
 
-      for (const endpoint of endpoints) {
-        const response = await fetch(endpoint, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            ...(CONFIG.SUPABASE_ANON_KEY ? { apikey: CONFIG.SUPABASE_ANON_KEY } : {}),
-          },
-        });
+      if (!response.ok) return null;
 
-        if (!response.ok) continue;
-
-        const data = await response.json() as SpendStats;
-        return {
-          today: Number(data.today) || 0,
-          thisWeek: Number(data.thisWeek) || 0,
-          thisMonth: Number(data.thisMonth) || 0,
-          allTime: Number(data.allTime) || 0,
-          lastMessageCost: Number(data.lastMessageCost) || 0,
-          messageCount: Number(data.messageCount) || 0,
-        };
-      }
-
-      return null;
+      const data = await response.json() as SpendStats;
+      return {
+        today: Number(data.today) || 0,
+        thisWeek: Number(data.thisWeek) || 0,
+        thisMonth: Number(data.thisMonth) || 0,
+        allTime: Number(data.allTime) || 0,
+        lastMessageCost: Number(data.lastMessageCost) || 0,
+        messageCount: Number(data.messageCount) || 0,
+      };
     } catch {
       return null;
     }

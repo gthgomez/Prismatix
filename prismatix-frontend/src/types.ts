@@ -4,6 +4,14 @@ export type AnthropicModel = 'opus-4.5' | 'sonnet-4.5' | 'haiku-4.5';
 export type RouterModel = AnthropicModel | 'gpt-5-mini' | 'gemini-3-flash' | 'gemini-3-pro';
 export type RouterProvider = 'anthropic' | 'openai' | 'google';
 export type GeminiFlashThinkingLevel = 'low' | 'high';
+export type AttachmentKind = 'image' | 'text' | 'video';
+export type VideoAssetStatus =
+  | 'pending_upload'
+  | 'uploaded'
+  | 'processing'
+  | 'ready'
+  | 'failed'
+  | 'expired';
 
 export interface MessageCost {
   estimatedUsd?: number;
@@ -30,12 +38,21 @@ export interface Message {
 }
 
 export interface FileUploadPayload {
+  clientId?: string;
   name: string;
+  kind?: AttachmentKind;
   isImage: boolean;
   imageData?: string;   // Base64 (without data URL prefix)
   mediaType?: string;   // e.g., "image/png"
   content?: string;     // For text files
   size?: number;        // File size in bytes
+  file?: File;
+  videoAssetId?: string;
+  durationMs?: number;
+  status?: VideoAssetStatus;
+  thumbnailUrl?: string;
+  uploadProgress?: number;
+  errorCode?: string;
 }
 
 export interface ContextAnalysis {
@@ -60,6 +77,7 @@ export interface RouterPayload {
   platform: 'web' | 'mobile';
   history: { role: string; content: string }[];
   images?: ImageAttachment[];     // Multiple images
+  videoAssetIds?: string[];
   imageData?: string;             // Legacy single image
   mediaType?: string;
   imageStorageUrl?: string;

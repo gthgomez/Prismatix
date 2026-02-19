@@ -12,6 +12,9 @@ import type {
 } from './types';
 
 const STORAGE_KEY = 'prismatix_conversation_id';
+const MAX_ROUTER_QUERY_LENGTH = 50000;
+const QUERY_SAFETY_MARGIN = 2000;
+const MAX_CLIENT_QUERY_LENGTH = MAX_ROUTER_QUERY_LENGTH - QUERY_SAFETY_MARGIN;
 
 function base64UrlDecode(input: string): string {
   const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
@@ -185,8 +188,11 @@ export async function askPrismatix(
     const conversationId = getConversationId();
     
     // ✅ FIX: Build arrays for multiple images and text file content
-    const imageAttachments = attachments.filter(f => f.isImage && f.imageData);
-    const textAttachments = attachments.filter(f => !f.isImage && f.content);
+    const imageAttachments = attachments.filter((f) => f.isImage && f.imageData);
+    const videoAttachments = attachments.filter(
+      (f) => f.kind === 'video' && f.videoAssetId && f.status === 'ready',
+    );
+    const textAttachments = attachments.filter((f) => f.kind !== 'video' && !f.isImage && f.content);
     
     // Append text file contents to query
     let finalQuery = query;
@@ -195,6 +201,13 @@ export async function askPrismatix(
         .map(f => `\n\n--- File: ${f.name} ---\n${f.content}`)
         .join('');
       finalQuery = query + textContent;
+    }
+
+    if (finalQuery.length > MAX_CLIENT_QUERY_LENGTH) {
+      throw new Error(
+        `Request is too large (${finalQuery.length} characters). ` +
+        `Please reduce text attachment size and keep total prompt content under ${MAX_CLIENT_QUERY_LENGTH} characters.`
+      );
     }
 
     // Build payload with image array
@@ -217,6 +230,12 @@ export async function askPrismatix(
       payload.mediaType = imageAttachments[0]?.mediaType || 'image/png';
     }
 
+    if (videoAttachments.length > 0) {
+      payload.videoAssetIds = videoAttachments
+        .map((video) => video.videoAssetId)
+        .filter((assetId): assetId is string => typeof assetId === 'string' && assetId.length > 0);
+    }
+
     // Add manual model override if specified
     if (modelOverride) {
       payload.modelOverride = modelOverride;
@@ -231,6 +250,7 @@ export async function askPrismatix(
       queryLength: finalQuery.length,
       historyLength: history.length,
       imageCount: imageAttachments.length,
+      videoCount: videoAttachments.length,
       textFileCount: textAttachments.length,
       modelOverride: modelOverride || 'auto',
       geminiFlashThinkingLevel,
@@ -266,6 +286,9 @@ export async function askPrismatix(
           }
           try {
             const errorJson = JSON.parse(retryText);
+            if (errorJson.error === 'video_not_ready') {
+              throw new Error('One or more videos are still processing. Please wait and try again.');
+            }
             throw new Error(errorJson.error || `Router returned ${response.status}`);
           } catch (e) {
             if (e instanceof SyntaxError) {
@@ -279,6 +302,9 @@ export async function askPrismatix(
       } else {
         try {
           const errorJson = JSON.parse(errorText);
+          if (errorJson.error === 'video_not_ready') {
+            throw new Error('One or more videos are still processing. Please wait and try again.');
+          }
           throw new Error(errorJson.error || `Router returned ${response.status}`);
         } catch (e) {
           if (e instanceof SyntaxError) {
