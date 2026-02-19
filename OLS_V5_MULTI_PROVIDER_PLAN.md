@@ -1,21 +1,21 @@
 # OLS-v5 Plan: Add Gemini 3 Family + Latest GPT Mini
 
 Last updated: 2026-02-11
-Scope: `Claude_Router` multi-provider routing expansion
+Scope: `Prismatix` multi-provider routing expansion
 
 ## 1) Objective
 Add support for:
 - Gemini 3 family (Pro + Flash; optional Pro Image if needed)
 - Latest GPT mini (OpenAI GPT-5 mini)
 
-while preserving current Claude routing behavior and frontend stability.
+while preserving current Anthropic routing behavior and frontend stability.
 
 ## 2) Evidence Snapshot (Current State)
-- Router model map is Claude-only in `supabase/functions/router/router_logic.ts`.
+- Router model map is Anthropic-first in `supabase/functions/router/router_logic.ts`.
 - Upstream call is hardcoded to Anthropic in `supabase/functions/router/index.ts`.
-- Frontend model type is Claude-only (`ClaudeModel`) in `claude-router-frontend/src/types.ts`.
-- Frontend selector config is Claude-only in `claude-router-frontend/src/components/ChatInterface.tsx`.
-- Frontend parses Claude-named headers in `claude-router-frontend/src/smartFetch.ts`.
+- Frontend model type includes Anthropic + OpenAI + Google keys in `prismatix-frontend/src/types.ts`.
+- Frontend selector config is provider-aware in `prismatix-frontend/src/components/ChatInterface.tsx`.
+- Frontend parses router-generic headers in `prismatix-frontend/src/smartFetch.ts`.
 - DB schema already stores generic `model_used` text, so no mandatory schema change for new providers.
 
 ## 3) Provider/Model Verification (As Of 2026-02-11)
@@ -25,27 +25,27 @@ while preserving current Claude routing behavior and frontend stability.
 
 ## 4) BCDP: Contract Changes + Impact
 ### Contract A: Frontend model union
-Current: `ClaudeModel = 'opus-4.5' | 'sonnet-4.5' | 'haiku-4.5'`
+Current: `AnthropicModel = 'opus-4.5' | 'sonnet-4.5' | 'haiku-4.5'`
 - Impacted files:
-  - `claude-router-frontend/src/types.ts`
-  - `claude-router-frontend/src/components/ChatInterface.tsx`
-  - `claude-router-frontend/src/smartFetch.ts`
+  - `prismatix-frontend/src/types.ts`
+  - `prismatix-frontend/src/components/ChatInterface.tsx`
+  - `prismatix-frontend/src/smartFetch.ts`
 - Severity: BREAKING if replaced in-place without backward-compatible aliasing.
-- Mitigation: Introduce new generic type (`RouterModelKey`) and keep `ClaudeModel` alias during migration.
+- Mitigation: Introduce new generic type (`RouterModelKey`) and keep `AnthropicModel` alias during migration.
 
 ### Contract B: Header names consumed by frontend
-Current headers: `X-Claude-Model`, `X-Claude-Model-Id`, `X-Model-Override`, `X-Router-Rationale`, `X-Complexity-Score`
+Current headers: `X-Router-Model`, `X-Router-Model-Id`, `X-Model-Override`, `X-Router-Rationale`, `X-Complexity-Score`
 - Impacted files:
   - `supabase/functions/router/index.ts`
-  - `claude-router-frontend/src/smartFetch.ts`
+  - `prismatix-frontend/src/smartFetch.ts`
 - Severity: BREAKING if renamed only.
-- Mitigation: Add new generic headers (`X-Router-Model`, `X-Router-Model-Id`, `X-Provider`) while continuing to emit existing Claude-named headers for compatibility.
+- Mitigation: Emit router-generic headers (`X-Router-Model`, `X-Router-Model-Id`, `X-Provider`) consistently across providers.
 
 ### Contract C: Manual override payload
-Current payload uses Claude tier values only.
+Current payload uses router model keys across providers.
 - Impacted files:
-  - `claude-router-frontend/src/types.ts`
-  - `claude-router-frontend/src/smartFetch.ts`
+  - `prismatix-frontend/src/types.ts`
+  - `prismatix-frontend/src/smartFetch.ts`
   - `supabase/functions/router/router_logic.ts`
   - `supabase/functions/router/index.ts`
 - Severity: RISKY (parsing and fallback behavior changes).
@@ -65,7 +65,7 @@ Current payload uses Claude tier values only.
 5. Continue emitting existing headers and add new provider-generic headers.
 
 ### Phase 2: Frontend model typing + selector expansion
-1. Replace strict Claude-only model union with generic router model type.
+1. Replace strict Anthropic-only model union with generic router model type.
 2. Expand selector UI to provider-grouped options:
    - Claude: Opus/Sonnet/Haiku
    - OpenAI: GPT-5 mini
@@ -73,7 +73,7 @@ Current payload uses Claude tier values only.
 3. Keep auto mode default and show provider badge in UI.
 
 ### Phase 3: Routing policy update
-1. Keep Claude routing as baseline.
+1. Keep Anthropic routing as baseline.
 2. Add policy gates for cross-provider routing, for example:
    - low-latency/low-cost -> GPT-5 mini or Gemini 3 Flash
    - multimodal heavy -> Gemini 3 Pro/Flash
@@ -107,11 +107,11 @@ Frontend:
 - Frontend tests/manual checks:
   - selector updates and manual override badges
   - model/provider metadata displayed correctly
-  - regression check for existing Claude-only flows
+- regression check for existing Anthropic-focused flows
 
 ## 9) Rollout Strategy
 1. Deploy backend with provider abstraction + compatibility headers first.
-2. Keep auto-routing pinned to Claude until provider adapters are verified.
+2. Keep auto-routing pinned to Anthropic until provider adapters are verified.
 3. Enable OpenAI and Gemini providers behind feature flags.
 4. Expand frontend selector once backend contract is stable.
 5. Gradually enable multi-provider auto-routing by rule.
@@ -120,6 +120,6 @@ Frontend:
 Before implementation:
 - Confirm whether Gemini 3 preview usage is acceptable in production.
 - Confirm if GPT-5 mini should be only manual-select first, or included in auto-routing on day one.
-- Confirm header migration policy (`X-Claude-*` compatibility window duration).
+- Confirm header policy for router-generic metadata fields.
 
 Ready to implement. Type "ACT" to proceed.

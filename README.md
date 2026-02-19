@@ -5,7 +5,7 @@ Intelligent multi-provider model router with streaming support and React fronten
 ## Project Structure
 
 ```
-claude-router-frontend/  → React + Vite + TypeScript frontend
+prismatix-frontend/  → React + Vite + TypeScript frontend
 supabase/               → Edge Functions backend
 SQL/                    → Database schemas
 Tests/                  → Test suites
@@ -16,14 +16,14 @@ Tests/                  → Test suites
 ### Frontend Development
 
 ```bash
-cd claude-router-frontend
+cd prismatix-frontend
 npm install
 npm run dev
 ```
 
 ### Environment Variables
 
-Create `claude-router-frontend/.env`:
+Create `prismatix-frontend/.env`:
 
 ```env
 VITE_SUPABASE_URL=your_supabase_url
@@ -55,7 +55,7 @@ supabase functions deploy
 
 ## Documentation
 
-- [Frontend Documentation](claude-router-frontend/README.md)
+- [Frontend Documentation](prismatix-frontend/README.md)
 - [Router Context](supabase/router-stream-context.md)
 
 ## License

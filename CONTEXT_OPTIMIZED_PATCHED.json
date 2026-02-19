@@ -3,7 +3,7 @@
   "meta": {
     "document_version": "2.1.0",
     "last_updated": "2026-01-19T22:00:00Z",
-    "project_name": "Claude Router",
+    "project_name": "Prismatix",
     "description": "Intelligent model selection system routing queries between Claude Opus/Sonnet/Haiku based on complexity",
     "owner": "Jonathan",
     "llm_optimization": {
@@ -49,16 +49,16 @@
     "generation_method": "PowerShell & Visual Verification",
     "last_verified": "2026-01-19",
     "roots": {
-      "frontend": "claude-router-frontend/",
+      "frontend": "prismatix-frontend/",
       "backend": "supabase/",
-      "types": "claude-router-frontend/src/types.ts"
+      "types": "prismatix-frontend/src/types.ts"
     },
     "critical_paths": {
       "api_entry": "supabase/functions/router/index.ts",
-      "frontend_entry": "claude-router-frontend/src/App.tsx",
-      "auth_logic": "claude-router-frontend/src/smartFetch.ts",
-      "type_definitions": "claude-router-frontend/src/types.ts",
-      "supabase_client": "claude-router-frontend/src/lib/supabase.ts"
+      "frontend_entry": "prismatix-frontend/src/App.tsx",
+      "auth_logic": "prismatix-frontend/src/smartFetch.ts",
+      "type_definitions": "prismatix-frontend/src/types.ts",
+      "supabase_client": "prismatix-frontend/src/lib/supabase.ts"
     },
     "file_map": {
       "frontend": {
@@ -124,16 +124,16 @@
     "modification_frequency": {
       "high": [
         "supabase/functions/router/index.ts",
-        "claude-router-frontend/src/components/ChatInterface.tsx",
-        "claude-router-frontend/src/smartFetch.ts"
+        "prismatix-frontend/src/components/ChatInterface.tsx",
+        "prismatix-frontend/src/smartFetch.ts"
       ],
       "medium": [
-        "claude-router-frontend/src/types.ts",
-        "claude-router-frontend/src/services/contextManager.ts"
+        "prismatix-frontend/src/types.ts",
+        "prismatix-frontend/src/services/contextManager.ts"
       ],
       "low": [
-        "claude-router-frontend/src/lib/supabase.ts",
-        "claude-router-frontend/vite.config.ts"
+        "prismatix-frontend/src/lib/supabase.ts",
+        "prismatix-frontend/vite.config.ts"
       ]
     }
   },
@@ -188,7 +188,7 @@
         "Consider migrating to Router_test_v2.ts which has better NAMIT coverage"
       ]
     },
-    "claude-router-frontend/src/App.tsx": {
+    "prismatix-frontend/src/App.tsx": {
       "description": "Frontend entry point and main component orchestration",
       "imports": [
         "components/ChatInterface.tsx",
@@ -198,7 +198,7 @@
       ],
       "modification_impact": "medium - UI changes, test in browser"
     },
-    "claude-router-frontend/src/components/ChatInterface.tsx": {
+    "prismatix-frontend/src/components/ChatInterface.tsx": {
       "description": "Main chat UI component with message handling",
       "imports": [
         "../smartFetch.ts",
@@ -209,7 +209,7 @@
       "modification_impact": "high - core user interaction",
       "hot_file": true
     },
-    "claude-router-frontend/src/smartFetch.ts": {
+    "prismatix-frontend/src/smartFetch.ts": {
       "description": "Auth-aware fetch wrapper with token refresh",
       "imports": [
         "lib/supabase.ts",
@@ -226,7 +226,7 @@
       "modification_impact": "high - affects all API calls",
       "hot_file": true
     },
-    "claude-router-frontend/src/types.ts": {
+    "prismatix-frontend/src/types.ts": {
       "description": "Shared TypeScript type definitions",
       "imported_by": [
         "multiple files across frontend"
@@ -319,10 +319,10 @@
       "session_id": "session_2026-01-19_cors_fix",
       "type": "bugfix",
       "severity": "critical",
-      "description": "Fixed CORS - frontend couldn't read X-Claude-Model header",
+      "description": "Fixed CORS - frontend couldn't read X-Router-Model header",
       "root_cause": "Missing Access-Control-Expose-Headers in CORS config",
       "affected_files": ["supabase/functions/router/index.ts"],
-      "changes_made": ["Added 'Access-Control-Expose-Headers': 'X-Claude-Model, X-Router-Rationale, X-Complexity-Score' to CORS_HEADERS"],
+      "changes_made": ["Added 'Access-Control-Expose-Headers': 'X-Router-Model, X-Router-Rationale, X-Complexity-Score' to CORS_HEADERS"],
       "validation_checklist": [
         "Deploy: supabase functions deploy router",
         "Test with test-cors-headers.html",
@@ -345,7 +345,7 @@
       "findings": [
         "Backend receives modelOverride correctly",
         "Backend routes to correct model",
-        "Backend sends X-Claude-Model header",
+        "Backend sends X-Router-Model header",
         "Frontend blocked by CORS from reading header"
       ],
       "files_created": ["index-debug.ts"]
@@ -356,7 +356,7 @@
       "type": "bugfix",
       "description": "Fixed session expiration and JWT refresh",
       "affected_files": [
-        "claude-router-frontend/src/smartFetch.ts",
+        "prismatix-frontend/src/smartFetch.ts",
         "supabase/functions/router/index.ts"
       ],
       "changes_made": [
@@ -498,34 +498,34 @@
         "calls_api": ["Anthropic API"],
         "modifies": ["response headers", "SSE stream"]
       },
-      "claude-router-frontend/src/smartFetch.ts": {
+      "prismatix-frontend/src/smartFetch.ts": {
         "depends_on": [
-          "claude-router-frontend/src/lib/supabase.ts",
-          "claude-router-frontend/src/types.ts"
+          "prismatix-frontend/src/lib/supabase.ts",
+          "prismatix-frontend/src/types.ts"
         ],
         "imported_by": [
-          "claude-router-frontend/src/components/ChatInterface.tsx"
+          "prismatix-frontend/src/components/ChatInterface.tsx"
         ],
         "calls_api": ["supabase/functions/router"]
       },
-      "claude-router-frontend/src/components/ChatInterface.tsx": {
+      "prismatix-frontend/src/components/ChatInterface.tsx": {
         "depends_on": [
-          "claude-router-frontend/src/smartFetch.ts",
-          "claude-router-frontend/src/types.ts",
-          "claude-router-frontend/src/components/FileUpload.tsx",
-          "claude-router-frontend/src/components/ModelIndicator.tsx",
-          "claude-router-frontend/src/hooks/useContextManager.ts"
+          "prismatix-frontend/src/smartFetch.ts",
+          "prismatix-frontend/src/types.ts",
+          "prismatix-frontend/src/components/FileUpload.tsx",
+          "prismatix-frontend/src/components/ModelIndicator.tsx",
+          "prismatix-frontend/src/hooks/useContextManager.ts"
         ],
         "imported_by": [
-          "claude-router-frontend/src/App.tsx"
+          "prismatix-frontend/src/App.tsx"
         ]
       },
-      "claude-router-frontend/src/types.ts": {
+      "prismatix-frontend/src/types.ts": {
         "depends_on": [],
         "imported_by": [
-          "claude-router-frontend/src/smartFetch.ts",
-          "claude-router-frontend/src/components/ChatInterface.tsx",
-          "claude-router-frontend/src/services/contextManager.ts"
+          "prismatix-frontend/src/smartFetch.ts",
+          "prismatix-frontend/src/components/ChatInterface.tsx",
+          "prismatix-frontend/src/services/contextManager.ts"
         ],
         "note": "Shared type definitions - changes affect many files"
       }
@@ -842,7 +842,7 @@
       "cors_headers": {
         "description": "Cross-Origin Resource Sharing config",
         "critical_setting": "Access-Control-Expose-Headers: lists headers JS can read",
-        "common_mistake": "Forgetting to expose custom headers like X-Claude-Model",
+        "common_mistake": "Forgetting to expose custom headers like X-Router-Model",
         "debugging": "Network tab → Response Headers → check if JS can read"
       }
     },

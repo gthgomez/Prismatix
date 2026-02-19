@@ -74,7 +74,7 @@ export function useRouterStream() {
       throw new Error(err.error || 'Router failed');
     }
 
-    const model = res.headers.get('X-Router-Model') || res.headers.get('X-Claude-Model');
+    const model = res.headers.get('X-Router-Model');
     const rationale = res.headers.get('X-Router-Rationale');
     const score = Number(res.headers.get('X-Complexity-Score') || 0);
 
@@ -157,7 +157,6 @@ Anthropic API Stream → Real-time UI Updates
 - `X-Router-Model`: Router model key selected for the request
 - `X-Router-Model-Id`: Provider-native model identifier
 - `X-Provider`: `anthropic` | `openai` | `google`
-- `X-Claude-Model`: Legacy compatibility alias
 - `X-Router-Rationale`: Human-readable tag explaining model choice
 - `X-Complexity-Score`: Numeric score (0-100) from analysis
 
@@ -210,4 +209,4 @@ Anthropic API Stream → Real-time UI Updates
 
 **Developer**: Jonathan (Chicago-based software engineer, SNHU student)  
 **Tech Stack**: Deno, TypeScript, React, Supabase, Anthropic/OpenAI/Google APIs  
-**Project**: Claude Router - Multi-provider AI routing SaaS
+**Project**: Prismatix - Multi-provider AI routing SaaS
