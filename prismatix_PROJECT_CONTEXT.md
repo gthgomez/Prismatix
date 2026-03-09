@@ -356,6 +356,12 @@ Example:
   Root cause: both spend_stats and spend-stats directories exist.
   Resolution path: verify active function name in deploy command and dashboard, then update docs.
   Guardrail: check for duplicate function folders before release.
+
+- 2026-03-08 [Future Tip] Area: supabase/migrations
+  Trigger: Supabase security lint 0011 (function_search_path_mutable) WARN.
+  Root cause: Functions created without a fixed search_path are vulnerable to hijacking via role-mutable search paths.
+  Resolution path: Add `set search_path = public` (and `security definer` if elevated privileges are needed) to all function definitions.
+  Guardrail: Include a fixed search_path in every new function created in migrations or snippets.
 ```
 
 ### 17) Debate Mode Architecture
@@ -440,6 +446,7 @@ SMD (Skeptic-Model-Drafting) is a 4-stage sequential pipeline for high-fidelity 
 - 2026-02-20: no drift detected in Prismatix runtime code during post-login 403 troubleshooting. Verified user-scoped project override env vars were cleared, but OAuth requests still resolve to project `gen-lang-client-0908185798` and fail with `PERMISSION_DENIED` / `SERVICE_DISABLED` for `cloudaicompanion.googleapis.com` (Gemini for Google Cloud API). This confirms current blocker is API enablement/permission on the bound Google Cloud project, not local CLI cache.
 - 2026-02-21: Model upgrade pass — all RouterModel keys and underlying API modelIds updated to latest versions. Renames: `opus-4.5`→`opus-4.6` (modelId: `claude-opus-4-6`), `sonnet-4.5`→`sonnet-4.6` (modelId: `claude-sonnet-4-6`), `gemini-3-pro`→`gemini-3.1-pro` (modelId: `gemini-3.1-pro-preview`), `gemini-3-flash` modelId→`gemini-3-flash-preview`. `haiku-4.5` and `gpt-5-mini` unchanged. Backwards-compat synonyms added in `OVERRIDE_SYNONYMS` and `parseVideoUiModelLadder` so existing client overrides and env vars using old strings still resolve. `googleAliasScore` fuzzy branches updated to cover both old and new alias strings. All tests in Router/Debate/Cost suites updated accordingly. `prismatix_PROJECT_CONTEXT.md` routing rules synced.
 - 2026-03-08: Context Sync. Identified and documented SMD v1.1 Light (Skeptic-Model-Drafting) pipeline. Fixed migration drift (added 20260219 migration). Synchronized header contract to include `X-SMD-*` additive headers. Verified all routing thresholds match `router_logic.ts`.
+- 2026-03-08: Resolved Supabase security lints `0011_function_search_path_mutable` for `public.increment_token_count` and `public.set_updated_at_timestamp`. Added `security definer` and `set search_path = public` to harden database functions against search-path hijacking.
 - 2026-02-20 [Future Tip] Area: Gemini CLI OAuth project binding (`cloudcode-pa.googleapis.com`)
   Trigger: After successful `/auth` login, requests failed with 403 `SERVICE_DISABLED` for `cloudaicompanion.googleapis.com` on project `gen-lang-client-0908185798`.
   Root cause: OAuth path is bound to a GCP project where Gemini for Google Cloud API is disabled; local model/env tweaks cannot bypass service-level deny.

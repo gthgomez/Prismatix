@@ -82,6 +82,8 @@ create policy messages_insert_own on public.messages
 create or replace function public.increment_token_count(p_conversation_id uuid, p_tokens integer)
 returns void
 language sql
+security definer
+set search_path = public
 as $$
   update public.conversations
   set total_tokens = total_tokens + greatest(p_tokens, 0)
