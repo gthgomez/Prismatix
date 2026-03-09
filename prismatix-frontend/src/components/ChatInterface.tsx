@@ -12,6 +12,7 @@ import { CostBadge } from './CostBadge';
 import { PrismatixPulse } from './PrismatixPulse';
 import { SpendTracker } from './SpendTracker';
 import { ThinkingProcess } from './ThinkingProcess';
+import '../styles/ChatInterface.css';
 import { askPrismatix, getConversationId, resetConversation } from '../smartFetch';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import {
@@ -98,6 +99,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [finalMessageCost, setFinalMessageCost] = useState<number | null>(null);
   const [debateSelection, setDebateSelection] = useState<DebateSelection>('off');
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
+  const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
 
   // ✅ FIX: Changed from single attachment to ARRAY of attachments
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
@@ -733,37 +735,114 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   : `Auto: ${modelConfig.name}`}
               >
                 <span className='model-icon'>{modelConfig.icon}</span>
-                <div className='model-info'>
-                  <span className='model-name'>{modelConfig.name}</span>
-                  <span className='model-description'>{modelConfig.description}</span>
-                </div>
-                <div className='complexity-score'>
-                  <div className='complexity-bar'>
-                    <div
-                      className='complexity-fill'
-                      style={{ width: `${currentComplexity}%` }}
-                    />
-                  </div>
-                  <span className='complexity-label'>{currentComplexity}</span>
-                </div>
+                <span className='model-name'>{modelConfig.name}</span>
                 {manualModelOverride && <span className='manual-badge'>Manual</span>}
+                <svg
+                  className={`dropdown-chevron ${showModelSelector ? 'open' : ''}`}
+                  width='12'
+                  height='12'
+                  viewBox='0 0 24 24'
+                  fill='none'
+                  stroke='currentColor'
+                  strokeWidth='3'
+                >
+                  <polyline points='6 9 12 15 18 9' />
+                </svg>
               </button>
 
               {/* Model Dropdown */}
               {showModelSelector && (
                 <div className='model-dropdown'>
                   <div className='dropdown-header'>
-                    <span>Select Model</span>
+                    <span>Model Selection</span>
                     {manualModelOverride && (
                       <button
                         type='button'
                         className='auto-mode-btn'
                         onClick={clearModelOverride}
                       >
-                        Use Auto
+                        Auto Mode
                       </button>
                     )}
                   </div>
+
+                  <div className='dropdown-section-title'>Routing Intelligence</div>
+                  <div className='dropdown-options-grid'>
+                    <div className='complexity-status-item'>
+                      <div className='status-header'>
+                        <span className='status-label'>Current Task Complexity</span>
+                        <span className='complexity-value'>{currentComplexity}</span>
+                      </div>
+                      <div className='complexity-bar'>
+                        <div
+                          className='complexity-fill'
+                          style={{ width: `${currentComplexity}%` }}
+                        />
+                      </div>
+                      <span className='routing-logic-hint'>
+                        {currentComplexity > 75 
+                          ? 'â†’ High complexity: Routed to Pro model' 
+                          : currentComplexity > 40
+                          ? 'â†’ Medium complexity: Routed to Sonnet'
+                          : 'â†’ Low complexity: Routed to Flash'}
+                      </span>
+                    </div>
+
+                    <div className='dropdown-divider' />
+                    
+                    <div className='dropdown-controls-row'>
+                      <div
+                        className='thinking-toggle-container'
+                        title='Applies when Gemini Flash is selected'
+                      >
+                        <span className='thinking-toggle-label'>Flash Thinking</span>
+                        <div className='thinking-toggle-buttons'>
+                          <button
+                            type='button'
+                            className={`thinking-toggle-button ${
+                              geminiFlashThinkingLevel === 'low' ? 'active' : ''
+                            }`}
+                            onClick={() => setGeminiFlashThinkingLevel('low')}
+                          >
+                            Low
+                          </button>
+                          <button
+                            type='button'
+                            className={`thinking-toggle-button ${
+                              geminiFlashThinkingLevel === 'high' ? 'active' : ''
+                            }`}
+                            onClick={() => setGeminiFlashThinkingLevel('high')}
+                          >
+                            High
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className='debate-toggle-container' title='Debate routing mode'>
+                        <span className='debate-toggle-label'>Debate Mode</span>
+                        <select
+                          className='debate-select'
+                          value={debateSelection}
+                          onChange={(e) => {
+                            setDebateSelection(e.target.value as DebateSelection);
+                            if (sendValidationError) {
+                              setSendValidationError(null);
+                            }
+                          }}
+                        >
+                          {DEBATE_SELECTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className='dropdown-divider' />
+                  <div className='dropdown-section-title'>Manual Model Override</div>
+
                   <div className='model-options'>
                     {MODEL_ORDER.map((key) => {
                       const config = MODEL_CONFIG[key];
@@ -788,53 +867,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   </div>
                 </div>
               )}
-            </div>
-
-            <div
-              className='thinking-toggle-container'
-              title='Applies when Gemini Flash is selected'
-            >
-              <span className='thinking-toggle-label'>Flash Thinking</span>
-              <div className='thinking-toggle-buttons'>
-                <button
-                  type='button'
-                  className={`thinking-toggle-button ${
-                    geminiFlashThinkingLevel === 'low' ? 'active' : ''
-                  }`}
-                  onClick={() => setGeminiFlashThinkingLevel('low')}
-                >
-                  Low
-                </button>
-                <button
-                  type='button'
-                  className={`thinking-toggle-button ${
-                    geminiFlashThinkingLevel === 'high' ? 'active' : ''
-                  }`}
-                  onClick={() => setGeminiFlashThinkingLevel('high')}
-                >
-                  High
-                </button>
-              </div>
-            </div>
-
-            <div className='debate-toggle-container' title='Debate routing mode'>
-              <span className='debate-toggle-label'>Debate</span>
-              <select
-                className='debate-select'
-                value={debateSelection}
-                onChange={(e) => {
-                  setDebateSelection(e.target.value as DebateSelection);
-                  if (sendValidationError) {
-                    setSendValidationError(null);
-                  }
-                }}
-              >
-                {DEBATE_SELECTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
             </div>
 
             <button
@@ -967,34 +999,73 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                         {msg.role === 'user' ? 'You' : 'Assistant'}
                       </span>
                       {msg.model && (
-                        <span className='message-model' title={msg.modelId || msg.model}>
-                          {msg.modelId || msg.model}
-                        </span>
-                      )}
-                      {msg.provider && (
-                        <span className='message-model-override'>{msg.provider}</span>
-                      )}
-                      {msg.modelOverride && msg.modelOverride !== 'auto' && (
-                        <span className='message-model-override'>manual</span>
-                      )}
-                      {msg.geminiFlashThinkingLevel && (
-                        <span className='message-model-override'>
-                          thinking:{msg.geminiFlashThinkingLevel}
-                        </span>
-                      )}
-                      {msg.role === 'assistant' && shouldShowDebateBadges(msg) && (
-                        <div className='debate-badge-group'>
-                          {msg.debateProfile && (
-                            <span className='debate-badge'>debate:{msg.debateProfile}</span>
-                          )}
-                          {msg.debateTrigger && (
-                            <span className='debate-badge'>trigger:{msg.debateTrigger}</span>
-                          )}
-                          {msg.debateModel && (
-                            <span className='debate-badge'>model:{msg.debateModel}</span>
-                          )}
-                          {msg.debateCostNote && (
-                            <span className='debate-badge'>{msg.debateCostNote}</span>
+                        <div className='message-metadata-container'>
+                          <button
+                            type='button'
+                            className={`message-model-pill ${expandedMetadataIdx === idx ? 'expanded' : ''}`}
+                            onClick={() => setExpandedMetadataIdx(expandedMetadataIdx === idx ? null : idx)}
+                            title={msg.modelId || msg.model}
+                          >
+                            <span className='pill-text'>{msg.modelId || msg.model}</span>
+                            <span className='info-icon'>
+                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                <circle cx="12" cy="12" r="10" />
+                                <line x1="12" y1="16" x2="12" y2="12" />
+                                <line x1="12" y1="8" x2="12.01" y2="8" />
+                              </svg>
+                            </span>
+                          </button>
+                          
+                          {expandedMetadataIdx === idx && (
+                            <div className='metadata-popover'>
+                              {msg.provider && (
+                                <div className='metadata-item'>
+                                  <span className='item-label'>Provider</span>
+                                  <span className='item-value'>{msg.provider}</span>
+                                </div>
+                              )}
+                              {msg.modelOverride && msg.modelOverride !== 'auto' && (
+                                <div className='metadata-item'>
+                                  <span className='item-label'>Override</span>
+                                  <span className='item-value'>Manual</span>
+                                </div>
+                              )}
+                              {msg.geminiFlashThinkingLevel && (
+                                <div className='metadata-item'>
+                                  <span className='item-label'>Thinking</span>
+                                  <span className='item-value'>{msg.geminiFlashThinkingLevel}</span>
+                                </div>
+                              )}
+                              {msg.role === 'assistant' && shouldShowDebateBadges(msg) && (
+                                <div className='metadata-debate-details'>
+                                  <div className='metadata-divider' />
+                                  {msg.debateProfile && (
+                                    <div className='metadata-item'>
+                                      <span className='item-label'>Debate</span>
+                                      <span className='item-value'>{msg.debateProfile}</span>
+                                    </div>
+                                  )}
+                                  {msg.debateTrigger && (
+                                    <div className='metadata-item'>
+                                      <span className='item-label'>Trigger</span>
+                                      <span className='item-value'>{msg.debateTrigger}</span>
+                                    </div>
+                                  )}
+                                  {msg.debateModel && (
+                                    <div className='metadata-item'>
+                                      <span className='item-label'>Synth</span>
+                                      <span className='item-value'>{msg.debateModel}</span>
+                                    </div>
+                                  )}
+                                  {msg.debateCostNote && (
+                                    <div className='metadata-item'>
+                                      <span className='item-label'>Cost Note</span>
+                                      <span className='item-value'>{msg.debateCostNote}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           )}
                         </div>
                       )}
@@ -1187,822 +1258,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         totalCost={sessionCostTotal}
         finalCostUsd={finalMessageCost}
       />
-
-      <style>
-        {`
-        .chat-container {
-          display: flex;
-          flex-direction: column;
-          height: calc(var(--app-vh, 1vh) * 100);
-          min-height: 100dvh;
-          background: #0a0a0a;
-          font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', monospace;
-          color: #fff;
-        }
-
-        .chat-header {
-          background: rgba(10, 10, 10, 0.95);
-          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-          padding: 1rem 1.5rem;
-          backdrop-filter: blur(20px);
-          position: sticky;
-          top: 0;
-          z-index: 100;
-        }
-
-        .header-content {
-          max-width: 1400px;
-          margin: 0 auto;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 1rem;
-        }
-
-        .header-title h1 {
-          margin: 0;
-          font-size: 1.25rem;
-          font-weight: 600;
-          background: linear-gradient(135deg, #fff, #4ECDC4);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-        }
-
-        .header-subtitle {
-          font-size: 0.75rem;
-          color: rgba(255, 255, 255, 0.5);
-          text-transform: uppercase;
-          letter-spacing: 0.1em;
-        }
-
-        .header-actions { display: flex; align-items: center; gap: 0.75rem; }
-
-        .header-button {
-          width: 44px; height: 44px;
-          border-radius: 0.5rem;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          color: rgba(255, 255, 255, 0.6);
-          cursor: pointer;
-          transition: all 0.2s;
-          display: flex; align-items: center; justify-content: center;
-        }
-
-        .header-button:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
-
-        .model-selector-container { position: relative; }
-
-        .thinking-toggle-container {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          padding: 0.35rem 0.6rem;
-          border-radius: 0.5rem;
-          background: rgba(255, 255, 255, 0.04);
-          border: 1px solid rgba(255, 255, 255, 0.12);
-        }
-
-        .thinking-toggle-label {
-          font-size: 0.68rem;
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-          color: rgba(255, 255, 255, 0.65);
-        }
-
-        .thinking-toggle-buttons {
-          display: flex;
-          gap: 0.3rem;
-        }
-
-        .thinking-toggle-button {
-          border: 1px solid rgba(255, 255, 255, 0.16);
-          background: rgba(255, 255, 255, 0.04);
-          color: rgba(255, 255, 255, 0.7);
-          border-radius: 0.4rem;
-          min-height: 44px;
-          padding: 0.25rem 0.6rem;
-          font-size: 0.72rem;
-          cursor: pointer;
-        }
-
-        .thinking-toggle-button.active {
-          border-color: rgba(78, 205, 196, 0.6);
-          background: rgba(78, 205, 196, 0.2);
-          color: #4ECDC4;
-        }
-
-        .debate-toggle-container {
-          display: flex;
-          align-items: center;
-          gap: 0.45rem;
-          padding: 0.35rem 0.55rem;
-          border-radius: 0.5rem;
-          background: rgba(255, 255, 255, 0.04);
-          border: 1px solid rgba(255, 255, 255, 0.12);
-        }
-
-        .debate-toggle-label {
-          font-size: 0.68rem;
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-          color: rgba(255, 255, 255, 0.65);
-        }
-
-        .debate-select {
-          min-height: 36px;
-          border-radius: 0.4rem;
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          background: rgba(20, 20, 20, 0.9);
-          color: #fff;
-          font-size: 0.74rem;
-          padding: 0.2rem 0.45rem;
-        }
-
-        .model-indicator-button {
-          display: flex; align-items: center; gap: 0.75rem;
-          padding: 0.5rem 1rem;
-          background: rgba(0, 0, 0, 0.6);
-          border: 1px solid var(--model-color);
-          border-radius: 0.5rem;
-          cursor: pointer;
-          transition: all 0.3s ease;
-          position: relative;
-          color: inherit;
-        }
-
-        .model-indicator-button:hover {
-          background: rgba(0, 0, 0, 0.8);
-          box-shadow: 0 0 20px rgba(78, 205, 196, 0.2);
-        }
-
-        .model-icon { font-size: 1.25rem; }
-        .model-info { display: flex; flex-direction: column; gap: 0.125rem; text-align: left; }
-        .model-name { font-size: 0.875rem; font-weight: 600; color: var(--model-color); }
-        .model-description { font-size: 0.7rem; color: rgba(255, 255, 255, 0.6); }
-
-        .complexity-score { display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem; }
-        .complexity-bar { width: 60px; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; overflow: hidden; }
-        .complexity-fill { height: 100%; background: var(--model-color); transition: width 0.5s ease; }
-        .complexity-label { font-size: 0.65rem; font-weight: 600; color: var(--model-color); }
-
-        .manual-badge {
-          position: absolute; top: -6px; right: -6px;
-          background: #FF6B6B; color: #fff;
-          font-size: 0.6rem; padding: 2px 6px;
-          border-radius: 4px; font-weight: 600;
-        }
-
-        .prismatix-pulse-track {
-          position: relative;
-          height: 1.6rem;
-          border-radius: 0.6rem;
-          overflow: hidden;
-          pointer-events: none;
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          background: rgba(255, 255, 255, 0.04);
-        }
-
-        .prismatix-pulse-fill {
-          --pulse-color: #4ECDC4;
-          position: absolute;
-          inset: 0;
-          background: linear-gradient(90deg, transparent, var(--pulse-color), transparent);
-          opacity: 0.8;
-          animation: prismPulse 1.25s ease-in-out infinite;
-        }
-
-        .prismatix-pulse-logo {
-          position: absolute;
-          top: 50%;
-          left: 0.45rem;
-          width: 0.8rem;
-          height: 0.8rem;
-          transform: translateY(-50%);
-          opacity: 0.75;
-          z-index: 1;
-          animation: logoPulse 0.9s ease-in-out infinite alternate;
-        }
-
-        .message-thinking-loader {
-          margin-top: 0.4rem;
-          max-width: 16rem;
-        }
-
-        .model-dropdown {
-          position: absolute; top: calc(100% + 8px); right: 0;
-          background: rgba(20, 20, 20, 0.98);
-          border: 1px solid rgba(255, 255, 255, 0.15);
-          border-radius: 0.75rem;
-          padding: 0.75rem;
-          min-width: 280px;
-          box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
-          z-index: 1000;
-          animation: dropdownIn 0.2s ease;
-        }
-
-        .dropdown-header {
-          display: flex; justify-content: space-between; align-items: center;
-          padding: 0 0.5rem 0.75rem;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-          margin-bottom: 0.75rem;
-          font-size: 0.8rem;
-          color: rgba(255, 255, 255, 0.6);
-        }
-
-        .auto-mode-btn {
-          background: rgba(78, 205, 196, 0.15);
-          border: 1px solid rgba(78, 205, 196, 0.3);
-          color: #4ECDC4;
-          padding: 4px 10px;
-          border-radius: 4px;
-          font-size: 0.7rem;
-          cursor: pointer;
-        }
-
-        .model-options { display: flex; flex-direction: column; gap: 0.5rem; }
-
-        .model-option {
-          display: flex; align-items: center; gap: 0.75rem;
-          padding: 0.75rem;
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 0.5rem;
-          cursor: pointer;
-          transition: all 0.2s;
-          text-align: left;
-          color: inherit;
-          width: 100%;
-        }
-
-        .model-option:hover { background: rgba(255, 255, 255, 0.08); border-color: var(--option-color); }
-        .model-option.active { background: rgba(255, 255, 255, 0.05); border-color: var(--option-color); }
-        .model-option.manual { box-shadow: 0 0 0 2px var(--option-color); }
-
-        .option-icon { font-size: 1.5rem; }
-        .option-info { display: flex; flex-direction: column; gap: 2px; }
-        .option-name { font-weight: 600; font-size: 0.85rem; color: var(--option-color); }
-        .option-desc { font-size: 0.7rem; color: rgba(255, 255, 255, 0.5); }
-
-        .user-menu-container { position: relative; }
-
-        .user-button {
-          width: 44px; height: 44px;
-          border-radius: 50%;
-          background: linear-gradient(135deg, #4ECDC4, #44A3B3);
-          border: none; cursor: pointer;
-          display: flex; align-items: center; justify-content: center;
-        }
-
-        .user-avatar { font-size: 1rem; font-weight: 600; color: #fff; }
-
-        .user-dropdown {
-          position: absolute; top: calc(100% + 8px); right: 0;
-          background: rgba(20, 20, 20, 0.98);
-          border: 1px solid rgba(255, 255, 255, 0.15);
-          border-radius: 0.75rem;
-          padding: 0.5rem;
-          min-width: 200px;
-          box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
-          z-index: 1000;
-        }
-
-        .user-info { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.25rem; }
-        .user-name { font-weight: 600; color: #fff; }
-        .user-email { font-size: 0.75rem; color: rgba(255, 255, 255, 0.5); }
-        .dropdown-divider { height: 1px; background: rgba(255, 255, 255, 0.1); margin: 0.25rem 0; }
-
-        .dropdown-item {
-          display: flex; align-items: center; gap: 0.75rem;
-          width: 100%; padding: 0.75rem;
-          background: transparent; border: none;
-          border-radius: 0.5rem;
-          color: rgba(255, 255, 255, 0.8);
-          cursor: pointer;
-          font-family: inherit; font-size: 0.875rem;
-        }
-
-        .dropdown-item:hover { background: rgba(255, 107, 107, 0.1); color: #FF6B6B; }
-
-        .chat-messages { flex: 1; overflow-y: auto; padding: 1.5rem; }
-
-        .empty-state {
-          display: flex; flex-direction: column;
-          align-items: center; justify-content: center;
-          height: 100%; text-align: center;
-          color: rgba(255, 255, 255, 0.7);
-        }
-
-        .empty-icon { font-size: 4rem; margin-bottom: 1rem; }
-        .empty-state h2 { margin: 0 0 0.5rem; font-size: 1.5rem; }
-        .empty-state p { margin: 0 0 2rem; color: rgba(255, 255, 255, 0.5); max-width: 400px; }
-
-        .model-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; max-width: 600px; }
-
-        .model-card {
-          display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
-          padding: 1.25rem 1rem;
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 0.75rem;
-          transition: all 0.3s ease;
-        }
-
-        .model-card:hover { border-color: var(--card-color); transform: translateY(-4px); }
-        .card-icon { font-size: 2rem; }
-        .card-name { font-weight: 600; color: var(--card-color); }
-        .card-desc { font-size: 0.75rem; color: rgba(255, 255, 255, 0.5); }
-
-        .messages-list { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.5rem; }
-
-        .message { display: flex; gap: 1rem; animation: slideIn 0.3s ease; }
-
-        .message-avatar {
-          width: 40px; height: 40px;
-          border-radius: 0.625rem;
-          display: flex; align-items: center; justify-content: center;
-          font-size: 1.25rem; flex-shrink: 0;
-        }
-
-        .message-user .message-avatar { background: rgba(78, 205, 196, 0.1); border: 1px solid rgba(78, 205, 196, 0.3); }
-        .message-assistant .message-avatar { background: rgba(255, 107, 107, 0.1); border: 1px solid rgba(255, 107, 107, 0.3); }
-
-        .message-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
-        .message-header { display: flex; align-items: center; gap: 0.75rem; font-size: 0.8rem; }
-        .message-role { font-weight: 600; color: #fff; }
-        .message-model { padding: 0.125rem 0.5rem; background: rgba(255, 255, 255, 0.05); border-radius: 0.25rem; font-size: 0.7rem; text-transform: uppercase; }
-        .message-model-override {
-          padding: 0.125rem 0.4rem;
-          background: rgba(255, 107, 107, 0.15);
-          border: 1px solid rgba(255, 107, 107, 0.4);
-          border-radius: 0.25rem;
-          font-size: 0.65rem;
-          text-transform: uppercase;
-          color: #FF6B6B;
-        }
-        .message-time { color: rgba(255, 255, 255, 0.4); margin-left: auto; }
-        .debate-badge-group { display: inline-flex; flex-wrap: wrap; gap: 0.35rem; }
-        .debate-badge {
-          font-size: 0.64rem;
-          padding: 0.12rem 0.35rem;
-          border-radius: 0.28rem;
-          border: 1px solid rgba(255, 196, 70, 0.45);
-          background: rgba(255, 196, 70, 0.15);
-          color: rgba(255, 226, 160, 0.95);
-          text-transform: lowercase;
-          max-width: 220px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .message-image-container { margin: 0.5rem 0; max-width: 300px; }
-        .message-image { max-width: 100%; max-height: 300px; border-radius: 0.5rem; border: 1px solid rgba(255, 255, 255, 0.1); }
-
-        .message-attachments-badge {
-          font-size: 0.75rem; color: rgba(78, 205, 196, 0.8);
-          padding: 0.25rem 0.5rem;
-          background: rgba(78, 205, 196, 0.1);
-          border-radius: 0.25rem;
-          width: fit-content;
-        }
-
-        .message-text { line-height: 1.6; color: rgba(255, 255, 255, 0.9); white-space: pre-wrap; word-break: break-word; }
-        .cursor-blink { animation: blink 1s step-end infinite; color: #4ECDC4; }
-
-        .thinking-process {
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 0.5rem;
-          background: rgba(255, 255, 255, 0.02);
-          overflow: hidden;
-        }
-
-        .thinking-process-header {
-          width: 100%;
-          background: rgba(0, 0, 0, 0.35);
-          border: none;
-          color: rgba(255, 255, 255, 0.75);
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 0.45rem 0.6rem;
-          min-height: 44px;
-          font-size: 0.72rem;
-          cursor: pointer;
-        }
-
-        .thinking-process-content {
-          margin: 0;
-          padding: 0.6rem;
-          color: rgba(220, 220, 220, 0.8);
-          font-size: 0.75rem;
-          font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', monospace;
-          white-space: pre-wrap;
-          word-break: break-word;
-        }
-
-        .chat-input-container {
-          background: rgba(20, 20, 20, 0.95);
-          border-top: 1px solid rgba(255, 255, 255, 0.1);
-          padding: 1.25rem 1.5rem calc(1.25rem + env(safe-area-inset-bottom));
-        }
-
-        .input-wrapper { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 0.75rem; }
-
-        .draft-preview-container {
-          background: rgba(78, 205, 196, 0.08);
-          border: 1px solid rgba(78, 205, 196, 0.2);
-          border-radius: 0.625rem;
-          padding: 0.75rem;
-        }
-
-        .draft-preview-header {
-          display: flex; justify-content: space-between; align-items: center;
-          margin-bottom: 0.5rem;
-          font-size: 0.8rem;
-          color: rgba(255, 255, 255, 0.7);
-        }
-
-        .clear-all-btn {
-          background: transparent;
-          border: 1px solid rgba(255, 107, 107, 0.3);
-          color: #FF6B6B;
-          min-height: 44px;
-          padding: 0.25rem 0.7rem;
-          border-radius: 0.25rem;
-          font-size: 0.7rem;
-          cursor: pointer;
-        }
-
-        .draft-files-list { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-
-        .draft-file-item {
-          display: flex; align-items: center; gap: 0.5rem;
-          padding: 0.375rem 0.5rem;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 0.375rem;
-        }
-
-        .draft-thumbnail { width: 28px; height: 28px; border-radius: 0.25rem; object-fit: cover; }
-        .draft-file-icon { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; }
-        .draft-filename { font-size: 0.75rem; color: rgba(255, 255, 255, 0.8); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .draft-video-status {
-          font-size: 0.65rem;
-          color: rgba(255, 255, 255, 0.7);
-          padding: 0.15rem 0.35rem;
-          border-radius: 0.25rem;
-          border: 1px solid rgba(255, 255, 255, 0.15);
-          background: rgba(255, 255, 255, 0.06);
-        }
-
-        .draft-remove-btn {
-          background: transparent; border: none;
-          color: rgba(255, 255, 255, 0.4);
-          cursor: pointer;
-          min-width: 44px;
-          min-height: 44px;
-          padding: 0.25rem;
-          border-radius: 0.25rem;
-        }
-
-        .draft-remove-btn:hover { background: rgba(255, 107, 107, 0.2); color: #FF6B6B; }
-
-        .input-row { display: flex; gap: 0.625rem; align-items: flex-end; }
-        .send-validation-error {
-          color: rgba(255, 159, 159, 0.95);
-          font-size: 0.74rem;
-          border: 1px solid rgba(255, 107, 107, 0.35);
-          background: rgba(255, 107, 107, 0.14);
-          border-radius: 0.45rem;
-          padding: 0.4rem 0.55rem;
-        }
-
-        .chat-input {
-          flex: 1;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 0.75rem;
-          padding: 0.875rem 1rem;
-          color: #fff;
-          font-family: inherit; font-size: 0.95rem;
-          resize: none;
-          min-height: 48px; max-height: 200px;
-        }
-
-        .chat-input:focus { outline: none; background: rgba(255, 255, 255, 0.08); border-color: rgba(78, 205, 196, 0.5); }
-        .chat-input:disabled { opacity: 0.5; }
-        .chat-input::placeholder { color: rgba(255, 255, 255, 0.4); }
-
-        .send-button {
-          width: 48px; height: 48px;
-          border-radius: 0.75rem;
-          background: linear-gradient(135deg, #4ECDC4, #44A3B3);
-          border: none; color: #fff; cursor: pointer;
-          display: flex; align-items: center; justify-content: center;
-        }
-
-        .send-button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(78, 205, 196, 0.3); }
-        .send-button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        .loading-spinner { width: 20px; height: 20px; border: 2px solid rgba(255, 255, 255, 0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; }
-
-        .budget-guard-overlay {
-          position: fixed;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.65);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 2000;
-          padding: 1rem;
-        }
-
-        .budget-guard-modal {
-          width: min(460px, 100%);
-          background: #121212;
-          border: 1px solid rgba(255, 255, 255, 0.15);
-          border-radius: 0.75rem;
-          padding: 1rem;
-          box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
-        }
-
-        .budget-guard-modal h3 {
-          margin: 0 0 0.5rem;
-          font-size: 1rem;
-        }
-
-        .budget-guard-modal p {
-          margin: 0.35rem 0;
-          color: rgba(255, 255, 255, 0.75);
-          font-size: 0.9rem;
-        }
-
-        .budget-guard-actions {
-          margin-top: 0.9rem;
-          display: flex;
-          gap: 0.5rem;
-          justify-content: flex-end;
-        }
-
-        .budget-guard-actions button {
-          border-radius: 0.45rem;
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          background: rgba(255, 255, 255, 0.08);
-          color: #fff;
-          padding: 0.45rem 0.7rem;
-          cursor: pointer;
-        }
-
-        .budget-guard-actions button:last-child {
-          border-color: rgba(255, 107, 107, 0.5);
-          background: rgba(255, 107, 107, 0.2);
-        }
-
-        .cost-estimator {
-          position: fixed;
-          right: 1rem;
-          bottom: calc(5.5rem + var(--kb-offset, 0px) + env(safe-area-inset-bottom));
-          width: 230px;
-          z-index: 1200;
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          border-radius: 0.75rem;
-          padding: 0.7rem;
-          background: rgba(10, 12, 16, 0.88);
-          backdrop-filter: blur(16px);
-          box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-          transition: opacity 0.25s ease, transform 0.25s ease;
-          opacity: 1;
-          transform: translateY(0);
-        }
-
-        .cost-estimator.streaming {
-          opacity: 1;
-        }
-
-        .cost-estimator.final {
-          opacity: 0.92;
-          transform: translateY(0);
-        }
-
-        .cost-estimator-title {
-          font-size: 0.76rem;
-          color: rgba(255, 255, 255, 0.82);
-          font-weight: 600;
-          margin-bottom: 0.45rem;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-        }
-
-        .cost-estimator-rows {
-          display: flex;
-          flex-direction: column;
-          gap: 0.24rem;
-          font-size: 0.74rem;
-        }
-
-        .cost-estimator-row,
-        .cost-estimator-total,
-        .cost-estimator-session {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .cost-estimator-row {
-          color: rgba(255, 255, 255, 0.72);
-        }
-
-        .cost-estimator-total {
-          margin-top: 0.3rem;
-          padding-top: 0.3rem;
-          border-top: 1px solid rgba(255, 255, 255, 0.12);
-          color: rgba(255, 255, 255, 0.9);
-          font-weight: 700;
-        }
-
-        .cost-estimator-session {
-          margin-top: 0.5rem;
-          padding-top: 0.45rem;
-          border-top: 1px dashed rgba(255, 255, 255, 0.18);
-          font-size: 0.72rem;
-          color: rgba(255, 255, 255, 0.68);
-        }
-
-        .cost-estimator-session strong {
-          color: #fff;
-          font-size: 0.78rem;
-        }
-
-        .cost-estimator-final-note {
-          margin-top: 0.4rem;
-          font-size: 0.68rem;
-          color: rgba(255, 255, 255, 0.58);
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-        }
-
-        .spend-widget {
-          position: relative;
-        }
-
-        .spend-pill {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.5rem;
-          border-radius: 0.6rem;
-          border: 1px solid rgba(78, 205, 196, 0.4);
-          background: rgba(18, 26, 40, 0.58);
-          color: #fff;
-          cursor: pointer;
-          padding: 0.42rem 0.62rem;
-          font-family: inherit;
-          min-height: 44px;
-        }
-
-        .spend-pill-value {
-          font-size: 0.86rem;
-          font-weight: 700;
-          color: #7ef3db;
-        }
-
-        .spend-pill-label {
-          font-size: 0.72rem;
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-          color: rgba(255, 255, 255, 0.74);
-        }
-
-        .spend-pill-state {
-          font-size: 0.62rem;
-          padding: 0.15rem 0.34rem;
-          border-radius: 0.34rem;
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-        }
-
-        .spend-pill-state.idle {
-          color: rgba(126, 243, 219, 0.95);
-          border-color: rgba(126, 243, 219, 0.35);
-          background: rgba(126, 243, 219, 0.12);
-        }
-
-        .spend-pill-state.syncing {
-          color: rgba(255, 220, 146, 0.95);
-          border-color: rgba(255, 220, 146, 0.35);
-          background: rgba(255, 220, 146, 0.12);
-        }
-
-        .spend-pill-state.error {
-          color: rgba(255, 156, 156, 0.95);
-          border-color: rgba(255, 156, 156, 0.35);
-          background: rgba(255, 156, 156, 0.12);
-        }
-
-        .spend-popover {
-          position: absolute;
-          top: calc(100% + 8px);
-          left: 0;
-          width: 270px;
-          z-index: 1200;
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          border-radius: 0.75rem;
-          padding: 0.75rem;
-          background: linear-gradient(180deg, rgba(18, 26, 40, 0.82), rgba(10, 12, 16, 0.82));
-          backdrop-filter: blur(16px);
-          box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-        }
-
-        .spend-popover h3 {
-          margin: 0 0 0.55rem;
-          font-size: 0.8rem;
-          color: rgba(255, 255, 255, 0.9);
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-        }
-
-        .spend-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 0.45rem;
-        }
-
-        .spend-card {
-          border-radius: 0.55rem;
-          padding: 0.42rem 0.5rem;
-          background: rgba(255, 255, 255, 0.06);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-        }
-
-        .spend-label {
-          font-size: 0.64rem;
-          color: rgba(255, 255, 255, 0.58);
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-        }
-
-        .spend-value {
-          margin-top: 0.15rem;
-          font-size: 0.9rem;
-          font-weight: 700;
-          color: #fff;
-        }
-
-        .spend-last {
-          margin-top: 0.6rem;
-          border-radius: 0.55rem;
-          background: rgba(255, 196, 70, 0.1);
-          border: 1px solid rgba(255, 196, 70, 0.24);
-          color: rgba(255, 226, 160, 0.9);
-          font-size: 0.72rem;
-          line-height: 1.5;
-          padding: 0.45rem 0.5rem;
-        }
-
-        .spend-sync-note {
-          margin-top: 0.45rem;
-          color: rgba(255, 255, 255, 0.62);
-          font-size: 0.67rem;
-        }
-
-        @keyframes dropdownIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes slideIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
-        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes pulse { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(1.1); opacity: 0; } }
-        @keyframes prismPulse {
-          0% { transform: translateX(-100%); opacity: 0.35; }
-          45% { opacity: 0.95; }
-          100% { transform: translateX(100%); opacity: 0.2; }
-        }
-        @keyframes logoPulse {
-          from { opacity: 0.45; }
-          to { opacity: 1; }
-        }
-
-        @media (max-width: 768px) {
-          .chat-header { padding: 0.75rem 1rem; }
-          .header-content { flex-direction: column; align-items: stretch; }
-          .header-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; }
-          .model-selector-container { flex: 1 1 100%; }
-          .thinking-toggle-container { flex: 1 1 100%; justify-content: space-between; }
-          .model-indicator-button { width: 100%; justify-content: space-between; }
-          .user-menu-container { margin-left: auto; flex-shrink: 0; }
-          .model-dropdown { right: 0; left: 0; width: calc(100vw - 2rem); max-width: 360px; }
-          .model-grid { grid-template-columns: 1fr; max-width: 200px; }
-          .model-info { display: none; }
-          .spend-widget { flex: 1 1 auto; }
-          .spend-pill { width: 100%; justify-content: space-between; }
-          .spend-popover { width: min(320px, calc(100vw - 2rem)); left: 0; right: auto; }
-          .cost-estimator {
-            right: 0.75rem;
-            left: 0.75rem;
-            bottom: calc(5.25rem + var(--kb-offset, 0px) + env(safe-area-inset-bottom));
-            width: auto;
-          }
-        }
-      `}
-      </style>
     </div>
   );
 };
