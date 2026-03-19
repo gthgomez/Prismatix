@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1A1E24"/>
+      <stop offset="1" stop-color="#101419"/>
+    </linearGradient>
+    <linearGradient id="beamWhite" x1="70" y1="250" x2="180" y2="252" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D6ECFF"/>
+    </linearGradient>
+    <linearGradient id="pathBlue" x1="266" y1="250" x2="468" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#60B8FF"/>
+      <stop offset="1" stop-color="#1A66FF"/>
+    </linearGradient>
+    <linearGradient id="pathGreen" x1="266" y1="255" x2="470" y2="230" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#66F4D2"/>
+      <stop offset="1" stop-color="#10A86F"/>
+    </linearGradient>
+    <linearGradient id="pathPurple" x1="266" y1="260" x2="470" y2="268" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#B39BFF"/>
+      <stop offset="1" stop-color="#7E4CFF"/>
+    </linearGradient>
+    <linearGradient id="pathOrange" x1="266" y1="264" x2="470" y2="308" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFCA7A"/>
+      <stop offset="1" stop-color="#FF7A26"/>
+    </linearGradient>
+    <linearGradient id="pathRed" x1="266" y1="268" x2="468" y2="346" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF9AA6"/>
+      <stop offset="1" stop-color="#E03847"/>
+    </linearGradient>
+    <linearGradient id="prismStroke" x1="168" y1="150" x2="312" y2="348" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6EE7FF"/>
+      <stop offset="1" stop-color="#2F87FF"/>
+    </linearGradient>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="14" y="14" width="484" height="484" rx="108" fill="url(#bg)"/>
+
+  <g opacity="0.22" stroke="#2B3B4F">
+    <path d="M68 116H444"/>
+    <path d="M68 164H444"/>
+    <path d="M68 212H444"/>
+    <path d="M68 260H444"/>
+    <path d="M68 308H444"/>
+    <path d="M68 356H444"/>
+    <path d="M68 404H444"/>
+  </g>
+
+  <path d="M72 254H180" stroke="url(#beamWhite)" stroke-width="16" stroke-linecap="round" filter="url(#glow)"/>
+
+  <g filter="url(#glow)">
+    <path d="M266 250L444 186" stroke="url(#pathBlue)" stroke-width="10" stroke-linecap="round"/>
+    <path d="M266 255L448 226" stroke="url(#pathGreen)" stroke-width="10" stroke-linecap="round"/>
+    <path d="M266 260L450 266" stroke="url(#pathPurple)" stroke-width="10" stroke-linecap="round"/>
+    <path d="M266 264L448 306" stroke="url(#pathOrange)" stroke-width="10" stroke-linecap="round"/>
+    <path d="M266 268L444 344" stroke="url(#pathRed)" stroke-width="10" stroke-linecap="round"/>
+  </g>
+
+  <g fill="#0E1826" stroke="#8CD9FF" stroke-width="3" filter="url(#glow)">
+    <rect x="438" y="176" width="24" height="24" rx="6"/>
+    <rect x="444" y="216" width="24" height="24" rx="6"/>
+    <rect x="446" y="254" width="24" height="24" rx="6"/>
+    <rect x="444" y="294" width="24" height="24" rx="6"/>
+    <rect x="438" y="332" width="24" height="24" rx="6"/>
+  </g>
+
+  <g filter="url(#glow)">
+    <path d="M176 150L266 250L176 352L234 250Z" fill="#13273C" fill-opacity="0.82" stroke="url(#prismStroke)" stroke-width="5"/>
+    <path d="M176 150L234 250L176 352" stroke="#88E2FF" stroke-width="3" stroke-linecap="round"/>
+    <path d="M266 250L234 250" stroke="#A2EBFF" stroke-width="3" stroke-linecap="round"/>
+
+    <path d="M180 182H208M192 170V194" stroke="#7AD7FF" stroke-width="2" stroke-linecap="round"/>
+    <path d="M188 250H230" stroke="#7AD7FF" stroke-width="2" stroke-linecap="round"/>
+    <path d="M180 318H208M192 306V330" stroke="#7AD7FF" stroke-width="2" stroke-linecap="round"/>
+  </g>
+</svg>

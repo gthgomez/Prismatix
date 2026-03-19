@@ -1,0 +1,12 @@
+.vercel
+.env*
+!.env.example
+dist/
+node_modules/
+__pycache__/
+*.pyc
+*.jsonl
+*.bak
+.DS_Store
+coverage/
+*.log
