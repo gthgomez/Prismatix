@@ -1,13 +1,57 @@
+# Vercel
 .vercel
+
+# Environment variables — never commit real values
 .env*
 !.env.example
+
+# Build outputs
 dist/
+dist-ssr/
+build/
+
+# Dependencies
 node_modules/
+
+# Supabase local state
+supabase/.branches/
+supabase/.temp/
+.supabase/
+
+# Testing
+coverage/
+.nyc_output/
+
+# Python artifacts
 __pycache__/
 *.pyc
+
+# Misc
 *.jsonl
 *.bak
-.DS_Store
-coverage/
 *.log
+.DS_Store
+Thumbs.db
+.cache/
+.temp/
+.tmp/
+
+# LLM context documents
 WebLLM-Contextdoc.md
+*-Contextdoc.md
+
+# Cryptographic files
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local function secrets
+supabase/functions/**/.env
+supabase/functions/**/secrets.json
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.gemini/

@@ -1,66 +1,174 @@
-import React from 'react';
-import { CONFIG } from './config';
-import './styles/app.css';
+// App.tsx - Root component with authentication gating
+// Auth state managed at root level for proper lifecycle management
 
-function StatusPill({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="status-pill">
-      <span className="status-pill-label">{label}</span>
-      <span className="status-pill-value">{value}</span>
-    </div>
-  );
+import React from 'react';
+import { ChatInterface } from './components/ChatInterface';
+import { Auth } from './components/Auth';
+import { ResetPassword } from './components/ResetPassword';
+import { useAuth } from './hooks/useAuth';
+import { useViewportHeight } from './hooks/useViewportHeight';
+
+function isRecoveryFlow(): boolean {
+  const { pathname, search, hash } = window.location;
+  if (pathname === '/reset-password') return true;
+
+  const searchParams = new URLSearchParams(search);
+  if (searchParams.get('type') === 'recovery') return true;
+
+  const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+  if (hashParams.get('type') === 'recovery') return true;
+
+  return false;
 }
 
 function App() {
-  return (
-    <main className="app-shell">
-      <section className="hero-card">
-        <p className="eyebrow">Public Release</p>
-        <h1>{CONFIG.appName}</h1>
-        <p className="lead">
-          A lightweight public starter for teams that want a clean React shell
-          connected to their own backend and deployment flow.
-        </p>
-        <div className="status-grid">
-          <StatusPill
-            label="API endpoint"
-            value={CONFIG.apiUrl ? 'configured' : 'set VITE_API_URL'}
-          />
-          <StatusPill label="Private backend" value="required externally" />
-          <StatusPill label="Public repo scope" value="frontend starter only" />
+  useViewportHeight();
+
+  const { 
+    isAuthenticated, 
+    isLoading, 
+    user,
+    signIn, 
+    signUp, 
+    signOut,
+    signInWithProvider 
+  } = useAuth();
+
+  // Password recovery flow (bypass normal auth gating)
+  if (isRecoveryFlow()) {
+    return (
+      <div className="app">
+        <ResetPassword />
+
+        <style>{`
+          html, body, #root {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: auto;
+          }
+
+          .app {
+            height: 100%;
+            width: 100%;
+          }
+
+        `}</style>
+      </div>
+    );
+  }
+
+  // Loading state while checking auth
+  if (isLoading) {
+    return (
+      <div className="app loading-screen">
+        <div className="loading-content">
+          <div className="loading-logo">🤖</div>
+          <div className="loading-spinner-large" />
+          <p>Initializing Prismatix...</p>
         </div>
-      </section>
 
-      <section className="content-grid">
-        <article className="info-card">
-          <h2>What is included</h2>
-          <ul>
-            <li>Vite + React + TypeScript app shell</li>
-            <li>Safe environment template</li>
-            <li>Static assets and deployment-ready config</li>
-            <li>Documentation for connecting your own backend</li>
-          </ul>
-        </article>
+        <style>{`
+          .loading-screen {
+            height: calc(var(--app-vh, 1vh) * 100);
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0a0a0a;
+            font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', monospace;
+          }
 
-        <article className="info-card">
-          <h2>How to extend it</h2>
-          <ul>
-            <li>Swap in your own API endpoint</li>
-            <li>Add authentication or session handling as needed</li>
-            <li>Replace starter copy, styling, and assets</li>
-            <li>Grow the app without inheriting private implementation details</li>
-          </ul>
-        </article>
-      </section>
+          .loading-content {
+            text-align: center;
+            color: rgba(255, 255, 255, 0.7);
+          }
 
-      <section className="integration-card">
-        <h2>Environment</h2>
-        <pre>{`VITE_API_URL=${CONFIG.apiUrl || 'https://YOUR_API_URL'}`}</pre>
-        <p>
-          Point <code>VITE_API_URL</code> at your own authenticated backend.
-        </p>
-      </section>
-    </main>
+          .loading-logo {
+            font-size: 4rem;
+            margin-bottom: 1.5rem;
+            animation: float 3s ease-in-out infinite;
+          }
+
+          .loading-spinner-large {
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 1rem;
+            border: 3px solid rgba(78, 205, 196, 0.2);
+            border-top-color: #4ECDC4;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+          }
+
+          .loading-content p {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.5);
+          }
+
+          @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+          }
+
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  // Not authenticated - show login
+  if (!isAuthenticated) {
+    return (
+      <div className="app">
+        <Auth 
+          onSignIn={signIn}
+          onSignUp={signUp}
+          onSignInWithProvider={signInWithProvider}
+        />
+
+        <style>{`
+          html, body, #root {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: auto;
+          }
+
+          .app {
+            height: 100%;
+            width: 100%;
+          }
+
+        `}</style>
+      </div>
+    );
+  }
+
+  // Authenticated - show chat interface
+  return (
+    <div className="app">
+      <ChatInterface 
+        user={user}
+        onSignOut={signOut}
+      />
+
+      <style>{`
+        html, body, #root {
+          margin: 0;
+          padding: 0;
+          height: 100%;
+          overflow: hidden;
+        }
+
+        .app {
+          height: 100%;
+          width: 100%;
+        }
+
+      `}</style>
+    </div>
   );
 }
 
