@@ -2,7 +2,6 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
-  countImageTokens,
   countTokens,
   determineRoute,
   type ImageAttachment,
@@ -30,6 +29,7 @@ import { createNormalizedProxyStream } from './sse_normalizer.ts';
 import {
   type GeminiFlashThinkingLevel,
   buildAnthropicStreamPayload,
+  buildGoogleJsonPayload,
   buildGoogleStreamPayload,
   buildOpenAILegacyStreamPayload,
   buildOpenAIStreamPayload,
@@ -58,54 +58,28 @@ import {
   buildSmdSkepticPrompt,
   buildSmdSynthDecisionPrompt,
 } from './smd_prompts.ts';
-import { buildGoogleJsonPayload } from './provider_payloads.ts';
+import {
+  type CostLogRecord,
+  computeUserTokenCount,
+  estimateVideoPromptTokens,
+  persistCostLog,
+  persistMessageAsync,
+  validateConversation,
+} from './db_helpers.ts';
+import {
+  fetchRelevantMemories,
+  maybeSummarizeConversationAsync,
+  type MemoryRetrievalResult,
+} from './memory_helpers.ts';
+import {
+  buildVideoContextBlock,
+  buildVideoUiNotesJson,
+  validateReadyVideoAssets,
+} from './video_helpers.ts';
 
 // ============================================================================
-// TYPE DEFINITIONS
+// LOCAL TYPE DEFINITIONS
 // ============================================================================
-
-interface Conversation {
-  id: string;
-  user_id: string;
-  total_tokens: number;
-  created_at?: string;
-}
-
-interface MessageRecord {
-  id?: string;
-  conversation_id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  token_count: number;
-  model_used?: string | undefined;
-  image_url?: string | undefined;
-  created_at?: string;
-}
-
-interface CostLogRecord {
-  id?: string;
-  user_id: string;
-  conversation_id: string;
-  model: string;
-  provider: string;
-  input_tokens: number;
-  output_tokens: number;
-  thinking_tokens: number;
-  input_cost: number;
-  output_cost: number;
-  thinking_cost: number;
-  total_cost: number;
-  pricing_version?: string;
-  created_at?: string;
-}
-
-interface ConversationMessageRecord {
-  id: string;
-  conversation_id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  created_at: string;
-}
 
 interface UpstreamCallResult {
   response: Response;
@@ -117,55 +91,6 @@ interface UpstreamCallResult {
 interface GoogleModelRecord {
   name: string;
   supportedGenerationMethods: string[];
-}
-
-interface UserMemoryRecord {
-  id: string;
-  user_id: string;
-  conversation_id: string | null;
-  source_window_end_at: string;
-  summary_text: string;
-  tags: string[] | null;
-  created_at: string;
-}
-
-interface ConversationMemoryStateRecord {
-  conversation_id: string;
-  user_id: string;
-  last_summarized_at: string | null;
-  last_summarized_message_created_at: string | null;
-  last_summarized_total_tokens: number | null;
-  updated_at: string;
-}
-
-interface MemoryRetrievalResult {
-  contextBlock: string;
-  hits: number;
-  tokenCount: number;
-}
-
-interface VideoAssetReadyRecord {
-  id: string;
-  user_id: string;
-  status: 'pending_upload' | 'uploaded' | 'processing' | 'ready' | 'failed' | 'expired';
-}
-
-interface VideoArtifactRecord {
-  asset_id: string;
-  kind: 'thumbnail' | 'frame' | 'transcript' | 'summary';
-  seq: number | null;
-  text_content: string | null;
-  metadata: Record<string, unknown> | null;
-  created_at: string;
-}
-
-interface VideoAssetContextRecord {
-  id: string;
-  status: 'pending_upload' | 'uploaded' | 'processing' | 'ready' | 'failed' | 'expired';
-  duration_ms: number | null;
-  width: number | null;
-  height: number | null;
-  updated_at: string | null;
 }
 
 // ============================================================================
@@ -188,12 +113,7 @@ const CORS_HEADERS = {
 const FUNCTION_TIMEOUT_MS = 55000;
 const MAX_QUERY_LENGTH = 50000;
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
-const MAX_VIDEO_ASSETS_PER_REQUEST = 4;
-const VIDEO_IMAGE_TOKEN_ESTIMATE = 1600;
-const VIDEO_TRANSCRIPT_TOKEN_ESTIMATE = 3000;
-const VIDEO_MAX_FRAME_TOKENS = 8 * VIDEO_IMAGE_TOKEN_ESTIMATE;
 const VIDEO_CONTEXT_MAX_CHARS = 5000;
-const VIDEO_CONTEXT_MAX_ARTIFACT_ROWS = 36;
 const DEV_MODE = Deno.env.get('DEV_MODE') === 'true';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
@@ -253,48 +173,6 @@ const SMD_FORMATTER_BUDGET = MODEL_REGISTRY[SMD_MODEL_TIER].budgetCap;
 const GOOGLE_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
 let googleModelsCache: { fetchedAt: number; models: GoogleModelRecord[] } | null = null;
 
-const MEMORY_MAX_CANDIDATES = 24;
-const MEMORY_MAX_INJECT = 3;
-const MEMORY_MAX_CONTEXT_CHARS = 1500;
-const MEMORY_SUMMARY_MIN_INTERVAL_MS = 10 * 60 * 1000;
-const MEMORY_SUMMARY_MIN_TOKEN_DELTA = 2200;
-const MEMORY_SUMMARY_MAX_MESSAGES = 24;
-const MEMORY_SUMMARY_MIN_TRANSCRIPT_TOKENS = 220;
-
-const MEMORY_STOP_WORDS = new Set([
-  'the',
-  'and',
-  'for',
-  'with',
-  'that',
-  'this',
-  'from',
-  'have',
-  'your',
-  'you',
-  'are',
-  'was',
-  'were',
-  'but',
-  'not',
-  'all',
-  'any',
-  'can',
-  'will',
-  'just',
-  'about',
-  'into',
-  'over',
-  'when',
-  'what',
-  'where',
-  'how',
-  'why',
-  'use',
-  'using',
-  'need',
-  'please',
-]);
 
 // ============================================================================
 // PROVIDER HELPERS
@@ -1416,599 +1294,6 @@ function extractBearerToken(authHeader: string): string | null {
   return authHeader.substring(7);
 }
 
-function extractKeywords(input: string): string[] {
-  const words = input
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, ' ')
-    .split(/\s+/)
-    .map((word) => word.trim())
-    .filter((word) => word.length >= 3 && !MEMORY_STOP_WORDS.has(word));
-  return [...new Set(words)].slice(0, 20);
-}
-
-function truncateWithEllipsis(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars - 1)}…`;
-}
-
-function scoreMemory(summary: string, tags: string[] | null, keywords: string[]): number {
-  if (keywords.length === 0) return 1;
-  const haystack = summary.toLowerCase();
-  const tagSet = new Set((tags || []).map((tag) => tag.toLowerCase()));
-  let score = 0;
-
-  for (const keyword of keywords) {
-    if (haystack.includes(keyword)) score += 2;
-    if (tagSet.has(keyword)) score += 3;
-  }
-  return score;
-}
-
-function buildMemoryContextBlock(memories: UserMemoryRecord[]): string {
-  const lines = memories.map((memory, idx) => {
-    const stamp = memory.created_at ? memory.created_at.slice(0, 10) : 'unknown-date';
-    return `- [${idx + 1}] (${stamp}) ${truncateWithEllipsis(memory.summary_text.trim(), 420)}`;
-  });
-
-  const block = [
-    '### Long-Term User Memory',
-    'Use this memory only when relevant to the current request.',
-    ...lines,
-    '### End Memory',
-  ].join('\n');
-
-  return truncateWithEllipsis(block, MEMORY_MAX_CONTEXT_CHARS);
-}
-
-async function fetchRelevantMemories(
-  supabase: ReturnType<typeof createClient>,
-  userId: string,
-  query: string,
-): Promise<MemoryRetrievalResult> {
-  const { data, error } = await supabase
-    .from('user_memories')
-    .select('id, user_id, conversation_id, source_window_end_at, summary_text, tags, created_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(MEMORY_MAX_CANDIDATES);
-
-  if (error || !data || data.length === 0) {
-    return { contextBlock: '', hits: 0, tokenCount: 0 };
-  }
-
-  const memories = data as UserMemoryRecord[];
-  const keywords = extractKeywords(query);
-  const ranked = memories
-    .map((memory, index) => ({
-      memory,
-      index,
-      score: scoreMemory(memory.summary_text, memory.tags, keywords),
-    }))
-    .sort((a, b) => {
-      if (b.score === a.score) return a.index - b.index;
-      return b.score - a.score;
-    });
-
-  const selected = ranked
-    .filter((entry) => entry.score > 0)
-    .slice(0, MEMORY_MAX_INJECT)
-    .map((entry) => entry.memory);
-
-  if (selected.length === 0) {
-    selected.push(memories[0]!);
-  }
-
-  const contextBlock = buildMemoryContextBlock(selected);
-  return {
-    contextBlock,
-    hits: selected.length,
-    tokenCount: countTokens(contextBlock),
-  };
-}
-
-function normalizeSummary(text: string): string {
-  return truncateWithEllipsis(text.replace(/\s+/g, ' ').trim(), 1200);
-}
-
-function extractSummaryFromOpenAI(payload: unknown): string | undefined {
-  const data = payload as {
-    choices?: Array<{
-      message?: { content?: string | Array<{ text?: string; type?: string }> };
-    }>;
-  };
-  const first = data.choices?.[0]?.message?.content;
-  if (typeof first === 'string') return first;
-  if (Array.isArray(first)) {
-    const parts = first
-      .map((part) => (typeof part?.text === 'string' ? part.text : ''))
-      .filter(Boolean);
-    if (parts.length > 0) return parts.join(' ');
-  }
-  return undefined;
-}
-
-function extractSummaryFromAnthropic(payload: unknown): string | undefined {
-  const data = payload as { content?: Array<{ type?: string; text?: string }> };
-  const parts = (data.content || [])
-    .filter((part) => part.type === 'text' && typeof part.text === 'string')
-    .map((part) => part.text || '');
-  if (parts.length === 0) return undefined;
-  return parts.join(' ');
-}
-
-function extractSummaryFromGoogle(payload: unknown): string | undefined {
-  const data = payload as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  const firstCandidate = data.candidates?.[0];
-  if (!firstCandidate) return undefined;
-  const parts = (firstCandidate.content?.parts || [])
-    .map((part) => (typeof part.text === 'string' ? part.text : ''))
-    .filter(Boolean);
-  if (parts.length === 0) return undefined;
-  return parts.join(' ');
-}
-
-async function summarizeConversationWindow(
-  transcript: string,
-  signal: AbortSignal,
-): Promise<string | undefined> {
-  const prompt = [
-    'Summarize key persistent facts about the user from this transcript.',
-    'Prioritize: preferences, projects, constraints, deadlines, recurring goals.',
-    'Exclude small talk and one-off ephemeral details.',
-    'Return plain text in 4-8 bullet points, max 120 words.',
-    '',
-    transcript,
-  ].join('\n');
-
-  if (OPENAI_API_KEY) {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-5.4-mini',
-        messages: [
-          { role: 'system', content: 'You extract durable user memory for future chat context.' },
-          { role: 'user', content: prompt },
-        ],
-        max_tokens: 220,
-      }),
-      signal,
-    });
-    if (response.ok) {
-      const payload = await response.json();
-      const summary = extractSummaryFromOpenAI(payload);
-      if (summary) return normalizeSummary(summary);
-    }
-  }
-
-  if (ANTHROPIC_API_KEY) {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: MODEL_REGISTRY['haiku-4.5'].modelId,
-        max_tokens: 220,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-      signal,
-    });
-    if (response.ok) {
-      const payload = await response.json();
-      const summary = extractSummaryFromAnthropic(payload);
-      if (summary) return normalizeSummary(summary);
-    }
-  }
-
-  if (GOOGLE_API_KEY) {
-    const model = await resolveGoogleModelAlias(MODEL_REGISTRY['gemini-2.5-flash'].modelId, signal);
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${
-      encodeURIComponent(model)
-    }:generateContent?key=${encodeURIComponent(GOOGLE_API_KEY)}`;
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 220 },
-      }),
-      signal,
-    });
-    if (response.ok) {
-      const payload = await response.json();
-      const summary = extractSummaryFromGoogle(payload);
-      if (summary) return normalizeSummary(summary);
-    }
-  }
-
-  return undefined;
-}
-
-async function maybeSummarizeConversationAsync(
-  supabase: ReturnType<typeof createClient>,
-  userId: string,
-  conversationId: string,
-  totalTokens: number,
-): Promise<void> {
-  try {
-    const { data: stateRaw } = await supabase
-      .from('conversation_memory_state')
-      .select(
-        'conversation_id, user_id, last_summarized_at, last_summarized_message_created_at, last_summarized_total_tokens, updated_at',
-      )
-      .eq('conversation_id', conversationId)
-      .maybeSingle();
-
-    const state = (stateRaw as ConversationMemoryStateRecord | null) || null;
-    const lastSummarizedAtMs = state?.last_summarized_at ? Date.parse(state.last_summarized_at) : 0;
-    const lastSummarizedTokens = state?.last_summarized_total_tokens || 0;
-    const nowMs = Date.now();
-    const dueByTime = !lastSummarizedAtMs ||
-      nowMs - lastSummarizedAtMs >= MEMORY_SUMMARY_MIN_INTERVAL_MS;
-    const dueByTokenDelta = totalTokens - lastSummarizedTokens >= MEMORY_SUMMARY_MIN_TOKEN_DELTA;
-
-    if (!dueByTime && !dueByTokenDelta) return;
-
-    let query = supabase
-      .from('messages')
-      .select('id, conversation_id, role, content, created_at')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: true })
-      .limit(MEMORY_SUMMARY_MAX_MESSAGES);
-
-    if (state?.last_summarized_message_created_at) {
-      query = query.gt('created_at', state.last_summarized_message_created_at);
-    }
-
-    const { data: rowsRaw, error: rowsError } = await query;
-    if (rowsError || !rowsRaw || rowsRaw.length < 2) return;
-
-    const rows = rowsRaw as ConversationMessageRecord[];
-    const transcript = rows
-      .map((row) => `${row.role.toUpperCase()}: ${row.content}`)
-      .join('\n');
-
-    if (countTokens(transcript) < MEMORY_SUMMARY_MIN_TRANSCRIPT_TOKENS && !dueByTime) return;
-
-    const abortController = new AbortController();
-    const timer = setTimeout(() => abortController.abort(), 15000);
-    let summary: string | undefined;
-    try {
-      summary = await summarizeConversationWindow(transcript, abortController.signal);
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!summary) return;
-
-    const sourceWindowEndAt = rows[rows.length - 1]!.created_at;
-    const tags = extractKeywords(summary).slice(0, 8);
-
-    await supabase.from('user_memories').upsert(
-      {
-        user_id: userId,
-        conversation_id: conversationId,
-        source_window_end_at: sourceWindowEndAt,
-        summary_text: summary,
-        tags,
-      } as never,
-      { onConflict: 'conversation_id,source_window_end_at' },
-    );
-
-    const nowIso = new Date().toISOString();
-    await supabase.from('conversation_memory_state').upsert(
-      {
-        conversation_id: conversationId,
-        user_id: userId,
-        last_summarized_at: nowIso,
-        last_summarized_message_created_at: sourceWindowEndAt,
-        last_summarized_total_tokens: totalTokens,
-        updated_at: nowIso,
-      } as never,
-      { onConflict: 'conversation_id' },
-    );
-  } catch (error) {
-    console.warn('[Memory] summarize skipped:', error);
-  }
-}
-
-// ============================================================================
-// DATABASE HELPERS
-// ============================================================================
-
-async function validateConversation(
-  supabase: ReturnType<typeof createClient>,
-  conversationId: string,
-  userId: string,
-): Promise<{ valid: boolean; tokenCount: number }> {
-  const { data: conv, error } = await supabase
-    .from('conversations')
-    .select('user_id, total_tokens')
-    .eq('id', conversationId)
-    .maybeSingle();
-
-  if (error || !conv) {
-    const newConv: Conversation = { id: conversationId, user_id: userId, total_tokens: 0 };
-    await supabase.from('conversations').insert(newConv as never);
-    return { valid: true, tokenCount: 0 };
-  }
-
-  const conversation = conv as Conversation;
-  if (conversation.user_id !== userId) return { valid: false, tokenCount: 0 };
-  return { valid: true, tokenCount: conversation.total_tokens || 0 };
-}
-
-function persistMessageAsync(
-  supabase: ReturnType<typeof createClient>,
-  conversationId: string,
-  role: 'user' | 'assistant',
-  content: string,
-  tokenCount: number,
-  modelUsed?: string,
-  imageUrl?: string,
-): void {
-  (async () => {
-    try {
-      const messageRecord: MessageRecord = {
-        conversation_id: conversationId,
-        role,
-        content,
-        token_count: tokenCount,
-        model_used: modelUsed || undefined,
-        image_url: imageUrl || undefined,
-      };
-
-      await Promise.all([
-        supabase.from('messages').insert(messageRecord as never),
-        supabase.rpc('increment_token_count', {
-          p_conversation_id: conversationId,
-          p_tokens: tokenCount,
-        } as never),
-      ]);
-    } catch (err) {
-      console.error('[DB] Persist failed:', err);
-    }
-  })();
-}
-
-function estimateVideoPromptTokens(videoAssetCount: number): number {
-  if (videoAssetCount <= 0) return 0;
-  const estimatedFrameCount = Math.min(videoAssetCount * 4, 8);
-  const estimatedFrameTokens = Math.min(
-    estimatedFrameCount * VIDEO_IMAGE_TOKEN_ESTIMATE,
-    VIDEO_MAX_FRAME_TOKENS,
-  );
-  return estimatedFrameTokens + VIDEO_TRANSCRIPT_TOKEN_ESTIMATE;
-}
-
-async function validateReadyVideoAssets(
-  supabase: ReturnType<typeof createClient>,
-  userId: string,
-  videoAssetIds: string[],
-): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
-  if (videoAssetIds.length === 0) {
-    return { ok: true, ids: [] };
-  }
-
-  const uniqueIds = [...new Set(videoAssetIds.filter((id) => typeof id === 'string' && id.trim()))];
-  if (uniqueIds.length === 0) {
-    return { ok: true, ids: [] };
-  }
-
-  if (!ENABLE_VIDEO_PIPELINE) {
-    return { ok: false, error: 'video_pipeline_disabled' };
-  }
-
-  if (uniqueIds.length > MAX_VIDEO_ASSETS_PER_REQUEST) {
-    return { ok: false, error: 'video_too_many_assets' };
-  }
-
-  const { data, error } = await supabase
-    .from('video_assets')
-    .select('id, user_id, status')
-    .in('id', uniqueIds);
-
-  if (error) {
-    console.error('[Video] validate assets query failed:', error);
-    return { ok: false, error: 'video_validation_failed' };
-  }
-
-  const rows = (data || []) as VideoAssetReadyRecord[];
-  if (rows.length !== uniqueIds.length) {
-    return { ok: false, error: 'video_not_ready' };
-  }
-
-  const allReady = rows.every((row) => row.user_id === userId && row.status === 'ready');
-  if (!allReady) {
-    return { ok: false, error: 'video_not_ready' };
-  }
-
-  return { ok: true, ids: uniqueIds };
-}
-
-function resolveArtifactTimestampSec(
-  metadata: Record<string, unknown> | null,
-  seq: number | null,
-): number | null {
-  const fromSec = metadata?.timestamp_sec ?? metadata?.timestamp_s ?? metadata?.time_sec;
-  if (typeof fromSec === 'number' && Number.isFinite(fromSec) && fromSec >= 0) return fromSec;
-
-  const fromMs = metadata?.timestamp_ms ?? metadata?.time_ms;
-  if (typeof fromMs === 'number' && Number.isFinite(fromMs) && fromMs >= 0) return fromMs / 1000;
-
-  if (typeof seq === 'number' && Number.isFinite(seq) && seq >= 0) {
-    // Heuristic fallback only when artifact metadata doesn't include a timestamp.
-    return seq * 5;
-  }
-  return null;
-}
-
-function clampText(input: string, maxChars: number): string {
-  if (input.length <= maxChars) return input;
-  return `${input.slice(0, maxChars)}...`;
-}
-
-function compactVideoStatusLine(asset: VideoAssetContextRecord): string {
-  const durationSec = typeof asset.duration_ms === 'number' && Number.isFinite(asset.duration_ms)
-    ? Math.max(0, Math.round(asset.duration_ms / 1000))
-    : null;
-  const dim = asset.width && asset.height ? `${asset.width}x${asset.height}` : 'unknown-dimensions';
-  const durationLabel = durationSec !== null ? `${durationSec}s` : 'unknown-duration';
-  return `asset=${asset.id} status=${asset.status} duration=${durationLabel} dimensions=${dim}`;
-}
-
-function compactArtifactLine(row: VideoArtifactRecord): string | null {
-  const textFromMetadata = typeof row.metadata?.caption === 'string'
-    ? row.metadata.caption
-    : typeof row.metadata?.summary === 'string'
-    ? row.metadata.summary
-    : '';
-  const rawText = (row.text_content || textFromMetadata || '').trim();
-  if (!rawText) return null;
-  const timestampSec = resolveArtifactTimestampSec(row.metadata, row.seq);
-  const tsLabel = typeof timestampSec === 'number' ? `t=${timestampSec.toFixed(1)}s ` : '';
-  return `[${row.asset_id}] ${row.kind} ${tsLabel}${clampText(rawText, 240)}`;
-}
-
-async function buildVideoContextBlock(
-  supabase: ReturnType<typeof createClient>,
-  videoAssetIds: string[],
-  maxChars: number,
-): Promise<string> {
-  if (videoAssetIds.length === 0) return '';
-
-  const lines: string[] = [];
-
-  const { data: assetsData, error: assetsError } = await supabase
-    .from('video_assets')
-    .select('id, status, duration_ms, width, height, updated_at')
-    .in('id', videoAssetIds)
-    .order('updated_at', { ascending: false });
-
-  if (assetsError) {
-    console.warn('[Video] asset context lookup failed:', assetsError);
-  } else {
-    const assets = (assetsData || []) as VideoAssetContextRecord[];
-    for (const asset of assets) {
-      lines.push(compactVideoStatusLine(asset));
-    }
-  }
-
-  const { data: artifactsData, error: artifactsError } = await supabase
-    .from('video_artifacts')
-    .select('asset_id, kind, seq, text_content, metadata, created_at')
-    .in('asset_id', videoAssetIds)
-    .order('asset_id', { ascending: true })
-    .order('seq', { ascending: true, nullsFirst: true })
-    .order('created_at', { ascending: true })
-    .limit(VIDEO_CONTEXT_MAX_ARTIFACT_ROWS);
-
-  if (artifactsError) {
-    console.warn('[Video] artifact context lookup failed:', artifactsError);
-  } else {
-    const rows = (artifactsData || []) as VideoArtifactRecord[];
-    for (const row of rows) {
-      const line = compactArtifactLine(row);
-      if (line) lines.push(line);
-    }
-  }
-
-  if (lines.length === 0) {
-    return '';
-  }
-
-  const block = [
-    '### Video Context',
-    'Use these extracted video artifacts as ground truth context.',
-    ...lines,
-    '### End Video Context',
-  ].join('\n');
-
-  return truncateWithEllipsis(block, maxChars);
-}
-
-async function buildVideoUiNotesJson(
-  supabase: ReturnType<typeof createClient>,
-  videoAssetIds: string[],
-  maxChars: number,
-): Promise<string | null> {
-  if (videoAssetIds.length === 0) return null;
-
-  const { data, error } = await supabase
-    .from('video_artifacts')
-    .select('asset_id, kind, seq, text_content, metadata, created_at')
-    .in('asset_id', videoAssetIds)
-    .order('asset_id', { ascending: true })
-    .order('seq', { ascending: true, nullsFirst: true })
-    .order('created_at', { ascending: true });
-
-  if (error) {
-    console.warn('[Debate][video_ui] artifact lookup failed:', error);
-    return null;
-  }
-
-  const rows = (data || []) as VideoArtifactRecord[];
-  const artifacts = rows.slice(0, 48).map((row) => {
-    const textFromMetadata = typeof row.metadata?.caption === 'string'
-      ? row.metadata.caption
-      : typeof row.metadata?.summary === 'string'
-      ? row.metadata.summary
-      : '';
-    const text = clampText((row.text_content || textFromMetadata || '').trim(), 260);
-    return {
-      asset_id: row.asset_id,
-      kind: row.kind,
-      seq: row.seq,
-      timestamp_sec: resolveArtifactTimestampSec(row.metadata, row.seq),
-      created_at: row.created_at,
-      text,
-    };
-  }).filter((a) => a.text.length > 0);
-
-  const payload = {
-    schema_version: 'video_ui_notes_v1',
-    video_asset_ids: videoAssetIds,
-    artifacts,
-    note: 'Use only these extracted notes. Unseen footage should be marked unknown.',
-  };
-
-  let json = JSON.stringify(payload);
-  if (json.length <= maxChars) return json;
-
-  const compact = {
-    schema_version: 'video_ui_notes_v1',
-    video_asset_ids: videoAssetIds,
-    artifacts: artifacts.slice(0, 12).map((a) => ({ ...a, text: clampText(a.text, 120) })),
-    truncated: true,
-  };
-  json = JSON.stringify(compact);
-  if (json.length <= maxChars) return json;
-
-  return JSON.stringify({
-    schema_version: 'video_ui_notes_v1',
-    video_asset_ids: videoAssetIds,
-    artifacts: [],
-    truncated: true,
-  });
-}
-
-async function persistCostLog(
-  supabase: ReturnType<typeof createClient>,
-  record: CostLogRecord,
-): Promise<void> {
-  try {
-    await supabase.from('cost_logs').insert(record as never);
-  } catch (err) {
-    console.error('[DB] Cost log persist failed:', err);
-  }
-}
 
 // ============================================================================
 // MAIN HANDLER
@@ -2224,6 +1509,7 @@ Deno.serve(async (req: Request) => {
       supabaseClient as unknown as ReturnType<typeof createClient>,
       userId,
       Array.isArray(videoAssetIds) ? videoAssetIds : [],
+      ENABLE_VIDEO_PIPELINE,
     );
     if (!videoValidation.ok) {
       return new Response(JSON.stringify({ error: videoValidation.error }), {
@@ -2330,6 +1616,7 @@ Deno.serve(async (req: Request) => {
 
     // SMD state — declared alongside debate state for the same reason.
     let smdActive = false;
+    let smdFastPathHit = false;
     let smdRunLog: SmdStageLog | null = null;
 
     let upstream: UpstreamCallResult;
@@ -2349,6 +1636,7 @@ Deno.serve(async (req: Request) => {
 
         if (fastPath.skip) {
           console.log(`[SMD] fast-path triggered: ${fastPath.reason} — routing to baseline`);
+          smdFastPathHit = true;
           // Fast-path: use the normally routed model (not forced to Gemini Flash).
           upstream = await callProviderStream(
             decision,
@@ -2513,9 +1801,7 @@ Deno.serve(async (req: Request) => {
 
     const effectiveModelId = upstream.effectiveModelId || responseDecision.model;
 
-    const userTokenCount = countTokens(query) +
-      countImageTokens(imageAttachments) +
-      estimatedVideoPromptTokens;
+    const userTokenCount = computeUserTokenCount(query, imageAttachments, estimatedVideoPromptTokens);
     persistMessageAsync(
       supabaseClient as unknown as ReturnType<typeof createClient>,
       conversationId,
@@ -2576,6 +1862,8 @@ Deno.serve(async (req: Request) => {
             thinking_cost: costBreakdown.reasoningCostUsd,
             total_cost: costBreakdown.totalUsd,
             pricing_version: costBreakdown.pricingVersion,
+            complexity_score: responseDecision.complexityScore,
+            route_rationale: responseDecision.rationaleTag,
           },
         );
 
@@ -2593,6 +1881,7 @@ Deno.serve(async (req: Request) => {
             userId,
             conversationId,
             ownership.tokenCount + userTokenCount + assistantTokenCount,
+            { openai: OPENAI_API_KEY, anthropic: ANTHROPIC_API_KEY, google: GOOGLE_API_KEY },
           );
         }
       },
@@ -2623,7 +1912,7 @@ Deno.serve(async (req: Request) => {
           debateTrigger: debateTriggerEffective,
           ...(debateModelTierEffective ? { debateModelTier: debateModelTierEffective } : {}),
         }),
-        // SMD headers are emitted ONLY when SMD pipeline ran (absent = SMD did not run).
+        // SMD headers: emitted when SMD pipeline ran OR fast-path triggered.
         ...(smdActive && smdRunLog ? {
           'X-SMD-Mode': 'true',
           'X-SMD-Issue-Count': String(smdRunLog.issueCount),
@@ -2632,6 +1921,10 @@ Deno.serve(async (req: Request) => {
           'X-SMD-Parse-Status': (smdRunLog.skepticSchemaValid && smdRunLog.synthSchemaValid)
             ? 'ok'
             : 'degraded',
+          'X-SMD-Fast-Path': 'false',
+        } : smdFastPathHit ? {
+          'X-SMD-Mode': 'true',
+          'X-SMD-Fast-Path': 'true',
         } : {}),
       },
     });

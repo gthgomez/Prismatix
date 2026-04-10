@@ -22,7 +22,7 @@ export interface MessageCost {
 
 export interface Message {
   role: 'user' | 'assistant';
-  content: string | any[]; // Supports multimodal content
+  content: string | unknown[]; // Supports multimodal content
   timestamp: number;
   model?: RouterModel;
   provider?: RouterProvider;

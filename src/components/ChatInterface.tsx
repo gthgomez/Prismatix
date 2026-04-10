@@ -12,9 +12,12 @@ import { CostBadge } from './CostBadge';
 import { PrismatixPulse } from './PrismatixPulse';
 import { SpendTracker } from './SpendTracker';
 import { ThinkingProcess } from './ThinkingProcess';
+import { ModelSelectorDropdown } from './ModelSelectorDropdown';
+import { AttachmentPreview } from './AttachmentPreview';
 import '../styles/ChatInterface.css';
 import { askPrismatix, getConversationId, resetConversation } from '../smartFetch';
 import { useAutoScroll } from '../hooks/useAutoScroll';
+import { readRouterStream } from '../hooks/useStreamHandler';
 import {
   calculateFinalCost,
   calculatePreFlightCost,
@@ -26,7 +29,7 @@ import {
   uploadVideoAttachment,
   waitForVideoReady,
 } from '../services/storageService';
-import { getDailyTotal, recordCost } from '../services/financeTracker';
+import { fetchServerDailyTotal, recordCost } from '../services/financeTracker';
 import type {
   FileUploadPayload,
   GeminiFlashThinkingLevel,
@@ -36,7 +39,6 @@ import type {
 import { MODEL_CATALOG, MODEL_ORDER } from '../modelCatalog';
 import type { User } from '@supabase/supabase-js';
 import {
-  DEBATE_SELECTIONS,
   getDebatePayload,
   hasReadyVideoAttachment,
   type DebateSelection,
@@ -365,7 +367,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     const promptTokenEstimate = preflight.promptTokens;
 
     if (!skipBudgetCheck) {
-      const dailyTotalUsd = getDailyTotal();
+      // Fetch from server first so budget cannot be bypassed by clearing localStorage or opening a new tab.
+      // Falls back to localStorage total if the server is unreachable.
+      const dailyTotalUsd = await fetchServerDailyTotal();
       const budgetDecision = evaluateBudget({
         estimateUsd: preflight.estimatedUsd,
         dailyTotalUsd,
@@ -486,11 +490,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       setCostModel(model);
       setCurrentComplexity(complexityScore);
 
-      const reader = stream.getReader();
-      const decoder = new TextDecoder();
-      let assistantContent = '';
-      const thinkingLog: string[] = [];
-      let streamedFinalUsd: number | undefined;
       const streamStartMs = Date.now();
 
       setMessages((prev) => [...prev, {
@@ -516,94 +515,43 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         timestamp: Date.now(),
       }]);
 
-      // Stream loop
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              if (line.startsWith('data: ')) {
-                const json = JSON.parse(line.slice(6));
-                if (json.type === 'content_block_delta') {
-                  const deltaText = json.delta?.text || '';
-                  if (deltaText) {
-                    assistantContent += deltaText;
-                    if (waitingFirstTokenRef.current) {
-                      waitingFirstTokenRef.current = false;
-                      setIsWaitingFirstToken(false);
-                    }
-                  }
-                } else if (json.type === 'thought') {
-                  const thoughtChunk = typeof json.chunk === 'string' ? json.chunk : '';
-                  if (thoughtChunk) {
-                    thinkingLog.push(thoughtChunk);
-                    setCurrentUsage({
-                      promptTokens: promptTokenEstimate,
-                      completionTokens: estimateTokenCount(assistantContent),
-                      thinkingTokens: estimateTokenCount(thinkingLog.join('')),
-                    });
-                  }
-                } else if (json.type === 'meta') {
-                  const finalUsd = Number(
-                    json.cost?.finalUsd ?? json.usage?.final_cost_usd ?? json.usage?.cost_usd,
-                  );
-                  if (Number.isFinite(finalUsd)) {
-                    streamedFinalUsd = finalUsd;
-                  }
-                }
-              } else if (!line.startsWith('event:')) {
-                if (line) {
-                  assistantContent += line;
-                  if (waitingFirstTokenRef.current) {
-                    waitingFirstTokenRef.current = false;
-                    setIsWaitingFirstToken(false);
-                  }
-                }
+      const { assistantContent, thinkingLog, streamedFinalUsd } = await readRouterStream(
+        stream,
+        promptTokenEstimate,
+        {
+          onFirstToken: () => {
+            waitingFirstTokenRef.current = false;
+            setIsWaitingFirstToken(false);
+          },
+          onUsageUpdate: (usage) => {
+            setCurrentUsage(usage);
+          },
+          onContentUpdate: (content, log) => {
+            setMessages((prev) => {
+              const updated = [...prev];
+              const lastMessage = updated[updated.length - 1];
+              if (lastMessage) {
+                const nextCost = lastMessage.cost
+                  ? { ...lastMessage.cost }
+                  : costEstimateUsd !== undefined
+                  ? { estimatedUsd: costEstimateUsd, pricingVersion: costPricingVersion }
+                  : undefined;
+                updated[updated.length - 1] = {
+                  ...lastMessage,
+                  content,
+                  thinkingLog: log,
+                  thinkingDurationMs: Date.now() - streamStartMs,
+                  cost: nextCost,
+                };
               }
-            } catch {
-              // Ignore partial JSON
+              return updated;
+            });
+            if (shouldStickToBottomRef.current) {
+              messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
             }
-          }
-        }
-
-        setCurrentUsage({
-          promptTokens: promptTokenEstimate,
-          completionTokens: estimateTokenCount(assistantContent),
-          thinkingTokens: estimateTokenCount(thinkingLog.join('')),
-        });
-
-        setMessages((prev) => {
-          const updated = [...prev];
-          const lastMessage = updated[updated.length - 1];
-          if (lastMessage) {
-            const nextCost = lastMessage.cost
-              ? { ...lastMessage.cost }
-              : costEstimateUsd !== undefined
-              ? { estimatedUsd: costEstimateUsd, pricingVersion: costPricingVersion }
-              : undefined;
-            if (nextCost && streamedFinalUsd !== undefined) {
-              nextCost.finalUsd = streamedFinalUsd;
-            }
-            updated[updated.length - 1] = {
-              ...lastMessage,
-              content: assistantContent,
-              thinkingLog: [...thinkingLog],
-              thinkingDurationMs: Date.now() - streamStartMs,
-              cost: nextCost,
-            };
-          }
-          return updated;
-        });
-
-        if (shouldStickToBottomRef.current) {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
-        }
-      }
+          },
+        },
+      );
 
       const historyTokens = messages.reduce((sum, msg) => {
         const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
@@ -752,120 +700,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
               {/* Model Dropdown */}
               {showModelSelector && (
-                <div className='model-dropdown'>
-                  <div className='dropdown-header'>
-                    <span>Model Selection</span>
-                    {manualModelOverride && (
-                      <button
-                        type='button'
-                        className='auto-mode-btn'
-                        onClick={clearModelOverride}
-                      >
-                        Auto Mode
-                      </button>
-                    )}
-                  </div>
-
-                  <div className='dropdown-section-title'>Routing Intelligence</div>
-                  <div className='dropdown-options-grid'>
-                    <div className='complexity-status-item'>
-                      <div className='status-header'>
-                        <span className='status-label'>Current Task Complexity</span>
-                        <span className='complexity-value'>{currentComplexity}</span>
-                      </div>
-                      <div className='complexity-bar'>
-                        <div
-                          className='complexity-fill'
-                          style={{ width: `${currentComplexity}%` }}
-                        />
-                      </div>
-                      <span className='routing-logic-hint'>
-                        {currentComplexity > 75 
-                          ? 'â†’ High complexity: Routed to Pro model' 
-                          : currentComplexity > 40
-                          ? 'â†’ Medium complexity: Routed to Sonnet'
-                          : 'â†’ Low complexity: Routed to Flash'}
-                      </span>
-                    </div>
-
-                    <div className='dropdown-divider' />
-                    
-                    <div className='dropdown-controls-row'>
-                      <div
-                        className='thinking-toggle-container'
-                        title='Applies when Gemini Flash is selected'
-                      >
-                        <span className='thinking-toggle-label'>Flash Thinking</span>
-                        <div className='thinking-toggle-buttons'>
-                          <button
-                            type='button'
-                            className={`thinking-toggle-button ${
-                              geminiFlashThinkingLevel === 'low' ? 'active' : ''
-                            }`}
-                            onClick={() => setGeminiFlashThinkingLevel('low')}
-                          >
-                            Low
-                          </button>
-                          <button
-                            type='button'
-                            className={`thinking-toggle-button ${
-                              geminiFlashThinkingLevel === 'high' ? 'active' : ''
-                            }`}
-                            onClick={() => setGeminiFlashThinkingLevel('high')}
-                          >
-                            High
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className='debate-toggle-container' title='Debate routing mode'>
-                        <span className='debate-toggle-label'>Debate Mode</span>
-                        <select
-                          className='debate-select'
-                          value={debateSelection}
-                          onChange={(e) => {
-                            setDebateSelection(e.target.value as DebateSelection);
-                            if (sendValidationError) {
-                              setSendValidationError(null);
-                            }
-                          }}
-                        >
-                          {DEBATE_SELECTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className='dropdown-divider' />
-                  <div className='dropdown-section-title'>Manual Model Override</div>
-
-                  <div className='model-options'>
-                    {MODEL_ORDER.map((key) => {
-                      const config = MODEL_CONFIG[key];
-                      return (
-                        <button
-                          key={key}
-                          type='button'
-                          className={`model-option ${currentModel === key ? 'active' : ''} ${
-                            manualModelOverride === key ? 'manual' : ''
-                          }`}
-                          onClick={() => handleModelSelect(key)}
-                          style={{ '--option-color': config.color } as React.CSSProperties}
-                        >
-                          <span className='option-icon'>{config.icon}</span>
-                          <div className='option-info'>
-                            <span className='option-name'>{config.shortName}</span>
-                            <span className='option-desc'>{config.description}</span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                <ModelSelectorDropdown
+                  currentModel={currentModel}
+                  currentComplexity={currentComplexity}
+                  manualModelOverride={manualModelOverride}
+                  geminiFlashThinkingLevel={geminiFlashThinkingLevel}
+                  debateSelection={debateSelection}
+                  sendValidationError={sendValidationError}
+                  onModelSelect={handleModelSelect}
+                  onClearOverride={clearModelOverride}
+                  onGeminiThinkingChange={setGeminiFlashThinkingLevel}
+                  onDebateChange={(sel) => {
+                    setDebateSelection(sel);
+                    if (sendValidationError) setSendValidationError(null);
+                  }}
+                  onClearValidationError={() => setSendValidationError(null)}
+                />
               )}
             </div>
 
@@ -1085,9 +935,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                       </div>
                     )}
                     {/* Show attachment count if multiple */}
-                    {(msg as any).attachments?.length > 1 && (
+                    {msg.attachments && msg.attachments.length > 1 && (
                       <div className='message-attachments-badge'>
-                        📎 {(msg as any).attachments.length} files attached
+                        📎 {msg.attachments.length} files attached
                       </div>
                     )}
                     {msg.role === 'assistant' && (
@@ -1122,69 +972,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       {/* Input Area */}
       <div className='chat-input-container'>
         <div className='input-wrapper'>
-          {/* ✅ FIX: Multi-file preview */}
-          {draftAttachments.length > 0 && (
-            <div className='draft-preview-container'>
-              <div className='draft-preview-header'>
-                <span>
-                  {draftAttachments.length} file{draftAttachments.length > 1 ? 's' : ''} attached
-                </span>
-                <button
-                  type='button'
-                  onClick={clearAllAttachments}
-                  className='clear-all-btn'
-                  title='Remove all attachments'
-                >
-                  Clear all
-                </button>
-              </div>
-              <div className='draft-files-list'>
-                {draftAttachments.map((file, index) => (
-                  <div key={file.clientId || `${file.name}-${index}`} className='draft-file-item'>
-                    {file.isImage && file.imageData
-                      ? (
-                        <img
-                          src={`data:${file.mediaType};base64,${file.imageData}`}
-                          alt={file.name}
-                          className='draft-thumbnail'
-                        />
-                      )
-                      : <div className='draft-file-icon'>{file.kind === 'video' ? '🎬' : '📄'}</div>}
-                    <span className='draft-filename' title={file.name}>
-                      {file.name.length > 20 ? file.name.slice(0, 17) + '...' : file.name}
-                    </span>
-                    {file.kind === 'video' && (
-                      <span className='draft-video-status'>
-                        {file.status === 'ready'
-                          ? 'ready'
-                          : file.status === 'failed'
-                          ? file.errorCode || 'failed'
-                          : `${file.uploadProgress || 0}%`}
-                      </span>
-                    )}
-                    <button
-                      type='button'
-                      onClick={() => removeAttachment(index)}
-                      className='draft-remove-btn'
-                      title='Remove this file'
-                    >
-                      <svg
-                        width='14'
-                        height='14'
-                        viewBox='0 0 24 24'
-                        fill='none'
-                        stroke='currentColor'
-                        strokeWidth='2'
-                      >
-                        <line x1='18' y1='6' x2='6' y2='18' />
-                        <line x1='6' y1='6' x2='18' y2='18' />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <AttachmentPreview
+            attachments={draftAttachments}
+            onRemove={removeAttachment}
+            onClearAll={clearAllAttachments}
+          />
 
           {/* Input Row */}
           <div className='input-row'>

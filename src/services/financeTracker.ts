@@ -1,4 +1,6 @@
 import type { RouterModel } from '../types';
+import { supabase } from '../lib/supabase';
+import { CONFIG } from '../config';
 
 const STORAGE_KEY = 'prismatix_finance_v1';
 
@@ -128,4 +130,36 @@ export function getSpendStats(date = currentDate()): SpendStats {
     lastMessageCost: roundUsd(lastEntry?.cost || 0),
     messageCount: history.length,
   };
+}
+
+/**
+ * Fetches today's spend total from the server (Supabase cost_logs via spend_stats edge function).
+ * Falls back to the localStorage total if the server is unreachable.
+ *
+ * Use this for budget enforcement — localStorage can be cleared or bypassed across tabs/devices.
+ */
+export async function fetchServerDailyTotal(): Promise<number> {
+  try {
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error || !session?.access_token || !CONFIG.SUPABASE_URL) {
+      return getDailyTotal();
+    }
+
+    const endpoint = `${String(CONFIG.SUPABASE_URL).replace(/\/$/, '')}/functions/v1/spend_stats`;
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        ...(CONFIG.SUPABASE_ANON_KEY ? { apikey: CONFIG.SUPABASE_ANON_KEY } : {}),
+      },
+    });
+
+    if (!response.ok) return getDailyTotal();
+
+    const data = await response.json() as { today?: unknown };
+    const serverTotal = Number(data.today);
+    return Number.isFinite(serverTotal) ? roundUsd(serverTotal) : getDailyTotal();
+  } catch {
+    return getDailyTotal();
+  }
 }

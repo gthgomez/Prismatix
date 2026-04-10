@@ -222,11 +222,14 @@ export function countTokens(text: string): number {
   if (!text) return 0;
   if (tokenCache.has(text)) return tokenCache.get(text)!;
 
-  const words = text.split(/\s+/).length;
-  const chars = text.length;
-  const count = Math.ceil((words + chars / 4) / 2);
+  // ~4 chars per token is the standard tiktoken approximation and handles code well.
+  const count = Math.ceil(text.length / 4);
 
-  if (tokenCache.size < 100) tokenCache.set(text, count);
+  if (tokenCache.size >= 100) {
+    const firstKey = tokenCache.keys().next().value as string;
+    tokenCache.delete(firstKey);
+  }
+  tokenCache.set(text, count);
   return count;
 }
 

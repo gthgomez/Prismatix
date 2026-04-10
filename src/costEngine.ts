@@ -9,9 +9,8 @@ function roundUsd(value: number): number {
 
 export function estimateTokenCount(text: string): number {
   if (!text) return 0;
-  const words = text.trim().split(/\s+/).length;
-  const chars = text.length;
-  return Math.ceil((words + chars / 4) / 2);
+  // ~4 chars per token is the standard tiktoken approximation and handles code well.
+  return Math.ceil(text.length / 4);
 }
 
 export interface PreFlightCostResult {
