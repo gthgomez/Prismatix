@@ -23,8 +23,8 @@ Prismatix automatically routes each request to the best AI model for the job —
 
 | Layer | Tech |
 |---|---|
-| Frontend | React 18 + Vite + TypeScript |
-| Backend | Deno edge functions on Supabase |
+| Frontend | TypeScript (Vite) — React 18 used only for UI components (~17 `.tsx` files); the bulk of the codebase is plain `.ts` (services, engine, hooks, types) |
+| Backend | TypeScript on Deno — edge functions on Supabase |
 | Database | Supabase Postgres (conversations, messages, cost_logs, user_memories, video_assets) |
 | Auth | Supabase Auth (JWT, RLS) |
 | Deployment | Vercel (frontend) + Supabase (backend) |
