@@ -51,4 +51,14 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
     outputRatePer1M: 10.0,
     isEstimated: true,
   },
+  'llama-4-scout': {
+    inputRatePer1M: 0.06,
+    outputRatePer1M: 0.30,
+    isEstimated: false,
+  },
+  'qwen3-235b': {
+    inputRatePer1M: 0.20,
+    outputRatePer1M: 0.60,
+    isEstimated: false,
+  },
 };

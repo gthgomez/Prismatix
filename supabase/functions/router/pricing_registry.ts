@@ -70,6 +70,20 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
     sourceRef: 'google-pricing',
     isEstimated: true,
   },
+  'llama-4-scout': {
+    inputRatePer1M: 0.06,
+    outputRatePer1M: 0.30,
+    asOfDate: '2026-04-10',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'qwen3-235b': {
+    inputRatePer1M: 0.20,
+    outputRatePer1M: 0.60,
+    asOfDate: '2026-04-10',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
 };
 
 export function getModelPricing(modelTier: RouterModel): ModelPricing | undefined {

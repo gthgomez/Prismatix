@@ -120,6 +120,7 @@ const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY') || '';
 const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY') || '';
 const NVIDIA_API_KEY = Deno.env.get('NVIDIA_API_KEY') || '';
+const DEEPINFRA_API_KEY = Deno.env.get('DEEPINFRA_API_KEY') || '';
 
 function envFlag(name: string, defaultValue: boolean): boolean {
   const raw = Deno.env.get(name);
@@ -138,6 +139,7 @@ const ENABLE_ANTHROPIC = envFlag('ENABLE_ANTHROPIC', true);
 const ENABLE_OPENAI = envFlag('ENABLE_OPENAI', true);
 const ENABLE_GOOGLE = envFlag('ENABLE_GOOGLE', true);
 const ENABLE_NVIDIA = envFlag('ENABLE_NVIDIA', true);
+const ENABLE_DEEPINFRA = envFlag('ENABLE_DEEPINFRA', true);
 const ENABLE_VIDEO_PIPELINE = envFlag('ENABLE_VIDEO_PIPELINE', false);
 
 // Debate Mode flags (router "tool" toggle)
@@ -188,6 +190,8 @@ function isProviderEnabled(provider: Provider): boolean {
       return ENABLE_GOOGLE;
     case 'nvidia':
       return ENABLE_NVIDIA;
+    case 'deepinfra':
+      return ENABLE_DEEPINFRA;
   }
 }
 
@@ -201,6 +205,8 @@ function hasProviderCredentials(provider: Provider): boolean {
       return !!GOOGLE_API_KEY;
     case 'nvidia':
       return !!NVIDIA_API_KEY;
+    case 'deepinfra':
+      return !!DEEPINFRA_API_KEY;
   }
 }
 
@@ -209,7 +215,7 @@ function isProviderReady(provider: Provider): boolean {
 }
 
 function hasAtLeastOneProviderConfigured(): boolean {
-  return isProviderReady('anthropic') || isProviderReady('openai') || isProviderReady('google') || isProviderReady('nvidia');
+  return isProviderReady('anthropic') || isProviderReady('openai') || isProviderReady('google') || isProviderReady('nvidia') || isProviderReady('deepinfra');
 }
 
 function fallbackModel(): RouterModel | undefined {
@@ -837,6 +843,30 @@ async function callNvidia(
   };
 }
 
+async function callDeepInfra(
+  decision: RouteDecision,
+  allMessages: Message[],
+  signal: AbortSignal,
+): Promise<UpstreamCallResult> {
+  const endpoint = 'https://api.deepinfra.com/v1/openai/chat/completions';
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${DEEPINFRA_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(buildOpenAIStreamPayload(decision, allMessages, [])),
+    signal,
+  });
+
+  return {
+    response,
+    extractDeltas: extractOpenAIDeltas,
+    effectiveModelId: decision.model,
+  };
+}
+
 async function callGoogle(
   decision: RouteDecision,
   allMessages: Message[],
@@ -921,6 +951,8 @@ async function callProviderStream(
       return await callGoogle(decision, allMessages, images, signal, geminiFlashThinkingLevel);
     case 'nvidia':
       return await callNvidia(decision, allMessages, signal);
+    case 'deepinfra':
+      return await callDeepInfra(decision, allMessages, signal);
   }
 }
 

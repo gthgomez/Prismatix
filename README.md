@@ -1,15 +1,15 @@
 # Prismatix
 
-**Intelligent multi-provider AI model router with streaming responses, cost tracking, and Supabase-backed conversation storage.**
+**AI model router across Anthropic, OpenAI, Gemini, NVIDIA & DeepInfra. Auto-routes by complexity, streams SSE, tracks spend server-side.**
 
-Prismatix automatically routes each request to the best AI model for the job — balancing response quality, cost, and latency across Anthropic, OpenAI, Google, and NVIDIA. You get a single chat interface backed by every frontier model.
+Prismatix automatically routes each request to the best AI model for the job — balancing response quality, cost, and latency across Anthropic, OpenAI, Google, NVIDIA, and DeepInfra. You get a single chat interface backed by every frontier model.
 
 ---
 
 ## What it does
 
-- **Smart routing** — A heuristic complexity scorer analyses each query (token count, keywords, code signals, question depth) and routes to the appropriate model tier: Haiku / GPT-mini for quick lookups, Sonnet for code, Flash for general use, Opus / Gemini Pro for deep analysis
-- **Multi-provider streaming** — Normalised SSE stream from Anthropic, OpenAI, Google Gemini, and NVIDIA Nemotron. One client, every model
+- **Smart routing** — A heuristic complexity scorer analyses each query (token count, keywords, code signals, question depth) and routes to the appropriate model tier: Haiku / GPT-mini / Llama 4 Scout for quick lookups, Sonnet for code, Flash for general use, Opus / Gemini Pro / Qwen3-235B for deep analysis
+- **Multi-provider streaming** — Normalised SSE stream from Anthropic, OpenAI, Google Gemini, NVIDIA Nemotron, and DeepInfra. One client, every model
 - **Debate mode** — Optional multi-model deliberation: parallel challenger models critique the prompt, a synthesis model produces the final answer
 - **SMD pipeline** — Structured Multi-Draft: Draft → Skeptic → SynthDecision → Formatter, gated by a fast-path complexity guard (experimental, off by default)
 - **Video pipeline** — Upload, process, and query video assets via Supabase Storage + a background worker edge function
@@ -25,6 +25,7 @@ Prismatix automatically routes each request to the best AI model for the job —
 |---|---|
 | Frontend | TypeScript (Vite) — React 18 used only for UI components (~17 `.tsx` files); the bulk of the codebase is plain `.ts` (services, engine, hooks, types) |
 | Backend | TypeScript on Deno — edge functions on Supabase |
+| AI Providers | Anthropic, OpenAI, Google Gemini, NVIDIA NIM, DeepInfra |
 | Database | Supabase Postgres (conversations, messages, cost_logs, user_memories, video_assets) |
 | Auth | Supabase Auth (JWT, RLS) |
 | Deployment | Vercel (frontend) + Supabase (backend) |
@@ -77,10 +78,12 @@ ANTHROPIC_API_KEY
 OPENAI_API_KEY
 GOOGLE_API_KEY
 NVIDIA_API_KEY
+DEEPINFRA_API_KEY
 ALLOWED_ORIGIN=https://your-frontend.vercel.app
 ENABLE_DEBATE_MODE=false
 ENABLE_SMD_LIGHT=false
 ENABLE_VIDEO_PIPELINE=false
+ENABLE_DEEPINFRA=true
 ```
 
 ---

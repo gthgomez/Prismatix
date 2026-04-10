@@ -74,6 +74,22 @@ export const MODEL_CATALOG: Record<RouterModel, ModelCatalogEntry> = {
     color: '#1D3557',
     icon: '🔬',
   },
+  'llama-4-scout': {
+    provider: 'deepinfra',
+    name: 'Llama 4 Scout',
+    shortName: 'Llama 4 Scout',
+    description: 'Fast open-weight inference (17B MoE)',
+    color: '#7B2FBE',
+    icon: '🦙',
+  },
+  'qwen3-235b': {
+    provider: 'deepinfra',
+    name: 'Qwen3 235B',
+    shortName: 'Qwen3 235B',
+    description: 'Large open-weight reasoning model',
+    color: '#5C4033',
+    icon: '🧬',
+  },
 };
 
 export const MODEL_ORDER: RouterModel[] = [
@@ -85,4 +101,6 @@ export const MODEL_ORDER: RouterModel[] = [
   'gemini-2.5-flash',
   'gemini-3.1-pro',
   'nemotron-3-super',
+  'llama-4-scout',
+  'qwen3-235b',
 ];

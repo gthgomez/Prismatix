@@ -1,6 +1,6 @@
 // router_logic.ts - Pure routing + message transform logic (no Deno.serve side effects)
 
-export type Provider = 'anthropic' | 'openai' | 'google' | 'nvidia';
+export type Provider = 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -79,6 +79,19 @@ export const MODEL_REGISTRY = {
     budgetCap: 8192,
     supportsImages: false,
   },
+  // DeepInfra — OpenAI-compatible endpoint
+  'llama-4-scout': {
+    provider: 'deepinfra',
+    modelId: 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+  'qwen3-235b': {
+    provider: 'deepinfra',
+    modelId: 'Qwen/Qwen3-235B-A22B',
+    budgetCap: 8192,
+    supportsImages: false,
+  },
 } as const satisfies Record<string, ModelConfig>;
 
 export type RouterModel = keyof typeof MODEL_REGISTRY;
@@ -121,6 +134,13 @@ const OVERRIDE_SYNONYMS: Record<string, RouterModel> = {
   // NVIDIA
   'nvidia:nemotron-3-super': 'nemotron-3-super',
   'nemotron-super': 'nemotron-3-super',
+  // DeepInfra
+  'deepinfra:llama-4-scout': 'llama-4-scout',
+  'deepinfra:qwen3-235b': 'qwen3-235b',
+  'llama-scout': 'llama-4-scout',
+  'llama4-scout': 'llama-4-scout',
+  'qwen3': 'qwen3-235b',
+  'qwen-235b': 'qwen3-235b',
 };
 
 export function normalizeModelOverride(input?: string): RouterModel | undefined {
@@ -173,6 +193,14 @@ export function normalizeModelOverride(input?: string): RouterModel | undefined 
     value.includes('nemotron')
   ) {
     return 'nemotron-3-super';
+  }
+
+  if (value.includes('llama-4-scout') || value.includes('llama4') || value.includes('llama scout')) {
+    return 'llama-4-scout';
+  }
+
+  if (value.includes('qwen3-235b') || value.includes('qwen3') || value.includes('qwen 235')) {
+    return 'qwen3-235b';
   }
 
   return undefined;
