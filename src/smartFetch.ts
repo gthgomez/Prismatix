@@ -3,7 +3,9 @@
 
 import { supabase } from './lib/supabase';
 import { CONFIG } from './config';
+import { devLog, devWarn, devError } from './utils';
 import type {
+  DebateParticipant,
   DebateProfile,
   FileUploadPayload,
   GeminiFlashThinkingLevel,
@@ -16,23 +18,11 @@ const STORAGE_KEY = 'prismatix_conversation_id';
 const MAX_ROUTER_QUERY_LENGTH = 50000;
 const QUERY_SAFETY_MARGIN = 2000;
 const MAX_CLIENT_QUERY_LENGTH = MAX_ROUTER_QUERY_LENGTH - QUERY_SAFETY_MARGIN;
-const DEV_MODE = import.meta.env.DEV;
-
-function devLog(...args: unknown[]): void {
-  if (DEV_MODE) console.log(...args);
-}
-
-function devWarn(...args: unknown[]): void {
-  if (DEV_MODE) console.warn(...args);
-}
-
-function devError(...args: unknown[]): void {
-  if (DEV_MODE) console.error(...args);
-}
 
 export interface DebateRequestOptions {
   mode?: 'debate';
   debateProfile?: DebateProfile;
+  debateContrarianInstructions?: string;
 }
 
 export interface DebateResponseMetadata {
@@ -41,6 +31,39 @@ export interface DebateResponseMetadata {
   debateTrigger?: string;
   debateModel?: string;
   debateCostNote?: string;
+}
+
+interface RouterRequestPayload {
+  query: string;
+  conversationId: string;
+  platform: string;
+  history: ReturnType<typeof messagesToHistory>;
+  images?: Array<{ data: string | undefined; mediaType: string }>;
+  imageData?: string;
+  mediaType?: string;
+  videoAssetIds?: string[];
+  modelOverride?: RouterModel;
+  geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
+  mode?: 'debate';
+  debateProfile?: DebateProfile;
+  debateContrarianInstructions?: string;
+}
+
+export interface RouterResponseBase {
+  model: RouterModel;
+  provider?: RouterProvider;
+  complexityScore: number;
+  modelId?: string;
+  modelOverride?: string;
+  geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
+  costEstimateUsd?: number;
+  costPricingVersion?: string;
+  debateActive?: boolean;
+  debateProfile?: DebateProfile;
+  debateTrigger?: string;
+  debateModel?: string;
+  debateCostNote?: string;
+  debateParticipants?: DebateParticipant[];
 }
 
 function base64UrlDecode(input: string): string {
@@ -192,26 +215,11 @@ async function getAccessToken(): Promise<string> {
 export async function askPrismatix(
   query: string,
   history: Message[] = [],
-  attachments: FileUploadPayload[] = [], // ✅ Changed from single to array
+  attachments: FileUploadPayload[] = [],
   modelOverride?: RouterModel | null,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel = 'high',
   debateOptions?: DebateRequestOptions,
-): Promise<{
-  stream: ReadableStream<Uint8Array>;
-  model: RouterModel;
-  provider?: RouterProvider;
-  complexityScore: number;
-  modelId?: string;
-  modelOverride?: string;
-  geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
-  costEstimateUsd?: number;
-  costPricingVersion?: string;
-  debateActive?: boolean;
-  debateProfile?: DebateProfile;
-  debateTrigger?: string;
-  debateModel?: string;
-  debateCostNote?: string;
-} | null> {
+): Promise<(RouterResponseBase & { stream: ReadableStream<Uint8Array> }) | null> {
   try {
     const routerEndpoint = CONFIG.ROUTER_ENDPOINT || getEnvVar('VITE_ROUTER_ENDPOINT');
     if (!routerEndpoint) {
@@ -243,22 +251,20 @@ export async function askPrismatix(
       );
     }
 
-    // Build payload with image array
-    const payload: Record<string, any> = {
+    const payload: RouterRequestPayload = {
       query: finalQuery,
       conversationId,
       platform: 'web',
       history: messagesToHistory(history),
+      geminiFlashThinkingLevel,
     };
 
-    // ✅ FIX: Send array of images instead of single image
     if (imageAttachments.length > 0) {
       payload.images = imageAttachments.map(img => ({
         data: img.imageData,
         mediaType: img.mediaType || 'image/png'
       }));
-      
-      // Also send first image in legacy format for backwards compatibility
+      // Legacy single-image fields for backwards compatibility
       payload.imageData = imageAttachments[0]?.imageData;
       payload.mediaType = imageAttachments[0]?.mediaType || 'image/png';
     }
@@ -269,16 +275,17 @@ export async function askPrismatix(
         .filter((assetId): assetId is string => typeof assetId === 'string' && assetId.length > 0);
     }
 
-    // Add manual model override if specified
     if (modelOverride) {
       payload.modelOverride = modelOverride;
       devLog('[smartFetch] Manual model override:', modelOverride);
     }
 
-    payload.geminiFlashThinkingLevel = geminiFlashThinkingLevel;
     if (debateOptions?.mode === 'debate' && debateOptions.debateProfile) {
       payload.mode = 'debate';
       payload.debateProfile = debateOptions.debateProfile;
+      if (debateOptions.debateContrarianInstructions) {
+        payload.debateContrarianInstructions = debateOptions.debateContrarianInstructions;
+      }
     }
 
     devLog('[smartFetch] Request:', {
@@ -309,7 +316,7 @@ export async function askPrismatix(
 
     if (!response.ok) {
       const errorText = await response.text();
-      devError('[smartFetch] Router Error:', response.status, DEV_MODE ? errorText : undefined);
+      devError('[smartFetch] Router Error:', response.status, errorText);
       
       if (response.status === 401) {
         devWarn('[smartFetch] 401 from router, retrying once with latest session');
@@ -318,7 +325,7 @@ export async function askPrismatix(
 
         if (!response.ok) {
           const retryText = await response.text();
-          devError('[smartFetch] Router Error (after retry):', response.status, DEV_MODE ? retryText : undefined);
+          devError('[smartFetch] Router Error (after retry):', response.status, retryText);
           if (response.status === 401) {
             await signOutLocal('router-401-after-retry');
             throw new Error('Session expired. Please sign in again.');
@@ -335,8 +342,6 @@ export async function askPrismatix(
             }
             throw e;
           }
-        } else {
-          // proceed to success path
         }
       } else {
         try {
@@ -351,15 +356,6 @@ export async function askPrismatix(
           }
           throw e;
         }
-      }
-      
-      if (!response.ok) {
-        // Should be unreachable, but keep a final guard.
-        if (response.status === 401) {
-          await signOutLocal('router-401-guard');
-          throw new Error('Session expired. Please sign in again.');
-        }
-        throw new Error(`Router returned ${response.status}`);
       }
     }
 
@@ -455,22 +451,7 @@ export async function askPrismatixSync(
   modelOverride?: RouterModel | null,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel = 'high',
   debateOptions?: DebateRequestOptions,
-): Promise<{
-  content: string;
-  model: RouterModel;
-  provider?: RouterProvider;
-  complexityScore: number;
-  modelId?: string;
-  modelOverride?: string;
-  geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
-  costEstimateUsd?: number;
-  costPricingVersion?: string;
-  debateActive?: boolean;
-  debateProfile?: DebateProfile;
-  debateTrigger?: string;
-  debateModel?: string;
-  debateCostNote?: string;
-} | null> {
+): Promise<(RouterResponseBase & { content: string }) | null> {
   const result = await askPrismatix(
     query,
     history,
@@ -492,22 +473,8 @@ export async function askPrismatixSync(
       content += decoder.decode(value, { stream: true });
     }
 
-    return {
-      content,
-      model: result.model,
-      provider: result.provider,
-      complexityScore: result.complexityScore,
-      modelId: result.modelId,
-      modelOverride: result.modelOverride,
-      geminiFlashThinkingLevel: result.geminiFlashThinkingLevel,
-      costEstimateUsd: result.costEstimateUsd,
-      costPricingVersion: result.costPricingVersion,
-      debateActive: result.debateActive,
-      debateProfile: result.debateProfile,
-      debateTrigger: result.debateTrigger,
-      debateModel: result.debateModel,
-      debateCostNote: result.debateCostNote,
-    };
+    const { stream: _, ...base } = result;
+    return { ...base, content };
   } catch (error) {
     devError('[smartFetch] Stream reading error:', error);
     return null;

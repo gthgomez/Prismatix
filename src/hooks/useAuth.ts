@@ -1,6 +1,4 @@
 // src/hooks/useAuth.ts
-// Authentication state management hook with L3 Safety Gates
-
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Session, User } from '@supabase/supabase-js';
@@ -19,6 +17,13 @@ interface UseAuthReturn extends AuthState {
   signInWithProvider: (provider: 'google' | 'github') => Promise<{ error: Error | null }>;
 }
 
+function validateCredentials(email: string, password: string): Error | null {
+  if (!email?.trim() || !password) {
+    return new Error('Email and password are required');
+  }
+  return null;
+}
+
 export const useAuth = (): UseAuthReturn => {
   const [authState, setAuthState] = useState<AuthState>({
     session: null,
@@ -27,13 +32,11 @@ export const useAuth = (): UseAuthReturn => {
     isAuthenticated: false,
   });
 
-  // Initialize auth state on mount
   useEffect(() => {
-    // L3 Gate: Get initial session
     const initAuth = async () => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
-        
+
         if (error) {
           const lowered = String(error.message || '').toLowerCase();
           if (lowered.includes('invalid refresh token') || lowered.includes('refresh token not found')) {
@@ -65,11 +68,9 @@ export const useAuth = (): UseAuthReturn => {
 
     initAuth();
 
-    // L3 Gate: Subscribe to auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('[useAuth] Auth event:', event);
-        
         setAuthState({
           session,
           user: session?.user ?? null,
@@ -79,18 +80,14 @@ export const useAuth = (): UseAuthReturn => {
       }
     );
 
-    // Cleanup subscription
     return () => {
       subscription.unsubscribe();
     };
   }, []);
 
-  // Sign in with email/password
   const signIn = useCallback(async (email: string, password: string) => {
-    // L3 Gate: Validate inputs
-    if (!email?.trim() || !password) {
-      return { error: new Error('Email and password are required') };
-    }
+    const validationError = validateCredentials(email, password);
+    if (validationError) return { error: validationError };
 
     try {
       const { error } = await supabase.auth.signInWithPassword({
@@ -110,12 +107,9 @@ export const useAuth = (): UseAuthReturn => {
     }
   }, []);
 
-  // Sign up with email/password
   const signUp = useCallback(async (email: string, password: string) => {
-    // L3 Gate: Validate inputs
-    if (!email?.trim() || !password) {
-      return { error: new Error('Email and password are required') };
-    }
+    const validationError = validateCredentials(email, password);
+    if (validationError) return { error: validationError };
 
     if (password.length < 6) {
       return { error: new Error('Password must be at least 6 characters') };
@@ -139,7 +133,6 @@ export const useAuth = (): UseAuthReturn => {
     }
   }, []);
 
-  // Sign out
   const signOut = useCallback(async () => {
     try {
       await supabase.auth.signOut();
@@ -148,7 +141,6 @@ export const useAuth = (): UseAuthReturn => {
     }
   }, []);
 
-  // Sign in with OAuth provider
   const signInWithProvider = useCallback(async (provider: 'google' | 'github') => {
     try {
       const { error } = await supabase.auth.signInWithOAuth({

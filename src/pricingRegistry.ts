@@ -61,4 +61,24 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
     outputRatePer1M: 0.60,
     isEstimated: false,
   },
+  'llama-3.3-70b-turbo': {
+    inputRatePer1M: 0.012,
+    outputRatePer1M: 0.03,
+    isEstimated: false,
+  },
+  'mistral-small-24b': {
+    inputRatePer1M: 0.04,
+    outputRatePer1M: 0.08,
+    isEstimated: false,
+  },
+  'qwen3-32b': {
+    inputRatePer1M: 0.07,
+    outputRatePer1M: 0.28,
+    isEstimated: false,
+  },
+  'deepseek-v3': {
+    inputRatePer1M: 0.22,
+    outputRatePer1M: 0.89,
+    isEstimated: false,
+  },
 };

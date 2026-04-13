@@ -2,11 +2,13 @@
 
 import { estimateTokenCount } from '../costEngine';
 import type { UsageEstimate } from '../costEngine';
+import type { DebateParticipant } from '../types';
 
 export interface StreamChunkResult {
   assistantContent: string;
   thinkingLog: string[];
   streamedFinalUsd?: number;
+  debateParticipants?: DebateParticipant[];
 }
 
 export interface StreamHandlerCallbacks {
@@ -19,6 +21,9 @@ export interface StreamHandlerCallbacks {
  * Reads SSE lines from a ReadableStream produced by the Prismatix router.
  * Handles content_block_delta, thought, and meta event types.
  * Calls the provided callbacks for live UI updates.
+ *
+ * The router sends debate participant data in the meta event under
+ * json.debate_participants as a JSON array of DebateParticipant objects.
  */
 export async function readRouterStream(
   stream: ReadableStream<Uint8Array>,
@@ -30,7 +35,10 @@ export async function readRouterStream(
   let assistantContent = '';
   const thinkingLog: string[] = [];
   let streamedFinalUsd: number | undefined;
+  let debateParticipants: DebateParticipant[] | undefined;
   let firstTokenReceived = false;
+  let lastEmittedCompletion = 0;
+  let lastEmittedThinking = 0;
 
   try {
     while (true) {
@@ -71,6 +79,9 @@ export async function readRouterStream(
               if (Number.isFinite(finalUsd)) {
                 streamedFinalUsd = finalUsd;
               }
+              if (Array.isArray(json.debate_participants) && json.debate_participants.length > 0) {
+                debateParticipants = json.debate_participants as DebateParticipant[];
+              }
             }
           } else if (!line.startsWith('event:')) {
             if (line) {
@@ -86,11 +97,17 @@ export async function readRouterStream(
         }
       }
 
-      callbacks.onUsageUpdate({
-        promptTokens: promptTokenEstimate,
-        completionTokens: estimateTokenCount(assistantContent),
-        thinkingTokens: estimateTokenCount(thinkingLog.join('')),
-      });
+      const completionTokens = estimateTokenCount(assistantContent);
+      const thinkingTokens = estimateTokenCount(thinkingLog.join(''));
+      if (completionTokens !== lastEmittedCompletion || thinkingTokens !== lastEmittedThinking) {
+        lastEmittedCompletion = completionTokens;
+        lastEmittedThinking = thinkingTokens;
+        callbacks.onUsageUpdate({
+          promptTokens: promptTokenEstimate,
+          completionTokens,
+          thinkingTokens,
+        });
+      }
 
       callbacks.onContentUpdate(assistantContent, [...thinkingLog]);
     }
@@ -98,5 +115,5 @@ export async function readRouterStream(
     reader.releaseLock();
   }
 
-  return { assistantContent, thinkingLog, streamedFinalUsd };
+  return { assistantContent, thinkingLog, streamedFinalUsd, debateParticipants };
 }

@@ -1,18 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CONFIG } from '../config';
 import { supabase } from '../lib/supabase';
+import type { SpendStats } from '../services/financeTracker';
 
 interface SpendTrackerProps {
   refreshKey: number;
-}
-
-interface SpendStats {
-  today: number;
-  thisWeek: number;
-  thisMonth: number;
-  allTime: number;
-  lastMessageCost: number;
-  messageCount: number;
 }
 
 const EMPTY_STATS: SpendStats = {

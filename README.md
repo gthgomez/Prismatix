@@ -1,5 +1,10 @@
 # Prismatix
 
+[![CI](https://github.com/gthgomez/Prismatix/actions/workflows/ci.yml/badge.svg)](https://github.com/gthgomez/Prismatix/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
+
 **AI model router across Anthropic, OpenAI, Gemini, NVIDIA & DeepInfra. Auto-routes by complexity, streams SSE, tracks spend server-side.**
 
 Prismatix automatically routes each request to the best AI model for the job — balancing response quality, cost, and latency across Anthropic, OpenAI, Google, NVIDIA, and DeepInfra. You get a single chat interface backed by every frontier model.
@@ -90,18 +95,58 @@ ENABLE_DEEPINFRA=true
 
 ## Development
 
+### First-time setup
+
+1. **Install the Supabase CLI** — [docs](https://supabase.com/docs/guides/cli)
+
+2. **Link your project:**
+   ```bash
+   supabase login
+   supabase link --project-ref YOUR_PROJECT_REF
+   ```
+
+3. **Run database migrations:**
+   ```bash
+   supabase db push
+   ```
+
+4. **Set edge function secrets** (one-time, per provider key you want active):
+   ```bash
+   supabase secrets set ANTHROPIC_API_KEY=sk-...
+   supabase secrets set OPENAI_API_KEY=sk-...
+   supabase secrets set GOOGLE_API_KEY=...
+   supabase secrets set NVIDIA_API_KEY=...
+   supabase secrets set DEEPINFRA_API_KEY=...
+   supabase secrets set ALLOWED_ORIGIN=http://localhost:5173
+   supabase secrets set ENABLE_DEBATE_MODE=false
+   supabase secrets set ENABLE_SMD_LIGHT=false
+   supabase secrets set ENABLE_VIDEO_PIPELINE=false
+   supabase secrets set ENABLE_DEEPINFRA=true
+   ```
+
+5. **Deploy edge functions:**
+   ```bash
+   supabase functions deploy router
+   supabase functions deploy spend_stats
+   ```
+
+6. **Install frontend dependencies and start dev server:**
+   ```bash
+   npm install
+   npm run dev
+   ```
+
+### Ongoing development
+
 ```bash
-npm install
-npm run dev
+npm run dev          # start Vite dev server
+npm run type-check   # TypeScript typecheck (no emit)
+npm run lint         # ESLint
+npm run test         # Vitest unit tests
+npm run build        # production build
 ```
 
-Run tests:
-
-```bash
-npm run test
-```
-
-Deploy edge functions:
+Deploy edge functions after changes:
 
 ```bash
 supabase functions deploy router
@@ -110,6 +155,14 @@ supabase functions deploy spend_stats
 
 ---
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for release history.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup instructions, architecture overview, and PR guidelines.
+
 ## License
 
-MIT
+MIT — [LICENSE](./LICENSE)

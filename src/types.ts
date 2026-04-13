@@ -1,10 +1,18 @@
 // src/types.ts
 
 export type AnthropicModel = 'opus-4.6' | 'sonnet-4.6' | 'haiku-4.5';
-export type RouterModel = AnthropicModel | 'gpt-5.4-mini' | 'gemini-3-flash' | 'gemini-2.5-flash' | 'gemini-3.1-pro' | 'nemotron-3-super' | 'llama-4-scout' | 'qwen3-235b';
+export type RouterModel = AnthropicModel | 'gpt-5.4-mini' | 'gemini-3-flash' | 'gemini-2.5-flash' | 'gemini-3.1-pro' | 'nemotron-3-super' | 'llama-4-scout' | 'qwen3-235b' | 'llama-3.3-70b-turbo' | 'mistral-small-24b' | 'qwen3-32b' | 'deepseek-v3';
 export type RouterProvider = 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
 export type GeminiFlashThinkingLevel = 'low' | 'high';
 export type DebateProfile = 'general' | 'code' | 'video_ui';
+export type DebateRole = 'proposer' | 'contrarian';
+
+export interface DebateParticipant {
+  model: RouterModel;
+  role: DebateRole;
+  response: string;
+  keyPoints?: string[];
+}
 export type AttachmentKind = 'image' | 'text' | 'video';
 export type VideoAssetStatus =
   | 'pending_upload'
@@ -34,6 +42,7 @@ export interface Message {
   debateTrigger?: string;
   debateModel?: string;
   debateCostNote?: string;
+  debateParticipants?: DebateParticipant[];
   imageData?: string;            // Base64 image data (first image for display)
   mediaType?: string;            // MIME type
   imageStorageUrl?: string;      // Supabase storage URL
@@ -67,7 +76,6 @@ export interface ContextAnalysis {
   utilizationPercent: number;
   shouldReset: boolean;
   summary?: string;
-  keyDecisions: string[];
   recentContext: { role: string; preview: string }[];
 }
 

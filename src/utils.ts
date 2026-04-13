@@ -3,6 +3,20 @@
 import type { Message, RouterModel } from './types';
 import { MODEL_CATALOG } from './modelCatalog';
 
+const DEV_MODE = import.meta.env.DEV;
+
+export function devLog(...args: unknown[]): void {
+  if (DEV_MODE) console.log(...args);
+}
+
+export function devWarn(...args: unknown[]): void {
+  if (DEV_MODE) console.warn(...args);
+}
+
+export function devError(...args: unknown[]): void {
+  if (DEV_MODE) console.error(...args);
+}
+
 /**
  * Formats timestamp to readable time
  */

@@ -12,6 +12,7 @@ import { CostBadge } from './CostBadge';
 import { PrismatixPulse } from './PrismatixPulse';
 import { SpendTracker } from './SpendTracker';
 import { ThinkingProcess } from './ThinkingProcess';
+import { DebateView } from './DebateView';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
 import { AttachmentPreview } from './AttachmentPreview';
 import '../styles/ChatInterface.css';
@@ -24,6 +25,7 @@ import {
   estimateTokenCount,
   type UsageEstimate,
 } from '../costEngine';
+import { calculateHistoryTokens } from '../utils';
 import {
   uploadAttachment,
   uploadVideoAttachment,
@@ -50,7 +52,6 @@ interface ChatInterfaceProps {
   onSignOut: () => Promise<void>;
 }
 
-const MODEL_CONFIG = MODEL_CATALOG;
 const DAILY_BUDGET_LIMIT_USD = 2.0;
 const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
 
@@ -103,7 +104,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
 
-  // ✅ FIX: Changed from single attachment to ARRAY of attachments
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
   const hasPendingVideoUploads = draftAttachments.some(
     (file) => file.kind === 'video' && file.status !== 'ready',
@@ -174,7 +174,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
   };
 
-  // ✅ FIX: Handle single file - ADD to array instead of replace
   const updateDraftAttachment = (
     targetClientId: string,
     updater: (file: FileUploadPayload) => FileUploadPayload,
@@ -256,7 +255,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     inputRef.current?.focus();
   };
 
-  // ✅ FIX: Handle multiple files at once - ADD all to array
   const handleMultipleFiles = (files: FileUploadPayload[]) => {
     console.log('[ChatInterface] Multiple files added:', files.length);
     if (sendValidationError) {
@@ -272,7 +270,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     inputRef.current?.focus();
   };
 
-  // ✅ FIX: Remove specific attachment by index
   const removeAttachment = (index: number) => {
     setDraftAttachments((prev) => prev.filter((_, i) => i !== index));
   };
@@ -402,17 +399,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       ? `[${draftAttachments.length} file${draftAttachments.length > 1 ? 's' : ''} attached]`
       : '';
 
-    // Prepare user message for display
+    const firstImage = draftAttachments.find((f) => f.isImage);
     const userMessage: Message = {
       role: 'user',
       content: input.trim() || attachmentSummary,
       timestamp: Date.now(),
-      // Store first image for display (UI limitation)
-      ...(draftAttachments.find((f) => f.isImage)?.imageData && {
-        imageData: draftAttachments.find((f) => f.isImage)?.imageData,
-        mediaType: draftAttachments.find((f) => f.isImage)?.mediaType,
+      ...(firstImage?.imageData && {
+        imageData: firstImage.imageData,
+        mediaType: firstImage.mediaType,
       }),
-      // Store all attachments for reference
       attachments: draftAttachments.length > 0 ? [...draftAttachments] : undefined,
     };
 
@@ -438,17 +433,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     });
 
     try {
-      // Upload image attachments (graceful failure)
       const storageUrls: string[] = [];
       if (user) {
-        for (const attachment of attachmentsToProcess) {
-          if (attachment.isImage && attachment.imageData) {
-            try {
-              const url = await uploadAttachment(attachment, user.id);
-              if (url) storageUrls.push(url);
-            } catch (uploadError) {
-              console.warn('[ChatInterface] Storage upload failed (non-blocking):', uploadError);
-            }
+        const imageAttachments = attachmentsToProcess.filter(a => a.isImage && a.imageData);
+        const uploadResults = await Promise.allSettled(
+          imageAttachments.map(a => uploadAttachment(a, user.id))
+        );
+        for (const result of uploadResults) {
+          if (result.status === 'fulfilled' && result.value) {
+            storageUrls.push(result.value);
+          } else if (result.status === 'rejected') {
+            console.warn('[ChatInterface] Storage upload failed (non-blocking):', result.reason);
           }
         }
       }
@@ -482,8 +477,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateCostNote,
       } = result;
 
-      // âœ… FIX: Only update model if no manual override is active
-      // This prevents the backend response from overwriting the user's manual selection
       if (!manualModelOverride) {
         setCurrentModel(model);
       }
@@ -515,7 +508,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         timestamp: Date.now(),
       }]);
 
-      const { assistantContent, thinkingLog, streamedFinalUsd } = await readRouterStream(
+      const { assistantContent, thinkingLog, streamedFinalUsd, debateParticipants } = await readRouterStream(
         stream,
         promptTokenEstimate,
         {
@@ -553,11 +546,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         },
       );
 
-      const historyTokens = messages.reduce((sum, msg) => {
-        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-        return sum + estimateTokenCount(content);
-      }, 0);
-      const promptTokens = historyTokens +
+      const promptTokens = calculateHistoryTokens(messages) +
         estimateTokenCount(queryText) +
         attachmentsToProcess.filter((file) => file.isImage).length * 1600;
       const completionTokens = estimateTokenCount(assistantContent);
@@ -588,6 +577,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             },
             thinkingLog: [...thinkingLog],
             thinkingDurationMs: Date.now() - streamStartMs,
+            ...(debateParticipants && debateParticipants.length > 0
+              ? { debateParticipants }
+              : {}),
           };
         }
         return updated;
@@ -633,6 +625,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       setDraftAttachments([]);
       setManualModelOverride(null);
       setGeminiFlashThinkingLevel('high');
+      setDebateSelection('off');
       setBudgetConfirm(null);
       setCurrentUsage(null);
       setSessionCostTotal(0);
@@ -656,7 +649,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
   };
 
-  const modelConfig = MODEL_CONFIG[currentModel];
+  const modelConfig = MODEL_CATALOG[currentModel];
 
   return (
     <div className='chat-container'>
@@ -685,6 +678,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 <span className='model-icon'>{modelConfig.icon}</span>
                 <span className='model-name'>{modelConfig.name}</span>
                 {manualModelOverride && <span className='manual-badge'>Manual</span>}
+                {debateSelection !== 'off' && <span className='debate-badge'>Debate</span>}
                 <svg
                   className={`dropdown-chevron ${showModelSelector ? 'open' : ''}`}
                   width='12'
@@ -814,7 +808,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </p>
               <div className='model-grid'>
                 {MODEL_ORDER.map((key) => {
-                  const config = MODEL_CONFIG[key];
+                  const config = MODEL_CATALOG[key];
                   return (
                     <div
                       key={key}
@@ -952,11 +946,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                         <span className='cursor-blink'>▊</span>
                       )}
                     </div>
+                    {msg.role === 'assistant' && msg.debateParticipants && msg.debateParticipants.length > 0 && (
+                      <DebateView participants={msg.debateParticipants} />
+                    )}
                     {isWaitingFirstToken && isStreaming && idx === messages.length - 1 &&
                       msg.role === 'assistant' && (
                       <div className='message-thinking-loader'>
                         <PrismatixPulse
-                          color={msg.model ? MODEL_CONFIG[msg.model].color : modelConfig.color}
+                          color={msg.model ? MODEL_CATALOG[msg.model].color : modelConfig.color}
                           showLogo
                         />
                       </div>
@@ -980,7 +977,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
           {/* Input Row */}
           <div className='input-row'>
-            {/* ✅ FIX: Now passing BOTH handlers */}
             <FileUpload
               onFileContent={handleFileSelect}
               onMultipleFiles={handleMultipleFiles}

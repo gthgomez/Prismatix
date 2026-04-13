@@ -3,6 +3,7 @@
 
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../config';
+import { devLog, devWarn, devError } from '../utils';
 import type { FileUploadPayload, VideoAssetStatus } from '../types';
 
 const IMAGE_BUCKET_NAME = 'chat-uploads';
@@ -10,18 +11,6 @@ const VIDEO_UPLOAD_TIMEOUT_MS = 60_000;
 const VIDEO_STATUS_POLL_INTERVAL_MS = 2_500;
 const VIDEO_STATUS_POLL_MAX_ATTEMPTS = 120;
 const DEV_MODE = import.meta.env.DEV;
-
-function devLog(...args: unknown[]): void {
-  if (DEV_MODE) console.log(...args);
-}
-
-function devWarn(...args: unknown[]): void {
-  if (DEV_MODE) console.warn(...args);
-}
-
-function devError(...args: unknown[]): void {
-  if (DEV_MODE) console.error(...args);
-}
 
 interface VideoInitResponse {
   assetId: string;
@@ -253,11 +242,7 @@ export async function uploadAttachment(
   try {
     // Convert Base64 back to Blob for upload
     const byteCharacters = atob(file.imageData);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
-    }
-    const byteArray = new Uint8Array(byteNumbers);
+    const byteArray = Uint8Array.from(byteCharacters, c => c.charCodeAt(0));
     const blob = new Blob([byteArray], { type: file.mediaType || 'application/octet-stream' });
 
     // Generate unique path: user_id/timestamp_filename
@@ -332,6 +317,7 @@ export async function checkBucketExists(): Promise<boolean> {
  * Call this to log setup instructions when bucket doesn't exist
  */
 export function logBucketSetupInstructions(): void {
+  if (!DEV_MODE) return;
   devLog(`
 ╔══════════════════════════════════════════════════════════════════╗
 ║                    SUPABASE STORAGE SETUP                        ║

@@ -1,8 +1,8 @@
 // ModelIndicator.tsx - Visual indicator for active router model
 
 import React from 'react';
-import { MODEL_CATALOG } from './modelCatalog';
-import type { RouterModel } from './types';
+import { MODEL_CATALOG } from '../modelCatalog';
+import type { RouterModel } from '../types';
 
 interface ModelIndicatorProps {
   model: RouterModel;

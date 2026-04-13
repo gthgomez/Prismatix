@@ -90,6 +90,38 @@ export const MODEL_CATALOG: Record<RouterModel, ModelCatalogEntry> = {
     color: '#5C4033',
     icon: '🧬',
   },
+  'llama-3.3-70b-turbo': {
+    provider: 'deepinfra',
+    name: 'Llama 3.3 70B Turbo',
+    shortName: 'Llama 3.3 70B',
+    description: 'Fast open-weight 70B — $0.03/M output',
+    color: '#9B59B6',
+    icon: '🦙',
+  },
+  'mistral-small-24b': {
+    provider: 'deepinfra',
+    name: 'Mistral Small 24B',
+    shortName: 'Mistral Small',
+    description: 'Efficient 24B instruct model — $0.08/M output',
+    color: '#E67E22',
+    icon: '🌊',
+  },
+  'qwen3-32b': {
+    provider: 'deepinfra',
+    name: 'Qwen3 32B',
+    shortName: 'Qwen3 32B',
+    description: 'Strong reasoning at low cost — $0.28/M output',
+    color: '#16A085',
+    icon: '🧠',
+  },
+  'deepseek-v3': {
+    provider: 'deepinfra',
+    name: 'DeepSeek V3',
+    shortName: 'DeepSeek V3',
+    description: 'Near-frontier quality open-weight — $0.89/M output',
+    color: '#2980B9',
+    icon: '🔭',
+  },
 };
 
 export const MODEL_ORDER: RouterModel[] = [
@@ -103,4 +135,8 @@ export const MODEL_ORDER: RouterModel[] = [
   'nemotron-3-super',
   'llama-4-scout',
   'qwen3-235b',
+  'llama-3.3-70b-turbo',
+  'mistral-small-24b',
+  'qwen3-32b',
+  'deepseek-v3',
 ];
