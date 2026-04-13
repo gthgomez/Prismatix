@@ -44,19 +44,19 @@ describe('recordCost', () => {
     const today = new Date().toISOString().slice(0, 10);
     const store = recordCost({ model: 'haiku-4.5', cost: 0.001 });
     expect(store.history).toHaveLength(1);
-    expect(store.history[0].date).toBe(today);
-    expect(store.history[0].model).toBe('haiku-4.5');
-    expect(store.history[0].cost).toBe(0.001);
+    expect(store.history[0]!.date).toBe(today);
+    expect(store.history[0]!.model).toBe('haiku-4.5');
+    expect(store.history[0]!.cost).toBe(0.001);
   });
 
   it('accepts a custom date', () => {
     const store = recordCost({ model: 'sonnet-4.6', cost: 0.005, date: '2025-01-15' });
-    expect(store.history[0].date).toBe('2025-01-15');
+    expect(store.history[0]!.date).toBe('2025-01-15');
   });
 
   it('clamps negative costs to zero', () => {
     const store = recordCost({ model: 'haiku-4.5', cost: -5 });
-    expect(store.history[0].cost).toBe(0);
+    expect(store.history[0]!.cost).toBe(0);
   });
 
   it('accumulates multiple entries', () => {
@@ -76,7 +76,7 @@ describe('recordCost', () => {
 
   it('stores pricingVersion when provided', () => {
     const store = recordCost({ model: 'haiku-4.5', cost: 0.001, pricingVersion: '2026-01-01' });
-    expect(store.history[0].pricingVersion).toBe('2026-01-01');
+    expect(store.history[0]!.pricingVersion).toBe('2026-01-01');
   });
 });
 
