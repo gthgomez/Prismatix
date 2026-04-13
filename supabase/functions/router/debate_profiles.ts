@@ -32,7 +32,7 @@ export const DEFAULT_DEBATE_THRESHOLD = 85;
  *   llama-3.3-70b-turbo: $0.012in / $0.03out  → ~$0.02 blended
  *   qwen3-32b:           $0.07in  / $0.28out  → ~$0.12 blended
  *   step-3.5-flash:      $0.10in  / $0.30out  → ~$0.15 blended
- *   deepseek-v3:         $0.22in  / $0.89out  → ~$0.39 blended
+ *   deepseek-v3:         $0.20in  / $0.77out  → ~$0.34 blended (DeepSeek-V3-0324)
  *   nemotron-3-super:    $0.10in  / $0.50out  → ~$0.20 blended
  */
 export const GENERAL_CHALLENGER_FALLBACKS: RouterModel[] = [

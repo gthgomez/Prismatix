@@ -78,9 +78,9 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
     isEstimated: false,
   },
   'qwen3-235b': {
-    inputRatePer1M: 0.20,
-    outputRatePer1M: 0.60,
-    asOfDate: '2026-04-10',
+    inputRatePer1M: 0.071,
+    outputRatePer1M: 0.10,
+    asOfDate: '2026-04-13',
     sourceRef: 'deepinfra-pricing',
     isEstimated: false,
   },
@@ -107,8 +107,8 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
     isEstimated: false,
   },
   'deepseek-v3': {
-    inputRatePer1M: 0.22,
-    outputRatePer1M: 0.89,
+    inputRatePer1M: 0.20,
+    outputRatePer1M: 0.77,
     asOfDate: '2026-04-13',
     sourceRef: 'deepinfra-pricing',
     isEstimated: false,

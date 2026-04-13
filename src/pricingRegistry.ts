@@ -57,8 +57,8 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
     isEstimated: false,
   },
   'qwen3-235b': {
-    inputRatePer1M: 0.20,
-    outputRatePer1M: 0.60,
+    inputRatePer1M: 0.071,
+    outputRatePer1M: 0.10,
     isEstimated: false,
   },
   'llama-3.3-70b-turbo': {
@@ -77,8 +77,8 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
     isEstimated: false,
   },
   'deepseek-v3': {
-    inputRatePer1M: 0.22,
-    outputRatePer1M: 0.89,
+    inputRatePer1M: 0.20,
+    outputRatePer1M: 0.77,
     isEstimated: false,
   },
   'glm-4.7-flash': {

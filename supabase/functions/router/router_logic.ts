@@ -88,7 +88,7 @@ export const MODEL_REGISTRY = {
   },
   'qwen3-235b': {
     provider: 'deepinfra',
-    modelId: 'Qwen/Qwen3-235B-A22B',
+    modelId: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
     budgetCap: 8192,
     supportsImages: false,
   },
@@ -112,7 +112,7 @@ export const MODEL_REGISTRY = {
   },
   'deepseek-v3': {
     provider: 'deepinfra',
-    modelId: 'deepseek-ai/DeepSeek-V3',
+    modelId: 'deepseek-ai/DeepSeek-V3-0324',
     budgetCap: 8192,
     supportsImages: false,
   },
