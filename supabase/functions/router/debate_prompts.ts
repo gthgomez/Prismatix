@@ -40,6 +40,14 @@ export function buildChallengerPrompt(profile: DebateProfile, role: string, user
           : 'Output customer trust, clarity, and CTA reactions with timestamped evidence.',
         'Keep findings concrete and evidence-based. Prefer short bullets.',
       ]
+    : role === 'alternative architect'
+    ? [
+        'Your job is NOT to critique — it is to propose a meaningfully different approach.',
+        'Assume the default approach works but ask: what if we started from different assumptions?',
+        'Include: (1) a different core strategy, (2) different trade-offs it makes, ' +
+          '(3) specific scenarios where this alternative beats the default.',
+        'Be concrete. No meta-commentary. Do not reference the original approach beyond one sentence.',
+      ]
     : [
         'Focus on reasoning quality, missing considerations, trade-offs, and better framing.',
         'Include at least: (1) assumptions to verify, (2) key risks, (3) alternative approaches.',
@@ -77,9 +85,11 @@ export function buildSynthesisPrompt(
         'Include timestamp references where available and keep recommendations implementation-ready.',
       ]
     : [
-        'You are the final synthesizer after reviewing multiple analyses.',
-        'Goal: produce a thorough, high-signal answer.',
-        'You must address critique points and clearly state assumptions.',
+        'You are the final synthesizer after reviewing a skeptic critique and an alternative approach.',
+        'Goal: produce a thorough, high-signal answer that is better than either input alone.',
+        'You must: (1) address the skeptic\'s strongest objections, ' +
+          '(2) incorporate the best elements of the alternative approach if they genuinely improve the answer, ' +
+          '(3) clearly state which trade-offs you chose and why.',
         'Output should be structured with headings and concrete recommendations.',
       ];
 

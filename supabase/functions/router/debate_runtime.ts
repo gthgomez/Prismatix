@@ -1,7 +1,13 @@
 // debate_runtime.ts
 // Shared pure helpers for Debate Mode runtime decisions.
 
-import { DEBATE_COST_CASCADE, type DebateProfile, type DebateTrigger } from './debate_profiles.ts';
+import {
+  CODE_CHALLENGER_FALLBACKS,
+  DEBATE_COST_CASCADE,
+  GENERAL_CHALLENGER_FALLBACKS,
+  type DebateProfile,
+  type DebateTrigger,
+} from './debate_profiles.ts';
 import type { Message, RouterModel } from './router_logic.ts';
 
 export function selectDebateWorkerMaxTokens(
@@ -79,11 +85,20 @@ export function serializeMessagesForCost(messages: Message[]): string {
 }
 
 /**
- * Returns the ordered sequence to try for a challenger: assigned tier first,
- * then the rest of DEBATE_COST_CASCADE cheapest-first (excluding the assigned tier).
+ * Returns the ordered fallback sequence for a challenger.
+ * Uses a role-aware cascade: code profiles use CODE_CHALLENGER_FALLBACKS,
+ * all others use GENERAL_CHALLENGER_FALLBACKS.
+ * Assigned tier is tried first; remaining cascade models follow in cost order.
  */
-export function buildFallbackSequence(assignedTier: RouterModel): RouterModel[] {
-  const rest = DEBATE_COST_CASCADE.filter((t) => t !== assignedTier);
+export function buildFallbackSequence(
+  assignedTier: RouterModel,
+  profile: DebateProfile = 'general',
+): RouterModel[] {
+  const cascade = profile === 'code'
+    ? CODE_CHALLENGER_FALLBACKS
+    : GENERAL_CHALLENGER_FALLBACKS;
+  // Ensure assignedTier is first; append cascade models not already included
+  const rest = cascade.filter((t) => t !== assignedTier);
   return [assignedTier, ...rest];
 }
 

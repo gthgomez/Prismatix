@@ -17,6 +17,7 @@ import { calculateCostBreakdown, calculatePreFlightCost } from './cost_engine.ts
 import {
   DEFAULT_DEBATE_THRESHOLD,
   getDebatePlan,
+  resolveDebateChallengerCount,
   type DebateProfile,
   type DebateTrigger,
 } from './debate_profiles.ts';
@@ -438,6 +439,26 @@ interface DebateRunResult {
   synthesisDecision: RouteDecision;
 }
 
+/**
+ * Detects whether two challenger outputs are redundant using word-level Jaccard
+ * similarity on content words (4+ chars). Threshold of 0.72 means >72% overlap.
+ * Only used when we have 2 challengers — if redundant, the second is dropped to
+ * avoid sending near-duplicate notes to the synthesizer.
+ */
+function challengersAreRedundant(a: ChallengerOutput, b: ChallengerOutput): boolean {
+  const tokenize = (t: string): Set<string> =>
+    new Set((t.toLowerCase().match(/\b\w{4,}\b/g) ?? []));
+  const setA = tokenize(a.text);
+  const setB = tokenize(b.text);
+  if (setA.size === 0 || setB.size === 0) return false;
+  let intersection = 0;
+  for (const w of setA) {
+    if (setB.has(w)) intersection++;
+  }
+  const union = new Set([...setA, ...setB]).size;
+  return union > 0 && intersection / union > 0.72;
+}
+
 async function maybeRunDebateMode(params: {
   decision: RouteDecision;
   allMessages: Message[];
@@ -450,6 +471,7 @@ async function maybeRunDebateMode(params: {
   forcedModelTier?: RouterModel;
   synthesisMaxTokens?: number;
   videoNotesJson?: string;
+  debateWasExplicit: boolean;
 }): Promise<DebateRunResult | null> {
   const isVideoUi = params.debateProfile === 'video_ui';
   if (!isVideoUi && (params.images.length > 0 || params.hasVideo)) return null;
@@ -473,13 +495,20 @@ async function maybeRunDebateMode(params: {
   };
 
   const primaryTier = synthesisDecision.modelTier;
-  const plan = getDebatePlan(params.debateProfile, primaryTier);
+  const userQuery = params.allMessages.at(-1)?.content || '';
+  const challengerCount = resolveDebateChallengerCount(
+    params.debateProfile,
+    params.decision.complexityScore,
+    userQuery,
+    params.debateWasExplicit,
+  );
+  const plan = getDebatePlan(params.debateProfile, primaryTier, challengerCount);
 
   // Readiness gating: primary must be ready; each challenger needs at least one cascade option ready.
   if (!isProviderReadyForModelTier(primaryTier)) return null;
   for (const c of plan.challengers) {
     const assignedTier = params.forcedModelTier || c.modelTier;
-    const sequence = buildFallbackSequence(assignedTier);
+    const sequence = buildFallbackSequence(assignedTier, params.debateProfile);
     if (!sequence.some(isProviderReadyForModelTier)) return null;
   }
 
@@ -510,9 +539,9 @@ async function maybeRunDebateMode(params: {
         { role: 'user', content: workerPrompt },
       ];
 
-      // Cost-cascade fallback: try assigned tier first, then cheaper alternatives.
+      // Role-aware cascade fallback: try assigned tier first, then role-appropriate alternatives.
       const assignedTier = params.forcedModelTier || c.modelTier;
-      const fallbackSequence = buildFallbackSequence(assignedTier);
+      const fallbackSequence = buildFallbackSequence(assignedTier, params.debateProfile);
       for (const workerTier of fallbackSequence) {
         if (workerController.signal.aborted) break;
         if (!isProviderReadyForModelTier(workerTier)) continue;
@@ -552,6 +581,14 @@ async function maybeRunDebateMode(params: {
   // If no challengers succeed, fall back to the normal single-provider path.
   if (challengerResults.length === 0) return null;
 
+  // Redundancy detection: if exactly 2 challengers ran and their outputs are near-identical,
+  // drop the second one. Sending duplicate notes to the synthesizer wastes context and can
+  // cause the synthesis to over-weight a single perspective. Keep index 0 (skeptic/critic).
+  const deduplicatedResults = challengerResults.length === 2 &&
+    challengersAreRedundant(challengerResults[0]!, challengerResults[1]!)
+    ? [challengerResults[0]!]
+    : challengerResults;
+
   // Synthesis: ask the PRIMARY decision model to produce a final answer using debate notes.
   const baseUserQuery = params.allMessages.at(-1)?.content || '';
   const userQuery = isVideoUi
@@ -560,7 +597,7 @@ async function maybeRunDebateMode(params: {
   const synthesisPrompt = buildSynthesisPrompt(
     params.debateProfile,
     userQuery,
-    challengerResults,
+    deduplicatedResults,
     plan.maxChallengerChars,
   );
 
@@ -1752,6 +1789,7 @@ Deno.serve(async (req: Request) => {
             geminiFlashThinkingLevel: normalizedGeminiFlashThinkingLevel,
             debateProfile: debateReq.profile,
             workerMaxTokens,
+            debateWasExplicit: debateReq.requested,
             ...(forcedVideoUiTier ? { forcedModelTier: forcedVideoUiTier } : {}),
             ...(debateReq.profile === 'video_ui'
               ? { synthesisMaxTokens: DEBATE_VIDEO_UI_SYNTHESIS_MAX_TOKENS }
