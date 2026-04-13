@@ -508,7 +508,7 @@ async function maybeRunDebateMode(params: {
   if (!isProviderReadyForModelTier(primaryTier)) return null;
   for (const c of plan.challengers) {
     const assignedTier = params.forcedModelTier || c.modelTier;
-    const sequence = buildFallbackSequence(assignedTier, params.debateProfile);
+    const sequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role);
     if (!sequence.some(isProviderReadyForModelTier)) return null;
   }
 
@@ -541,7 +541,7 @@ async function maybeRunDebateMode(params: {
 
       // Role-aware cascade fallback: try assigned tier first, then role-appropriate alternatives.
       const assignedTier = params.forcedModelTier || c.modelTier;
-      const fallbackSequence = buildFallbackSequence(assignedTier, params.debateProfile);
+      const fallbackSequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role);
       for (const workerTier of fallbackSequence) {
         if (workerController.signal.aborted) break;
         if (!isProviderReadyForModelTier(workerTier)) continue;

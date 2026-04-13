@@ -92,6 +92,73 @@ export const MODEL_REGISTRY = {
     budgetCap: 8192,
     supportsImages: false,
   },
+  'llama-3.3-70b-turbo': {
+    provider: 'deepinfra',
+    modelId: 'meta-llama/Meta-Llama-3.3-70B-Instruct-Turbo',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+  'mistral-small-24b': {
+    provider: 'deepinfra',
+    modelId: 'mistralai/Mistral-Small-24B-Instruct-2501',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+  'qwen3-32b': {
+    provider: 'deepinfra',
+    modelId: 'Qwen/Qwen3-32B',
+    budgetCap: 8192,
+    supportsImages: false,
+  },
+  'deepseek-v3': {
+    provider: 'deepinfra',
+    modelId: 'deepseek-ai/DeepSeek-V3',
+    budgetCap: 8192,
+    supportsImages: false,
+  },
+  // Debate-tier cheap DeepInfra challengers
+  'glm-4.7-flash': {
+    provider: 'deepinfra',
+    modelId: 'THUDM/GLM-4.7-Flash',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+  'qwen3.5-4b': {
+    provider: 'deepinfra',
+    modelId: 'Qwen/Qwen3.5-4B',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+  'qwen3.5-9b': {
+    provider: 'deepinfra',
+    modelId: 'Qwen/Qwen3.5-9B',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+  'step-3.5-flash': {
+    provider: 'deepinfra',
+    modelId: 'stepfun-ai/Step-3.5-Flash',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+  'llama-3.1-8b-turbo': {
+    provider: 'deepinfra',
+    modelId: 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+  'mistral-nemo': {
+    provider: 'deepinfra',
+    modelId: 'mistralai/Mistral-Nemo-Instruct-2407',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+  'nemotron-nano-30b': {
+    provider: 'deepinfra',
+    modelId: 'nvidia/NVIDIA-Nemotron-Nano-30B-A3B',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
 } as const satisfies Record<string, ModelConfig>;
 
 export type RouterModel = keyof typeof MODEL_REGISTRY;
@@ -134,13 +201,36 @@ const OVERRIDE_SYNONYMS: Record<string, RouterModel> = {
   // NVIDIA
   'nvidia:nemotron-3-super': 'nemotron-3-super',
   'nemotron-super': 'nemotron-3-super',
-  // DeepInfra
+  // DeepInfra — original
   'deepinfra:llama-4-scout': 'llama-4-scout',
   'deepinfra:qwen3-235b': 'qwen3-235b',
   'llama-scout': 'llama-4-scout',
   'llama4-scout': 'llama-4-scout',
   'qwen3': 'qwen3-235b',
   'qwen-235b': 'qwen3-235b',
+  // DeepInfra — cheap batch (added 2026-04-13)
+  'deepinfra:llama-3.3-70b-turbo': 'llama-3.3-70b-turbo',
+  'llama-3.3-70b': 'llama-3.3-70b-turbo',
+  'deepinfra:mistral-small-24b': 'mistral-small-24b',
+  'deepinfra:qwen3-32b': 'qwen3-32b',
+  'deepinfra:deepseek-v3': 'deepseek-v3',
+  // DeepInfra — debate-tier challengers (added 2026-04-13)
+  'deepinfra:glm-4.7-flash': 'glm-4.7-flash',
+  'glm-flash': 'glm-4.7-flash',
+  'glm4-flash': 'glm-4.7-flash',
+  'deepinfra:qwen3.5-4b': 'qwen3.5-4b',
+  'qwen3.5-4b': 'qwen3.5-4b',
+  'deepinfra:qwen3.5-9b': 'qwen3.5-9b',
+  'qwen3.5-9b': 'qwen3.5-9b',
+  'deepinfra:step-3.5-flash': 'step-3.5-flash',
+  'step-flash': 'step-3.5-flash',
+  'deepinfra:llama-3.1-8b-turbo': 'llama-3.1-8b-turbo',
+  'llama-3.1-8b': 'llama-3.1-8b-turbo',
+  'llama-8b': 'llama-3.1-8b-turbo',
+  'deepinfra:mistral-nemo': 'mistral-nemo',
+  'mistral-nemo': 'mistral-nemo',
+  'deepinfra:nemotron-nano-30b': 'nemotron-nano-30b',
+  'nemotron-nano': 'nemotron-nano-30b',
 };
 
 export function normalizeModelOverride(input?: string): RouterModel | undefined {

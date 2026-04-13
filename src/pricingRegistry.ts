@@ -81,4 +81,39 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
     outputRatePer1M: 0.89,
     isEstimated: false,
   },
+  'glm-4.7-flash': {
+    inputRatePer1M: 0.06,
+    outputRatePer1M: 0.40,
+    isEstimated: false,
+  },
+  'qwen3.5-4b': {
+    inputRatePer1M: 0.03,
+    outputRatePer1M: 0.15,
+    isEstimated: false,
+  },
+  'qwen3.5-9b': {
+    inputRatePer1M: 0.04,
+    outputRatePer1M: 0.20,
+    isEstimated: false,
+  },
+  'step-3.5-flash': {
+    inputRatePer1M: 0.10,
+    outputRatePer1M: 0.30,
+    isEstimated: false,
+  },
+  'llama-3.1-8b-turbo': {
+    inputRatePer1M: 0.02,
+    outputRatePer1M: 0.03,
+    isEstimated: false,
+  },
+  'mistral-nemo': {
+    inputRatePer1M: 0.02,
+    outputRatePer1M: 0.04,
+    isEstimated: false,
+  },
+  'nemotron-nano-30b': {
+    inputRatePer1M: 0.10,
+    outputRatePer1M: 0.16,
+    isEstimated: false,
+  },
 };

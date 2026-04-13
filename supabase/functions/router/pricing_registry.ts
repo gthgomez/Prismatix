@@ -84,6 +84,85 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
     sourceRef: 'deepinfra-pricing',
     isEstimated: false,
   },
+  // DeepInfra cheap batch
+  'llama-3.3-70b-turbo': {
+    inputRatePer1M: 0.012,
+    outputRatePer1M: 0.03,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'mistral-small-24b': {
+    inputRatePer1M: 0.04,
+    outputRatePer1M: 0.08,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'qwen3-32b': {
+    inputRatePer1M: 0.07,
+    outputRatePer1M: 0.28,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'deepseek-v3': {
+    inputRatePer1M: 0.22,
+    outputRatePer1M: 0.89,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  // DeepInfra debate-tier challengers
+  'glm-4.7-flash': {
+    inputRatePer1M: 0.06,
+    outputRatePer1M: 0.40,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'qwen3.5-4b': {
+    inputRatePer1M: 0.03,
+    outputRatePer1M: 0.15,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'qwen3.5-9b': {
+    inputRatePer1M: 0.04,
+    outputRatePer1M: 0.20,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'step-3.5-flash': {
+    inputRatePer1M: 0.10,
+    outputRatePer1M: 0.30,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'llama-3.1-8b-turbo': {
+    inputRatePer1M: 0.02,
+    outputRatePer1M: 0.03,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'mistral-nemo': {
+    inputRatePer1M: 0.02,
+    outputRatePer1M: 0.04,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
+  'nemotron-nano-30b': {
+    inputRatePer1M: 0.10,
+    outputRatePer1M: 0.16,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+  },
 };
 
 export function getModelPricing(modelTier: RouterModel): ModelPricing | undefined {

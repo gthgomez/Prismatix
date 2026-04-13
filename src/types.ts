@@ -1,7 +1,7 @@
 // src/types.ts
 
 export type AnthropicModel = 'opus-4.6' | 'sonnet-4.6' | 'haiku-4.5';
-export type RouterModel = AnthropicModel | 'gpt-5.4-mini' | 'gemini-3-flash' | 'gemini-2.5-flash' | 'gemini-3.1-pro' | 'nemotron-3-super' | 'llama-4-scout' | 'qwen3-235b' | 'llama-3.3-70b-turbo' | 'mistral-small-24b' | 'qwen3-32b' | 'deepseek-v3';
+export type RouterModel = AnthropicModel | 'gpt-5.4-mini' | 'gemini-3-flash' | 'gemini-2.5-flash' | 'gemini-3.1-pro' | 'nemotron-3-super' | 'llama-4-scout' | 'qwen3-235b' | 'llama-3.3-70b-turbo' | 'mistral-small-24b' | 'qwen3-32b' | 'deepseek-v3' | 'glm-4.7-flash' | 'qwen3.5-4b' | 'qwen3.5-9b' | 'step-3.5-flash' | 'llama-3.1-8b-turbo' | 'mistral-nemo' | 'nemotron-nano-30b';
 export type RouterProvider = 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
 export type GeminiFlashThinkingLevel = 'low' | 'high';
 export type DebateProfile = 'general' | 'code' | 'video_ui';

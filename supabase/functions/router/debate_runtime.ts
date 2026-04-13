@@ -2,7 +2,8 @@
 // Shared pure helpers for Debate Mode runtime decisions.
 
 import {
-  CODE_CHALLENGER_FALLBACKS,
+  CODE_CRITIC_FALLBACKS,
+  CODE_IMPLEMENTER_FALLBACKS,
   DEBATE_COST_CASCADE,
   GENERAL_CHALLENGER_FALLBACKS,
   type DebateProfile,
@@ -86,18 +87,23 @@ export function serializeMessagesForCost(messages: Message[]): string {
 
 /**
  * Returns the ordered fallback sequence for a challenger.
- * Uses a role-aware cascade: code profiles use CODE_CHALLENGER_FALLBACKS,
- * all others use GENERAL_CHALLENGER_FALLBACKS.
+ * Uses a role-aware cascade:
+ *   - code critic role  → CODE_CRITIC_FALLBACKS
+ *   - code implementer  → CODE_IMPLEMENTER_FALLBACKS
+ *   - everything else   → GENERAL_CHALLENGER_FALLBACKS
  * Assigned tier is tried first; remaining cascade models follow in cost order.
  */
 export function buildFallbackSequence(
   assignedTier: RouterModel,
   profile: DebateProfile = 'general',
+  role = '',
 ): RouterModel[] {
-  const cascade = profile === 'code'
-    ? CODE_CHALLENGER_FALLBACKS
-    : GENERAL_CHALLENGER_FALLBACKS;
-  // Ensure assignedTier is first; append cascade models not already included
+  let cascade: RouterModel[];
+  if (profile === 'code') {
+    cascade = role === 'implementer' ? CODE_IMPLEMENTER_FALLBACKS : CODE_CRITIC_FALLBACKS;
+  } else {
+    cascade = GENERAL_CHALLENGER_FALLBACKS;
+  }
   const rest = cascade.filter((t) => t !== assignedTier);
   return [assignedTier, ...rest];
 }

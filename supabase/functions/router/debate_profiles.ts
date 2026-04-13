@@ -18,36 +18,51 @@ export const DEFAULT_DEBATE_THRESHOLD = 85;
 /**
  * Role-aware fallback cascades for debate challengers (cheapest-first within role class).
  *
- * General/skeptic/architect roles: prefer diverse reasoning models.
- * Code roles: prefer models with strong code critique / structured output ability.
- * Each cascade is tried in order when the assigned model fails or is unavailable.
+ * General cascade: cheap DeepInfra models first, escalate only when needed.
+ * Code critic cascade: starts cheap (GLM), escalates to DeepSeek for serious critique.
+ * Code implementer cascade: Step-3.5-Flash first (agentic), then ultra-cheap floor.
  *
  * Blended $/1M (3:1 in:out ratio) as of 2026-04-13:
+ *   qwen3.5-4b:          $0.03in  / $0.15out  → ~$0.06 blended
+ *   llama-3.1-8b-turbo:  $0.02in  / $0.03out  → ~$0.02 blended
+ *   mistral-nemo:        $0.02in  / $0.04out  → ~$0.03 blended
+ *   glm-4.7-flash:       $0.06in  / $0.40out  → ~$0.15 blended
+ *   qwen3.5-9b:          $0.04in  / $0.20out  → ~$0.08 blended
+ *   nemotron-nano-30b:   $0.10in  / $0.16out  → ~$0.11 blended
  *   llama-3.3-70b-turbo: $0.012in / $0.03out  → ~$0.02 blended
- *   nemotron-3-super:    $0.10in  / $0.50out  → ~$0.20 blended
- *   mistral-small-24b:   $0.04in  / $0.08out  → ~$0.05 blended
  *   qwen3-32b:           $0.07in  / $0.28out  → ~$0.12 blended
+ *   step-3.5-flash:      $0.10in  / $0.30out  → ~$0.15 blended
  *   deepseek-v3:         $0.22in  / $0.89out  → ~$0.39 blended
- *   gemini-3-flash:      $0.50in  / $3.00out  → ~$1.13 blended
- *   gpt-5.4-mini:        $0.75in  / $4.50out  → ~$1.69 blended
+ *   nemotron-3-super:    $0.10in  / $0.50out  → ~$0.20 blended
  */
 export const GENERAL_CHALLENGER_FALLBACKS: RouterModel[] = [
-  'nemotron-3-super',      // strong general reasoning, very cheap
-  'llama-3.3-70b-turbo',   // fast, solid general baseline
-  'qwen3-32b',             // alternative framing tendency
-  'gemini-3-flash',        // reliable, slightly higher cost
-  'gpt-5.4-mini',          // last resort
+  'qwen3.5-4b',            // ultra-cheap, good alternative framing
+  'glm-4.7-flash',         // cheap skeptical challenger
+  'qwen3.5-9b',            // stronger cheap option
+  'llama-3.1-8b-turbo',    // absolute floor fallback
+  'llama-3.3-70b-turbo',   // mid-tier sturdy fallback
+  'nemotron-3-super',      // stronger agentic reasoning if needed
 ];
 
-export const CODE_CHALLENGER_FALLBACKS: RouterModel[] = [
-  'gpt-5.4-mini',          // best code critique at this price tier
-  'deepseek-v3',           // strong structured code reasoning
-  'haiku-4.5',             // cheap Anthropic code baseline
-  'gemini-3-flash',        // fallback
+export const CODE_CRITIC_FALLBACKS: RouterModel[] = [
+  'glm-4.7-flash',         // cheap first-pass critic
+  'deepseek-v3',           // strong open-weight code critic
+  'qwen3-32b',             // mid-band open alternative
+  'step-3.5-flash',        // agentic + code-aware
+  'llama-3.3-70b-turbo',   // sturdy 70B fallback
 ];
 
-/** @deprecated use GENERAL_CHALLENGER_FALLBACKS or CODE_CHALLENGER_FALLBACKS */
+export const CODE_IMPLEMENTER_FALLBACKS: RouterModel[] = [
+  'step-3.5-flash',        // agentic, SWE-bench strong
+  'mistral-nemo',          // ultra-cheap implementer
+  'llama-3.1-8b-turbo',    // absolute floor fallback
+  'qwen3.5-9b',            // cheap structured alternative
+];
+
+/** @deprecated use profile-specific cascade constants */
 export const DEBATE_COST_CASCADE: RouterModel[] = GENERAL_CHALLENGER_FALLBACKS;
+// Alias kept for any external references
+export const CODE_CHALLENGER_FALLBACKS: RouterModel[] = CODE_CRITIC_FALLBACKS;
 
 function uniq<T>(arr: T[]): T[] {
   return [...new Set(arr)];
@@ -108,8 +123,8 @@ export function getDebatePlan(
   // NOTE: All tiers must exist in MODEL_REGISTRY; do not invent keys here.
   const base = profile === 'code'
     ? [
-        { role: 'critic', modelTier: 'gpt-5.4-mini' as RouterModel },
-        { role: 'implementer', modelTier: 'haiku-4.5' as RouterModel },
+        { role: 'critic', modelTier: 'deepseek-v3' as RouterModel },
+        { role: 'implementer', modelTier: 'step-3.5-flash' as RouterModel },
       ]
     : profile === 'video_ui'
     ? [
@@ -118,8 +133,8 @@ export function getDebatePlan(
         { role: 'Customer Persona', modelTier: 'gemini-3.1-pro' as RouterModel },
       ]
     : [
-        { role: 'skeptic', modelTier: 'gpt-5.4-mini' as RouterModel },
-        { role: 'alternative architect', modelTier: 'gemini-3-flash' as RouterModel },
+        { role: 'skeptic', modelTier: 'glm-4.7-flash' as RouterModel },
+        { role: 'alternative architect', modelTier: 'qwen3.5-4b' as RouterModel },
       ];
 
   const filtered = profile === 'video_ui'
