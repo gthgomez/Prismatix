@@ -204,3 +204,17 @@ export const MODEL_ORDER: RouterModel[] = [
   'mistral-nemo',
   'nemotron-nano-30b',
 ];
+
+/** Curated subset for marketing empty state and compact override UI (full list stays in MODEL_ORDER). */
+export const MODEL_HIGHLIGHTS: RouterModel[] = [
+  'gemini-3-flash',
+  'gemini-3.1-pro',
+  'sonnet-4.6',
+  'opus-4.6',
+  'haiku-4.5',
+  'gpt-5.4-mini',
+];
+
+export const MODEL_EXTENDED_ORDER: RouterModel[] = MODEL_ORDER.filter(
+  (id) => !MODEL_HIGHLIGHTS.includes(id),
+);

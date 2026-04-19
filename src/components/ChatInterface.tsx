@@ -38,7 +38,12 @@ import type {
   Message,
   RouterModel,
 } from '../types';
-import { MODEL_CATALOG, MODEL_ORDER } from '../modelCatalog';
+import { MODEL_CATALOG, MODEL_HIGHLIGHTS, MODEL_ORDER } from '../modelCatalog';
+import { assistantModelPillDisplay } from '../modelDisplay';
+import {
+  getComposerSendValidationView,
+  VIDEO_UI_DEBATE_SEND_ERROR,
+} from '../sendValidationPresentation';
 import type { User } from '@supabase/supabase-js';
 import {
   getDebatePayload,
@@ -100,6 +105,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [spendRefreshKey, setSpendRefreshKey] = useState(0);
   const [showCostEstimator, setShowCostEstimator] = useState(false);
   const [finalMessageCost, setFinalMessageCost] = useState<number | null>(null);
+  const [routerPricingVersion, setRouterPricingVersion] = useState<string | undefined>(undefined);
   const [debateSelection, setDebateSelection] = useState<DebateSelection>('off');
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
@@ -318,7 +324,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     const hasContent = input.trim() || draftAttachments.length > 0;
     if (!hasContent || isStreaming || hasPendingVideoUploads) return;
     if (debateSelection === 'video_ui' && !hasReadyVideo) {
-      setSendValidationError('Video UI debate requires at least one ready video attachment.');
+      setSendValidationError(VIDEO_UI_DEBATE_SEND_ERROR);
       return;
     }
     setSendValidationError(null);
@@ -425,6 +431,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     clearCostEstimatorHideTimer();
     setShowCostEstimator(true);
     setFinalMessageCost(null);
+    setRouterPricingVersion(undefined);
     setCostModel(estimatedModel);
     setCurrentUsage({
       promptTokens: promptTokenEstimate,
@@ -481,6 +488,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         setCurrentModel(model);
       }
       setCostModel(model);
+      setRouterPricingVersion(costPricingVersion ?? undefined);
       setCurrentComplexity(complexityScore);
 
       const streamStartMs = Date.now();
@@ -632,6 +640,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       setCostModel('gemini-2.5-flash');
       setShowCostEstimator(false);
       setFinalMessageCost(null);
+      setRouterPricingVersion(undefined);
       clearCostEstimatorHideTimer();
       resetAutoScroll();
       setIsWaitingFirstToken(false);
@@ -650,6 +659,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const modelConfig = MODEL_CATALOG[currentModel];
+  const composerValidationView = getComposerSendValidationView(sendValidationError);
+
+  const openRoutingDebateMenu = () => {
+    setShowUserMenu(false);
+    setShowModelSelector(true);
+  };
 
   return (
     <div className='chat-container'>
@@ -677,6 +692,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               >
                 <span className='model-icon'>{modelConfig.icon}</span>
                 <span className='model-name'>{modelConfig.name}</span>
+                {!manualModelOverride && <span className='route-mode-badge'>Auto</span>}
                 {manualModelOverride && <span className='manual-badge'>Manual</span>}
                 {debateSelection !== 'off' && <span className='debate-badge'>Debate</span>}
                 <svg
@@ -804,16 +820,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <div className='empty-icon'>🤖</div>
               <h2>Welcome, {getUserDisplay()}!</h2>
               <p>
-                Prismatix will automatically select the best model based on your query complexity
+                Prismatix will automatically select the best model based on your query complexity.
+                The router can use {MODEL_ORDER.length} models; highlights below are representative.
               </p>
-              <div className='model-grid'>
-                {MODEL_ORDER.map((key) => {
+              <div className='model-grid model-grid--highlights' role='list' aria-label='Representative models'>
+                {MODEL_HIGHLIGHTS.map((key) => {
                   const config = MODEL_CATALOG[key];
                   return (
                     <div
                       key={key}
-                      className='model-card'
+                      className='model-card model-card--info'
                       style={{ '--card-color': config.color } as React.CSSProperties}
+                      role='listitem'
                     >
                       <span className='card-icon'>{config.icon}</span>
                       <span className='card-name'>{config.shortName}</span>
@@ -822,11 +840,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   );
                 })}
               </div>
+              <p className='empty-state-model-hint'>
+                Override any time from the model menu in the header.
+              </p>
             </div>
           )
           : (
             <div className='messages-list'>
-              {messages.map((msg, idx) => (
+              {messages.map((msg, idx) => {
+                const modelPillMeta = msg.model ? assistantModelPillDisplay(msg) : null;
+                return (
                 <div
                   key={idx}
                   className={`message message-${msg.role}`}
@@ -848,9 +871,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                             type='button'
                             className={`message-model-pill ${expandedMetadataIdx === idx ? 'expanded' : ''}`}
                             onClick={() => setExpandedMetadataIdx(expandedMetadataIdx === idx ? null : idx)}
-                            title={msg.modelId || msg.model}
+                            title={modelPillMeta?.title}
                           >
-                            <span className='pill-text'>{msg.modelId || msg.model}</span>
+                            <span className='pill-text'>{modelPillMeta?.label}</span>
                             <span className='info-icon'>
                               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
                                 <circle cx="12" cy="12" r="10" />
@@ -866,6 +889,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                                 <div className='metadata-item'>
                                   <span className='item-label'>Provider</span>
                                   <span className='item-value'>{msg.provider}</span>
+                                </div>
+                              )}
+                              {msg.modelId && (
+                                <div className='metadata-item'>
+                                  <span className='item-label'>API ID</span>
+                                  <span className='item-value metadata-value-break'>{msg.modelId}</span>
                                 </div>
                               )}
                               {msg.modelOverride && msg.modelOverride !== 'auto' && (
@@ -960,7 +989,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     )}
                   </div>
                 </div>
-              ))}
+              );
+              })}
               <div ref={messagesEndRef} />
             </div>
           )}
@@ -1021,9 +1051,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               )}
             </button>
           </div>
-          {sendValidationError && (
-            <div className='send-validation-error'>
-              {sendValidationError}
+          {composerValidationView && (
+            <div className='send-validation-error' role='alert' aria-live='polite'>
+              <p className='send-validation-summary'>{composerValidationView.summary}</p>
+              {composerValidationView.detail && (
+                <p className='send-validation-detail'>{composerValidationView.detail}</p>
+              )}
+              {composerValidationView.showRoutingCta && (
+                <button
+                  type='button'
+                  className='send-validation-routing-cta'
+                  onClick={openRoutingDebateMenu}
+                >
+                  Open routing & debate
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1045,6 +1087,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         isStreaming={isStreaming}
         totalCost={sessionCostTotal}
         finalCostUsd={finalMessageCost}
+        routerPricingVersion={routerPricingVersion}
       />
     </div>
   );
