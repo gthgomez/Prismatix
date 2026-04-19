@@ -4,6 +4,9 @@
   --kb-offset: 0px;
   --max-content-width: 900px;
   --header-height: 72px;
+  /* Fallback until ChatInterface measures the real sticky header */
+  --prismatix-chat-header-h: 4.5rem;
+  --prismatix-model-dropdown-top: 5.25rem;
 
   /* Colors - Core */
   --color-bg: #0a0a0a;

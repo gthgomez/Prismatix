@@ -16,6 +16,7 @@
   position: sticky;
   top: 0;
   z-index: 100;
+  overflow: visible;
 }
 
 .header-content {
@@ -25,6 +26,7 @@
   justify-content: space-between;
   align-items: center;
   gap: var(--spacing-md);
+  min-width: 0;
 }
 
 .header-title h1 {
@@ -45,7 +47,13 @@
   margin-top: 2px;
 }
 
-.header-actions { display: flex; align-items: center; gap: var(--spacing-sm); }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+  flex-shrink: 1;
+}
 
 .header-button {
   width: 40px; height: 40px;
@@ -1347,20 +1355,107 @@
 }
 
 @media (max-width: 768px) {
-  .chat-header { padding: var(--spacing-sm) var(--spacing-md); }
-  .header-content { gap: var(--spacing-sm); }
+  .chat-header {
+    padding-top: calc(var(--spacing-sm) + env(safe-area-inset-top, 0px));
+    padding-left: calc(var(--spacing-md) + env(safe-area-inset-left, 0px));
+    padding-right: calc(var(--spacing-md) + env(safe-area-inset-right, 0px));
+    padding-bottom: var(--spacing-sm);
+  }
+
+  .header-content {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+    row-gap: var(--spacing-xs);
+  }
+
+  .header-title {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+    max-width: 100%;
+  }
+
+  .context-status {
+    max-width: min(200px, 46vw);
+    min-width: 0;
+  }
+
+  .context-status > span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .model-indicator-button {
+    padding: 0.4rem 0.6rem;
+    max-width: min(48vw, 11rem);
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .model-name {
+    font-size: 0.8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .model-icon { font-size: 1rem; }
+
   .header-title h1 { font-size: 1.1rem; }
   .header-subtitle { display: none; }
-  .model-indicator-button { padding: 0.4rem 0.6rem; }
-  .model-name { font-size: 0.8rem; }
-  .model-icon { font-size: 1rem; }
+
   .user-button { width: 36px; height: 36px; }
+
   .chat-messages { padding: var(--spacing-md); }
+
   .model-grid { grid-template-columns: 1fr; }
+
+  /* Full-width sheet: measured --prismatix-model-dropdown-top = header bottom + gap */
+  .model-dropdown {
+    position: fixed;
+    left: max(0.5rem, env(safe-area-inset-left, 0px));
+    right: max(0.5rem, env(safe-area-inset-right, 0px));
+    top: var(
+      --prismatix-model-dropdown-top,
+      calc(env(safe-area-inset-top, 0px) + var(--prismatix-chat-header-h, 4.5rem) + 0.35rem)
+    );
+    bottom: auto;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    max-height: min(
+      88dvh,
+      calc(100dvh - env(safe-area-inset-bottom, 0px) - var(--prismatix-model-dropdown-top, 5.5rem) - 0.75rem)
+    );
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    z-index: 2500;
+    animation: none;
+    box-sizing: border-box;
+  }
+
+  .model-options-scroll {
+    max-height: min(32vh, 11rem);
+  }
+
   .cost-estimator {
     right: var(--spacing-sm);
     left: var(--spacing-sm);
     bottom: calc(5.5rem + var(--kb-offset, 0px) + env(safe-area-inset-bottom));
     width: auto;
+    max-width: none;
+    z-index: 2400;
   }
 }

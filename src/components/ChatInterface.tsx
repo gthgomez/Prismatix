@@ -1,7 +1,7 @@
 // src/components/ChatInterface.tsx
 // Main chat interface with multi-file upload support and model selector
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useContextManager } from '../hooks/useContextManager';
 import { ContextWarning } from './ContextWarning';
 import { ContextStatus } from './ContextStatus';
@@ -136,6 +136,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const modelSelectorRef = useRef<HTMLDivElement>(null);
+  const chatHeaderRef = useRef<HTMLElement>(null);
   const costEstimatorHideTimeoutRef = useRef<number | null>(null);
 
   // Scroll only when a new message bubble is created, and only if user is near bottom.
@@ -317,6 +318,34 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   useEffect(() => {
     return () => clearCostEstimatorHideTimer();
+  }, []);
+
+  // Narrow viewports: measured header box drives a fixed model menu (`top` + max-height)
+  // so it clears notches, safe areas, and #root overflow without clipping the menu header.
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const el = chatHeaderRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const apply = () => {
+      const r = el.getBoundingClientRect();
+      const topPx = Math.ceil(r.bottom) + 6;
+      root.style.setProperty('--prismatix-model-dropdown-top', `${topPx}px`);
+      root.style.setProperty('--prismatix-chat-header-h', `${Math.ceil(r.height)}px`);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    window.addEventListener('orientationchange', apply);
+    window.visualViewport?.addEventListener('resize', apply);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('orientationchange', apply);
+      window.visualViewport?.removeEventListener('resize', apply);
+      root.style.removeProperty('--prismatix-model-dropdown-top');
+      root.style.removeProperty('--prismatix-chat-header-h');
+    };
   }, []);
 
   const handleSend = async (skipBudgetCheck = false) => {
@@ -669,7 +698,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   return (
     <div className='chat-container'>
       {/* Header */}
-      <header className='chat-header'>
+      <header className='chat-header' ref={chatHeaderRef}>
         <div className='header-content'>
           <div className='header-title'>
             <h1>Prismatix</h1>
