@@ -3,6 +3,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
   countTokens,
+  createStubRoutingDebug,
   determineRoute,
   type ImageAttachment,
   type Message,
@@ -245,6 +246,7 @@ function decisionFromModel(
     budgetCap: modelCfg.budgetCap,
     rationaleTag,
     complexityScore,
+    routingDebug: createStubRoutingDebug(complexityScore, rationaleTag),
   };
 }
 
@@ -590,13 +592,13 @@ async function maybeRunDebateMode(params: {
     : challengerResults;
 
   // Synthesis: ask the PRIMARY decision model to produce a final answer using debate notes.
-  const baseUserQuery = params.allMessages.at(-1)?.content || '';
-  const userQuery = isVideoUi
-    ? `${baseUserQuery}\n\nVIDEO_NOTES_JSON:\n${params.videoNotesJson}`
-    : baseUserQuery;
+  const baseUserQueryForSynth = params.allMessages.at(-1)?.content || '';
+  const synthesisUserQuery = isVideoUi
+    ? `${baseUserQueryForSynth}\n\nVIDEO_NOTES_JSON:\n${params.videoNotesJson}`
+    : baseUserQueryForSynth;
   const synthesisPrompt = buildSynthesisPrompt(
     params.debateProfile,
-    userQuery,
+    synthesisUserQuery,
     deduplicatedResults,
     plan.maxChallengerChars,
   );
@@ -1323,6 +1325,11 @@ async function maybeRunSmdMode(params: {
       ...smdDecisionBase,
       budgetCap: SMD_FORMATTER_BUDGET,
       rationaleTag: 'smd-formatter',
+      routingDebug: {
+        ...smdDecisionBase.routingDebug,
+        routeStep: 'smd-formatter',
+        matchedBranch: 'smd-formatter',
+      },
     };
     const formatterMessages: Message[] = [
       // Include conversation history for context continuity.

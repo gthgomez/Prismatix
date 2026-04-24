@@ -164,6 +164,26 @@ export const MODEL_REGISTRY = {
 export type RouterModel = keyof typeof MODEL_REGISTRY;
 export type ModelTier = RouterModel;
 
+/** Unified routing analysis (`analyzeRouting`). */
+export interface RoutingAnalysis {
+  complexityScore: number;
+  reasoningDifficulty: number;
+  codeSignals: number;
+  isCodeHeavy: boolean;
+  multimodalLoad: number;
+  contextTokens: number;
+  textQueryTokens: number;
+  imageAttachmentCount: number;
+  hasImages: boolean;
+  hasVideoAssets: boolean;
+}
+
+/** Structured debug attached to every `determineRoute` outcome (and synthetic stubs elsewhere). */
+export interface RoutingDebugInfo extends RoutingAnalysis {
+  routeStep: string;
+  matchedBranch: string;
+}
+
 export interface RouteDecision {
   provider: Provider;
   model: string;
@@ -171,6 +191,7 @@ export interface RouteDecision {
   budgetCap: number;
   rationaleTag: string;
   complexityScore: number;
+  routingDebug: RoutingDebugInfo;
 }
 
 const OVERRIDE_SYNONYMS: Record<string, RouterModel> = {
@@ -536,27 +557,52 @@ export function transformMessagesForGoogle(
   });
 }
 
-function analyzeComplexity(params: RouterParams): number {
-  let score = 50;
-  const query = params.userQuery.toLowerCase();
-  const queryTokens = countTokens(params.userQuery);
-  const historyTokens = params.currentSessionTokens;
+/** Shared code-detection patterns — one source for `codeSignals` and `isCodeHeavy`. */
+export const ROUTING_CODE_PATTERNS: RegExp[] = [
+  /```/,
+  /\b(function|const|let|var|class|def|import|export|typescript|javascript|python|sql)\b/i,
+  /[{}\[\]();]/,
+  /\b(error|bug|fix|debug|trace|stack|exception|compile|crash)\b/i,
+];
 
-  if (queryTokens < 20) score -= 20;
-  else if (queryTokens < 50) score -= 10;
-  else if (queryTokens > 500) score += 15;
-  else if (queryTokens > 200) score += 10;
+export function countRoutingCodeSignals(query: string): number {
+  let n = 0;
+  for (const p of ROUTING_CODE_PATTERNS) {
+    if (p.test(query)) n++;
+  }
+  return n;
+}
+
+/**
+ * Single entry point for routing signals. `contextTokens` includes session + text + image surcharge.
+ * `complexityScore` adds a small multimodal bump to `reasoningDifficulty` for routing/UI alignment.
+ */
+export function analyzeRouting(params: RouterParams): RoutingAnalysis {
+  const query = params.userQuery.toLowerCase();
+  const textQueryTokens = countTokens(params.userQuery);
+  const imageAttachmentCount = params.images?.length ?? 0;
+  const imageTokenSurcharge = countImageTokens(params.images);
+  const contextTokens = params.currentSessionTokens + textQueryTokens + imageTokenSurcharge;
+  const hasImages = imageAttachmentCount > 0;
+  const hasVideoAssets = params.hasVideoAssets === true;
+  const multimodalLoad = imageAttachmentCount + (hasVideoAssets ? 3 : 0);
+
+  let score = 35;
+
+  if (textQueryTokens < 20) score -= 20;
+  else if (textQueryTokens < 50) score -= 10;
+  else if (textQueryTokens > 500) score += 15;
+  else if (textQueryTokens > 200) score += 10;
 
   for (const keyword of COMPLEXITY_INDICATORS.opus) {
     if (query.includes(keyword)) {
-      score += 5;
-      if (score > 75) break;
+      score += 4;
     }
   }
   for (const keyword of COMPLEXITY_INDICATORS.quick) {
     if (query.includes(keyword)) {
-      score -= 5;
-      if (score < 25) break;
+      score -= 6;
+      if (score < 15) break;
     }
   }
 
@@ -567,48 +613,91 @@ function analyzeComplexity(params: RouterParams): number {
 
   if (query.includes(' and ') && query.includes('?')) score += 10;
 
-  const codeIndicators = [
-    /```/,
-    /\b(function|const|let|var|class|def|import|export)\b/,
-    /[{}\[\]();]/,
-    /\b(error|bug|fix|debug|crash|exception)\b/i,
-  ];
-  let codeSignals = 0;
-  for (const pattern of codeIndicators) {
-    if (pattern.test(params.userQuery)) codeSignals++;
-  }
+  const codeSignals = countRoutingCodeSignals(params.userQuery);
   if (codeSignals >= 3) score += 15;
   else if (codeSignals >= 2) score += 10;
 
-  const totalTokens = historyTokens + queryTokens;
-  if (totalTokens > 100000) score += 10;
-  else if (totalTokens > 50000) score += 5;
+  if (contextTokens > 100000) score += 10;
+  else if (contextTokens > 50000) score += 5;
 
-  if (/\b(json|list|bullet|table|csv)\b/i.test(query) && queryTokens < 100) {
+  if (/\b(json|list|bullet|table|csv)\b/i.test(query) && textQueryTokens < 100) {
     score -= 10;
   }
 
   if (/\b(write|story|poem|essay|blog|article|creative|fiction)\b/i.test(query)) {
-    if (score < 50) score = 50;
+    if (score < 35) score = 35;
     if (score > 70) score = 65;
   }
 
-  return Math.max(0, Math.min(100, score));
+  const reasoningDifficulty = Math.max(0, Math.min(100, score));
+  const multimodalBump = Math.min(8, multimodalLoad * 2);
+  const complexityScore = Math.max(0, Math.min(100, reasoningDifficulty + multimodalBump));
+  const isCodeHeavy = codeSignals >= 2;
+
+  return {
+    complexityScore,
+    reasoningDifficulty,
+    codeSignals,
+    isCodeHeavy,
+    multimodalLoad,
+    contextTokens,
+    textQueryTokens,
+    imageAttachmentCount,
+    hasImages,
+    hasVideoAssets,
+  };
+}
+
+/** Minimal debug for debate/SMD paths that synthesize a `RouteDecision` without `determineRoute`. */
+export function createStubRoutingDebug(
+  complexityScore: number,
+  matchedBranch: string,
+): RoutingDebugInfo {
+  return {
+    complexityScore,
+    reasoningDifficulty: complexityScore,
+    codeSignals: 0,
+    isCodeHeavy: false,
+    multimodalLoad: 0,
+    contextTokens: 0,
+    textQueryTokens: 0,
+    imageAttachmentCount: 0,
+    hasImages: false,
+    hasVideoAssets: false,
+    routeStep: 'synthetic',
+    matchedBranch,
+  };
 }
 
 function buildDecision(
   modelTier: RouterModel,
   rationaleTag: string,
-  complexityScore: number,
+  analysis: RoutingAnalysis,
+  meta: { routeStep: string; matchedBranch?: string },
 ): RouteDecision {
   const config = MODEL_REGISTRY[modelTier];
+  const routingDebug: RoutingDebugInfo = {
+    complexityScore: analysis.complexityScore,
+    reasoningDifficulty: analysis.reasoningDifficulty,
+    codeSignals: analysis.codeSignals,
+    isCodeHeavy: analysis.isCodeHeavy,
+    multimodalLoad: analysis.multimodalLoad,
+    contextTokens: analysis.contextTokens,
+    textQueryTokens: analysis.textQueryTokens,
+    imageAttachmentCount: analysis.imageAttachmentCount,
+    hasImages: analysis.hasImages,
+    hasVideoAssets: analysis.hasVideoAssets,
+    matchedBranch: meta.matchedBranch ?? rationaleTag,
+    routeStep: meta.routeStep,
+  };
   return {
     provider: config.provider,
     model: config.modelId,
     modelTier,
     budgetCap: config.budgetCap,
     rationaleTag,
-    complexityScore,
+    complexityScore: analysis.complexityScore,
+    routingDebug,
   };
 }
 
@@ -616,57 +705,86 @@ export function isAnthropicModel(modelTier: RouterModel): boolean {
   return MODEL_REGISTRY[modelTier].provider === 'anthropic';
 }
 
-function isCodeHeavyQuery(query: string): boolean {
-  const codeIndicators = [
-    /```/,
-    /\b(function|const|let|var|class|def|import|export|typescript|javascript|python|sql)\b/i,
-    /[{}\[\]();]/,
-    /\b(error|bug|fix|debug|trace|stack|exception|compile)\b/i,
-  ];
-  return codeIndicators.some((pattern) => pattern.test(query));
-}
-
+/**
+ * Text-path numeric gates — keep aligned with `src/routingThresholds.ts` `ROUTING_SCORE_GATES`:
+ * mini≤18, Haiku≤28, Qwen 29–45, DeepSeek 46–65 (+ code-mid 29–69), Flash 66–80,
+ * Sonnet code≥75 or text≥81, Opus reasoning≥90 or (ctx>120k & reasoning≥70), images Pro≥75.
+ */
 export function determineRoute(params: RouterParams, modelOverride?: RouterModel): RouteDecision {
-  const hasImages = params.images && params.images.length > 0;
-  const hasVideoAssets = params.hasVideoAssets === true;
-  const complexityScore = analyzeComplexity(params);
-  const queryTokens = countTokens(params.userQuery) + countImageTokens(params.images);
-  const totalTokens = params.currentSessionTokens + queryTokens;
-  const codeHeavy = isCodeHeavyQuery(params.userQuery);
+  const analysis = analyzeRouting(params);
+  const {
+    complexityScore: c,
+    reasoningDifficulty: rd,
+    isCodeHeavy,
+    contextTokens,
+    textQueryTokens,
+    hasImages,
+    hasVideoAssets,
+  } = analysis;
+  const queryTokensForCaps = textQueryTokens + countImageTokens(params.images);
 
   if (modelOverride && MODEL_REGISTRY[modelOverride]) {
-    return buildDecision(modelOverride, 'manual-override', complexityScore);
+    return buildDecision(modelOverride, 'manual-override', analysis, { routeStep: 'manual-override' });
   }
 
   if (hasVideoAssets) {
-    return buildDecision('gemini-3.1-pro', 'video-default-pro', complexityScore);
+    return buildDecision('gemini-3.1-pro', 'video-default-pro', analysis, {
+      routeStep: 'video-default-pro',
+    });
   }
 
   if (hasImages) {
-    if (complexityScore >= 70 || totalTokens > 60000) {
-      return buildDecision('gemini-3.1-pro', 'images-complex', complexityScore);
+    if (c >= 75) {
+      return buildDecision('gemini-3.1-pro', 'images-pro', analysis, { routeStep: 'images-pro' });
     }
-    if (complexityScore <= 30 && totalTokens < 30000) {
-      return buildDecision('gemini-2.5-flash', 'images-fast', complexityScore);
-    }
-    return buildDecision('gemini-2.5-flash', 'images-default-flash', complexityScore);
+    return buildDecision('gemini-2.5-flash', 'images-flash', analysis, { routeStep: 'images-flash' });
   }
 
-  if (codeHeavy && complexityScore >= 45 && totalTokens < 90000) {
-    return buildDecision('sonnet-4.6', 'code-quality-priority', complexityScore);
+  const opusEligible = rd >= 90 || (contextTokens > 120000 && rd >= 70);
+  if (opusEligible) {
+    return buildDecision('opus-4.6', 'opus-reasoning-or-context', analysis, {
+      routeStep: 'opus',
+      matchedBranch: 'opus-reasoning-or-context',
+    });
   }
 
-  if (complexityScore >= 80 || totalTokens > 100000) {
-    return buildDecision('opus-4.6', 'high-complexity', complexityScore);
+  const sonnetEligible =
+    (isCodeHeavy && c >= 75) ||
+    (!hasImages && !hasVideoAssets && c >= 81);
+  if (sonnetEligible) {
+    return buildDecision('sonnet-4.6', 'sonnet-tier', analysis, {
+      routeStep: 'sonnet',
+      matchedBranch: 'sonnet-tier',
+    });
   }
 
-  if (complexityScore <= 18 && queryTokens < 80 && totalTokens < 12000) {
-    return buildDecision('gpt-5.4-mini', 'ultra-low-latency', complexityScore);
+  if (c <= 18 && queryTokensForCaps < 80 && contextTokens < 12000) {
+    return buildDecision('gpt-5.4-mini', 'tier-mini', analysis, { routeStep: 'gpt-mini' });
   }
 
-  if (complexityScore <= 25 && queryTokens < 100 && totalTokens < 10000) {
-    return buildDecision('haiku-4.5', 'low-complexity', complexityScore);
+  if (c <= 28 && queryTokensForCaps < 100 && contextTokens < 10000) {
+    return buildDecision('haiku-4.5', 'tier-haiku', analysis, { routeStep: 'haiku' });
   }
 
-  return buildDecision('gemini-2.5-flash', 'default-cost-optimized', complexityScore);
+  if (isCodeHeavy && c < 70 && c >= 29) {
+    return buildDecision('deepseek-v3', 'code-mid-deepseek', analysis, {
+      routeStep: 'code-mid-deepseek',
+    });
+  }
+
+  if (c >= 29 && c <= 45) {
+    return buildDecision('qwen3-235b', 'tier-qwen', analysis, { routeStep: 'qwen' });
+  }
+
+  if (c >= 46 && c <= 65) {
+    return buildDecision('deepseek-v3', 'tier-deepseek', analysis, { routeStep: 'deepseek' });
+  }
+
+  if (c >= 66 && c <= 80) {
+    return buildDecision('gemini-2.5-flash', 'tier-flash', analysis, { routeStep: 'flash' });
+  }
+
+  return buildDecision('gemini-2.5-flash', 'default-fallback', analysis, {
+    routeStep: 'default-fallback',
+  });
 }
