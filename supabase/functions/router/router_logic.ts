@@ -561,7 +561,7 @@ export function transformMessagesForGoogle(
 export const ROUTING_CODE_PATTERNS: RegExp[] = [
   /```/,
   /\b(function|const|let|var|class|def|import|export|typescript|javascript|python|sql)\b/i,
-  /[{}\[\]();]/,
+  /[{}[\]();]/,
   /\b(error|bug|fix|debug|trace|stack|exception|compile|crash)\b/i,
 ];
 

@@ -292,7 +292,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       let failed = 0;
 
       // Process all files concurrently
-      const promises = fileArray.map(async (file, index) => {
+      const promises = fileArray.map(async (file) => {
         const result = await processFile(file);
         
         setProcessing(prev => prev ? {

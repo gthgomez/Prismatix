@@ -1,7 +1,7 @@
 // memory_helpers.ts - Long-term user memory retrieval and conversation summarization
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { countTokens, type Message } from './router_logic.ts';
+import { countTokens } from './router_logic.ts';
 import { MODEL_REGISTRY } from './router_logic.ts';
 
 // ============================================================================

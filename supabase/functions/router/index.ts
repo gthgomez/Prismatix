@@ -61,7 +61,6 @@ import {
   buildSmdSynthDecisionPrompt,
 } from './smd_prompts.ts';
 import {
-  type CostLogRecord,
   computeUserTokenCount,
   estimateVideoPromptTokens,
   persistCostLog,
@@ -164,8 +163,6 @@ const ENABLE_SMD_LIGHT = envFlag('ENABLE_SMD_LIGHT', false);
 const SMD_FAST_PATH_MIN_TOKENS = Number(Deno.env.get('SMD_FAST_PATH_MIN_TOKENS') || '') || 25;
 // SMD is locked to Gemini Flash for the experiment (cost control + single-model rule).
 const SMD_MODEL_TIER: RouterModel = 'gemini-2.5-flash';
-// Stage timeout for the non-streaming JSON stages (ms).
-const SMD_JSON_STAGE_TIMEOUT_MS = Number(Deno.env.get('SMD_JSON_STAGE_TIMEOUT_MS') || '') || 15000;
 // Draft output cap fed to later stages (chars, not tokens — cheap truncation guard).
 const SMD_DRAFT_MAX_CHARS = Number(Deno.env.get('SMD_DRAFT_MAX_CHARS') || '') || 6000;
 // Token budget caps per stage.
