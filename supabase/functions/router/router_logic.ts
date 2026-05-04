@@ -570,7 +570,7 @@ function analyzeComplexity(params: RouterParams): number {
   const codeIndicators = [
     /```/,
     /\b(function|const|let|var|class|def|import|export)\b/,
-    /[{}\[\]();]/,
+    /[{}[\]();]/,
     /\b(error|bug|fix|debug|crash|exception)\b/i,
   ];
   let codeSignals = 0;
@@ -620,7 +620,7 @@ function isCodeHeavyQuery(query: string): boolean {
   const codeIndicators = [
     /```/,
     /\b(function|const|let|var|class|def|import|export|typescript|javascript|python|sql)\b/i,
-    /[{}\[\]();]/,
+    /[{}[\]();]/,
     /\b(error|bug|fix|debug|trace|stack|exception|compile)\b/i,
   ];
   return codeIndicators.some((pattern) => pattern.test(query));
