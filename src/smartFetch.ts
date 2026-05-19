@@ -127,7 +127,7 @@ export function getConversationId(): string {
   if (!conversationId || !uuidRegex.test(conversationId)) {
     conversationId = generateUUID();
     localStorage.setItem(STORAGE_KEY, conversationId);
-    devLog('[smartFetch] Generated new conversation UUID:', conversationId);
+    devLog('[smartFetch] Generated new conversation UUID:', conversationId.slice(0, 8));
   }
 
   return conversationId;
@@ -290,7 +290,7 @@ export async function askPrismatix(
 
     devLog('[smartFetch] Request:', {
       endpoint: routerEndpoint,
-      conversationId,
+      conversationId: conversationId.slice(0, 8),
       queryLength: finalQuery.length,
       historyLength: history.length,
       imageCount: imageAttachments.length,

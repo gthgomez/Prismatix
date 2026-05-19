@@ -2,6 +2,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
+  countImageTokens,
   countTokens,
   createStubRoutingDebug,
   determineRoute,
@@ -77,6 +78,11 @@ import {
   buildVideoUiNotesJson,
   validateReadyVideoAssets,
 } from './video_helpers.ts';
+import {
+  evaluateRateLimit,
+  evaluateSpendGate,
+  normalizeRouterRequestBody,
+} from './security_guards.ts';
 
 // ============================================================================
 // LOCAL TYPE DEFINITIONS
@@ -112,7 +118,6 @@ const CORS_HEADERS = {
 };
 
 const FUNCTION_TIMEOUT_MS = 55000;
-const MAX_QUERY_LENGTH = 50000;
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const VIDEO_CONTEXT_MAX_CHARS = 5000;
 const DEV_MODE = Deno.env.get('DEV_MODE') === 'true';
@@ -171,8 +176,17 @@ const SMD_SKEPTIC_BUDGET = Number(Deno.env.get('SMD_SKEPTIC_BUDGET') || '') || 1
 const SMD_SYNTH_BUDGET = Number(Deno.env.get('SMD_SYNTH_BUDGET') || '') || 1024;
 const SMD_FORMATTER_BUDGET = MODEL_REGISTRY[SMD_MODEL_TIER].budgetCap;
 
+const ENABLE_SERVER_SPEND_LIMIT = envFlag('ENABLE_SERVER_SPEND_LIMIT', true);
+const DAILY_SPEND_LIMIT_USD = Number(Deno.env.get('DAILY_SPEND_LIMIT_USD') || '') || 2;
+const PER_REQUEST_COST_LIMIT_USD = Number(Deno.env.get('PER_REQUEST_COST_LIMIT_USD') || '') || 0.5;
+const USER_RATE_LIMIT_WINDOW_MS = Number(Deno.env.get('USER_RATE_LIMIT_WINDOW_MS') || '') || 60_000;
+const USER_RATE_LIMIT_MAX_REQUESTS = Number(Deno.env.get('USER_RATE_LIMIT_MAX_REQUESTS') || '') || 20;
+const MAX_ACTIVE_STREAMS_PER_USER = Number(Deno.env.get('MAX_ACTIVE_STREAMS_PER_USER') || '') || 2;
+
 const GOOGLE_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
 let googleModelsCache: { fetchedAt: number; models: GoogleModelRecord[] } | null = null;
+const requestTimestampsByUser = new Map<string, number[]>();
+const activeStreamsByUser = new Map<string, number>();
 
 
 // ============================================================================
@@ -280,6 +294,75 @@ function normalizeDecisionAgainstProviderAvailability(
   return {
     decision: fallbackDecision,
   };
+}
+
+async function fetchDailySpendUsd(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+): Promise<number> {
+  const startOfDayUtc = new Date();
+  startOfDayUtc.setUTCHours(0, 0, 0, 0);
+
+  const { data, error } = await supabase
+    .from('cost_logs')
+    .select('total_cost')
+    .eq('user_id', userId)
+    .gte('created_at', startOfDayUtc.toISOString());
+
+  if (error) {
+    throw new Error(`daily spend lookup failed: ${error.message}`);
+  }
+
+  return (data || []).reduce((sum, row) => {
+    const value = Number((row as { total_cost?: unknown }).total_cost);
+    return Number.isFinite(value) ? sum + value : sum;
+  }, 0);
+}
+
+function checkUserRateLimit(userId: string): { allowed: boolean; retryAfterMs?: number } {
+  const previous = requestTimestampsByUser.get(userId) || [];
+  const decision = evaluateRateLimit(
+    previous,
+    Date.now(),
+    USER_RATE_LIMIT_WINDOW_MS,
+    USER_RATE_LIMIT_MAX_REQUESTS,
+  );
+  requestTimestampsByUser.set(userId, decision.timestamps);
+  return {
+    allowed: decision.allowed,
+    ...(decision.retryAfterMs !== undefined ? { retryAfterMs: decision.retryAfterMs } : {}),
+  };
+}
+
+function acquireUserStreamSlot(userId: string): (() => void) | null {
+  const active = activeStreamsByUser.get(userId) || 0;
+  if (MAX_ACTIVE_STREAMS_PER_USER > 0 && active >= MAX_ACTIVE_STREAMS_PER_USER) {
+    return null;
+  }
+
+  activeStreamsByUser.set(userId, active + 1);
+  let released = false;
+
+  return () => {
+    if (released) return;
+    released = true;
+    const current = activeStreamsByUser.get(userId) || 0;
+    if (current <= 1) {
+      activeStreamsByUser.delete(userId);
+    } else {
+      activeStreamsByUser.set(userId, current - 1);
+    }
+  };
+}
+
+function promptTokensForCost(
+  messages: Message[],
+  images: ImageAttachment[],
+  estimatedVideoPromptTokens: number,
+): number {
+  return countTokens(serializeMessagesForCost(messages)) +
+    countImageTokens(images) +
+    estimatedVideoPromptTokens;
 }
 
 // ============================================================================
@@ -693,14 +776,16 @@ async function listGoogleModels(signal: AbortSignal): Promise<GoogleModelRecord[
     return googleModelsCache.models;
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models?key=${
-    encodeURIComponent(GOOGLE_API_KEY)
-  }`;
-  const response = await fetch(endpoint, { method: 'GET', signal });
+  const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models';
+  const response = await fetch(endpoint, {
+    method: 'GET',
+    headers: { 'x-goog-api-key': GOOGLE_API_KEY },
+    signal,
+  });
   const responseText = await response.text();
 
   if (!response.ok) {
-    throw new Error(`Google ListModels failed (${response.status}): ${responseText}`);
+    throw new Error(`Google ListModels failed (${response.status})`);
   }
 
   let payload: { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }> } = {};
@@ -914,7 +999,7 @@ async function callGoogle(
 
   const endpoint =
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(resolvedModel)}` +
-    `:streamGenerateContent?alt=sse&key=${encodeURIComponent(GOOGLE_API_KEY)}`;
+    ':streamGenerateContent?alt=sse';
 
   const isGeminiFlash = decision.modelTier === 'gemini-2.5-flash';
 
@@ -923,6 +1008,7 @@ async function callGoogle(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-goog-api-key': GOOGLE_API_KEY,
       },
       body: JSON.stringify(
         buildGoogleStreamPayload(
@@ -1029,13 +1115,16 @@ async function callGoogleStructured(
   const resolvedModel = await resolveGoogleModelAlias(decision.model, signal);
   const endpoint =
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(resolvedModel)}` +
-    `:generateContent?key=${encodeURIComponent(GOOGLE_API_KEY)}`;
+    ':generateContent';
 
   const payload = buildGoogleJsonPayload(decision, allMessages, responseSchema);
 
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': GOOGLE_API_KEY,
+    },
     body: JSON.stringify(payload),
     signal,
   });
@@ -1377,8 +1466,16 @@ Deno.serve(async (req: Request) => {
     return new Response('ok', { headers: CORS_HEADERS });
   }
 
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', Allow: 'POST, OPTIONS' },
+    });
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FUNCTION_TIMEOUT_MS);
+  let streamReturned = false;
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -1386,19 +1483,6 @@ Deno.serve(async (req: Request) => {
     if (!supabaseUrl || !supabaseServiceRoleKey) {
       return new Response(
         JSON.stringify({ error: 'Server misconfigured: missing Supabase env vars' }),
-        {
-          status: 500,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-
-    if (!hasAtLeastOneProviderConfigured()) {
-      return new Response(
-        JSON.stringify({
-          error:
-            'Server misconfigured: no provider credentials available. Configure ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.',
-        }),
         {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -1445,22 +1529,33 @@ Deno.serve(async (req: Request) => {
 
     const userId = user.id;
 
-    let body: {
-      query?: string;
-      conversationId?: string;
-      platform?: 'web' | 'mobile';
-      history?: Message[];
-      images?: ImageAttachment[];
-      videoAssetIds?: string[];
-      imageData?: string;
-      mediaType?: string;
-      imageStorageUrl?: string;
-      modelOverride?: string;
-      geminiFlashThinkingLevel?: string;
-      // Debate Mode tool toggle
-      mode?: string; // "debate" to enable
-      debateProfile?: string; // "general" | "code" | "video_ui"
-    };
+    const rateLimit = checkUserRateLimit(userId);
+    if (!rateLimit.allowed) {
+      return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), {
+        status: 429,
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': 'application/json',
+          ...(rateLimit.retryAfterMs !== undefined
+            ? { 'Retry-After': String(Math.ceil(rateLimit.retryAfterMs / 1000)) }
+            : {}),
+        },
+      });
+    }
+
+    if (!hasAtLeastOneProviderConfigured()) {
+      return new Response(
+        JSON.stringify({
+          error: 'Server misconfigured: no provider credentials available.',
+        }),
+        {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
+    let body: unknown;
 
     const contentLengthHeader = req.headers.get('content-length');
     if (contentLengthHeader) {
@@ -1478,8 +1573,30 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    let rawBody = '';
     try {
-      body = await req.json();
+      rawBody = await req.text();
+    } catch {
+      return new Response(JSON.stringify({ error: 'Bad Request: Unable to read request body' }), {
+        status: 400,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (rawBody.length > MAX_REQUEST_BYTES) {
+      return new Response(
+        JSON.stringify({
+          error: `Payload too large. Max allowed size is ${Math.round(MAX_REQUEST_BYTES / (1024 * 1024))}MB.`,
+        }),
+        {
+          status: 413,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
+    try {
+      body = JSON.parse(rawBody);
     } catch {
       return new Response(JSON.stringify({ error: 'Bad Request: Invalid JSON' }), {
         status: 400,
@@ -1487,47 +1604,37 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    const normalizedBody = normalizeRouterRequestBody(body);
+    if (!normalizedBody.ok) {
+      return new Response(JSON.stringify({ error: normalizedBody.error }), {
+        status: normalizedBody.status,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
+
     const {
-      query: rawQuery,
       conversationId,
-      platform = 'web',
-      history = [],
-      images,
+      platform,
+      history,
+      images: imageAttachments,
       videoAssetIds = [],
-      imageData,
-      mediaType,
       imageStorageUrl,
       modelOverride,
       geminiFlashThinkingLevel,
       mode,
       debateProfile,
-    } = body;
+    } = normalizedBody.value;
 
     const normalizedGeminiFlashThinkingLevel = normalizeGeminiFlashThinkingLevel(
       geminiFlashThinkingLevel,
     );
 
-    let imageAttachments: ImageAttachment[] = [];
-
-    if (images && images.length > 0) {
-      imageAttachments = images;
-    } else if (imageData) {
-      imageAttachments = [{ data: imageData, mediaType: mediaType || 'image/png' }];
-    }
-
-    let query = rawQuery?.trim() || '';
+    let query = normalizedBody.value.query;
     const hasImages = imageAttachments.length > 0;
-    const hasVideoAssets = Array.isArray(videoAssetIds) && videoAssetIds.length > 0;
+    const hasVideoAssets = videoAssetIds.length > 0;
 
     if (!query && !hasImages && !hasVideoAssets) {
       return new Response(JSON.stringify({ error: 'Bad Request: Missing query, image, or videoAssetIds' }), {
-        status: 400,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (!conversationId) {
-      return new Response(JSON.stringify({ error: 'Bad Request: Missing conversationId' }), {
         status: 400,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       });
@@ -1545,13 +1652,6 @@ Deno.serve(async (req: Request) => {
           ? 'Please analyze this image.'
           : `Please analyze these ${imageAttachments.length} images.`;
       }
-    }
-
-    if (query.length > MAX_QUERY_LENGTH) {
-      return new Response(JSON.stringify({ error: 'Query exceeds maximum length' }), {
-        status: 400,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      });
     }
 
     if (DEV_MODE) {
@@ -1661,6 +1761,49 @@ Deno.serve(async (req: Request) => {
       estimatedVideoPromptTokens,
     );
 
+    if (ENABLE_SERVER_SPEND_LIMIT) {
+      let dailySpendUsd = 0;
+      try {
+        dailySpendUsd = await fetchDailySpendUsd(
+          supabaseClient as unknown as ReturnType<typeof createClient>,
+          userId,
+        );
+      } catch (spendLookupError) {
+        const message = spendLookupError instanceof Error
+          ? spendLookupError.message
+          : String(spendLookupError);
+        console.error('[Cost] Spend lookup failed:', message);
+        return new Response(JSON.stringify({ error: 'Cost controls unavailable' }), {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const spendGate = evaluateSpendGate({
+        dailyTotalUsd: dailySpendUsd,
+        estimatedRequestUsd: preFlightCost.estimatedUsd,
+        dailyLimitUsd: DAILY_SPEND_LIMIT_USD,
+        perRequestLimitUsd: PER_REQUEST_COST_LIMIT_USD,
+      });
+
+      if (!spendGate.allowed) {
+        const error = spendGate.reason === 'request_cost_limit_exceeded'
+          ? 'Request cost limit exceeded'
+          : 'Daily spend limit exceeded';
+        return new Response(
+          JSON.stringify({
+            error,
+            dailyLimitUsd: spendGate.dailyLimitUsd,
+            projectedTotalUsd: Number(spendGate.projectedTotalUsd.toFixed(6)),
+          }),
+          {
+            status: spendGate.status,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+    }
+
     if (DEV_MODE) {
       console.log('[ROUTER] Decision:', {
         provider: decision.provider,
@@ -1691,6 +1834,14 @@ Deno.serve(async (req: Request) => {
     let smdActive = false;
     let smdFastPathHit = false;
     let smdRunLog: SmdStageLog | null = null;
+
+    const releaseStreamSlot = acquireUserStreamSlot(userId);
+    if (!releaseStreamSlot) {
+      return new Response(JSON.stringify({ error: 'Too many active streams' }), {
+        status: 429,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
 
     let upstream: UpstreamCallResult;
     try {
@@ -1831,6 +1982,7 @@ Deno.serve(async (req: Request) => {
       }
       } // end: else (not smdEligible)
     } catch (upstreamError) {
+      releaseStreamSlot();
       const message = upstreamError instanceof Error
         ? upstreamError.message
         : String(upstreamError);
@@ -1853,11 +2005,11 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!upstream.response.ok) {
+      releaseStreamSlot();
       if (DEV_MODE) {
-        const errorBody = await upstream.response.text();
         console.error(
           `[Upstream:${responseDecision.provider}] Error ${upstream.response.status}:`,
-          errorBody,
+          upstream.response.headers.get('content-type') || 'unknown content-type',
         );
       }
       return new Response(
@@ -1879,6 +2031,7 @@ Deno.serve(async (req: Request) => {
     persistMessageAsync(
       supabaseClient as unknown as ReturnType<typeof createClient>,
       conversationId,
+      userId,
       'user',
       query,
       userTokenCount,
@@ -1887,6 +2040,7 @@ Deno.serve(async (req: Request) => {
     );
 
     if (!upstream.response.body) {
+      releaseStreamSlot();
       return new Response(JSON.stringify({ error: 'Upstream provider returned empty stream' }), {
         status: 502,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -1906,6 +2060,9 @@ Deno.serve(async (req: Request) => {
       : preFlightCost.estimatedUsd;
 
     let assistantText = '';
+    const finalPromptTokenCount = debateSynthesisMessages
+      ? promptTokensForCost(debateSynthesisMessages, [], 0)
+      : promptTokensForCost(allMessages, imageAttachments, estimatedVideoPromptTokens);
 
     const proxyStream = createNormalizedProxyStream({
       upstreamBody: upstream.response.body,
@@ -1914,53 +2071,60 @@ Deno.serve(async (req: Request) => {
         assistantText += delta;
       },
       onComplete: async () => {
-        const assistantTokenCount = countTokens(assistantText);
-        const costBreakdown = calculateCostBreakdown(responseDecision.modelTier, {
-          promptTokens: userTokenCount,
-          completionTokens: assistantTokenCount,
-          reasoningTokens: 0,
-        });
+        try {
+          const assistantTokenCount = countTokens(assistantText);
+          const costBreakdown = calculateCostBreakdown(responseDecision.modelTier, {
+            promptTokens: finalPromptTokenCount,
+            completionTokens: assistantTokenCount,
+            reasoningTokens: 0,
+          });
 
-        await persistCostLog(
-          supabaseClient as unknown as ReturnType<typeof createClient>,
-          {
-            user_id: userId,
-            conversation_id: conversationId,
-            model: responseDecision.modelTier,
-            provider: responseDecision.provider,
-            input_tokens: costBreakdown.promptTokens,
-            output_tokens: costBreakdown.completionTokens,
-            thinking_tokens: costBreakdown.reasoningTokens,
-            input_cost: costBreakdown.inputCostUsd,
-            output_cost: costBreakdown.outputCostUsd,
-            thinking_cost: costBreakdown.reasoningCostUsd,
-            total_cost: costBreakdown.totalUsd,
-            pricing_version: costBreakdown.pricingVersion,
-            complexity_score: responseDecision.complexityScore,
-            route_rationale: responseDecision.rationaleTag,
-          },
-        );
+          await persistCostLog(
+            supabaseClient as unknown as ReturnType<typeof createClient>,
+            {
+              user_id: userId,
+              conversation_id: conversationId,
+              model: responseDecision.modelTier,
+              provider: responseDecision.provider,
+              input_tokens: costBreakdown.promptTokens,
+              output_tokens: costBreakdown.completionTokens,
+              thinking_tokens: costBreakdown.reasoningTokens,
+              input_cost: costBreakdown.inputCostUsd,
+              output_cost: costBreakdown.outputCostUsd,
+              thinking_cost: costBreakdown.reasoningCostUsd,
+              total_cost: costBreakdown.totalUsd,
+              pricing_version: costBreakdown.pricingVersion,
+              complexity_score: responseDecision.complexityScore,
+              route_rationale: responseDecision.rationaleTag,
+            },
+          );
 
-        if (assistantText.trim()) {
-          persistMessageAsync(
-            supabaseClient as unknown as ReturnType<typeof createClient>,
-            conversationId,
-            'assistant',
-            assistantText,
-            assistantTokenCount,
-            `${responseDecision.provider}:${effectiveModelId}`,
-          );
-          void maybeSummarizeConversationAsync(
-            supabaseClient as unknown as ReturnType<typeof createClient>,
-            userId,
-            conversationId,
-            ownership.tokenCount + userTokenCount + assistantTokenCount,
-            { openai: OPENAI_API_KEY, anthropic: ANTHROPIC_API_KEY, google: GOOGLE_API_KEY },
-          );
+          if (assistantText.trim()) {
+            persistMessageAsync(
+              supabaseClient as unknown as ReturnType<typeof createClient>,
+              conversationId,
+              userId,
+              'assistant',
+              assistantText,
+              assistantTokenCount,
+              `${responseDecision.provider}:${effectiveModelId}`,
+            );
+            void maybeSummarizeConversationAsync(
+              supabaseClient as unknown as ReturnType<typeof createClient>,
+              userId,
+              conversationId,
+              ownership.tokenCount + userTokenCount + assistantTokenCount,
+              { openai: OPENAI_API_KEY, anthropic: ANTHROPIC_API_KEY, google: GOOGLE_API_KEY },
+            );
+          }
+        } finally {
+          clearTimeout(timeoutId);
+          releaseStreamSlot();
         }
       },
     });
 
+    streamReturned = true;
     return new Response(proxyStream, {
       headers: {
         ...CORS_HEADERS,
@@ -2010,12 +2174,15 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    console.error('[Router] Critical error:', error);
+    const criticalMessage = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error('[Router] Critical error:', criticalMessage);
     return new Response(JSON.stringify({ error: 'Internal server error' }), {
       status: 500,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });
   } finally {
-    clearTimeout(timeoutId);
+    if (!streamReturned) {
+      clearTimeout(timeoutId);
+    }
   }
 });
