@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getDebatePayload,
+  getDebateRoleInstructions,
   hasReadyVideoAttachment,
   shouldShowDebateBadges,
 } from '../debateMode';
@@ -26,9 +27,21 @@ describe('ChatInterface debate mode helpers', () => {
 
   it('sends debate payload only when debate mode is selected', () => {
     expect(getDebatePayload('off')).toEqual({});
-    expect(getDebatePayload('general')).toEqual({ mode: 'debate', debateProfile: 'general' });
-    expect(getDebatePayload('code')).toEqual({ mode: 'debate', debateProfile: 'code' });
-    expect(getDebatePayload('video_ui')).toEqual({ mode: 'debate', debateProfile: 'video_ui' });
+    expect(getDebatePayload('general')).toEqual({
+      mode: 'debate',
+      debateProfile: 'general',
+      debateContrarianInstructions: getDebateRoleInstructions('general', 'contrarian'),
+    });
+    expect(getDebatePayload('code')).toEqual({
+      mode: 'debate',
+      debateProfile: 'code',
+      debateContrarianInstructions: getDebateRoleInstructions('code', 'contrarian'),
+    });
+    expect(getDebatePayload('video_ui')).toEqual({
+      mode: 'debate',
+      debateProfile: 'video_ui',
+      debateContrarianInstructions: getDebateRoleInstructions('video_ui', 'contrarian'),
+    });
   });
 
   it('shows debate badges only when debate metadata exists', () => {
