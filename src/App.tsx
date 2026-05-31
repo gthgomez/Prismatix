@@ -1,174 +1,37 @@
-// App.tsx - Root component with authentication gating
-// Auth state managed at root level for proper lifecycle management
+// App.tsx - Root route switch for public resume pages and auth-gated app
 
-import React from 'react';
-import { ChatInterface } from './components/ChatInterface';
-import { Auth } from './components/Auth';
-import { ResetPassword } from './components/ResetPassword';
-import { useAuth } from './hooks/useAuth';
+import React, { Suspense } from 'react';
+import { ResumeDemo } from './components/ResumeDemo';
 import { useViewportHeight } from './hooks/useViewportHeight';
 
-function isRecoveryFlow(): boolean {
-  const { pathname, search, hash } = window.location;
-  if (pathname === '/reset-password') return true;
+const AuthenticatedApp = React.lazy(() =>
+  import('./components/AuthenticatedApp').then((module) => ({
+    default: module.AuthenticatedApp,
+  })),
+);
 
-  const searchParams = new URLSearchParams(search);
-  if (searchParams.get('type') === 'recovery') return true;
-
-  const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
-  if (hashParams.get('type') === 'recovery') return true;
-
-  return false;
+function isPublicResumeRoute(): boolean {
+  return window.location.pathname === '/demo' || window.location.pathname === '/about';
 }
 
 function App() {
   useViewportHeight();
 
-  const { 
-    isAuthenticated, 
-    isLoading, 
-    user,
-    signIn, 
-    signUp, 
-    signOut,
-    signInWithProvider 
-  } = useAuth();
-
-  // Password recovery flow (bypass normal auth gating)
-  if (isRecoveryFlow()) {
-    return (
-      <div className="app">
-        <ResetPassword />
-
-        <style>{`
-          html, body, #root {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            overflow: auto;
-          }
-
-          .app {
-            height: 100%;
-            width: 100%;
-          }
-
-        `}</style>
-      </div>
-    );
+  if (isPublicResumeRoute()) {
+    return <ResumeDemo />;
   }
 
-  // Loading state while checking auth
-  if (isLoading) {
-    return (
-      <div className="app loading-screen">
-        <div className="loading-content">
-          <div className="loading-logo">🤖</div>
-          <div className="loading-spinner-large" />
-          <p>Initializing Prismatix...</p>
-        </div>
-
-        <style>{`
-          .loading-screen {
-            height: calc(var(--app-vh, 1vh) * 100);
-            min-height: 100dvh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: #0a0a0a;
-            font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', monospace;
-          }
-
-          .loading-content {
-            text-align: center;
-            color: rgba(255, 255, 255, 0.7);
-          }
-
-          .loading-logo {
-            font-size: 4rem;
-            margin-bottom: 1.5rem;
-            animation: float 3s ease-in-out infinite;
-          }
-
-          .loading-spinner-large {
-            width: 40px;
-            height: 40px;
-            margin: 0 auto 1rem;
-            border: 3px solid rgba(78, 205, 196, 0.2);
-            border-top-color: #4ECDC4;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-          }
-
-          .loading-content p {
-            font-size: 0.9rem;
-            color: rgba(255, 255, 255, 0.5);
-          }
-
-          @keyframes float {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-10px); }
-          }
-
-          @keyframes spin {
-            to { transform: rotate(360deg); }
-          }
-        `}</style>
-      </div>
-    );
-  }
-
-  // Not authenticated - show login
-  if (!isAuthenticated) {
-    return (
-      <div className="app">
-        <Auth 
-          onSignIn={signIn}
-          onSignUp={signUp}
-          onSignInWithProvider={signInWithProvider}
-        />
-
-        <style>{`
-          html, body, #root {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            overflow: auto;
-          }
-
-          .app {
-            height: 100%;
-            width: 100%;
-          }
-
-        `}</style>
-      </div>
-    );
-  }
-
-  // Authenticated - show chat interface
   return (
-    <div className="app">
-      <ChatInterface 
-        user={user}
-        onSignOut={signOut}
-      />
-
-      <style>{`
-        html, body, #root {
-          margin: 0;
-          padding: 0;
-          height: 100%;
-          overflow: hidden;
-        }
-
-        .app {
-          height: 100%;
-          width: 100%;
-        }
-
-      `}</style>
-    </div>
+    <Suspense
+      fallback={
+        <div className="loading">
+          <div className="loading-spinner" />
+          <div>Loading Prismatix...</div>
+        </div>
+      }
+    >
+      <AuthenticatedApp />
+    </Suspense>
   );
 }
 
