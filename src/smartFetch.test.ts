@@ -142,4 +142,31 @@ describe('smartFetch debate support', () => {
     expect(result?.debateModel).toBeUndefined();
     expect(result?.debateCostNote).toBeUndefined();
   });
+
+  it('passes private image storage references to the router when provided', async () => {
+    const response = new Response(makeStream('data: {"type":"meta"}\n\n'), {
+      status: 200,
+      headers: {
+        'X-Router-Model': 'gemini-2.5-flash',
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await askPrismatix(
+      'Analyze this',
+      [],
+      [],
+      null,
+      'high',
+      undefined,
+      'supabase://chat-uploads/user-id/image.png',
+    );
+
+    const firstCall = fetchMock.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const init = firstCall![1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.imageStorageUrl).toBe('supabase://chat-uploads/user-id/image.png');
+  });
 });

@@ -469,7 +469,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     });
 
     try {
-      const storageUrls: string[] = [];
+      const storageReferences: string[] = [];
       if (user) {
         const imageAttachments = attachmentsToProcess.filter(a => a.isImage && a.imageData);
         const uploadResults = await Promise.allSettled(
@@ -477,7 +477,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         );
         for (const result of uploadResults) {
           if (result.status === 'fulfilled' && result.value) {
-            storageUrls.push(result.value);
+            storageReferences.push(result.value);
           } else if (result.status === 'rejected') {
             console.warn('[ChatInterface] Storage upload failed (non-blocking):', result.reason);
           }
@@ -492,6 +492,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         manualModelOverride,
         geminiFlashThinkingLevel,
         getDebatePayload(debateSelection),
+        storageReferences[0],
       );
 
       if (!result) throw new Error('Failed to get response from router');

@@ -34,6 +34,10 @@ export interface VideoUploadResult {
   status: VideoAssetStatus;
 }
 
+function toPrivateStorageReference(filePath: string): string {
+  return `supabase://${IMAGE_BUCKET_NAME}/${filePath}`;
+}
+
 async function getAccessToken(): Promise<string> {
   const {
     data: { session },
@@ -220,14 +224,14 @@ export async function uploadVideoAttachment(
 
 /**
  * Uploads an image attachment to Supabase Storage
- * Returns the public URL on success, null on failure
+ * Returns a private storage reference on success, null on failure
  *
  * IMPORTANT: This function is non-blocking - if storage fails,
  * the chat can still proceed with base64 data sent directly to the selected provider
  *
  * @param file - The file payload with base64 image data
  * @param userId - The authenticated user's ID
- * @returns Public URL string or null if upload failed
+ * @returns Private storage reference string or null if upload failed
  */
 export async function uploadAttachment(
   file: FileUploadPayload,
@@ -278,13 +282,9 @@ export async function uploadAttachment(
       return null;
     }
 
-    // Get Public URL
-    const { data: urlData } = supabase.storage
-      .from(IMAGE_BUCKET_NAME)
-      .getPublicUrl(filePath);
-
-    devLog('[Storage] Upload successful:', urlData.publicUrl);
-    return urlData.publicUrl;
+    const storageReference = toPrivateStorageReference(filePath);
+    devLog('[Storage] Upload successful:', storageReference);
+    return storageReference;
   } catch (error) {
     devError('[Storage] Unexpected error:', error);
     // Return null instead of throwing - allow chat to continue
@@ -328,10 +328,10 @@ export function logBucketSetupInstructions(): void {
 ║  1. Go to your Supabase Dashboard                               ║
 ║  2. Navigate to Storage -> New Bucket                            ║
 ║  3. Create bucket named: ${IMAGE_BUCKET_NAME}                    ║
-║  4. Set it to "Public" for URL access                           ║
-║  5. Add RLS policy:                                              ║
+║  4. Keep it private                                              ║
+║  5. Add owner-folder RLS policies:                               ║
 ║     - INSERT: auth.uid() = (storage.foldername(name))[1]::uuid  ║
-║     - SELECT: true (public read)                                 ║
+║     - SELECT/UPDATE/DELETE: same owner-folder check              ║
 ║                                                                  ║
 ║  Without this, images are sent as base64 (still works, but      ║
 ║  not persisted for conversation history).                        ║
