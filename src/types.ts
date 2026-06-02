@@ -45,7 +45,7 @@ export interface Message {
   debateParticipants?: DebateParticipant[];
   imageData?: string;            // Base64 image data (first image for display)
   mediaType?: string;            // MIME type
-  imageStorageUrl?: string;      // Supabase storage URL
+  imageStorageUrl?: string;      // Private Supabase storage reference
   attachments?: FileUploadPayload[]; // ✅ NEW: All attachments for reference
   thinkingLog?: string[];
   thinkingDurationMs?: number;
@@ -94,7 +94,7 @@ export interface RouterPayload {
   videoAssetIds?: string[];
   imageData?: string;             // Legacy single image
   mediaType?: string;
-  imageStorageUrl?: string;
+  imageStorageUrl?: string;      // Private Supabase storage reference
   modelOverride?: RouterModel;
   geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
   mode?: 'debate';

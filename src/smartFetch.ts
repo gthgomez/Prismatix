@@ -41,6 +41,7 @@ interface RouterRequestPayload {
   images?: Array<{ data: string | undefined; mediaType: string }>;
   imageData?: string;
   mediaType?: string;
+  imageStorageUrl?: string;
   videoAssetIds?: string[];
   modelOverride?: RouterModel;
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
@@ -211,6 +212,7 @@ async function getAccessToken(): Promise<string> {
  * @param history - Previous messages in the conversation
  * @param attachments - Array of file attachments (images or text files)
  * @param modelOverride - Optional manual model selection (bypasses auto-routing)
+ * @param imageStorageUrl - Optional private Supabase storage reference for persisted history
  */
 export async function askPrismatix(
   query: string,
@@ -219,6 +221,7 @@ export async function askPrismatix(
   modelOverride?: RouterModel | null,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel = 'high',
   debateOptions?: DebateRequestOptions,
+  imageStorageUrl?: string,
 ): Promise<(RouterResponseBase & { stream: ReadableStream<Uint8Array> }) | null> {
   try {
     const routerEndpoint = CONFIG.ROUTER_ENDPOINT || getEnvVar('VITE_ROUTER_ENDPOINT');
@@ -267,6 +270,10 @@ export async function askPrismatix(
       // Legacy single-image fields for backwards compatibility
       payload.imageData = imageAttachments[0]?.imageData;
       payload.mediaType = imageAttachments[0]?.mediaType || 'image/png';
+    }
+
+    if (imageStorageUrl) {
+      payload.imageStorageUrl = imageStorageUrl;
     }
 
     if (videoAttachments.length > 0) {
