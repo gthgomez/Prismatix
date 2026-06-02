@@ -11,6 +11,7 @@ const CORS_HEADERS = {
 };
 
 const ENABLE_VIDEO_PIPELINE = envFlag('ENABLE_VIDEO_PIPELINE', false);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type VideoAssetStatus = 'pending_upload' | 'uploaded' | 'processing' | 'ready' | 'failed' | 'expired';
 
@@ -27,6 +28,10 @@ function extractBearerToken(authHeader: string | null): string | null {
   if (!authHeader?.startsWith('Bearer ')) return null;
   const token = authHeader.slice(7).trim();
   return token || null;
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_RE.test(value);
 }
 
 function progressFromStatus(status: VideoAssetStatus): number {
@@ -84,8 +89,8 @@ Deno.serve(async (req: Request) => {
   }
 
   const assetId = new URL(req.url).searchParams.get('assetId');
-  if (!assetId) {
-    return new Response(JSON.stringify({ error: 'Bad Request: Missing assetId' }), {
+  if (!isUuid(assetId)) {
+    return new Response(JSON.stringify({ error: 'Bad Request: Invalid assetId' }), {
       status: 400,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });

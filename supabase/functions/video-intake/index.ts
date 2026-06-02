@@ -13,8 +13,10 @@ const CORS_HEADERS = {
 const VIDEO_UPLOAD_BUCKET = 'video-uploads';
 const ENABLE_VIDEO_PIPELINE = envFlag('ENABLE_VIDEO_PIPELINE', false);
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_JSON_BODY_BYTES = 16 * 1024;
 const MAX_ACTIVE_JOBS_PER_USER = 2;
 const DEV_MODE = Deno.env.get('DEV_MODE') === 'true';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ALLOWED_MIME_TYPES = new Set([
   'video/mp4',
   'video/quicktime',
@@ -87,6 +89,23 @@ function devError(...args: unknown[]): void {
   if (DEV_MODE) console.error(...args);
 }
 
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_RE.test(value);
+}
+
+async function readJsonBody(req: Request): Promise<unknown> {
+  const contentLength = Number(req.headers.get('content-length') || '0');
+  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) {
+    throw new Error('body_too_large');
+  }
+
+  const rawBody = await req.text();
+  if (rawBody.length > MAX_JSON_BODY_BYTES) {
+    throw new Error('body_too_large');
+  }
+  return JSON.parse(rawBody);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
@@ -155,8 +174,14 @@ Deno.serve(async (req: Request) => {
 
   let body: InitRequestBody | CompleteRequestBody;
   try {
-    body = await req.json();
-  } catch {
+    body = await readJsonBody(req) as InitRequestBody | CompleteRequestBody;
+  } catch (bodyError) {
+    if (bodyError instanceof Error && bodyError.message === 'body_too_large') {
+      return new Response(JSON.stringify({ error: 'Payload too large' }), {
+        status: 413,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
     return new Response(JSON.stringify({ error: 'Bad Request: Invalid JSON' }), {
       status: 400,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -167,7 +192,13 @@ Deno.serve(async (req: Request) => {
     const { fileName, mimeType, fileSizeBytes, conversationId } = body as InitRequestBody;
     let conversationIdForAsset: string | null = conversationId || null;
 
-    if (!fileName || !mimeType || !Number.isFinite(fileSizeBytes)) {
+    if (
+      typeof fileName !== 'string' ||
+      fileName.trim().length === 0 ||
+      fileName.length > 255 ||
+      typeof mimeType !== 'string' ||
+      !Number.isFinite(fileSizeBytes)
+    ) {
       return new Response(JSON.stringify({ error: 'Bad Request: Missing required fields' }), {
         status: 400,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -191,6 +222,13 @@ Deno.serve(async (req: Request) => {
     }
 
     if (conversationId) {
+      if (!isUuid(conversationId)) {
+        return new Response(JSON.stringify({ error: 'Bad Request: Invalid conversationId' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
+
       const { data: conversation, error: conversationError } = await supabase
         .from('conversations')
         .select('id, user_id')
@@ -198,11 +236,7 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
 
       if (conversationError) {
-        devError('[video-intake] conversation lookup failed:', {
-          conversationId,
-          userId: user.id,
-          error: conversationError,
-        });
+        devError('[video-intake] conversation lookup failed:', conversationError.message);
         return new Response(JSON.stringify({ error: 'Failed to validate conversation ownership' }), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -217,10 +251,7 @@ Deno.serve(async (req: Request) => {
       }
 
       if (!conversation) {
-        devLog('[video-intake] New conversation detected, allowing upload for authenticated user', {
-          conversationId,
-          userId: user.id,
-        });
+        devLog('[video-intake] New conversation detected, allowing upload for authenticated user');
         // Avoid FK failure when conversation row is not created yet.
         conversationIdForAsset = null;
       } else {
@@ -294,7 +325,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const { assetId } = body as CompleteRequestBody;
-  if (!assetId) {
+  if (!isUuid(assetId)) {
     return new Response(JSON.stringify({ error: 'Bad Request: Missing assetId' }), {
       status: 400,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },

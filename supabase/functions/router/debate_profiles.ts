@@ -85,6 +85,7 @@ function uniqChallengers(
 const HIGH_RISK_CODE_PATTERN =
   /\b(auth|password|token|secret|api.?key|billing|payment|sql|inject|xss|rce|exploit|privilege|sanitize|encrypt|hash|csrf|cors|rbac|permission|credential)\b/i;
 
+// Debate score threshold: keep `93` in sync with `DEBATE_CHALLENGER_FULL_MIN_SCORE` in `src/routingThresholds.ts`.
 /**
  * Determines how many challengers to run based on complexity score and query risk.
  *

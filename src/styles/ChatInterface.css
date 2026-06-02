@@ -555,6 +555,15 @@
   color: var(--color-text-dim);
   font-style: italic;
   margin-top: 2px;
+  line-height: 1.45;
+}
+
+.routing-logic-legend {
+  display: block;
+  font-size: 0.58rem;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  margin-top: 0.35rem;
 }
 
 .dropdown-controls-row {
