@@ -42,6 +42,14 @@ interface VideoAssetRow {
   } | null;
 }
 
+interface SupabaseMutationClient {
+  from(table: string): {
+    update(values: Record<string, unknown>): {
+      eq(column: string, value: string): unknown;
+    };
+  };
+}
+
 function envFlag(name: string, defaultValue: boolean): boolean {
   const raw = Deno.env.get(name);
   if (!raw) return defaultValue;
@@ -53,7 +61,7 @@ function envFlag(name: string, defaultValue: boolean): boolean {
 
 function getWorkerSecretValid(req: Request): boolean {
   const provided = req.headers.get('x-worker-secret') || '';
-  return provided === VIDEO_WORKER_SECRET;
+  return timingSafeEqual(provided, VIDEO_WORKER_SECRET);
 }
 
 function devLog(...args: unknown[]): void {
@@ -64,8 +72,22 @@ function devError(...args: unknown[]): void {
   if (DEV_MODE) console.error(...args);
 }
 
+function timingSafeEqual(a: string, b: string): boolean {
+  const encoder = new TextEncoder();
+  const left = encoder.encode(a);
+  const right = encoder.encode(b);
+  const maxLength = Math.max(left.length, right.length);
+  let diff = left.length ^ right.length;
+
+  for (let i = 0; i < maxLength; i++) {
+    diff |= (left[i] ?? 0) ^ (right[i] ?? 0);
+  }
+
+  return diff === 0;
+}
+
 async function markJobFailed(
-  supabase: any,
+  supabase: SupabaseMutationClient,
   jobId: string,
   assetId: string,
   code: string,
@@ -75,11 +97,11 @@ async function markJobFailed(
   await Promise.all([
     supabase
       .from('video_jobs')
-      .update({ status: 'failed', finished_at: nowIso, error_code: code, error_message: message } as never)
+      .update({ status: 'failed', finished_at: nowIso, error_code: code, error_message: message })
       .eq('id', jobId),
     supabase
       .from('video_assets')
-      .update({ status: 'failed', error_code: code, error_message: message, updated_at: nowIso } as never)
+      .update({ status: 'failed', error_code: code, error_message: message, updated_at: nowIso })
       .eq('id', assetId),
   ]);
 }
@@ -220,17 +242,22 @@ Deno.serve(async (req: Request) => {
     const { data: blob, error: downloadError } = await supabase.storage.from(assetRow.storage_bucket).download(assetRow.storage_path);
     if (downloadError || !blob) throw new Error('Failed to download video blob from storage');
 
-    // Create a temporary file locally for @google/generative-ai upload (it expects a path)
+    // Create a temporary file locally for @google/generative-ai upload (it expects a path).
     const tempPath = '/tmp/' + assetRow.id + '.tmp';
-    await Deno.writeFile(tempPath, new Uint8Array(await blob.arrayBuffer()));
-    
-    const uploadResult = await fileManager.uploadFile(tempPath, {
-      mimeType: assetRow.mime_type,
-      displayName: assetRow.id,
-    });
-    
-    // Clean up
-    await Deno.remove(tempPath);
+    let uploadResult;
+    try {
+      await Deno.writeFile(tempPath, new Uint8Array(await blob.arrayBuffer()));
+      uploadResult = await fileManager.uploadFile(tempPath, {
+        mimeType: assetRow.mime_type,
+        displayName: assetRow.id,
+      });
+    } finally {
+      try {
+        await Deno.remove(tempPath);
+      } catch {
+        // Ignore temp cleanup failures.
+      }
+    }
 
     // Save metadata and requeue immediately for polling
     const newMetadata = { 
@@ -252,4 +279,3 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ ok: false, error: 'video_processing_failed' }), { status: 500, headers: CORS_HEADERS });
   }
 });
-

@@ -9,6 +9,10 @@ import {
   MODEL_ORDER,
 } from '../modelCatalog';
 import { DEBATE_SELECTIONS, type DebateSelection } from '../debateMode';
+import {
+  complexityScoreRoutingHint,
+  ROUTING_SCORE_GATE_LEGEND,
+} from '../routingThresholds';
 
 const LS_GROUP = 'prismatix.modelSelector.groupByProvider';
 const LS_TAB = 'prismatix.modelSelector.activeTab';
@@ -155,12 +159,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
     );
   };
 
-  const routingHint =
-    currentComplexity > 75
-      ? '↳ High score: auto-routing favors stronger (often slower / pricier) models when no manual override is set.'
-      : currentComplexity > 40
-      ? '↳ Mid score: auto-routing balances speed, cost, and capability across all configured providers.'
-      : '↳ Low score: auto-routing favors faster, cheaper paths when no manual override is set.';
+  const routingHint = complexityScoreRoutingHint(currentComplexity);
 
   return (
     <div className='model-dropdown'>
@@ -214,6 +213,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
                 />
               </div>
               <span className='routing-logic-hint'>{routingHint}</span>
+              <span className='routing-logic-legend'>{ROUTING_SCORE_GATE_LEGEND}</span>
             </div>
 
             <div className='dropdown-divider' />
@@ -300,7 +300,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
                 type='button'
                 className={!groupByProvider ? 'active' : ''}
                 onClick={() => setGroupByProvider(false)}
-                title='Single list in router priority order'
+                title='Listed output $/M (low → high) from pricing registry'
               >
                 List order
               </button>

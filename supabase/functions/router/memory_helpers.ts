@@ -273,10 +273,13 @@ async function summarizeConversationWindow(
     const endpoint =
       `https://generativelanguage.googleapis.com/v1beta/models/${
         encodeURIComponent(resolvedModel)
-      }:generateContent?key=${encodeURIComponent(apiKeys.google)}`;
+      }:generateContent`;
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKeys.google,
+      },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: { maxOutputTokens: 220 },

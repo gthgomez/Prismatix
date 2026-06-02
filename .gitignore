@@ -35,6 +35,8 @@ Thumbs.db
 .cache/
 .temp/
 .tmp/
+babel.ps1
+babel-local.ps1
 
 # LLM context documents
 WebLLM-Contextdoc.md

@@ -1,4 +1,5 @@
 import type { RouterModel, RouterProvider } from './types';
+import { getRouterModelOrderByListedOutputUsdPerM } from './modelEconomyOrder';
 
 export interface ModelCatalogEntry {
   provider: RouterProvider;
@@ -181,38 +182,18 @@ export const MODEL_CATALOG: Record<RouterModel, ModelCatalogEntry> = {
   },
 };
 
-export const MODEL_ORDER: RouterModel[] = [
-  'opus-4.6',
-  'sonnet-4.6',
-  'haiku-4.5',
-  'gpt-5.4-mini',
-  'gemini-3-flash',
-  'gemini-2.5-flash',
-  'gemini-3.1-pro',
-  'nemotron-3-super',
-  'llama-4-scout',
-  'qwen3-235b',
-  'llama-3.3-70b-turbo',
-  'mistral-small-24b',
-  'qwen3-32b',
-  'deepseek-v3',
-  'glm-4.7-flash',
-  'qwen3.5-4b',
-  'qwen3.5-9b',
-  'step-3.5-flash',
-  'llama-3.1-8b-turbo',
-  'mistral-nemo',
-  'nemotron-nano-30b',
-];
+/** Listed output $/M ascending (cheapest → priciest) for list order and provider sub-order. */
+export const MODEL_ORDER: RouterModel[] = getRouterModelOrderByListedOutputUsdPerM('asc');
 
 /** Curated subset for marketing empty state and compact override UI (full list stays in MODEL_ORDER). */
 export const MODEL_HIGHLIGHTS: RouterModel[] = [
+  'llama-3.1-8b-turbo',
+  'qwen3-235b',
+  'gemini-2.5-flash',
   'gemini-3-flash',
-  'gemini-3.1-pro',
   'sonnet-4.6',
+  'gemini-3.1-pro',
   'opus-4.6',
-  'haiku-4.5',
-  'gpt-5.4-mini',
 ];
 
 export const MODEL_EXTENDED_ORDER: RouterModel[] = MODEL_ORDER.filter(

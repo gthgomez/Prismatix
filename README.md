@@ -18,7 +18,7 @@ Prismatix automatically routes each request to the best AI model for the job —
 - **Debate mode** — Optional multi-model deliberation: parallel challenger models critique the prompt, a synthesis model produces the final answer
 - **SMD pipeline** — Structured Multi-Draft: Draft → Skeptic → SynthDecision → Formatter, gated by a fast-path complexity guard (experimental, off by default)
 - **Video pipeline** — Upload, process, and query video assets via Supabase Storage + a background worker edge function
-- **Cost tracking** — Pre-flight cost estimates, live token counting during streaming, per-message final cost logged to Supabase `cost_logs`. Server-enforced daily budget guard
+- **Cost tracking** — Pre-flight cost estimates, live token counting during streaming, per-message final cost logged to Supabase `cost_logs`, plus server-side request, daily spend, rate, and concurrent-stream guards
 - **Long-term memory** — Conversation windows are periodically summarised and injected as context on future requests
 - **Auth** — Supabase email/password auth with JWT verification on every edge function call
 
@@ -89,6 +89,12 @@ ENABLE_DEBATE_MODE=false
 ENABLE_SMD_LIGHT=false
 ENABLE_VIDEO_PIPELINE=false
 ENABLE_DEEPINFRA=true
+ENABLE_SERVER_SPEND_LIMIT=true
+DAILY_SPEND_LIMIT_USD=2
+PER_REQUEST_COST_LIMIT_USD=0.5
+USER_RATE_LIMIT_WINDOW_MS=60000
+USER_RATE_LIMIT_MAX_REQUESTS=20
+MAX_ACTIVE_STREAMS_PER_USER=2
 ```
 
 ---
@@ -122,6 +128,12 @@ ENABLE_DEEPINFRA=true
    supabase secrets set ENABLE_SMD_LIGHT=false
    supabase secrets set ENABLE_VIDEO_PIPELINE=false
    supabase secrets set ENABLE_DEEPINFRA=true
+   supabase secrets set ENABLE_SERVER_SPEND_LIMIT=true
+   supabase secrets set DAILY_SPEND_LIMIT_USD=2
+   supabase secrets set PER_REQUEST_COST_LIMIT_USD=0.5
+   supabase secrets set USER_RATE_LIMIT_WINDOW_MS=60000
+   supabase secrets set USER_RATE_LIMIT_MAX_REQUESTS=20
+   supabase secrets set MAX_ACTIVE_STREAMS_PER_USER=2
    ```
 
 5. **Deploy edge functions:**
