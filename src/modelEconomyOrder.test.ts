@@ -3,7 +3,7 @@ import { PRICING_REGISTRY } from './pricingRegistry';
 import { getRouterModelOrderByListedOutputUsdPerM } from './modelEconomyOrder';
 
 describe('getRouterModelOrderByListedOutputUsdPerM', () => {
-  it('ascending puts minimum listed output first and Opus last', () => {
+  it('ascending puts minimum listed output first and Opus tier last', () => {
     const asc = getRouterModelOrderByListedOutputUsdPerM('asc');
     expect(asc.length).toBeGreaterThan(0);
     const first = asc[0];
@@ -11,7 +11,7 @@ describe('getRouterModelOrderByListedOutputUsdPerM', () => {
     if (!first || !last) throw new Error('expected non-empty order');
     const minOut = Math.min(...Object.values(PRICING_REGISTRY).map((p) => p.outputRatePer1M));
     expect(PRICING_REGISTRY[first].outputRatePer1M).toBe(minOut);
-    expect(last).toBe('opus-4.6');
+    expect(PRICING_REGISTRY[last].outputRatePer1M).toBe(75.0);
     for (let i = 1; i < asc.length; i++) {
       const pk = asc[i - 1];
       const ck = asc[i];
@@ -25,11 +25,12 @@ describe('getRouterModelOrderByListedOutputUsdPerM', () => {
     }
   });
 
-  it('descending puts Opus first', () => {
+  it('descending puts Opus tier first', () => {
     const desc = getRouterModelOrderByListedOutputUsdPerM('desc');
     const head = desc[0];
     if (!head) throw new Error('expected non-empty order');
-    expect(head).toBe('opus-4.6');
+    expect(PRICING_REGISTRY[head].outputRatePer1M).toBe(75.0);
+    expect(['opus-4.6', 'claude-opus-5']).toContain(head);
     expect(desc[desc.length - 1]).toBeDefined();
   });
 

@@ -1,6 +1,8 @@
 // router_logic.ts - Pure routing + message transform logic (no Deno.serve side effects)
 
-export type Provider = 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
+import { RouteRole, resolveModelForRole, CURATED_OPENCODE_REGISTRY } from './models_hub.ts';
+
+export type Provider = 'opencode' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -23,14 +25,89 @@ export interface RouterParams {
   hasVideoAssets?: boolean;
 }
 
-interface ModelConfig {
+export interface ModelConfig {
   provider: Provider;
   modelId: string;
   budgetCap: number;
   supportsImages: boolean;
 }
 
-export const MODEL_REGISTRY = {
+export const MODEL_REGISTRY: Record<string, ModelConfig> = {
+  // OpenCode Curated Models
+  'deepseek-v4-flash': {
+    provider: 'opencode',
+    modelId: 'deepseek-v4-flash',
+    budgetCap: 8192,
+    supportsImages: false,
+  },
+  'deepseek-v4-flash-free': {
+    provider: 'opencode',
+    modelId: 'deepseek-v4-flash-free',
+    budgetCap: 8192,
+    supportsImages: false,
+  },
+  'deepseek-v4-pro': {
+    provider: 'opencode',
+    modelId: 'deepseek-v4-pro',
+    budgetCap: 16384,
+    supportsImages: false,
+  },
+  'gpt-5.6-luna': {
+    provider: 'opencode',
+    modelId: 'gpt-5.6-luna',
+    budgetCap: 8192,
+    supportsImages: true,
+  },
+  'gpt-5.6-terra': {
+    provider: 'opencode',
+    modelId: 'gpt-5.6-terra',
+    budgetCap: 16384,
+    supportsImages: true,
+  },
+  'gpt-5.6-sol': {
+    provider: 'opencode',
+    modelId: 'gpt-5.6-sol',
+    budgetCap: 32768,
+    supportsImages: true,
+  },
+  'claude-sonnet-5': {
+    provider: 'opencode',
+    modelId: 'claude-sonnet-5',
+    budgetCap: 16384,
+    supportsImages: true,
+  },
+  'claude-opus-5': {
+    provider: 'opencode',
+    modelId: 'claude-opus-5',
+    budgetCap: 16384,
+    supportsImages: true,
+  },
+  'claude-haiku-4-5': {
+    provider: 'opencode',
+    modelId: 'claude-haiku-4-5',
+    budgetCap: 8192,
+    supportsImages: true,
+  },
+  'gemini-3.7-flash': {
+    provider: 'opencode',
+    modelId: 'gemini-3.7-flash',
+    budgetCap: 8192,
+    supportsImages: true,
+  },
+  'grok-4.6': {
+    provider: 'opencode',
+    modelId: 'grok-4.6',
+    budgetCap: 16384,
+    supportsImages: true,
+  },
+  'mimo-v2.5-free': {
+    provider: 'opencode',
+    modelId: 'mimo-v2.5-free',
+    budgetCap: 4096,
+    supportsImages: false,
+  },
+
+  // Legacy direct fallback models
   'haiku-4.5': {
     provider: 'anthropic',
     modelId: 'claude-haiku-4-5-20251001',
@@ -79,7 +156,6 @@ export const MODEL_REGISTRY = {
     budgetCap: 8192,
     supportsImages: false,
   },
-  // DeepInfra — OpenAI-compatible endpoint
   'llama-4-scout': {
     provider: 'deepinfra',
     modelId: 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
@@ -116,7 +192,6 @@ export const MODEL_REGISTRY = {
     budgetCap: 8192,
     supportsImages: false,
   },
-  // Debate-tier cheap DeepInfra challengers
   'glm-4.7-flash': {
     provider: 'deepinfra',
     modelId: 'THUDM/GLM-4.7-Flash',
@@ -155,16 +230,15 @@ export const MODEL_REGISTRY = {
   },
   'nemotron-nano-30b': {
     provider: 'deepinfra',
-    modelId: 'nvidia/NVIDIA-Nemotron-Nano-30B-A3B',
+    modelId: 'nvidia/Nemotron-4-Mini-Hindi-4B-Instruct',
     budgetCap: 4096,
     supportsImages: false,
   },
-} as const satisfies Record<string, ModelConfig>;
+};
 
-export type RouterModel = keyof typeof MODEL_REGISTRY;
-export type ModelTier = RouterModel;
+export type AnthropicModel = 'opus-4.6' | 'sonnet-4.6' | 'haiku-4.5';
+export type RouterModel = string;
 
-/** Unified routing analysis (`analyzeRouting`). */
 export interface RoutingAnalysis {
   complexityScore: number;
   reasoningDifficulty: number;
@@ -178,16 +252,26 @@ export interface RoutingAnalysis {
   hasVideoAssets: boolean;
 }
 
-/** Structured debug attached to every `determineRoute` outcome (and synthetic stubs elsewhere). */
-export interface RoutingDebugInfo extends RoutingAnalysis {
+export interface RoutingDebugInfo {
+  complexityScore: number;
+  reasoningDifficulty: number;
+  codeSignals: number;
+  isCodeHeavy: boolean;
+  multimodalLoad: number;
+  contextTokens: number;
+  textQueryTokens: number;
+  imageAttachmentCount: number;
+  hasImages: boolean;
+  hasVideoAssets: boolean;
   routeStep: string;
-  matchedBranch: string;
+  matchedBranch?: string;
 }
 
 export interface RouteDecision {
   provider: Provider;
   model: string;
   modelTier: RouterModel;
+  routeRole?: RouteRole;
   budgetCap: number;
   rationaleTag: string;
   complexityScore: number;
@@ -195,63 +279,33 @@ export interface RouteDecision {
 }
 
 const OVERRIDE_SYNONYMS: Record<string, RouterModel> = {
-  // Anthropic — current keys
+  // OpenCode
+  'deepseek-v4-flash': 'deepseek-v4-flash',
+  'deepseek-v4-pro': 'deepseek-v4-pro',
+  'gpt-5.6-luna': 'gpt-5.6-luna',
+  'gpt-5.6-terra': 'gpt-5.6-terra',
+  'gpt-5.6-sol': 'gpt-5.6-sol',
+  'claude-sonnet-5': 'claude-sonnet-5',
+  'claude-opus-5': 'claude-opus-5',
+  'gemini-3.7-flash': 'gemini-3.7-flash',
+  // Anthropic
   'anthropic:haiku': 'haiku-4.5',
   'anthropic:haiku-4.5': 'haiku-4.5',
   'anthropic:sonnet': 'sonnet-4.6',
   'anthropic:sonnet-4.6': 'sonnet-4.6',
   'anthropic:opus': 'opus-4.6',
   'anthropic:opus-4.6': 'opus-4.6',
-  // Anthropic — backwards-compat (old keys)
-  'anthropic:sonnet-4.5': 'sonnet-4.6',
-  'sonnet-4.5': 'sonnet-4.6',
-  'anthropic:opus-4.5': 'opus-4.6',
-  'opus-4.5': 'opus-4.6',
   // OpenAI
   'openai:gpt-5.4-mini': 'gpt-5.4-mini',
   'openai:gpt-5-mini': 'gpt-5.4-mini',
   'openai:gpt-mini': 'gpt-5.4-mini',
   'gpt-5-mini': 'gpt-5.4-mini',
-  // Google — current keys
+  // Google
   'google:gemini-3-flash': 'gemini-3-flash',
   'google:gemini-3.1-pro': 'gemini-3.1-pro',
   'google:gemini-2.5-flash': 'gemini-2.5-flash',
-  // Google — backwards-compat
-  'google:gemini-3-pro': 'gemini-3.1-pro',
-  'gemini-3-pro': 'gemini-3.1-pro',
-  // NVIDIA
-  'nvidia:nemotron-3-super': 'nemotron-3-super',
-  'nemotron-super': 'nemotron-3-super',
-  // DeepInfra — original
-  'deepinfra:llama-4-scout': 'llama-4-scout',
-  'deepinfra:qwen3-235b': 'qwen3-235b',
-  'llama-scout': 'llama-4-scout',
-  'llama4-scout': 'llama-4-scout',
-  'qwen3': 'qwen3-235b',
-  'qwen-235b': 'qwen3-235b',
-  // DeepInfra — cheap batch (added 2026-04-13)
-  'deepinfra:llama-3.3-70b-turbo': 'llama-3.3-70b-turbo',
-  'llama-3.3-70b': 'llama-3.3-70b-turbo',
-  'deepinfra:mistral-small-24b': 'mistral-small-24b',
-  'deepinfra:qwen3-32b': 'qwen3-32b',
+  // DeepInfra
   'deepinfra:deepseek-v3': 'deepseek-v3',
-  // DeepInfra — debate-tier challengers (added 2026-04-13)
-  'deepinfra:glm-4.7-flash': 'glm-4.7-flash',
-  'glm-flash': 'glm-4.7-flash',
-  'glm4-flash': 'glm-4.7-flash',
-  'deepinfra:qwen3.5-4b': 'qwen3.5-4b',
-  'qwen3.5-4b': 'qwen3.5-4b',
-  'deepinfra:qwen3.5-9b': 'qwen3.5-9b',
-  'qwen3.5-9b': 'qwen3.5-9b',
-  'deepinfra:step-3.5-flash': 'step-3.5-flash',
-  'step-flash': 'step-3.5-flash',
-  'deepinfra:llama-3.1-8b-turbo': 'llama-3.1-8b-turbo',
-  'llama-3.1-8b': 'llama-3.1-8b-turbo',
-  'llama-8b': 'llama-3.1-8b-turbo',
-  'deepinfra:mistral-nemo': 'mistral-nemo',
-  'mistral-nemo': 'mistral-nemo',
-  'deepinfra:nemotron-nano-30b': 'nemotron-nano-30b',
-  'nemotron-nano': 'nemotron-nano-30b',
 };
 
 export function normalizeModelOverride(input?: string): RouterModel | undefined {
@@ -260,60 +314,11 @@ export function normalizeModelOverride(input?: string): RouterModel | undefined 
   if (!value || value === 'auto') return undefined;
 
   if (value in MODEL_REGISTRY) {
-    return value as RouterModel;
+    return value;
   }
-
   if (value in OVERRIDE_SYNONYMS) {
     return OVERRIDE_SYNONYMS[value];
   }
-
-  if (value.includes('haiku')) return 'haiku-4.5';
-  if (value.includes('sonnet')) return 'sonnet-4.6';
-  if (value.includes('opus')) return 'opus-4.6';
-
-  if (
-    value.includes('gpt-5.4-mini') ||
-    value.includes('gpt-5-mini') ||
-    value.includes('gpt mini')
-  ) return 'gpt-5.4-mini';
-
-  if (
-    value.includes('gemini-3-flash') ||
-    value.includes('gemini 3 flash') ||
-    value.includes('gemini flash')
-  ) {
-    return 'gemini-3-flash';
-  }
-
-  if (value.includes('gemini-2.5-flash')) {
-    return 'gemini-2.5-flash';
-  }
-
-  if (
-    value.includes('gemini-3.1-pro') ||
-    value.includes('gemini-3-pro') ||
-    value.includes('gemini 3 pro') ||
-    value.includes('gemini pro')
-  ) {
-    return 'gemini-3.1-pro';
-  }
-
-  if (
-    value.includes('nemotron-3-super') ||
-    value.includes('nemotron super') ||
-    value.includes('nemotron')
-  ) {
-    return 'nemotron-3-super';
-  }
-
-  if (value.includes('llama-4-scout') || value.includes('llama4') || value.includes('llama scout')) {
-    return 'llama-4-scout';
-  }
-
-  if (value.includes('qwen3-235b') || value.includes('qwen3') || value.includes('qwen 235')) {
-    return 'qwen3-235b';
-  }
-
   return undefined;
 }
 
@@ -360,10 +365,7 @@ const tokenCache = new Map<string, number>();
 export function countTokens(text: string): number {
   if (!text) return 0;
   if (tokenCache.has(text)) return tokenCache.get(text)!;
-
-  // ~4 chars per token is the standard tiktoken approximation and handles code well.
   const count = Math.ceil(text.length / 4);
-
   if (tokenCache.size >= 100) {
     const firstKey = tokenCache.keys().next().value as string;
     tokenCache.delete(firstKey);
@@ -377,32 +379,14 @@ export function countImageTokens(images?: ImageAttachment[]): number {
   return images.length * 1600;
 }
 
-interface AnthropicImageBlock {
-  type: 'image';
-  source: {
-    type: 'base64';
-    media_type: string;
-    data: string;
-  };
-}
-
-interface AnthropicTextBlock {
-  type: 'text';
-  text: string;
-}
-
-type AnthropicContent = string | Array<AnthropicImageBlock | AnthropicTextBlock>;
-
 export function transformMessagesForAnthropic(
   messages: Message[],
   currentImages?: ImageAttachment[],
-): Array<{ role: 'user' | 'assistant'; content: AnthropicContent }> {
+): Array<{ role: 'user' | 'assistant'; content: any }> {
   return messages.map((msg, index) => {
     const isLastMessage = index === messages.length - 1;
-
     if (isLastMessage && msg.role === 'user' && currentImages && currentImages.length > 0) {
-      const contentArray: Array<AnthropicImageBlock | AnthropicTextBlock> = [];
-
+      const contentArray: any[] = [];
       for (const img of currentImages) {
         contentArray.push({
           type: 'image',
@@ -413,63 +397,24 @@ export function transformMessagesForAnthropic(
           },
         });
       }
-
       contentArray.push({
         type: 'text',
         text: msg.content || 'Please analyze these images.',
       });
-
       return { role: msg.role, content: contentArray };
     }
-
-    if (msg.imageData) {
-      return {
-        role: msg.role,
-        content: [
-          {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: msg.mediaType || 'image/jpeg',
-              data: msg.imageData,
-            },
-          },
-          {
-            type: 'text',
-            text: msg.content || 'Please analyze this image.',
-          },
-        ],
-      };
-    }
-
     return { role: msg.role, content: msg.content || '' };
   });
 }
 
-interface OpenAITextPart {
-  type: 'text';
-  text: string;
-}
-
-interface OpenAIImagePart {
-  type: 'image_url';
-  image_url: { url: string };
-}
-
-type OpenAIContent = string | Array<OpenAITextPart | OpenAIImagePart>;
-
 export function transformMessagesForOpenAI(
   messages: Message[],
   currentImages?: ImageAttachment[],
-): Array<{ role: 'user' | 'assistant'; content: OpenAIContent }> {
+): Array<{ role: 'user' | 'assistant'; content: any }> {
   return messages.map((msg, index) => {
     const isLastMessage = index === messages.length - 1;
-
     if (isLastMessage && msg.role === 'user' && currentImages && currentImages.length > 0) {
-      const contentArray: Array<OpenAITextPart | OpenAIImagePart> = [
-        { type: 'text', text: msg.content || 'Please analyze these images.' },
-      ];
-
+      const contentArray: any[] = [];
       for (const img of currentImages) {
         contentArray.push({
           type: 'image_url',
@@ -478,49 +423,25 @@ export function transformMessagesForOpenAI(
           },
         });
       }
-
+      contentArray.push({
+        type: 'text',
+        text: msg.content || 'Please analyze these images.',
+      });
       return { role: msg.role, content: contentArray };
     }
-
-    if (msg.imageData) {
-      return {
-        role: msg.role,
-        content: [
-          { type: 'text', text: msg.content || 'Please analyze this image.' },
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:${msg.mediaType || 'image/jpeg'};base64,${msg.imageData}`,
-            },
-          },
-        ],
-      };
-    }
-
     return { role: msg.role, content: msg.content || '' };
   });
 }
 
-interface GoogleInlineDataPart {
-  inlineData: { mimeType: string; data: string };
-}
-
-interface GoogleTextPart {
-  text: string;
-}
-
-type GooglePart = GoogleInlineDataPart | GoogleTextPart;
-
 export function transformMessagesForGoogle(
   messages: Message[],
   currentImages?: ImageAttachment[],
-): Array<{ role: 'user' | 'model'; parts: GooglePart[] }> {
+): Array<{ role: 'user' | 'model'; parts: any[] }> {
   return messages.map((msg, index) => {
     const isLastMessage = index === messages.length - 1;
     const role = msg.role === 'assistant' ? 'model' : 'user';
-
     if (isLastMessage && msg.role === 'user' && currentImages && currentImages.length > 0) {
-      const parts: GooglePart[] = [];
+      const parts: any[] = [];
       for (const img of currentImages) {
         parts.push({
           inlineData: {
@@ -532,24 +453,6 @@ export function transformMessagesForGoogle(
       parts.push({ text: msg.content || 'Please analyze these images.' });
       return { role, parts };
     }
-
-    if (msg.imageData) {
-      return {
-        role,
-        parts: [
-          {
-            inlineData: {
-              mimeType: msg.mediaType || 'image/jpeg',
-              data: msg.imageData,
-            },
-          },
-          {
-            text: msg.content || 'Please analyze this image.',
-          },
-        ],
-      };
-    }
-
     return {
       role,
       parts: [{ text: msg.content || '' }],
@@ -557,7 +460,6 @@ export function transformMessagesForGoogle(
   });
 }
 
-/** Shared code-detection patterns — one source for `codeSignals` and `isCodeHeavy`. */
 export const ROUTING_CODE_PATTERNS: RegExp[] = [
   /```/,
   /\b(function|const|let|var|class|def|import|export|typescript|javascript|python|sql)\b/i,
@@ -573,10 +475,6 @@ export function countRoutingCodeSignals(query: string): number {
   return n;
 }
 
-/**
- * Single entry point for routing signals. `contextTokens` includes session + text + image surcharge.
- * `complexityScore` adds a small multimodal bump to `reasoningDifficulty` for routing/UI alignment.
- */
 export function analyzeRouting(params: RouterParams): RoutingAnalysis {
   const query = params.userQuery.toLowerCase();
   const textQueryTokens = countTokens(params.userQuery);
@@ -588,16 +486,13 @@ export function analyzeRouting(params: RouterParams): RoutingAnalysis {
   const multimodalLoad = imageAttachmentCount + (hasVideoAssets ? 3 : 0);
 
   let score = 35;
-
   if (textQueryTokens < 20) score -= 20;
   else if (textQueryTokens < 50) score -= 10;
   else if (textQueryTokens > 500) score += 15;
   else if (textQueryTokens > 200) score += 10;
 
   for (const keyword of COMPLEXITY_INDICATORS.opus) {
-    if (query.includes(keyword)) {
-      score += 4;
-    }
+    if (query.includes(keyword)) score += 4;
   }
   for (const keyword of COMPLEXITY_INDICATORS.quick) {
     if (query.includes(keyword)) {
@@ -648,7 +543,6 @@ export function analyzeRouting(params: RouterParams): RoutingAnalysis {
   };
 }
 
-/** Minimal debug for debate/SMD paths that synthesize a `RouteDecision` without `determineRoute`. */
 export function createStubRoutingDebug(
   complexityScore: number,
   matchedBranch: string,
@@ -673,9 +567,14 @@ function buildDecision(
   modelTier: RouterModel,
   rationaleTag: string,
   analysis: RoutingAnalysis,
-  meta: { routeStep: string; matchedBranch?: string },
+  meta: { routeStep: string; matchedBranch?: string; routeRole?: RouteRole },
 ): RouteDecision {
-  const config = MODEL_REGISTRY[modelTier];
+  const config = MODEL_REGISTRY[modelTier] || {
+    provider: 'opencode' as Provider,
+    modelId: modelTier,
+    budgetCap: 8192,
+    supportsImages: true,
+  };
   const routingDebug: RoutingDebugInfo = {
     complexityScore: analysis.complexityScore,
     reasoningDifficulty: analysis.reasoningDifficulty,
@@ -694,6 +593,7 @@ function buildDecision(
     provider: config.provider,
     model: config.modelId,
     modelTier,
+    routeRole: meta.routeRole,
     budgetCap: config.budgetCap,
     rationaleTag,
     complexityScore: analysis.complexityScore,
@@ -701,90 +601,96 @@ function buildDecision(
   };
 }
 
-export function isAnthropicModel(modelTier: RouterModel): boolean {
-  return MODEL_REGISTRY[modelTier].provider === 'anthropic';
-}
-
-/**
- * Text-path numeric gates — keep aligned with `src/routingThresholds.ts` `ROUTING_SCORE_GATES`:
- * mini≤18, Haiku≤28, Qwen 29–45, DeepSeek 46–65 (+ code-mid 29–69), Flash 66–80,
- * Sonnet code≥75 or text≥81, Opus reasoning≥90 or (ctx>120k & reasoning≥70), images Pro≥75.
- */
-export function determineRoute(params: RouterParams, modelOverride?: RouterModel): RouteDecision {
+export function determineRouteRole(params: RouterParams): RouteRole {
   const analysis = analyzeRouting(params);
   const {
     complexityScore: c,
     reasoningDifficulty: rd,
     isCodeHeavy,
     contextTokens,
-    textQueryTokens,
     hasImages,
     hasVideoAssets,
   } = analysis;
-  const queryTokensForCaps = textQueryTokens + countImageTokens(params.images);
+
+  if (hasVideoAssets) return 'vision_strong';
+  if (hasImages) return c >= 75 ? 'vision_strong' : 'vision_fast';
+  if (rd >= 90 || (contextTokens > 120000 && rd >= 70)) return 'max';
+  if (isCodeHeavy && c >= 50) return 'code_review';
+  if (c >= 81) return 'strong';
+  if (c >= 66) return 'fast';
+  if (c >= 46) return 'balanced';
+  return 'economy';
+}
+
+export function determineRoute(
+  params: RouterParams,
+  modelOverride?: RouterModel,
+  openCodePrimary: boolean = true,
+  discoveredModelIds?: Set<string>,
+): RouteDecision {
+  const analysis = analyzeRouting(params);
 
   if (modelOverride && MODEL_REGISTRY[modelOverride]) {
-    return buildDecision(modelOverride, 'manual-override', analysis, { routeStep: 'manual-override' });
+    return buildDecision(modelOverride, 'manual-override', analysis, {
+      routeStep: 'manual-override',
+    });
   }
 
+  const role = determineRouteRole(params);
+
+  if (openCodePrimary) {
+    try {
+      const resolvedConfig = resolveModelForRole(role, discoveredModelIds);
+      return buildDecision(resolvedConfig.modelId, `opencode-${role}`, analysis, {
+        routeStep: `opencode-${role}`,
+        routeRole: role,
+      });
+    } catch {
+      // If resolution fails, fall through to legacy fallback
+    }
+  }
+
+  // Legacy direct fallback logic
+  const { complexityScore: c, hasImages, hasVideoAssets } = analysis;
   if (hasVideoAssets) {
     return buildDecision('gemini-3.1-pro', 'video-default-pro', analysis, {
       routeStep: 'video-default-pro',
+      routeRole: role,
     });
   }
-
   if (hasImages) {
-    if (c >= 75) {
-      return buildDecision('gemini-3.1-pro', 'images-pro', analysis, { routeStep: 'images-pro' });
-    }
-    return buildDecision('gemini-2.5-flash', 'images-flash', analysis, { routeStep: 'images-flash' });
+    const tier = c >= 75 ? 'gemini-3.1-pro' : 'gemini-2.5-flash';
+    return buildDecision(tier, 'images-fallback', analysis, {
+      routeStep: 'images-fallback',
+      routeRole: role,
+    });
   }
-
-  const opusEligible = rd >= 90 || (contextTokens > 120000 && rd >= 70);
-  if (opusEligible) {
-    return buildDecision('opus-4.6', 'opus-reasoning-or-context', analysis, {
+  if (role === 'max') {
+    return buildDecision('opus-4.6', 'opus-fallback', analysis, {
       routeStep: 'opus',
-      matchedBranch: 'opus-reasoning-or-context',
+      routeRole: role,
     });
   }
-
-  const sonnetEligible =
-    (isCodeHeavy && c >= 75) ||
-    (!hasImages && !hasVideoAssets && c >= 81);
-  if (sonnetEligible) {
-    return buildDecision('sonnet-4.6', 'sonnet-tier', analysis, {
+  if (role === 'strong' || role === 'code_review') {
+    return buildDecision('sonnet-4.6', 'sonnet-fallback', analysis, {
       routeStep: 'sonnet',
-      matchedBranch: 'sonnet-tier',
+      routeRole: role,
     });
   }
-
-  if (c <= 18 && queryTokensForCaps < 80 && contextTokens < 12000) {
-    return buildDecision('gpt-5.4-mini', 'tier-mini', analysis, { routeStep: 'gpt-mini' });
-  }
-
-  if (c <= 28 && queryTokensForCaps < 100 && contextTokens < 10000) {
-    return buildDecision('haiku-4.5', 'tier-haiku', analysis, { routeStep: 'haiku' });
-  }
-
-  if (isCodeHeavy && c < 70 && c >= 29) {
-    return buildDecision('deepseek-v3', 'code-mid-deepseek', analysis, {
-      routeStep: 'code-mid-deepseek',
+  if (role === 'fast') {
+    return buildDecision('gemini-2.5-flash', 'fast-fallback', analysis, {
+      routeStep: 'fast',
+      routeRole: role,
     });
   }
-
-  if (c >= 29 && c <= 45) {
-    return buildDecision('qwen3-235b', 'tier-qwen', analysis, { routeStep: 'qwen' });
+  if (role === 'balanced') {
+    return buildDecision('deepseek-v3', 'balanced-fallback', analysis, {
+      routeStep: 'balanced',
+      routeRole: role,
+    });
   }
-
-  if (c >= 46 && c <= 65) {
-    return buildDecision('deepseek-v3', 'tier-deepseek', analysis, { routeStep: 'deepseek' });
-  }
-
-  if (c >= 66 && c <= 80) {
-    return buildDecision('gemini-2.5-flash', 'tier-flash', analysis, { routeStep: 'flash' });
-  }
-
-  return buildDecision('gemini-2.5-flash', 'default-fallback', analysis, {
-    routeStep: 'default-fallback',
+  return buildDecision('qwen3-235b', 'economy-fallback', analysis, {
+    routeStep: 'economy',
+    routeRole: role,
   });
 }

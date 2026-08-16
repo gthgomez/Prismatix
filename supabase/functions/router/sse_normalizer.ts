@@ -14,6 +14,7 @@ export function createNormalizedProxyStream(params: {
   extractDeltas: (payload: unknown) => string[];
   onDelta: (delta: string) => void;
   onComplete: () => Promise<void> | void;
+  onCancel?: (reason: unknown) => void;
 }): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -99,6 +100,9 @@ export function createNormalizedProxyStream(params: {
     },
     async cancel(reason) {
       try {
+        if (params.onCancel) {
+          params.onCancel(reason);
+        }
         if (reader) await reader.cancel(reason);
       } catch {
         // ignore

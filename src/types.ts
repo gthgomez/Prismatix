@@ -1,8 +1,63 @@
 // src/types.ts
 
 export type AnthropicModel = 'opus-4.6' | 'sonnet-4.6' | 'haiku-4.5';
-export type RouterModel = AnthropicModel | 'gpt-5.4-mini' | 'gemini-3-flash' | 'gemini-2.5-flash' | 'gemini-3.1-pro' | 'nemotron-3-super' | 'llama-4-scout' | 'qwen3-235b' | 'llama-3.3-70b-turbo' | 'mistral-small-24b' | 'qwen3-32b' | 'deepseek-v3' | 'glm-4.7-flash' | 'qwen3.5-4b' | 'qwen3.5-9b' | 'step-3.5-flash' | 'llama-3.1-8b-turbo' | 'mistral-nemo' | 'nemotron-nano-30b';
-export type RouterProvider = 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
+
+export type OpenCodeModel =
+  | 'deepseek-v4-flash'
+  | 'deepseek-v4-flash-free'
+  | 'deepseek-v4-pro'
+  | 'gpt-5.6-luna'
+  | 'gpt-5.6-terra'
+  | 'gpt-5.6-sol'
+  | 'claude-sonnet-5'
+  | 'claude-opus-5'
+  | 'claude-haiku-4-5'
+  | 'gemini-3.7-flash'
+  | 'grok-4.6'
+  | 'mimo-v2.5-free';
+
+export type RouterModel =
+  | OpenCodeModel
+  | AnthropicModel
+  | 'gpt-5.4-mini'
+  | 'gemini-3-flash'
+  | 'gemini-2.5-flash'
+  | 'gemini-3.1-pro'
+  | 'nemotron-3-super'
+  | 'llama-4-scout'
+  | 'qwen3-235b'
+  | 'llama-3.3-70b-turbo'
+  | 'mistral-small-24b'
+  | 'qwen3-32b'
+  | 'deepseek-v3'
+  | 'glm-4.7-flash'
+  | 'qwen3.5-4b'
+  | 'qwen3.5-9b'
+  | 'step-3.5-flash'
+  | 'llama-3.1-8b-turbo'
+  | 'mistral-nemo'
+  | 'nemotron-nano-30b';
+
+export type RouterProvider =
+  | 'opencode'
+  | 'anthropic'
+  | 'openai'
+  | 'google'
+  | 'nvidia'
+  | 'deepinfra'
+  | 'other';
+
+export type RouteRole =
+  | 'economy'
+  | 'fast'
+  | 'balanced'
+  | 'strong'
+  | 'max'
+  | 'vision_fast'
+  | 'vision_strong'
+  | 'code_review'
+  | 'cheap_critic';
+
 export type GeminiFlashThinkingLevel = 'low' | 'high';
 export type DebateProfile = 'general' | 'code' | 'video_ui';
 export type DebateRole = 'proposer' | 'contrarian';
@@ -36,6 +91,7 @@ export interface Message {
   provider?: RouterProvider;
   modelId?: string;
   modelOverride?: string;
+  routeRole?: RouteRole;
   geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
   debateActive?: boolean;
   debateProfile?: DebateProfile;
@@ -46,7 +102,7 @@ export interface Message {
   imageData?: string;            // Base64 image data (first image for display)
   mediaType?: string;            // MIME type
   imageStorageUrl?: string;      // Private Supabase storage reference
-  attachments?: FileUploadPayload[]; // ✅ NEW: All attachments for reference
+  attachments?: FileUploadPayload[]; // All attachments for reference
   thinkingLog?: string[];
   thinkingDurationMs?: number;
   cost?: MessageCost;
@@ -58,45 +114,36 @@ export interface FileUploadPayload {
   kind?: AttachmentKind;
   isImage: boolean;
   imageData?: string;   // Base64 (without data URL prefix)
-  mediaType?: string;   // e.g., "image/png"
-  content?: string;     // For text files
-  size?: number;        // File size in bytes
-  file?: File;
-  videoAssetId?: string;
-  durationMs?: number;
-  status?: VideoAssetStatus;
-  thumbnailUrl?: string;
-  uploadProgress?: number;
-  errorCode?: string;
-}
-
-export interface ContextAnalysis {
-  messageCount: number;
-  tokenEstimate: number;
-  utilizationPercent: number;
-  shouldReset: boolean;
-  summary?: string;
-  recentContext: { role: string; preview: string }[];
-}
-
-// API payload types
-export interface ImageAttachment {
-  data: string;       // Base64 image data
-  mediaType: string;  // MIME type
-}
-
-export interface RouterPayload {
-  query: string;
-  conversationId: string;
-  platform: 'web' | 'mobile';
-  history: { role: string; content: string }[];
-  images?: ImageAttachment[];     // Multiple images
-  videoAssetIds?: string[];
-  imageData?: string;             // Legacy single image
   mediaType?: string;
-  imageStorageUrl?: string;      // Private Supabase storage reference
-  modelOverride?: RouterModel;
-  geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
-  mode?: 'debate';
-  debateProfile?: DebateProfile;
+  sizeBytes?: number;
+  size?: number;
+  storageUrl?: string;  // Set after uploading to Supabase Storage
+  extractedText?: string;
+  fileText?: string;
+  content?: string;
+  file?: File;
+  status?: string;
+  errorCode?: string;
+  uploadProgress?: number;
+  durationMs?: number;
+  videoAssetId?: string;
+  videoStatus?: VideoAssetStatus;
+  videoDurationSeconds?: number;
+  videoMimeType?: string;
+  videoError?: string;
+}
+
+export interface ModelOption {
+  value: string;
+  label: string;
+  description: string;
+  provider: RouterProvider;
+  icon: string;
+  badge?: string;
+}
+
+export interface ChatStats {
+  totalMessages: number;
+  totalTokens: number;
+  estimatedCost: number;
 }

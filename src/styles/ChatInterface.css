@@ -1468,3 +1468,130 @@
     z-index: 2400;
   }
 }
+
+/* ── Global Drag & Drop Overlay ───────────────────────────────────── */
+.global-drag-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 10, 0.85);
+  backdrop-filter: blur(12px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.global-drag-content {
+  border: 2px dashed var(--color-primary);
+  border-radius: var(--radius-lg);
+  padding: 3rem 4rem;
+  background: rgba(78, 205, 196, 0.08);
+  box-shadow: 0 0 40px rgba(78, 205, 196, 0.25);
+  text-align: center;
+  color: var(--color-primary);
+}
+
+.global-drag-icon {
+  font-size: 3.5rem;
+  margin-bottom: 1rem;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.global-drag-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem 0;
+}
+
+.global-drag-subtitle {
+  font-size: 0.9rem;
+  color: var(--color-text-dim);
+}
+
+/* ── Prompt Starter Chips (Empty State) ─────────────────────────── */
+.prompt-starters-section {
+  margin-top: 1.5rem;
+  width: 100%;
+  max-width: 680px;
+}
+
+.prompt-starters-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+}
+
+.prompt-starters-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.625rem;
+}
+
+.prompt-starter-chip {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.875rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: var(--color-text);
+}
+
+.prompt-starter-chip:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--color-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+}
+
+.starter-chip-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.starter-chip-desc {
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+  line-height: 1.35;
+}
+
+/* ── Hybrid Typography Code Overrides ────────────────────────────── */
+.message-text code,
+.message-text pre {
+  font-family: var(--font-mono);
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: var(--radius-sm);
+}
+
+.message-text pre {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  overflow-x: auto;
+}
+
+.message-text code {
+  padding: 0.15rem 0.35rem;
+  font-size: 0.88em;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}

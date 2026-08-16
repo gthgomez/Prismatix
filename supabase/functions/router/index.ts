@@ -1474,6 +1474,8 @@ Deno.serve(async (req: Request) => {
   }
 
   const controller = new AbortController();
+  const onReqAbort = () => controller.abort();
+  req.signal.addEventListener('abort', onReqAbort, { once: true });
   const timeoutId = setTimeout(() => controller.abort(), FUNCTION_TIMEOUT_MS);
   let streamReturned = false;
 
@@ -1696,14 +1698,18 @@ Deno.serve(async (req: Request) => {
       hits: 0,
       tokenCount: 0,
     };
-    try {
-      memoryRetrieval = await fetchRelevantMemories(
-        supabaseClient as unknown as ReturnType<typeof createClient>,
-        userId,
-        query,
-      );
-    } catch (memoryError) {
-      console.warn('[Memory] retrieval skipped:', memoryError);
+    // INVARIANT: Mobile clients (Prism) are sole personal memory authorities.
+    // Server-side memory retrieval is bypassed for platform === 'mobile'.
+    if (platform !== 'mobile') {
+      try {
+        memoryRetrieval = await fetchRelevantMemories(
+          supabaseClient as unknown as ReturnType<typeof createClient>,
+          userId,
+          query,
+        );
+      } catch (memoryError) {
+        console.warn('[Memory] retrieval skipped:', memoryError);
+      }
     }
 
     let videoContextBlock = '';
@@ -2070,6 +2076,9 @@ Deno.serve(async (req: Request) => {
       onDelta: (delta) => {
         assistantText += delta;
       },
+      onCancel: () => {
+        controller.abort();
+      },
       onComplete: async () => {
         try {
           const assistantTokenCount = countTokens(assistantText);
@@ -2109,13 +2118,17 @@ Deno.serve(async (req: Request) => {
               assistantTokenCount,
               `${responseDecision.provider}:${effectiveModelId}`,
             );
-            void maybeSummarizeConversationAsync(
-              supabaseClient as unknown as ReturnType<typeof createClient>,
-              userId,
-              conversationId,
-              ownership.tokenCount + userTokenCount + assistantTokenCount,
-              { openai: OPENAI_API_KEY, anthropic: ANTHROPIC_API_KEY, google: GOOGLE_API_KEY },
-            );
+            // INVARIANT: Mobile clients (Prism) own their own conversation history.
+            // Server-side long-term memory extraction/summarization is bypassed for platform === 'mobile'.
+            if (platform !== 'mobile') {
+              void maybeSummarizeConversationAsync(
+                supabaseClient as unknown as ReturnType<typeof createClient>,
+                userId,
+                conversationId,
+                ownership.tokenCount + userTokenCount + assistantTokenCount,
+                { openai: OPENAI_API_KEY, anthropic: ANTHROPIC_API_KEY, google: GOOGLE_API_KEY },
+              );
+            }
           }
         } finally {
           clearTimeout(timeoutId);
