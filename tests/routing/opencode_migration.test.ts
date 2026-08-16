@@ -122,8 +122,10 @@ describe('OpenCode Model Hub & Semantic Routing Migration', () => {
   describe('Pricing Registry & Fail-Closed Spend Policy', () => {
     it('accurately prices curated OpenCode models with modern Zen rates', () => {
       const ds = getPricingForModel('deepseek-v4-flash');
-      expect(ds.inputRatePer1M).toBe(0.14);
-      expect(ds.outputRatePer1M).toBe(0.28);
+      expect(ds.inputRatePer1M).toBe(0.44);
+      expect(ds.outputRatePer1M).toBe(1.32);
+      expect(ds.offPeakInputRatePer1M).toBe(0.22);
+      expect(ds.offPeakOutputRatePer1M).toBe(0.66);
       expect(ds.isEligibleForAutoRouting).toBe(true);
 
       const luna = getPricingForModel('gpt-5.6-luna');

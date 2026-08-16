@@ -95,28 +95,26 @@ export async function dispatchOpenCodeStream(params: {
     }
 
     case 'openai-responses': {
-      // OpenAI Responses protocol with full streaming event delta extraction & multimodal support
-      let inputPayload: any;
-      if (images.length > 0) {
-        inputPayload = messages.map((m, idx) => {
-          const isLastUser = m.role === 'user' && idx === messages.length - 1;
-          if (isLastUser) {
-            return {
-              role: m.role,
-              content: [
-                { type: 'input_text', text: m.content },
-                ...images.map((img) => ({
-                  type: 'input_image',
-                  image_url: `data:${img.mediaType};base64,${img.data}`,
-                })),
-              ],
-            };
-          }
-          return { role: m.role, content: m.content };
-        });
-      } else {
-        inputPayload = messages.map((m) => `${m.role}: ${m.content}`).join('\n\n');
-      }
+      // OpenAI Responses protocol with structured role hierarchy and multimodal image support
+      const inputPayload = messages.map((m, idx) => {
+        const isLastUser = m.role === 'user' && idx === messages.length - 1;
+        if (isLastUser && images.length > 0) {
+          return {
+            role: m.role,
+            content: [
+              { type: 'input_text', text: m.content },
+              ...images.map((img) => ({
+                type: 'input_image',
+                image_url: `data:${img.mediaType};base64,${img.data}`,
+              })),
+            ],
+          };
+        }
+        return {
+          role: m.role,
+          content: m.content,
+        };
+      });
 
       const body = {
         model: config.modelId,

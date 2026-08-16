@@ -10,14 +10,15 @@ describe('getRouterModelOrderByListedOutputUsdPerM', () => {
     const last = asc[asc.length - 1];
     if (!first || !last) throw new Error('expected non-empty order');
     const minOut = Math.min(...Object.values(PRICING_REGISTRY).map((p) => p.outputRatePer1M));
-    expect(PRICING_REGISTRY[first].outputRatePer1M).toBe(minOut);
-    expect(PRICING_REGISTRY[last].outputRatePer1M).toBe(75.0);
+    expect(PRICING_REGISTRY[first]?.outputRatePer1M).toBe(minOut);
+    expect(PRICING_REGISTRY[last]?.outputRatePer1M).toBe(75.0);
     for (let i = 1; i < asc.length; i++) {
       const pk = asc[i - 1];
       const ck = asc[i];
       if (!pk || !ck) continue;
       const prev = PRICING_REGISTRY[pk];
       const cur = PRICING_REGISTRY[ck];
+      if (!prev || !cur) continue;
       expect(
         prev.outputRatePer1M < cur.outputRatePer1M ||
           (prev.outputRatePer1M === cur.outputRatePer1M && prev.inputRatePer1M <= cur.inputRatePer1M),
@@ -29,8 +30,8 @@ describe('getRouterModelOrderByListedOutputUsdPerM', () => {
     const desc = getRouterModelOrderByListedOutputUsdPerM('desc');
     const head = desc[0];
     if (!head) throw new Error('expected non-empty order');
-    expect(PRICING_REGISTRY[head].outputRatePer1M).toBe(75.0);
-    expect(['opus-4.6', 'claude-opus-5']).toContain(head);
+    expect(PRICING_REGISTRY[head]?.outputRatePer1M).toBe(75.0);
+    expect(['opus-4.6', 'claude-opus-5', 'claude-3-opus']).toContain(head);
     expect(desc[desc.length - 1]).toBeDefined();
   });
 

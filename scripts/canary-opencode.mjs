@@ -229,22 +229,73 @@ async function testMessages(modelId) {
 }
 
 async function testGemini(modelId) {
-  const url = `${BASE_URL}/chat/completions`;
+  const url = `${BASE_URL}/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${key}`,
         'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
       },
       body: JSON.stringify({
-        model: modelId,
-        messages: [{ role: 'user', content: 'Ping' }],
-        max_tokens: 10,
-        stream: true,
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: 'Say hello in one word' }],
+          },
+        ],
+        generationConfig: {
+          maxOutputTokens: 10,
+          temperature: 0.2,
+        },
       }),
     });
     const status = res.status;
+    if (res.ok) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let textDeltas = [];
+      let chunks = 0;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        chunks++;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data:')) {
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr && dataStr !== '[DONE]') {
+              try {
+                const parsed = JSON.parse(dataStr);
+                const part = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (part) textDeltas.push(part);
+              } catch (_) {}
+            }
+          }
+        }
+        if (chunks > 10) {
+          await reader.cancel();
+          break;
+        }
+      }
+
+      const reconstructedText = textDeltas.join('').trim();
+      return {
+        result: 'PASS',
+        status,
+        endpoint: url,
+        model: modelId,
+        chunks,
+        reconstructedText: reconstructedText.slice(0, 60),
+      };
+    }
     const errText = await res.text();
     return {
       result: evaluateStatus(status, errText),

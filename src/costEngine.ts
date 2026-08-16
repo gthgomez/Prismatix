@@ -1,5 +1,5 @@
 import type { RouterModel } from './types';
-import { PRICING_REGISTRY, PRICING_VERSION } from './pricingRegistry';
+import { getPricingForModel, PRICING_VERSION } from './pricingRegistry';
 
 const TOKENS_PER_MILLION = 1_000_000;
 
@@ -44,7 +44,7 @@ export function calculatePreFlightCost(
   contextText: string,
   imageCount = 0,
 ): PreFlightCostResult {
-  const pricing = PRICING_REGISTRY[model];
+  const pricing = getPricingForModel(model);
   const promptTokens = estimateTokenCount(contextText) + Math.max(0, imageCount) * 1600;
   const projectedOutputTokens = Math.max(64, Math.ceil(promptTokens * 0.35));
 
@@ -63,7 +63,7 @@ export function calculateFinalCost(
   model: RouterModel,
   usage: { promptTokens: number; completionTokens: number; reasoningTokens?: number },
 ): FinalCostResult {
-  const pricing = PRICING_REGISTRY[model];
+  const pricing = getPricingForModel(model);
   const reasoningRate = pricing.reasoningRatePer1M ?? pricing.outputRatePer1M;
 
   const inputCost = (Math.max(0, usage.promptTokens) / TOKENS_PER_MILLION) * pricing.inputRatePer1M;
@@ -81,7 +81,7 @@ export function calculateCostBreakdown(
   model: RouterModel,
   usage: UsageEstimate,
 ): CostBreakdown {
-  const pricing = PRICING_REGISTRY[model];
+  const pricing = getPricingForModel(model);
   const reasoningRate = pricing.reasoningRatePer1M ?? pricing.outputRatePer1M;
 
   const inputCost = roundUsd(

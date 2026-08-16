@@ -8,6 +8,10 @@ export interface ModelPricing {
   longContextInputRatePer1M?: number;
   longContextOutputRatePer1M?: number;
   longContextCachedReadRatePer1M?: number;
+  longContextCachedWriteRatePer1M?: number;
+  offPeakInputRatePer1M?: number;
+  offPeakOutputRatePer1M?: number;
+  offPeakCachedReadRatePer1M?: number;
   asOfDate: string;
   sourceRef: string;
   isEstimated: boolean;
@@ -15,15 +19,28 @@ export interface ModelPricing {
   isEligibleForAutoRouting?: boolean;
 }
 
-export const PRICING_VERSION = '2026-08-16-v6';
+export const PRICING_VERSION = '2026-08-16-v7';
 
-// Official OpenCode Zen & fallback pricing table with tier-aware cache economics
+/**
+ * Checks if a given UTC time falls within DeepSeek's official off-peak window (16:30 - 08:30 UTC).
+ */
+export function isDeepSeekOffPeak(date: Date = new Date()): boolean {
+  const utcMinutes = date.getUTCHours() * 60 + date.getUTCMinutes();
+  // 16:30 UTC = 990 minutes; 08:30 UTC = 510 minutes
+  return utcMinutes >= 990 || utcMinutes < 510;
+}
+
+// Official OpenCode Zen & fallback pricing table with tier-aware cache economics & peak/off-peak rates
 export const PRICING_REGISTRY: Record<string, ModelPricing> = {
   // OpenCode Curated Models (Official Zen Rates 2026)
+  // DeepSeek V4 Flash: Peak rate ($0.44/$1.32/$0.014) is conservative routing ceiling; off-peak ($0.22/$0.66/$0.007)
   'deepseek-v4-flash': {
-    inputRatePer1M: 0.14,
-    outputRatePer1M: 0.28,
-    cachedReadRatePer1M: 0.05,
+    inputRatePer1M: 0.44,
+    outputRatePer1M: 1.32,
+    cachedReadRatePer1M: 0.014,
+    offPeakInputRatePer1M: 0.22,
+    offPeakOutputRatePer1M: 0.66,
+    offPeakCachedReadRatePer1M: 0.007,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -38,15 +55,20 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     longContextInputRatePer1M: 0.40,
     longContextOutputRatePer1M: 1.80,
     longContextCachedReadRatePer1M: 0.04,
+    longContextCachedWriteRatePer1M: 0.50,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
+  // DeepSeek V4 Pro: Peak rate ($1.32/$3.96/$0.044) is conservative routing ceiling; off-peak ($0.66/$1.98/$0.022)
   'deepseek-v4-pro': {
-    inputRatePer1M: 1.74,
-    outputRatePer1M: 3.48,
-    cachedReadRatePer1M: 0.15,
+    inputRatePer1M: 1.32,
+    outputRatePer1M: 3.96,
+    cachedReadRatePer1M: 0.044,
+    offPeakInputRatePer1M: 0.66,
+    offPeakOutputRatePer1M: 1.98,
+    offPeakCachedReadRatePer1M: 0.022,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -84,6 +106,7 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     longContextInputRatePer1M: 4.00,
     longContextOutputRatePer1M: 18.00,
     longContextCachedReadRatePer1M: 0.40,
+    longContextCachedWriteRatePer1M: 5.00,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -108,6 +131,7 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     longContextInputRatePer1M: 10.00,
     longContextOutputRatePer1M: 45.00,
     longContextCachedReadRatePer1M: 1.00,
+    longContextCachedWriteRatePer1M: 12.50,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -116,6 +140,7 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
   'gemini-3.7-flash': {
     inputRatePer1M: 1.50,
     outputRatePer1M: 7.50,
+    cachedReadRatePer1M: 0.05,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -137,7 +162,7 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     inputRatePer1M: 0.0,
     outputRatePer1M: 0.0,
     asOfDate: '2026-08-16',
-    sourceRef: 'opencode-zen-free-tier',
+    sourceRef: 'opencode-zen-free',
     isEstimated: false,
     isEligibleForAutoRouting: false,
   },
@@ -145,87 +170,78 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     inputRatePer1M: 0.0,
     outputRatePer1M: 0.0,
     asOfDate: '2026-08-16',
-    sourceRef: 'opencode-zen-free-tier',
+    sourceRef: 'opencode-zen-free',
     isEstimated: false,
     isEligibleForAutoRouting: false,
   },
 
-  // Legacy fallback models
+  // Legacy / Direct Router Model Mappings
   'haiku-4.5': {
-    inputRatePer1M: 1.0,
-    outputRatePer1M: 5.0,
-    asOfDate: '2026-02-12',
-    sourceRef: 'anthropic-docs',
-    isEstimated: true,
+    inputRatePer1M: 0.80,
+    outputRatePer1M: 4.00,
+    asOfDate: '2026-04-13',
+    sourceRef: 'anthropic-pricing',
+    isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'sonnet-4.6': {
-    inputRatePer1M: 3.0,
-    outputRatePer1M: 15.0,
-    asOfDate: '2026-02-21',
-    sourceRef: 'anthropic-docs',
-    isEstimated: true,
+    inputRatePer1M: 3.00,
+    outputRatePer1M: 15.00,
+    asOfDate: '2026-04-13',
+    sourceRef: 'anthropic-pricing',
+    isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'opus-4.6': {
-    inputRatePer1M: 15.0,
-    outputRatePer1M: 75.0,
-    asOfDate: '2026-02-21',
-    sourceRef: 'anthropic-docs',
-    isEstimated: true,
+    inputRatePer1M: 15.00,
+    outputRatePer1M: 75.00,
+    asOfDate: '2026-04-13',
+    sourceRef: 'anthropic-pricing',
+    isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'gpt-5.4-mini': {
-    inputRatePer1M: 0.75,
-    outputRatePer1M: 4.50,
-    asOfDate: '2026-03-20',
+    inputRatePer1M: 0.15,
+    outputRatePer1M: 0.60,
+    asOfDate: '2026-04-13',
     sourceRef: 'openai-pricing',
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'gemini-3-flash': {
-    inputRatePer1M: 0.50,
-    outputRatePer1M: 3.00,
-    asOfDate: '2026-03-20',
+    inputRatePer1M: 0.075,
+    outputRatePer1M: 0.30,
+    asOfDate: '2026-04-13',
     sourceRef: 'google-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'gemini-2.5-flash': {
-    inputRatePer1M: 0.15,
-    outputRatePer1M: 0.60,
-    reasoningRatePer1M: 0.35,
-    asOfDate: '2026-03-20',
-    sourceRef: 'google-pricing',
-    isEstimated: true,
-    isEligibleForAutoRouting: true,
-  },
-  'nemotron-3-super': {
-    inputRatePer1M: 0.10,
-    outputRatePer1M: 0.50,
-    asOfDate: '2026-03-20',
-    sourceRef: 'nvidia-nim-pricing',
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'gemini-3.1-pro': {
     inputRatePer1M: 1.25,
-    outputRatePer1M: 10.0,
-    asOfDate: '2026-02-21',
+    outputRatePer1M: 5.00,
+    asOfDate: '2026-04-13',
     sourceRef: 'google-pricing',
-    isEstimated: true,
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'nemotron-3-super': {
+    inputRatePer1M: 0.10,
+    outputRatePer1M: 0.16,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'llama-4-scout': {
-    inputRatePer1M: 0.06,
+    inputRatePer1M: 0.10,
     outputRatePer1M: 0.30,
-    asOfDate: '2026-04-10',
+    asOfDate: '2026-04-13',
     sourceRef: 'deepinfra-pricing',
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'qwen3-235b': {
-    inputRatePer1M: 0.071,
+    inputRatePer1M: 0.05,
     outputRatePer1M: 0.10,
     asOfDate: '2026-04-13',
     sourceRef: 'deepinfra-pricing',
@@ -233,7 +249,7 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     isEligibleForAutoRouting: true,
   },
   'llama-3.3-70b-turbo': {
-    inputRatePer1M: 0.012,
+    inputRatePer1M: 0.02,
     outputRatePer1M: 0.03,
     asOfDate: '2026-04-13',
     sourceRef: 'deepinfra-pricing',
@@ -241,7 +257,7 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     isEligibleForAutoRouting: true,
   },
   'mistral-small-24b': {
-    inputRatePer1M: 0.04,
+    inputRatePer1M: 0.03,
     outputRatePer1M: 0.08,
     asOfDate: '2026-04-13',
     sourceRef: 'deepinfra-pricing',
@@ -249,8 +265,91 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     isEligibleForAutoRouting: true,
   },
   'qwen3-32b': {
-    inputRatePer1M: 0.07,
+    inputRatePer1M: 0.08,
     outputRatePer1M: 0.28,
+    asOfDate: '2026-04-13',
+    sourceRef: 'deepinfra-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+
+  // Direct Provider Fallback Pricing Table
+  'claude-3-5-sonnet': {
+    inputRatePer1M: 3.00,
+    outputRatePer1M: 15.00,
+    asOfDate: '2026-04-13',
+    sourceRef: 'anthropic-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'claude-3-5-haiku': {
+    inputRatePer1M: 0.80,
+    outputRatePer1M: 4.00,
+    asOfDate: '2026-04-13',
+    sourceRef: 'anthropic-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'claude-3-opus': {
+    inputRatePer1M: 15.00,
+    outputRatePer1M: 75.00,
+    asOfDate: '2026-04-13',
+    sourceRef: 'anthropic-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'gpt-4o': {
+    inputRatePer1M: 2.50,
+    outputRatePer1M: 10.00,
+    asOfDate: '2026-04-13',
+    sourceRef: 'openai-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'gpt-4o-mini': {
+    inputRatePer1M: 0.15,
+    outputRatePer1M: 0.60,
+    asOfDate: '2026-04-13',
+    sourceRef: 'openai-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'o3-mini': {
+    inputRatePer1M: 1.10,
+    outputRatePer1M: 4.40,
+    reasoningRatePer1M: 4.40,
+    asOfDate: '2026-04-13',
+    sourceRef: 'openai-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'gemini-2.5-flash': {
+    inputRatePer1M: 0.075,
+    outputRatePer1M: 0.30,
+    asOfDate: '2026-04-13',
+    sourceRef: 'google-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'gemini-2.5-pro': {
+    inputRatePer1M: 1.25,
+    outputRatePer1M: 5.00,
+    asOfDate: '2026-04-13',
+    sourceRef: 'google-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'gemini-2.0-flash': {
+    inputRatePer1M: 0.10,
+    outputRatePer1M: 0.40,
+    asOfDate: '2026-04-13',
+    sourceRef: 'google-pricing',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'deepseek-r1': {
+    inputRatePer1M: 0.55,
+    outputRatePer1M: 2.19,
     asOfDate: '2026-04-13',
     sourceRef: 'deepinfra-pricing',
     isEstimated: false,
@@ -342,6 +441,11 @@ export function getPricingForModel(model: string): ModelPricing {
   };
 }
 
+/**
+ * Backward compatibility alias for router/cost_engine.ts
+ */
+export const getModelPricing = getPricingForModel;
+
 export function calculateEstimatedCostUsd(
   model: string,
   inputTokens: number,
@@ -349,11 +453,13 @@ export function calculateEstimatedCostUsd(
   contextTokens: number = inputTokens,
   cachedReadTokens: number = 0,
   cachedWriteTokens: number = 0,
+  evaluationDate?: Date,
 ): {
   costUsd: number | null;
   isUnknown: boolean;
   eligibleForAutoRoute: boolean;
   isLongContext: boolean;
+  isOffPeak?: boolean;
   breakdown?: {
     inputCost: number;
     outputCost: number;
@@ -375,19 +481,30 @@ export function calculateEstimatedCostUsd(
     pricing.longContextThreshold && contextTokens > pricing.longContextThreshold,
   );
 
-  const inputRate = isLongContext && pricing.longContextInputRatePer1M !== undefined
-    ? pricing.longContextInputRatePer1M
-    : pricing.inputRatePer1M;
+  const hasOffPeak = pricing.offPeakInputRatePer1M !== undefined;
+  const isOffPeak = hasOffPeak && evaluationDate ? isDeepSeekOffPeak(evaluationDate) : false;
 
-  const outputRate = isLongContext && pricing.longContextOutputRatePer1M !== undefined
-    ? pricing.longContextOutputRatePer1M
-    : pricing.outputRatePer1M;
+  let inputRate: number;
+  let outputRate: number;
+  let cachedReadRate: number;
+  let cachedWriteRate: number;
 
-  const cachedReadRate = isLongContext && pricing.longContextCachedReadRatePer1M !== undefined
-    ? pricing.longContextCachedReadRatePer1M
-    : (pricing.cachedReadRatePer1M ?? inputRate);
-
-  const cachedWriteRate = pricing.cachedWriteRatePer1M ?? inputRate;
+  if (isLongContext) {
+    inputRate = pricing.longContextInputRatePer1M ?? pricing.inputRatePer1M;
+    outputRate = pricing.longContextOutputRatePer1M ?? pricing.outputRatePer1M;
+    cachedReadRate = pricing.longContextCachedReadRatePer1M ?? (pricing.cachedReadRatePer1M ?? inputRate);
+    cachedWriteRate = pricing.longContextCachedWriteRatePer1M ?? (pricing.cachedWriteRatePer1M ?? inputRate);
+  } else if (isOffPeak) {
+    inputRate = pricing.offPeakInputRatePer1M!;
+    outputRate = pricing.offPeakOutputRatePer1M!;
+    cachedReadRate = pricing.offPeakCachedReadRatePer1M!;
+    cachedWriteRate = pricing.cachedWriteRatePer1M ?? inputRate;
+  } else {
+    inputRate = pricing.inputRatePer1M;
+    outputRate = pricing.outputRatePer1M;
+    cachedReadRate = pricing.cachedReadRatePer1M ?? inputRate;
+    cachedWriteRate = pricing.cachedWriteRatePer1M ?? inputRate;
+  }
 
   const uncachedInputTokens = Math.max(0, inputTokens - cachedReadTokens);
   const inputCost = (uncachedInputTokens / 1_000_000) * inputRate;
@@ -402,6 +519,7 @@ export function calculateEstimatedCostUsd(
     isUnknown: false,
     eligibleForAutoRoute: pricing.isEligibleForAutoRouting !== false,
     isLongContext,
+    isOffPeak,
     breakdown: {
       inputCost,
       outputCost,

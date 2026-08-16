@@ -11,11 +11,11 @@ export function getRouterModelOrderByListedOutputUsdPerM(sort: ListedOutputSort)
   const keys = Object.keys(PRICING_REGISTRY) as RouterModel[];
   const mul = sort === 'asc' ? 1 : -1;
   keys.sort((a, b) => {
-    const oa = PRICING_REGISTRY[a].outputRatePer1M;
-    const ob = PRICING_REGISTRY[b].outputRatePer1M;
+    const oa = PRICING_REGISTRY[a]?.outputRatePer1M ?? 0;
+    const ob = PRICING_REGISTRY[b]?.outputRatePer1M ?? 0;
     if (oa !== ob) return (oa - ob) * mul;
-    const ia = PRICING_REGISTRY[a].inputRatePer1M;
-    const ib = PRICING_REGISTRY[b].inputRatePer1M;
+    const ia = PRICING_REGISTRY[a]?.inputRatePer1M ?? 0;
+    const ib = PRICING_REGISTRY[b]?.inputRatePer1M ?? 0;
     return (ia - ib) * mul;
   });
   return keys;
