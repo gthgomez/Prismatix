@@ -9,43 +9,50 @@ export interface ModelPricing {
   longContextThreshold?: number;
   longContextInputRatePer1M?: number;
   longContextOutputRatePer1M?: number;
+  longContextCachedReadRatePer1M?: number;
   isEstimated: boolean;
   isUnknown?: boolean;
   isEligibleForAutoRouting?: boolean;
 }
 
-export const PRICING_VERSION = '2026-08-16-v5';
+export const PRICING_VERSION = '2026-08-16-v6';
 
 export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
   // OpenCode Curated Models (Official Zen Rates 2026)
   'deepseek-v4-flash': {
     inputRatePer1M: 0.14,
     outputRatePer1M: 0.28,
+    cachedReadRatePer1M: 0.05,
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'gpt-5.6-luna': {
     inputRatePer1M: 0.20,
     outputRatePer1M: 1.20,
+    cachedReadRatePer1M: 0.02,
+    cachedWriteRatePer1M: 0.25,
     longContextThreshold: 272000,
     longContextInputRatePer1M: 0.40,
     longContextOutputRatePer1M: 1.80,
+    longContextCachedReadRatePer1M: 0.04,
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'deepseek-v4-pro': {
     inputRatePer1M: 1.74,
     outputRatePer1M: 3.48,
+    cachedReadRatePer1M: 0.15,
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'grok-4.6': {
     inputRatePer1M: 2.00,
     outputRatePer1M: 6.00,
-    cachedReadRatePer1M: 1.00,
+    cachedReadRatePer1M: 0.50,
     longContextThreshold: 200000,
     longContextInputRatePer1M: 4.00,
     longContextOutputRatePer1M: 12.00,
+    longContextCachedReadRatePer1M: 1.00,
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
@@ -60,9 +67,12 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
   'gpt-5.6-terra': {
     inputRatePer1M: 2.00,
     outputRatePer1M: 12.00,
+    cachedReadRatePer1M: 0.20,
+    cachedWriteRatePer1M: 2.50,
     longContextThreshold: 272000,
     longContextInputRatePer1M: 4.00,
     longContextOutputRatePer1M: 18.00,
+    longContextCachedReadRatePer1M: 0.40,
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
@@ -77,21 +87,27 @@ export const PRICING_REGISTRY: Record<RouterModel, ModelPricing> = {
   'gpt-5.6-sol': {
     inputRatePer1M: 5.00,
     outputRatePer1M: 30.00,
+    cachedReadRatePer1M: 0.50,
+    cachedWriteRatePer1M: 6.25,
     longContextThreshold: 272000,
     longContextInputRatePer1M: 10.00,
     longContextOutputRatePer1M: 45.00,
+    longContextCachedReadRatePer1M: 1.00,
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'gemini-3.7-flash': {
     inputRatePer1M: 1.50,
     outputRatePer1M: 7.50,
+    cachedReadRatePer1M: 0.05,
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
   'claude-haiku-4-5': {
     inputRatePer1M: 1.00,
     outputRatePer1M: 5.00,
+    cachedReadRatePer1M: 0.10,
+    cachedWriteRatePer1M: 1.25,
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },

@@ -7,6 +7,7 @@ export interface ModelPricing {
   longContextThreshold?: number;
   longContextInputRatePer1M?: number;
   longContextOutputRatePer1M?: number;
+  longContextCachedReadRatePer1M?: number;
   asOfDate: string;
   sourceRef: string;
   isEstimated: boolean;
@@ -14,14 +15,15 @@ export interface ModelPricing {
   isEligibleForAutoRouting?: boolean;
 }
 
-export const PRICING_VERSION = '2026-08-16-v5';
+export const PRICING_VERSION = '2026-08-16-v6';
 
-// Official OpenCode Zen & fallback pricing table
+// Official OpenCode Zen & fallback pricing table with tier-aware cache economics
 export const PRICING_REGISTRY: Record<string, ModelPricing> = {
   // OpenCode Curated Models (Official Zen Rates 2026)
   'deepseek-v4-flash': {
     inputRatePer1M: 0.14,
     outputRatePer1M: 0.28,
+    cachedReadRatePer1M: 0.05,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -30,9 +32,12 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
   'gpt-5.6-luna': {
     inputRatePer1M: 0.20,
     outputRatePer1M: 1.20,
+    cachedReadRatePer1M: 0.02,
+    cachedWriteRatePer1M: 0.25,
     longContextThreshold: 272000,
     longContextInputRatePer1M: 0.40,
     longContextOutputRatePer1M: 1.80,
+    longContextCachedReadRatePer1M: 0.04,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -41,6 +46,7 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
   'deepseek-v4-pro': {
     inputRatePer1M: 1.74,
     outputRatePer1M: 3.48,
+    cachedReadRatePer1M: 0.15,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -49,10 +55,11 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
   'grok-4.6': {
     inputRatePer1M: 2.00,
     outputRatePer1M: 6.00,
-    cachedReadRatePer1M: 1.00,
+    cachedReadRatePer1M: 0.50,
     longContextThreshold: 200000,
     longContextInputRatePer1M: 4.00,
     longContextOutputRatePer1M: 12.00,
+    longContextCachedReadRatePer1M: 1.00,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -71,9 +78,12 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
   'gpt-5.6-terra': {
     inputRatePer1M: 2.00,
     outputRatePer1M: 12.00,
+    cachedReadRatePer1M: 0.20,
+    cachedWriteRatePer1M: 2.50,
     longContextThreshold: 272000,
     longContextInputRatePer1M: 4.00,
     longContextOutputRatePer1M: 18.00,
+    longContextCachedReadRatePer1M: 0.40,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -92,9 +102,12 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
   'gpt-5.6-sol': {
     inputRatePer1M: 5.00,
     outputRatePer1M: 30.00,
+    cachedReadRatePer1M: 0.50,
+    cachedWriteRatePer1M: 6.25,
     longContextThreshold: 272000,
     longContextInputRatePer1M: 10.00,
     longContextOutputRatePer1M: 45.00,
+    longContextCachedReadRatePer1M: 1.00,
     asOfDate: '2026-08-16',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
@@ -334,7 +347,20 @@ export function calculateEstimatedCostUsd(
   inputTokens: number,
   estimatedOutputTokens: number,
   contextTokens: number = inputTokens,
-): { costUsd: number | null; isUnknown: boolean; eligibleForAutoRoute: boolean; isLongContext: boolean } {
+  cachedReadTokens: number = 0,
+  cachedWriteTokens: number = 0,
+): {
+  costUsd: number | null;
+  isUnknown: boolean;
+  eligibleForAutoRoute: boolean;
+  isLongContext: boolean;
+  breakdown?: {
+    inputCost: number;
+    outputCost: number;
+    cachedReadCost: number;
+    cachedWriteCost: number;
+  };
+} {
   const pricing = getPricingForModel(model);
   if (pricing.isUnknown) {
     return {
@@ -357,13 +383,30 @@ export function calculateEstimatedCostUsd(
     ? pricing.longContextOutputRatePer1M
     : pricing.outputRatePer1M;
 
-  const inputCost = (inputTokens / 1_000_000) * inputRate;
+  const cachedReadRate = isLongContext && pricing.longContextCachedReadRatePer1M !== undefined
+    ? pricing.longContextCachedReadRatePer1M
+    : (pricing.cachedReadRatePer1M ?? inputRate);
+
+  const cachedWriteRate = pricing.cachedWriteRatePer1M ?? inputRate;
+
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedReadTokens);
+  const inputCost = (uncachedInputTokens / 1_000_000) * inputRate;
   const outputCost = (estimatedOutputTokens / 1_000_000) * outputRate;
+  const cachedReadCost = (cachedReadTokens / 1_000_000) * cachedReadRate;
+  const cachedWriteCost = (cachedWriteTokens / 1_000_000) * cachedWriteRate;
+
+  const totalCost = inputCost + outputCost + cachedReadCost + cachedWriteCost;
 
   return {
-    costUsd: inputCost + outputCost,
+    costUsd: totalCost,
     isUnknown: false,
     eligibleForAutoRoute: pricing.isEligibleForAutoRouting !== false,
     isLongContext,
+    breakdown: {
+      inputCost,
+      outputCost,
+      cachedReadCost,
+      cachedWriteCost,
+    },
   };
 }

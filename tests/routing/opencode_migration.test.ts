@@ -148,6 +148,16 @@ describe('OpenCode Model Hub & Semantic Routing Migration', () => {
       const costLong = calculateEstimatedCostUsd('gpt-5.6-sol', 300000, 1000, 300000);
       expect(costLong.isLongContext).toBe(true);
       expect(costLong.costUsd).toBeCloseTo(3.045, 3);
+
+      // Grok 4.6 tiered cache reads: base cached read ($0.50/M) vs long-context cached read ($1.00/M)
+      const grokBase = calculateEstimatedCostUsd('grok-4.6', 10000, 1000, 10000, 8000);
+      // (2k * $2.00/M) + (1k * $6.00/M) + (8k * $0.50/M) = $0.004 + $0.006 + $0.004 = $0.014
+      expect(grokBase.costUsd).toBeCloseTo(0.014, 5);
+
+      const grokLong = calculateEstimatedCostUsd('grok-4.6', 250000, 2000, 250000, 200000);
+      // (50k * $4.00/M) + (2k * $12.00/M) + (200k * $1.00/M) = $0.20 + $0.024 + $0.20 = $0.424
+      expect(grokLong.isLongContext).toBe(true);
+      expect(grokLong.costUsd).toBeCloseTo(0.424, 4);
     });
 
     it('forbids automatic routing for unknown models (fails closed)', () => {

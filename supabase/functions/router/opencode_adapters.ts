@@ -265,7 +265,7 @@ export async function dispatchOpenCodeStream(params: {
       };
 
       const response = await fetch(
-        `${openCodeBaseUrl}/models/${encodeURIComponent(config.modelId)}:streamGenerateContent`,
+        `${openCodeBaseUrl}/models/${encodeURIComponent(config.modelId)}:streamGenerateContent?alt=sse`,
         {
           method: 'POST',
           headers: {
