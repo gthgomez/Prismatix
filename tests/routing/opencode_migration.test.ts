@@ -8,7 +8,6 @@ import {
 } from '../../supabase/functions/router/models_hub';
 import {
   determineRouteRole,
-  determineRoute,
   RouterParams,
 } from '../../supabase/functions/router/router_logic';
 import {

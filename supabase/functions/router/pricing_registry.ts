@@ -1,6 +1,3 @@
-import type { RouterModel } from './router_logic.ts';
-import { CURATED_OPENCODE_REGISTRY } from './models_hub.ts';
-
 export interface ModelPricing {
   inputRatePer1M: number;
   outputRatePer1M: number;

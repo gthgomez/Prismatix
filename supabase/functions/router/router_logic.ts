@@ -1,6 +1,6 @@
 // router_logic.ts - Pure routing + message transform logic (no Deno.serve side effects)
 
-import { RouteRole, resolveModelForRole, CURATED_OPENCODE_REGISTRY } from './models_hub.ts';
+import { RouteRole, resolveModelForRole } from './models_hub.ts';
 
 export type Provider = 'opencode' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
 

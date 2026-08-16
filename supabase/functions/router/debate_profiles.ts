@@ -2,7 +2,6 @@
 // Debate Mode: challenger critiques synthesized by the primary model.
 
 import type { RouterModel } from './router_logic.ts';
-import { RouteRole, resolveModelForRole } from './models_hub.ts';
 
 export type DebateProfile = 'general' | 'code' | 'video_ui';
 export type DebateTrigger = 'off' | 'explicit' | 'auto';

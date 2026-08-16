@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createNormalizedProxyStream } from '../../supabase/functions/router/sse_normalizer.ts';
 
 describe('end-to-end cancellation semantics & abort propagation', () => {
   it('propagates downstream cancellation to upstream abort signal, halts generation, and cleans up slots', async () => {
     const abortController = new AbortController();
-    let upstreamTokenEmissionCount = 0;
     let upstreamAborted = false;
     let slotReleasedCount = 0;
     let persistedMessageCount = 0;
@@ -53,7 +52,6 @@ describe('end-to-end cancellation semantics & abort propagation', () => {
     const reader = proxyStream.getReader();
 
     // 1. Upstream emits chunk 1
-    upstreamTokenEmissionCount++;
     upstreamController!.enqueue(
       encoder.encode('data: {"type":"content_block_delta","delta":{"text":"First part"}}\n\n'),
     );

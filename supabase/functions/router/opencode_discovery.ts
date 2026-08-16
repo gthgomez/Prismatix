@@ -1,7 +1,5 @@
 // opencode_discovery.ts
-// Dynamic model discovery for OpenCode Zen/Console with TTL caching.
-
-import { CURATED_OPENCODE_REGISTRY } from './models_hub.ts';
+// Dynamic model discovery for OpenCode Zen/Console with scoped TTL caching and fail-safe fallback.
 
 const DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -10,20 +8,29 @@ interface CachedDiscovery {
   discoveredAt: number;
 }
 
-let cachedDiscovery: CachedDiscovery | null = null;
+// Scoped cache map keyed by endpoint + credential scope
+const discoveryCache = new Map<string, CachedDiscovery>();
+
+function getCacheKey(openCodeApiKey?: string, openCodeBaseUrl: string = 'https://opencode.ai/zen/v1'): string {
+  const keyTail = openCodeApiKey ? openCodeApiKey.slice(-8) : 'anon';
+  return `${openCodeBaseUrl}::${keyTail}`;
+}
 
 export async function fetchDiscoveredModelIds(
   openCodeApiKey?: string,
   openCodeBaseUrl: string = 'https://opencode.ai/zen/v1',
 ): Promise<Set<string>> {
+  const cacheKey = getCacheKey(openCodeApiKey, openCodeBaseUrl);
   const now = Date.now();
-  if (cachedDiscovery && (now - cachedDiscovery.discoveredAt) < DISCOVERY_CACHE_TTL_MS) {
-    return cachedDiscovery.modelIds;
+  const cached = discoveryCache.get(cacheKey);
+
+  if (cached && now - cached.discoveredAt < DISCOVERY_CACHE_TTL_MS) {
+    return cached.modelIds;
   }
 
   if (!openCodeApiKey) {
-    // If no key provided, return all known curated IDs for offline/mock fallback
-    return new Set(Object.keys(CURATED_OPENCODE_REGISTRY));
+    // If no credentials provided, return empty set (fail closed, do NOT assume models exist)
+    return new Set<string>();
   }
 
   try {
@@ -35,33 +42,39 @@ export async function fetchDiscoveredModelIds(
     });
 
     if (!res.ok) {
-      console.warn(`[OpenCode Discovery] HTTP ${res.status} when fetching models; using cached/curated set`);
-      return cachedDiscovery?.modelIds ?? new Set(Object.keys(CURATED_OPENCODE_REGISTRY));
+      console.warn(
+        `[OpenCode Discovery] HTTP ${res.status} when fetching models; falling back to scoped cache or failing closed`,
+      );
+      return cached?.modelIds ?? new Set<string>();
     }
 
     const data = await res.json();
-    const rawList = Array.isArray(data.data) ? data.data : (Array.isArray(data.models) ? data.models : []);
+    const rawList = Array.isArray(data.data)
+      ? data.data
+      : Array.isArray(data.models)
+      ? data.models
+      : [];
     const discoveredIds = new Set<string>();
 
     for (const item of rawList) {
-      const id = typeof item === 'string' ? item : (item?.id || item?.name);
+      const id = typeof item === 'string' ? item : item?.id || item?.name;
       if (typeof id === 'string' && id.trim()) {
         discoveredIds.add(id.trim());
       }
     }
 
-    cachedDiscovery = {
+    discoveryCache.set(cacheKey, {
       modelIds: discoveredIds,
       discoveredAt: now,
-    };
+    });
 
     return discoveredIds;
   } catch (err) {
-    console.warn('[OpenCode Discovery] Error fetching models:', err);
-    return cachedDiscovery?.modelIds ?? new Set(Object.keys(CURATED_OPENCODE_REGISTRY));
+    console.warn('[OpenCode Discovery] Error fetching models; failing closed:', err);
+    return cached?.modelIds ?? new Set<string>();
   }
 }
 
 export function resetDiscoveryCacheForTests(): void {
-  cachedDiscovery = null;
+  discoveryCache.clear();
 }
