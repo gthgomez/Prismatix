@@ -5,7 +5,6 @@ import {
   countImageTokens,
   countTokens,
   createStubRoutingDebug,
-  determineRoute,
   type ImageAttachment,
   type Message,
   MODEL_REGISTRY,
@@ -29,6 +28,9 @@ import {
   type ChallengerOutput,
 } from './debate_prompts.ts';
 import { createNormalizedProxyStream } from './sse_normalizer.ts';
+import { CURATED_OPENCODE_REGISTRY } from './models_hub.ts';
+import { dispatchOpenCodeStream } from './opencode_adapters.ts';
+import { resolveProductionRoute } from './production_routing.ts';
 import {
   type GeminiFlashThinkingLevel,
   buildAnthropicStreamPayload,
@@ -127,6 +129,8 @@ const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY') || '';
 const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY') || '';
 const NVIDIA_API_KEY = Deno.env.get('NVIDIA_API_KEY') || '';
 const DEEPINFRA_API_KEY = Deno.env.get('DEEPINFRA_API_KEY') || '';
+const OPENCODE_API_KEY = Deno.env.get('OPENCODE_API_KEY') || '';
+const OPENCODE_BASE_URL = Deno.env.get('OPENCODE_BASE_URL') || 'https://opencode.ai/zen/v1';
 
 function envFlag(name: string, defaultValue: boolean): boolean {
   const raw = Deno.env.get(name);
@@ -141,6 +145,7 @@ function envFlag(name: string, defaultValue: boolean): boolean {
   return defaultValue;
 }
 
+const ENABLE_OPENCODE = envFlag('ENABLE_OPENCODE', true);
 const ENABLE_ANTHROPIC = envFlag('ENABLE_ANTHROPIC', true);
 const ENABLE_OPENAI = envFlag('ENABLE_OPENAI', true);
 const ENABLE_GOOGLE = envFlag('ENABLE_GOOGLE', true);
@@ -195,6 +200,8 @@ const activeStreamsByUser = new Map<string, number>();
 
 function isProviderEnabled(provider: Provider): boolean {
   switch (provider) {
+    case 'opencode':
+      return ENABLE_OPENCODE;
     case 'anthropic':
       return ENABLE_ANTHROPIC;
     case 'openai':
@@ -210,6 +217,8 @@ function isProviderEnabled(provider: Provider): boolean {
 
 function hasProviderCredentials(provider: Provider): boolean {
   switch (provider) {
+    case 'opencode':
+      return !!OPENCODE_API_KEY;
     case 'anthropic':
       return !!ANTHROPIC_API_KEY;
     case 'openai':
@@ -228,7 +237,14 @@ function isProviderReady(provider: Provider): boolean {
 }
 
 function hasAtLeastOneProviderConfigured(): boolean {
-  return isProviderReady('anthropic') || isProviderReady('openai') || isProviderReady('google') || isProviderReady('nvidia') || isProviderReady('deepinfra');
+  return (
+    isProviderReady('opencode') ||
+    isProviderReady('anthropic') ||
+    isProviderReady('openai') ||
+    isProviderReady('google') ||
+    isProviderReady('nvidia') ||
+    isProviderReady('deepinfra')
+  );
 }
 
 function fallbackModel(): RouterModel | undefined {
@@ -1057,6 +1073,43 @@ async function callGoogle(
   return result;
 }
 
+async function callOpenCode(
+  decision: RouteDecision,
+  allMessages: Message[],
+  images: ImageAttachment[],
+  signal: AbortSignal,
+): Promise<UpstreamCallResult> {
+  const modelConfig = CURATED_OPENCODE_REGISTRY[decision.model] || {
+    modelId: decision.model,
+    displayName: decision.model,
+    gateway: 'opencode' as const,
+    protocol: 'openai-chat' as const,
+    family: 'other' as const,
+    supportsImages: images.length > 0,
+    budgetCap: 8192,
+    pricing: {
+      inputPer1M: 1.0,
+      outputPer1M: 5.0,
+      source: 'dynamic',
+      verifiedAt: '2026-08-16',
+    },
+  };
+
+  const streamResult = await dispatchOpenCodeStream({
+    config: modelConfig,
+    messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
+    images: images.map((img) => ({ data: img.data, mediaType: img.mediaType })),
+    openCodeApiKey: OPENCODE_API_KEY,
+    signal,
+  });
+
+  return {
+    response: streamResult.response,
+    extractDeltas: streamResult.extractDeltas,
+    effectiveModelId: decision.model,
+  };
+}
+
 async function callProviderStream(
   decision: RouteDecision,
   allMessages: Message[],
@@ -1065,6 +1118,8 @@ async function callProviderStream(
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel,
 ): Promise<UpstreamCallResult> {
   switch (decision.provider) {
+    case 'opencode':
+      return await callOpenCode(decision, allMessages, images, signal);
     case 'anthropic':
       return await callAnthropic(decision, allMessages, images, signal);
     case 'openai':
@@ -1474,6 +1529,8 @@ Deno.serve(async (req: Request) => {
   }
 
   const controller = new AbortController();
+  const onReqAbort = () => controller.abort();
+  req.signal.addEventListener('abort', onReqAbort, { once: true });
   const timeoutId = setTimeout(() => controller.abort(), FUNCTION_TIMEOUT_MS);
   let streamReturned = false;
 
@@ -1696,14 +1753,18 @@ Deno.serve(async (req: Request) => {
       hits: 0,
       tokenCount: 0,
     };
-    try {
-      memoryRetrieval = await fetchRelevantMemories(
-        supabaseClient as unknown as ReturnType<typeof createClient>,
-        userId,
-        query,
-      );
-    } catch (memoryError) {
-      console.warn('[Memory] retrieval skipped:', memoryError);
+    // INVARIANT: Mobile clients (Prism) are sole personal memory authorities.
+    // Server-side memory retrieval is bypassed for platform === 'mobile'.
+    if (platform !== 'mobile') {
+      try {
+        memoryRetrieval = await fetchRelevantMemories(
+          supabaseClient as unknown as ReturnType<typeof createClient>,
+          userId,
+          query,
+        );
+      } catch (memoryError) {
+        console.warn('[Memory] retrieval skipped:', memoryError);
+      }
     }
 
     let videoContextBlock = '';
@@ -1736,7 +1797,11 @@ Deno.serve(async (req: Request) => {
     const normalizedOverride = normalizeModelOverride(
       debateReq.suppressModelOverride ? undefined : modelOverride,
     );
-    let decision = determineRoute(routerParams, normalizedOverride);
+    let decision = await resolveProductionRoute(routerParams, normalizedOverride, {
+      openCodePrimary: isProviderReady('opencode'),
+      openCodeApiKey: OPENCODE_API_KEY || undefined,
+      openCodeBaseUrl: OPENCODE_BASE_URL,
+    });
 
     const availabilityCheck = normalizeDecisionAgainstProviderAvailability(
       decision,
@@ -2070,6 +2135,9 @@ Deno.serve(async (req: Request) => {
       onDelta: (delta) => {
         assistantText += delta;
       },
+      onCancel: () => {
+        controller.abort();
+      },
       onComplete: async () => {
         try {
           const assistantTokenCount = countTokens(assistantText);
@@ -2109,13 +2177,17 @@ Deno.serve(async (req: Request) => {
               assistantTokenCount,
               `${responseDecision.provider}:${effectiveModelId}`,
             );
-            void maybeSummarizeConversationAsync(
-              supabaseClient as unknown as ReturnType<typeof createClient>,
-              userId,
-              conversationId,
-              ownership.tokenCount + userTokenCount + assistantTokenCount,
-              { openai: OPENAI_API_KEY, anthropic: ANTHROPIC_API_KEY, google: GOOGLE_API_KEY },
-            );
+            // INVARIANT: Mobile clients (Prism) own their own conversation history.
+            // Server-side long-term memory extraction/summarization is bypassed for platform === 'mobile'.
+            if (platform !== 'mobile') {
+              void maybeSummarizeConversationAsync(
+                supabaseClient as unknown as ReturnType<typeof createClient>,
+                userId,
+                conversationId,
+                ownership.tokenCount + userTokenCount + assistantTokenCount,
+                { openai: OPENAI_API_KEY, anthropic: ANTHROPIC_API_KEY, google: GOOGLE_API_KEY },
+              );
+            }
           }
         } finally {
           clearTimeout(timeoutId);

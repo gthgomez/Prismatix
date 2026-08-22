@@ -18,19 +18,23 @@ const LS_GROUP = 'prismatix.modelSelector.groupByProvider';
 const LS_TAB = 'prismatix.modelSelector.activeTab';
 
 const OVERRIDE_PROVIDER_ORDER: RouterProvider[] = [
+  'opencode',
   'anthropic',
   'openai',
   'google',
   'nvidia',
   'deepinfra',
+  'other',
 ];
 
 const PROVIDER_LABEL: Record<RouterProvider, string> = {
+  opencode: 'OpenCode',
   anthropic: 'Anthropic',
   openai: 'OpenAI',
   google: 'Google',
   nvidia: 'NVIDIA',
   deepinfra: 'DeepInfra',
+  other: 'Other',
 };
 
 type SelectorTab = 'routing' | 'models';
@@ -66,6 +70,7 @@ interface ModelSelectorDropdownProps {
   onGeminiThinkingChange: (level: GeminiFlashThinkingLevel) => void;
   onDebateChange: (selection: DebateSelection) => void;
   onClearValidationError: () => void;
+  onClose?: () => void;
 }
 
 export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
@@ -80,6 +85,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   onGeminiThinkingChange,
   onDebateChange,
   onClearValidationError,
+  onClose,
 }) => {
   const modelConfig = MODEL_CATALOG;
   const [activeTab, setActiveTab] = useState<SelectorTab>(() =>
@@ -87,6 +93,16 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   );
   const [showAllOverrides, setShowAllOverrides] = useState(false);
   const [groupByProvider, setGroupByProvider] = useState(readStoredGroupByProvider);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && onClose) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   useEffect(() => {
     if (!sendValidationError) return;

@@ -60,6 +60,34 @@ interface ChatInterfaceProps {
 const DAILY_BUDGET_LIMIT_USD = 2.0;
 const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
 
+interface PromptStarter {
+  icon: string;
+  title: string;
+  desc: string;
+  prompt: string;
+}
+
+const PROMPT_STARTERS: PromptStarter[] = [
+  {
+    icon: '⚡',
+    title: 'Code Architecture',
+    desc: 'Analyze clean design patterns & edge function streaming',
+    prompt: 'Analyze our TypeScript edge function streaming pipeline and recommend performance optimizations.',
+  },
+  {
+    icon: '⚖️',
+    title: 'Debate Mode Test',
+    desc: 'Compare multi-provider perspective on complex tradeoff',
+    prompt: 'Debate the architectural tradeoffs between serverless SSE streaming vs WebSocket subscriptions for multi-model AI routing.',
+  },
+  {
+    icon: '📊',
+    title: 'Cost Math & Limits',
+    desc: 'Verify token estimates, prompt history, and daily spend',
+    prompt: 'Explain how token pricing and pre-flight budget calculations work across Anthropic, OpenAI, and Gemini models.',
+  },
+];
+
 function shouldTreatAsVideoAttachment(file: FileUploadPayload): boolean {
   if (file.kind === 'video') return true;
   if (typeof file.mediaType === 'string' && file.mediaType.toLowerCase().startsWith('video/')) {
@@ -157,7 +185,52 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [draftAttachments.length]);
 
-  // Close dropdowns on outside click
+  const [isDraggingGlobal, setIsDraggingGlobal] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  // Global Drag & Drop Handler
+  useEffect(() => {
+    const handleDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current += 1;
+      if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        setIsDraggingGlobal(true);
+      }
+    };
+
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current -= 1;
+      if (dragCounterRef.current <= 0) {
+        dragCounterRef.current = 0;
+        setIsDraggingGlobal(false);
+      }
+    };
+
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current = 0;
+      setIsDraggingGlobal(false);
+    };
+
+    window.addEventListener('dragenter', handleDragEnter);
+    window.addEventListener('dragleave', handleDragLeave);
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('drop', handleDrop);
+
+    return () => {
+      window.removeEventListener('dragenter', handleDragEnter);
+      window.removeEventListener('dragleave', handleDragLeave);
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, []);
+
+  // Close dropdowns & metadata popovers on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
@@ -166,10 +239,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       if (modelSelectorRef.current && !modelSelectorRef.current.contains(e.target as Node)) {
         setShowModelSelector(false);
       }
+      const target = e.target as HTMLElement;
+      if (expandedMetadataIdx !== null && !target.closest('.message-metadata-container')) {
+        setExpandedMetadataIdx(null);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [expandedMetadataIdx]);
 
   // Auto-resize textarea
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -755,6 +832,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     if (sendValidationError) setSendValidationError(null);
                   }}
                   onClearValidationError={() => setSendValidationError(null)}
+                  onClose={() => setShowModelSelector(false)}
                 />
               )}
             </div>
@@ -822,6 +900,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         </div>
       </header>
 
+      {/* Global Drag Overlay */}
+      {isDraggingGlobal && (
+        <div className='global-drag-overlay'>
+          <div className='global-drag-content'>
+            <div className='global-drag-icon'>📁</div>
+            <h3 className='global-drag-title'>Drop files anywhere</h3>
+            <p className='global-drag-subtitle'>Images, documents, code & video files supported</p>
+          </div>
+        </div>
+      )}
+
       {/* Context Warning */}
       {shouldShowWarning && contextStatus && (
         <ContextWarning
@@ -870,6 +959,30 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   );
                 })}
               </div>
+
+              <div className='prompt-starters-section'>
+                <div className='prompt-starters-label'>Quick Start Prompts</div>
+                <div className='prompt-starters-grid'>
+                  {PROMPT_STARTERS.map((starter, i) => (
+                    <button
+                      key={i}
+                      type='button'
+                      className='prompt-starter-chip'
+                      onClick={() => {
+                        setInput(starter.prompt);
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      <span className='starter-chip-title'>
+                        <span>{starter.icon}</span>
+                        <span>{starter.title}</span>
+                      </span>
+                      <span className='starter-chip-desc'>{starter.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <p className='empty-state-model-hint'>
                 Override any time from the model menu in the header.
               </p>

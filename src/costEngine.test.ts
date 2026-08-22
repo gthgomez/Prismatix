@@ -69,7 +69,7 @@ describe('calculatePreFlightCost', () => {
   });
 
   it('uses the correct input rate for haiku-4.5', () => {
-    const pricing = PRICING_REGISTRY['haiku-4.5'];
+    const pricing = PRICING_REGISTRY['haiku-4.5']!;
     const result = calculatePreFlightCost('haiku-4.5', 'hello world', 0);
     const expectedInput = (result.promptTokens / 1_000_000) * pricing.inputRatePer1M;
     const expectedOutput = (result.projectedOutputTokens / 1_000_000) * pricing.outputRatePer1M;
