@@ -5,7 +5,6 @@ import {
   countImageTokens,
   countTokens,
   createStubRoutingDebug,
-  determineRoute,
   type ImageAttachment,
   type Message,
   MODEL_REGISTRY,
@@ -31,6 +30,7 @@ import {
 import { createNormalizedProxyStream } from './sse_normalizer.ts';
 import { CURATED_OPENCODE_REGISTRY } from './models_hub.ts';
 import { dispatchOpenCodeStream } from './opencode_adapters.ts';
+import { resolveProductionRoute } from './production_routing.ts';
 import {
   type GeminiFlashThinkingLevel,
   buildAnthropicStreamPayload,
@@ -130,6 +130,7 @@ const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY') || '';
 const NVIDIA_API_KEY = Deno.env.get('NVIDIA_API_KEY') || '';
 const DEEPINFRA_API_KEY = Deno.env.get('DEEPINFRA_API_KEY') || '';
 const OPENCODE_API_KEY = Deno.env.get('OPENCODE_API_KEY') || '';
+const OPENCODE_BASE_URL = Deno.env.get('OPENCODE_BASE_URL') || 'https://opencode.ai/zen/v1';
 
 function envFlag(name: string, defaultValue: boolean): boolean {
   const raw = Deno.env.get(name);
@@ -1796,7 +1797,11 @@ Deno.serve(async (req: Request) => {
     const normalizedOverride = normalizeModelOverride(
       debateReq.suppressModelOverride ? undefined : modelOverride,
     );
-    let decision = determineRoute(routerParams, normalizedOverride);
+    let decision = await resolveProductionRoute(routerParams, normalizedOverride, {
+      openCodePrimary: isProviderReady('opencode'),
+      openCodeApiKey: OPENCODE_API_KEY || undefined,
+      openCodeBaseUrl: OPENCODE_BASE_URL,
+    });
 
     const availabilityCheck = normalizeDecisionAgainstProviderAvailability(
       decision,
