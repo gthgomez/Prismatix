@@ -10,6 +10,7 @@ import type {
   FileUploadPayload,
   GeminiFlashThinkingLevel,
   Message,
+  RouteExplanation,
   RouterModel,
   RouterProvider,
 } from './types';
@@ -59,12 +60,49 @@ export interface RouterResponseBase {
   geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
   costEstimateUsd?: number;
   costPricingVersion?: string;
+  routeInfo?: RouteExplanation;
+  rationale?: string;
   debateActive?: boolean;
   debateProfile?: DebateProfile;
   debateTrigger?: string;
   debateModel?: string;
   debateCostNote?: string;
   debateParticipants?: DebateParticipant[];
+}
+
+/**
+ * Parses the router's X-Route-Decision header (URI-encoded compact JSON).
+ * Returns undefined when absent or malformed — the route explanation is
+ * additive metadata and must never break the stream.
+ */
+function parseRouteDecisionHeader(header: string | null): RouteExplanation | undefined {
+  if (!header) return undefined;
+  try {
+    const parsed = JSON.parse(decodeURIComponent(header)) as Partial<RouteExplanation>;
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      typeof parsed.modelTier === 'string' &&
+      typeof parsed.reason === 'string' &&
+      (parsed.selection === 'auto' || parsed.selection === 'override')
+    ) {
+      return {
+        selection: parsed.selection,
+        modelTier: parsed.modelTier as RouterModel,
+        gateway: parsed.gateway === 'opencode' ? 'opencode' : 'direct_fallback',
+        reason: parsed.reason,
+        fallbackUsed: parsed.fallbackUsed === true,
+        role: parsed.role,
+        attemptedModels: Array.isArray(parsed.attemptedModels)
+          ? parsed.attemptedModels.filter((m): m is string => typeof m === 'string')
+          : undefined,
+        priceKnown: parsed.priceKnown !== false,
+      };
+    }
+  } catch {
+    /* malformed header — ignore */
+  }
+  return undefined;
 }
 
 function base64UrlDecode(input: string): string {
@@ -379,6 +417,8 @@ export async function askPrismatix(
     const rationaleHeader = response.headers.get('X-Router-Rationale');
     const costEstimateHeader = response.headers.get('X-Cost-Estimate-USD');
     const costPricingVersion = response.headers.get('X-Cost-Pricing-Version') || undefined;
+    const routeDecisionHeader = response.headers.get('X-Route-Decision');
+    const routeInfo = parseRouteDecisionHeader(routeDecisionHeader);
     const debateModeHeader = response.headers.get('X-Debate-Mode');
     const debateProfileHeader = response.headers.get('X-Debate-Profile');
     const debateTriggerHeader = response.headers.get('X-Debate-Trigger');
@@ -436,6 +476,8 @@ export async function askPrismatix(
       geminiFlashThinkingLevel: appliedGeminiThinkingLevel,
       costEstimateUsd,
       costPricingVersion,
+      routeInfo,
+      rationale: rationaleHeader || undefined,
       debateActive: debateMetadata.debateActive,
       debateProfile: debateMetadata.debateProfile,
       debateTrigger: debateMetadata.debateTrigger,

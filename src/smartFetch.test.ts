@@ -118,8 +118,55 @@ describe('smartFetch debate support', () => {
     expect(await readStream(result!.stream)).toBe(sse);
   });
 
-  it('omits debate request fields and metadata when debate is not enabled', async () => {
-    const response = new Response(makeStream('data: {"type":"meta"}\n\n'), {
+  it('parses the X-Route-Decision explanation header into routeInfo', async () => {
+    const explanation = {
+      selection: 'auto',
+      role: 'economy',
+      modelTier: 'deepseek-v4-flash',
+      gateway: 'opencode',
+      reason: "Highest-ranked available model for role 'economy'.",
+      fallbackUsed: false,
+      attemptedModels: [],
+      priceKnown: true,
+    };
+    const sse = 'data: {"type":"content_block_delta","delta":{"text":"hi"}}\n\n';
+    const response = new Response(makeStream(sse), {
+      status: 200,
+      headers: {
+        'X-Router-Model': 'deepseek-v4-flash',
+        'X-Router-Rationale': 'opencode-economy',
+        'X-Route-Decision': encodeURIComponent(JSON.stringify(explanation)),
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await askPrismatix('Hello world');
+
+    expect(result?.routeInfo).toEqual(explanation);
+    expect(result?.rationale).toBe('opencode-economy');
+  });
+
+  it('survives a malformed X-Route-Decision header without breaking the stream', async () => {
+    const sse = 'data: {"type":"content_block_delta","delta":{"text":"hi"}}\n\n';
+    const response = new Response(makeStream(sse), {
+      status: 200,
+      headers: {
+        'X-Router-Model': 'deepseek-v4-flash',
+        'X-Route-Decision': '%not-encoded-json%',
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await askPrismatix('Hello world');
+
+    expect(result?.routeInfo).toBeUndefined();
+    expect(result?.stream).toBeDefined();
+    expect(await readStream(result!.stream)).toBe(sse);
+  });
+
+  it('omits debate request fields and metadata when debate is not enabled', async () => {    const response = new Response(makeStream('data: {"type":"meta"}\n\n'), {
       status: 200,
       headers: {
         'X-Router-Model': 'gemini-2.5-flash',

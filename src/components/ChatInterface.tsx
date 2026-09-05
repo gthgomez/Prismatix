@@ -39,7 +39,8 @@ import type {
   RouterModel,
 } from '../types';
 import { MODEL_CATALOG, MODEL_HIGHLIGHTS, MODEL_ORDER } from '../modelCatalog';
-import { assistantModelPillDisplay } from '../modelDisplay';
+import { assistantModelPillDisplay, buildRouteExplanationRows } from '../modelDisplay';
+import { RouteExplanationList } from './RouteExplanationList';
 import {
   getComposerSendValidationView,
   VIDEO_UI_DEBATE_SEND_ERROR,
@@ -584,6 +585,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         geminiFlashThinkingLevel: appliedGeminiThinkingLevel,
         costEstimateUsd,
         costPricingVersion,
+        routeInfo,
         debateActive,
         debateProfile,
         debateTrigger,
@@ -607,6 +609,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         provider,
         modelId,
         modelOverride: appliedOverride,
+        routeInfo,
         geminiFlashThinkingLevel: appliedGeminiThinkingLevel,
         debateActive,
         debateProfile,
@@ -1051,6 +1054,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                                   <span className='item-label'>Thinking</span>
                                   <span className='item-value'>{msg.geminiFlashThinkingLevel}</span>
                                 </div>
+                              )}
+                              {msg.role === 'assistant' && (
+                                <RouteExplanationList {...buildRouteExplanationRows(msg)} />
                               )}
                               {msg.role === 'assistant' && shouldShowDebateBadges(msg) && (
                                 <div className='metadata-debate-details'>

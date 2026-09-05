@@ -4,7 +4,6 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
   countImageTokens,
   countTokens,
-  createStubRoutingDebug,
   type ImageAttachment,
   type Message,
   MODEL_REGISTRY,
@@ -14,7 +13,11 @@ import {
   type RouterModel,
   type RouterParams,
 } from './router_logic.ts';
-import { calculateCostBreakdown, calculatePreFlightCost } from './cost_engine.ts';
+import {
+  calculateCostBreakdown,
+  calculatePreFlightCost,
+  evaluateAutoSendSafety,
+} from './cost_engine.ts';
 import {
   DEFAULT_DEBATE_THRESHOLD,
   getDebatePlan,
@@ -28,7 +31,11 @@ import {
   type ChallengerOutput,
 } from './debate_prompts.ts';
 import { createNormalizedProxyStream } from './sse_normalizer.ts';
-import { CURATED_OPENCODE_REGISTRY } from './models_hub.ts';
+import {
+  decisionFromModel,
+  normalizeDecisionAgainstProviderAvailability,
+} from './provider_availability.ts';
+import { CURATED_OPENCODE_REGISTRY, ModelUnavailableError } from './models_hub.ts';
 import { dispatchOpenCodeStream } from './opencode_adapters.ts';
 import { resolveProductionRoute } from './production_routing.ts';
 import {
@@ -247,69 +254,10 @@ function hasAtLeastOneProviderConfigured(): boolean {
   );
 }
 
-function fallbackModel(): RouterModel | undefined {
-  if (isProviderReady('google')) return 'gemini-2.5-flash';
-  if (isProviderReady('openai')) return 'gpt-5.4-mini';
-  if (isProviderReady('anthropic')) return 'sonnet-4.6';
-  return undefined;
-}
-
 function normalizeGeminiFlashThinkingLevel(input?: string): GeminiFlashThinkingLevel {
   const normalized = String(input || '').trim().toLowerCase();
   if (normalized === 'low') return 'low';
   return 'high';
-}
-
-function decisionFromModel(
-  modelTier: RouterModel,
-  complexityScore: number,
-  rationaleTag: string,
-): RouteDecision {
-  const modelCfg = MODEL_REGISTRY[modelTier];
-  return {
-    provider: modelCfg.provider,
-    model: modelCfg.modelId,
-    modelTier,
-    budgetCap: modelCfg.budgetCap,
-    rationaleTag,
-    complexityScore,
-    routingDebug: createStubRoutingDebug(complexityScore, rationaleTag),
-  };
-}
-
-function normalizeDecisionAgainstProviderAvailability(
-  decision: RouteDecision,
-  normalizedOverride: RouterModel | undefined,
-): { decision: RouteDecision; error?: string } {
-  if (isProviderReady(decision.provider)) {
-    return { decision };
-  }
-
-  if (normalizedOverride) {
-    return {
-      decision,
-      error: `Requested model '${normalizedOverride}' requires provider '${decision.provider}', ` +
-        `but it is not configured or enabled on the server.`,
-    };
-  }
-
-  const fallback = fallbackModel();
-  if (!fallback) {
-    return {
-      decision,
-      error: 'No enabled provider has valid credentials configured on the server.',
-    };
-  }
-
-  const fallbackDecision = decisionFromModel(
-    fallback,
-    decision.complexityScore,
-    `provider-unavailable-fallback-${decision.provider}`,
-  );
-
-  return {
-    decision: fallbackDecision,
-  };
 }
 
 async function fetchDailySpendUsd(
@@ -1797,15 +1745,38 @@ Deno.serve(async (req: Request) => {
     const normalizedOverride = normalizeModelOverride(
       debateReq.suppressModelOverride ? undefined : modelOverride,
     );
-    let decision = await resolveProductionRoute(routerParams, normalizedOverride, {
-      openCodePrimary: isProviderReady('opencode'),
-      openCodeApiKey: OPENCODE_API_KEY || undefined,
-      openCodeBaseUrl: OPENCODE_BASE_URL,
-    });
+    let decision: RouteDecision;
+    try {
+      decision = await resolveProductionRoute(routerParams, normalizedOverride, {
+        openCodePrimary: isProviderReady('opencode'),
+        openCodeApiKey: OPENCODE_API_KEY || undefined,
+        openCodeBaseUrl: OPENCODE_BASE_URL,
+      });
+    } catch (routeError) {
+      // Fail-closed cost safety: discovery unavailable/empty or no priced
+      // candidate for the role must produce a deterministic, readable
+      // failure — never a silent legacy-provider escalation.
+      if (routeError instanceof ModelUnavailableError) {
+        return new Response(
+          JSON.stringify({
+            error: 'auto_route_unavailable',
+            message:
+              `${routeError.message} Auto will not fall back to a more expensive provider. ` +
+              'Pick a model manually from the model menu, or try again shortly.',
+          }),
+          {
+            status: 409,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+      throw routeError;
+    }
 
     const availabilityCheck = normalizeDecisionAgainstProviderAvailability(
       decision,
       normalizedOverride,
+      isProviderReady,
     );
     if (availabilityCheck.error) {
       return new Response(JSON.stringify({ error: availabilityCheck.error }), {
@@ -1825,6 +1796,27 @@ Deno.serve(async (req: Request) => {
       imageAttachments.length,
       estimatedVideoPromptTokens,
     );
+
+    // Authoritative cost-safety gate: unknown pricing can never auto-send.
+    // This runs before the spend gate so an unpriced model is rejected with a
+    // clear reason instead of slipping through a $0 estimate.
+    const autoSendCheck = evaluateAutoSendSafety({
+      isAuto: !normalizedOverride,
+      modelTier: decision.modelTier,
+      hasUnknownRate: preFlightCost.hasUnknownRate,
+    });
+    if (!autoSendCheck.allowed) {
+      return new Response(
+        JSON.stringify({
+          error: 'unknown_model_pricing',
+          message: autoSendCheck.message,
+        }),
+        {
+          status: 409,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
 
     if (ENABLE_SERVER_SPEND_LIMIT) {
       let dailySpendUsd = 0;
@@ -2210,6 +2202,12 @@ Deno.serve(async (req: Request) => {
         'X-Model-Override': debateOverrideHeader || normalizedOverride || 'auto',
         'X-Router-Rationale': responseDecision.rationaleTag,
         'X-Complexity-Score': responseDecision.complexityScore.toString(),
+        // Explainable route contract: compact JSON (URI-encoded for header
+        // safety) describing role/model/gateway/reason/fallback/price-basis.
+        // Derived from the actual routing decision; contains no secrets.
+        ...(responseDecision.explanation
+          ? { 'X-Route-Decision': encodeURIComponent(JSON.stringify(responseDecision.explanation)) }
+          : {}),
         'X-Gemini-Thinking-Level': upstream.effectiveGeminiFlashThinkingLevel || 'n/a',
         'X-Memory-Hits': String(memoryRetrieval.hits),
         'X-Memory-Tokens': String(memoryRetrieval.tokenCount),

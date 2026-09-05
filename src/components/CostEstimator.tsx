@@ -52,6 +52,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
         thinkingCost: 0,
         totalCost: 0,
         pricingVersion: PRICING_VERSION,
+        hasUnknownRate: false,
       };
     }
     return calculateCostBreakdown(model, usage);
@@ -85,26 +86,32 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
       aria-live='polite'
     >
       <div className='cost-estimator-title'>{isStreaming ? 'This message' : 'Final total'}</div>
-      <div className='cost-estimator-rows'>
-        <div className='cost-estimator-row'>
-          <span>Input</span>
-          <span>${breakdown.inputCost.toFixed(4)}</span>
-        </div>
-        <div className='cost-estimator-row'>
-          <span>Output</span>
-          <span>${breakdown.outputCost.toFixed(4)}</span>
-        </div>
-        {breakdown.thinkingCost > 0 && (
+      {breakdown.hasUnknownRate ? (
+        <p className='cost-estimator-unknown-pricing' role='alert'>
+          Pricing for {model} is unknown — no cost estimate shown, and Auto will not send it.
+        </p>
+      ) : (
+        <div className='cost-estimator-rows'>
           <div className='cost-estimator-row'>
-            <span>Thinking</span>
-            <span>${breakdown.thinkingCost.toFixed(4)}</span>
+            <span>Input</span>
+            <span>${breakdown.inputCost.toFixed(4)}</span>
           </div>
-        )}
-        <div className='cost-estimator-total'>
-          <span>Total</span>
-          <span>${messageTotal.toFixed(4)}</span>
+          <div className='cost-estimator-row'>
+            <span>Output</span>
+            <span>${breakdown.outputCost.toFixed(4)}</span>
+          </div>
+          {breakdown.thinkingCost > 0 && (
+            <div className='cost-estimator-row'>
+              <span>Thinking</span>
+              <span>${breakdown.thinkingCost.toFixed(4)}</span>
+            </div>
+          )}
+          <div className='cost-estimator-total'>
+            <span>Total</span>
+            <span>${messageTotal.toFixed(4)}</span>
+          </div>
         </div>
-      </div>
+      )}
 
       {clientVsServerDiffers && (
         <p className='cost-estimator-reconcile-note' role='status'>
