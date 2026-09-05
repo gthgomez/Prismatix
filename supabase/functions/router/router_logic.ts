@@ -1,6 +1,7 @@
 // router_logic.ts - Pure routing + message transform logic (no Deno.serve side effects)
 
-import { RouteRole, resolveModelForRole } from './models_hub.ts';
+import { CURATED_ROUTE_POLICY, Gateway, RouteRole, resolveRoleCandidates } from './models_hub.ts';
+import { getPricingForModel } from './pricing_registry.ts';
 
 export type Provider = 'opencode' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
 
@@ -276,6 +277,33 @@ export interface RouteDecision {
   rationaleTag: string;
   complexityScore: number;
   routingDebug: RoutingDebugInfo;
+  /**
+   * UI-safe explanation of how this model was chosen. Contains no secrets,
+   * credentials, or internal headers — derived only from the routing decision.
+   */
+  explanation?: RouteExplanation;
+}
+
+export type RouteSelection = 'auto' | 'override';
+
+/**
+ * User-facing route-decision contract. Everything here is safe to expose to
+ * the client: it answers which role/model/gateway was chosen, why, whether a
+ * fallback was involved, and whether the price basis is known.
+ */
+export interface RouteExplanation {
+  selection: RouteSelection;
+  role?: RouteRole;
+  modelTier: RouterModel;
+  gateway: Gateway;
+  /** Short human-readable reason for the choice. */
+  reason: string;
+  /** True when the route was reached via any fallback (role fallback or provider-unavailable re-route). */
+  fallbackUsed: boolean;
+  /** Candidates evaluated and skipped, as "modelId: reason" strings. */
+  attemptedModels?: string[];
+  /** False when the pricing registry has no known rate for this model. */
+  priceKnown: boolean;
 }
 
 const OVERRIDE_SYNONYMS: Record<string, RouterModel> = {
@@ -567,7 +595,12 @@ function buildDecision(
   modelTier: RouterModel,
   rationaleTag: string,
   analysis: RoutingAnalysis,
-  meta: { routeStep: string; matchedBranch?: string; routeRole?: RouteRole },
+  meta: {
+    routeStep: string;
+    matchedBranch?: string;
+    routeRole?: RouteRole;
+    explanation?: RouteExplanation;
+  },
 ): RouteDecision {
   const config = MODEL_REGISTRY[modelTier] || {
     provider: 'opencode' as Provider,
@@ -598,7 +631,12 @@ function buildDecision(
     rationaleTag,
     complexityScore: analysis.complexityScore,
     routingDebug,
+    explanation: meta.explanation,
   };
+}
+
+function priceIsKnown(modelTier: RouterModel): boolean {
+  return !getPricingForModel(modelTier).isUnknown;
 }
 
 export function determineRouteRole(params: RouterParams): RouteRole {
@@ -633,29 +671,54 @@ export function determineRoute(
   if (modelOverride && MODEL_REGISTRY[modelOverride]) {
     return buildDecision(modelOverride, 'manual-override', analysis, {
       routeStep: 'manual-override',
+      explanation: {
+        selection: 'override',
+        modelTier: modelOverride,
+        gateway: MODEL_REGISTRY[modelOverride].provider === 'opencode' ? 'opencode' : 'direct_fallback',
+        reason: `Manually selected model '${modelOverride}'.`,
+        fallbackUsed: false,
+        priceKnown: priceIsKnown(modelOverride),
+      },
     });
   }
 
   const role = determineRouteRole(params);
 
   if (openCodePrimary) {
-    try {
-      const resolvedConfig = resolveModelForRole(role, discoveredModelIds);
-      return buildDecision(resolvedConfig.modelId, `opencode-${role}`, analysis, {
-        routeStep: `opencode-${role}`,
-        routeRole: role,
-      });
-    } catch {
-      // If resolution fails, fall through to legacy fallback
-    }
+    // Fail-closed cost safety: when OpenCode is the primary gateway, a routing
+    // failure (discovery unavailable, empty, or no priced candidate for the
+    // role) must NOT silently escalate into the legacy direct-provider chain.
+    // The error propagates so the request fails deterministically and the user
+    // is told why — never surprise-routed onto a more expensive provider.
+    const resolution = resolveRoleCandidates(role, discoveredModelIds);
+    return buildDecision(resolution.config.modelId, `opencode-${role}`, analysis, {
+      routeStep: `opencode-${role}`,
+      routeRole: role,
+      explanation: {
+        selection: 'auto',
+        role,
+        modelTier: resolution.config.modelId,
+        gateway: 'opencode',
+        reason: resolution.attempted.length === 0
+          ? `Highest-ranked available model for role '${role}'.`
+          : `Best available model for role '${role}' after skipping ${resolution.attempted.length} candidate(s).`,
+        fallbackUsed: resolution.config.modelId !== CURATED_ROUTE_POLICY[role].primary,
+        attemptedModels: resolution.attempted.map((a) => `${a.modelId}: ${a.reason}`),
+        priceKnown: priceIsKnown(resolution.config.modelId),
+      },
+    });
   }
 
-  // Legacy direct fallback logic
+  // Legacy direct mode: reached only when the OpenCode gateway is explicitly
+  // not primary (deployment posture without OpenCode credentials). Each role
+  // keeps a deterministic, priced mapping; every route is flagged as a
+  // gateway fallback so the UI can explain it.
   const { complexityScore: c, hasImages, hasVideoAssets } = analysis;
   if (hasVideoAssets) {
     return buildDecision('gemini-3.1-pro', 'video-default-pro', analysis, {
       routeStep: 'video-default-pro',
       routeRole: role,
+      explanation: legacyExplanation(role, 'gemini-3.1-pro', 'Video assets require a vision-capable pro model.'),
     });
   }
   if (hasImages) {
@@ -663,34 +726,52 @@ export function determineRoute(
     return buildDecision(tier, 'images-fallback', analysis, {
       routeStep: 'images-fallback',
       routeRole: role,
+      explanation: legacyExplanation(role, tier, `Images routed to a ${c >= 75 ? 'pro' : 'fast'} vision model.`),
     });
   }
   if (role === 'max') {
     return buildDecision('opus-4.6', 'opus-fallback', analysis, {
       routeStep: 'opus',
       routeRole: role,
+      explanation: legacyExplanation(role, 'opus-4.6', 'Maximum-complexity queries map to the strongest legacy model.'),
     });
   }
   if (role === 'strong' || role === 'code_review') {
     return buildDecision('sonnet-4.6', 'sonnet-fallback', analysis, {
       routeStep: 'sonnet',
       routeRole: role,
+      explanation: legacyExplanation(role, 'sonnet-4.6', 'Strong/code-review queries map to a strong legacy model.'),
     });
   }
   if (role === 'fast') {
     return buildDecision('gemini-2.5-flash', 'fast-fallback', analysis, {
       routeStep: 'fast',
       routeRole: role,
+      explanation: legacyExplanation(role, 'gemini-2.5-flash', 'Fast queries map to a low-latency legacy model.'),
     });
   }
   if (role === 'balanced') {
     return buildDecision('deepseek-v3', 'balanced-fallback', analysis, {
       routeStep: 'balanced',
       routeRole: role,
+      explanation: legacyExplanation(role, 'deepseek-v3', 'Balanced queries map to a mid-cost legacy model.'),
     });
   }
   return buildDecision('qwen3-235b', 'economy-fallback', analysis, {
     routeStep: 'economy',
     routeRole: role,
+    explanation: legacyExplanation(role, 'qwen3-235b', 'Economy queries map to the cheapest legacy model.'),
   });
+}
+
+function legacyExplanation(role: RouteRole, modelTier: RouterModel, why: string): RouteExplanation {
+  return {
+    selection: 'auto',
+    role,
+    modelTier,
+    gateway: 'direct_fallback',
+    reason: `OpenCode gateway not primary; legacy role mapping used. ${why}`,
+    fallbackUsed: true,
+    priceKnown: priceIsKnown(modelTier),
+  };
 }

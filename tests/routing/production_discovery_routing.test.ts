@@ -4,6 +4,7 @@ import {
   DEFAULT_OPENCODE_BASE_URL,
 } from '../../supabase/functions/router/production_routing.ts';
 import { resetDiscoveryCacheForTests } from '../../supabase/functions/router/opencode_discovery.ts';
+import { ModelUnavailableError } from '../../supabase/functions/router/models_hub.ts';
 import type { RouterParams } from '../../supabase/functions/router/router_logic.ts';
 
 function baseParams(over: Partial<RouterParams> = {}): RouterParams {
@@ -53,7 +54,7 @@ describe('production discovery routing integration', () => {
     expect(decision.rationaleTag).toBe('opencode-economy');
   });
 
-  it('falls back to legacy providers when discovery returns no curated models', async () => {
+  it('FAILS CLOSED when discovery returns no curated models (no silent legacy escalation)', async () => {
     globalThis.fetch = (async () => {
       return new Response(JSON.stringify({ data: ['unrelated-model-only'] }), {
         status: 200,
@@ -61,13 +62,33 @@ describe('production discovery routing integration', () => {
       });
     }) as typeof fetch;
 
-    const decision = await resolveProductionRoute(baseParams(), undefined, {
-      openCodePrimary: true,
-      openCodeApiKey: 'test-opencode-key',
+    // Cost-safety invariant: with OpenCode primary, an empty curated
+    // intersection must produce a deterministic failure — never a silent
+    // legacy direct-provider route (e.g. opus-4.6 for a max-complexity ask).
+    let decision: unknown;
+    await expect(
+      resolveProductionRoute(baseParams(), undefined, {
+        openCodePrimary: true,
+        openCodeApiKey: 'test-opencode-key',
+      }),
+    ).rejects.toSatisfy((err: unknown) => {
+      decision = err;
+      return err instanceof ModelUnavailableError;
     });
+    expect(decision).toBeInstanceOf(ModelUnavailableError);
+  });
 
-    expect(decision.modelTier).toBe('qwen3-235b');
-    expect(decision.rationaleTag).toBe('economy-fallback');
+  it('FAILS CLOSED when discovery errors out (no silent expensive legacy route)', async () => {
+    globalThis.fetch = (async () => {
+      throw new Error('gateway unreachable');
+    }) as typeof fetch;
+
+    await expect(
+      resolveProductionRoute(baseParams(), undefined, {
+        openCodePrimary: true,
+        openCodeApiKey: 'test-opencode-key',
+      }),
+    ).rejects.toBeInstanceOf(ModelUnavailableError);
   });
 
   it('skips discovery fetch when OpenCode is not primary', async () => {

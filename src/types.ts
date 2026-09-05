@@ -58,6 +58,25 @@ export type RouteRole =
   | 'code_review'
   | 'cheap_critic';
 
+export type RouteGateway = 'opencode' | 'direct_fallback';
+export type RouteSelection = 'auto' | 'override';
+
+/**
+ * Client mirror of the router's explainable route contract (X-Route-Decision).
+ * Answers: which role/model/gateway was chosen, why, whether a fallback was
+ * used, and whether the price basis is known. Contains no secrets.
+ */
+export interface RouteExplanation {
+  selection: RouteSelection;
+  role?: RouteRole;
+  modelTier: RouterModel;
+  gateway: RouteGateway;
+  reason: string;
+  fallbackUsed: boolean;
+  attemptedModels?: string[];
+  priceKnown: boolean;
+}
+
 export type GeminiFlashThinkingLevel = 'low' | 'high';
 export type DebateProfile = 'general' | 'code' | 'video_ui';
 export type DebateRole = 'proposer' | 'contrarian';
@@ -92,6 +111,7 @@ export interface Message {
   modelId?: string;
   modelOverride?: string;
   routeRole?: RouteRole;
+  routeInfo?: RouteExplanation;
   geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
   debateActive?: boolean;
   debateProfile?: DebateProfile;
