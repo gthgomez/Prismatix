@@ -324,6 +324,70 @@ export class ModelPricingUnavailableError extends Error {
   }
 }
 
+export type CandidateRejectionReason =
+  | 'not-in-registry'
+  | 'experimental-free'
+  | 'pricing-unknown'
+  | 'not-discovered';
+
+export interface CandidateRejection {
+  modelId: string;
+  reason: CandidateRejectionReason;
+}
+
+export interface RoleResolution {
+  config: ModelConfig;
+  /** Candidates evaluated before the chosen model, with why each was skipped. */
+  attempted: CandidateRejection[];
+}
+
+/**
+ * Resolves a logical RouteRole to a concrete ModelConfig plus the rejection
+ * trail for every candidate evaluated before the chosen one.
+ */
+export function resolveRoleCandidates(
+  role: RouteRole,
+  discoveredModelIds?: Set<string>,
+): RoleResolution {
+  const policy = CURATED_ROUTE_POLICY[role];
+  if (!policy) {
+    throw new Error(`Unknown route role: ${role}`);
+  }
+
+  const candidates = [policy.primary, ...policy.fallback];
+  const attempted: CandidateRejection[] = [];
+
+  for (const modelId of candidates) {
+    const config = CURATED_OPENCODE_REGISTRY[modelId];
+    if (!config) {
+      attempted.push({ modelId, reason: 'not-in-registry' });
+      continue;
+    }
+
+    // Reject free/experimental models from standard production auto-routing
+    if (config.isExperimentalFree) {
+      attempted.push({ modelId, reason: 'experimental-free' });
+      continue;
+    }
+
+    // Fail closed if pricing is unknown
+    if (config.pricing.isUnknown) {
+      attempted.push({ modelId, reason: 'pricing-unknown' });
+      continue;
+    }
+
+    // Candidate must be present in runtime discovery
+    if (discoveredModelIds && !discoveredModelIds.has(modelId)) {
+      attempted.push({ modelId, reason: 'not-discovered' });
+      continue;
+    }
+
+    return { config, attempted };
+  }
+
+  throw new ModelUnavailableError(role);
+}
+
 /**
  * Resolves a logical RouteRole to a concrete ModelConfig given discovered models.
  */
@@ -331,34 +395,5 @@ export function resolveModelForRole(
   role: RouteRole,
   discoveredModelIds?: Set<string>,
 ): ModelConfig {
-  const policy = CURATED_ROUTE_POLICY[role];
-  if (!policy) {
-    throw new Error(`Unknown route role: ${role}`);
-  }
-
-  const candidates = [policy.primary, ...policy.fallback];
-
-  for (const modelId of candidates) {
-    const config = CURATED_OPENCODE_REGISTRY[modelId];
-    if (!config) continue;
-
-    // Reject free/experimental models from standard production auto-routing
-    if (config.isExperimentalFree) {
-      continue;
-    }
-
-    // Fail closed if pricing is unknown
-    if (config.pricing.isUnknown) {
-      continue;
-    }
-
-    // Candidate must be present in runtime discovery
-    if (discoveredModelIds && !discoveredModelIds.has(modelId)) {
-      continue;
-    }
-
-    return config;
-  }
-
-  throw new ModelUnavailableError(role);
+  return resolveRoleCandidates(role, discoveredModelIds).config;
 }

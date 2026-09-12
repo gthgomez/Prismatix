@@ -18,11 +18,14 @@ export interface PreFlightCostResult {
   projectedOutputTokens: number;
   estimatedUsd: number;
   pricingVersion: string;
+  /** True when the pricing registry has no known rate for this model. */
+  hasUnknownRate: boolean;
 }
 
 export interface FinalCostResult {
   finalUsd: number;
   pricingVersion: string;
+  hasUnknownRate: boolean;
 }
 
 export interface UsageEstimate {
@@ -37,7 +40,14 @@ export interface CostBreakdown {
   thinkingCost: number;
   totalCost: number;
   pricingVersion: string;
+  /** True when the pricing registry has no known rate for this model. */
+  hasUnknownRate: boolean;
 }
+
+/**
+ * Fail-closed display policy: an unknown rate is never shown as $0.00.
+ * Callers surface hasUnknownRate instead of trusting the numeric estimate.
+ */
 
 export function calculatePreFlightCost(
   model: RouterModel,
@@ -48,6 +58,16 @@ export function calculatePreFlightCost(
   const promptTokens = estimateTokenCount(contextText) + Math.max(0, imageCount) * 1600;
   const projectedOutputTokens = Math.max(64, Math.ceil(promptTokens * 0.35));
 
+  if (pricing.isUnknown) {
+    return {
+      promptTokens,
+      projectedOutputTokens,
+      estimatedUsd: 0,
+      pricingVersion: PRICING_VERSION,
+      hasUnknownRate: true,
+    };
+  }
+
   const inputCost = (promptTokens / TOKENS_PER_MILLION) * pricing.inputRatePer1M;
   const outputCost = (projectedOutputTokens / TOKENS_PER_MILLION) * pricing.outputRatePer1M;
 
@@ -56,6 +76,7 @@ export function calculatePreFlightCost(
     projectedOutputTokens,
     estimatedUsd: roundUsd(inputCost + outputCost),
     pricingVersion: PRICING_VERSION,
+    hasUnknownRate: false,
   };
 }
 
@@ -64,6 +85,9 @@ export function calculateFinalCost(
   usage: { promptTokens: number; completionTokens: number; reasoningTokens?: number },
 ): FinalCostResult {
   const pricing = getPricingForModel(model);
+  if (pricing.isUnknown) {
+    return { finalUsd: 0, pricingVersion: PRICING_VERSION, hasUnknownRate: true };
+  }
   const reasoningRate = pricing.reasoningRatePer1M ?? pricing.outputRatePer1M;
 
   const inputCost = (Math.max(0, usage.promptTokens) / TOKENS_PER_MILLION) * pricing.inputRatePer1M;
@@ -74,6 +98,7 @@ export function calculateFinalCost(
   return {
     finalUsd: roundUsd(inputCost + outputCost + reasoningCost),
     pricingVersion: PRICING_VERSION,
+    hasUnknownRate: false,
   };
 }
 
@@ -82,6 +107,16 @@ export function calculateCostBreakdown(
   usage: UsageEstimate,
 ): CostBreakdown {
   const pricing = getPricingForModel(model);
+  if (pricing.isUnknown) {
+    return {
+      inputCost: 0,
+      outputCost: 0,
+      thinkingCost: 0,
+      totalCost: 0,
+      pricingVersion: PRICING_VERSION,
+      hasUnknownRate: true,
+    };
+  }
   const reasoningRate = pricing.reasoningRatePer1M ?? pricing.outputRatePer1M;
 
   const inputCost = roundUsd(
@@ -100,5 +135,6 @@ export function calculateCostBreakdown(
     thinkingCost,
     totalCost: roundUsd(inputCost + outputCost + thinkingCost),
     pricingVersion: PRICING_VERSION,
+    hasUnknownRate: false,
   };
 }

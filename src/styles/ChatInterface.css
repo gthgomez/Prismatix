@@ -933,6 +933,19 @@
   margin: var(--spacing-xs) 0;
 }
 
+.route-explanation .item-value {
+  max-width: 14rem;
+  word-break: break-word;
+  font-weight: 500;
+}
+
+.route-price-warning {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: 0.66rem;
+  color: #ffb84d;
+  font-weight: 600;
+}
+
 .message-time { color: var(--color-text-muted); margin-left: auto; font-size: 0.7rem; }
 
 .message-image-container { margin: var(--spacing-sm) 0; max-width: 400px; }
@@ -1233,6 +1246,14 @@
   font-size: 0.62rem;
   line-height: 1.4;
   color: var(--color-warning);
+}
+
+.cost-estimator-unknown-pricing {
+  margin: var(--spacing-xs) 0 0;
+  font-size: 0.66rem;
+  line-height: 1.4;
+  color: var(--color-warning);
+  font-weight: 600;
 }
 
 .cost-estimator-details-toggle {
