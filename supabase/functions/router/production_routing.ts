@@ -1,5 +1,7 @@
 // production_routing.ts
-// Production chat routing: OpenCode discovery + curated role resolution with legacy fallback.
+// Production chat routing: OpenCode discovery + curated role resolution.
+// When OpenCode is primary, routing fails closed on discovery/resolution failure
+// instead of silently falling through to legacy direct providers.
 
 import { fetchDiscoveredModelIds } from './opencode_discovery.ts';
 import {
@@ -20,7 +22,8 @@ export interface ProductionRoutingOptions {
 /**
  * Resolves the production route for a chat request.
  * When OpenCode is primary, live model discovery gates curated OpenCode targets;
- * discovery failure or empty intersection falls through to legacy direct providers.
+ * discovery failure or an empty intersection throws ModelUnavailableError (fail
+ * closed) rather than silently falling through to legacy direct providers.
  */
 export async function resolveProductionRoute(
   params: RouterParams,

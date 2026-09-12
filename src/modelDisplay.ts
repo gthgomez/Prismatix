@@ -77,7 +77,9 @@ export function buildRouteExplanationRows(
     value: info.fallbackUsed ? 'Yes (see why above)' : 'No — first choice worked',
   });
 
-  if (msg.cost?.estimatedUsd !== undefined) {
+  // Never present a numeric cost basis when the price is unknown; the
+  // fail-closed policy surfaces priceWarning instead.
+  if (info.priceKnown && msg.cost?.estimatedUsd !== undefined) {
     const versionSuffix = msg.cost.pricingVersion ? ` · prices ${msg.cost.pricingVersion}` : '';
     rows.push({
       label: 'Est. cost basis',

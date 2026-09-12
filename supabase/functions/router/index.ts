@@ -1806,9 +1806,14 @@ Deno.serve(async (req: Request) => {
       hasUnknownRate: preFlightCost.hasUnknownRate,
     });
     if (!autoSendCheck.allowed) {
+      // Distinguish an unknown price from a model that is priced but not
+      // eligible for automatic routing, so the client can show the right reason.
+      const autoSendError = autoSendCheck.reason === 'auto_not_eligible'
+        ? 'auto_route_ineligible'
+        : 'unknown_model_pricing';
       return new Response(
         JSON.stringify({
-          error: 'unknown_model_pricing',
+          error: autoSendError,
           message: autoSendCheck.message,
         }),
         {

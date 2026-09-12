@@ -166,7 +166,8 @@ describe('smartFetch debate support', () => {
     expect(await readStream(result!.stream)).toBe(sse);
   });
 
-  it('omits debate request fields and metadata when debate is not enabled', async () => {    const response = new Response(makeStream('data: {"type":"meta"}\n\n'), {
+  it('omits debate request fields and metadata when debate is not enabled', async () => {
+    const response = new Response(makeStream('data: {"type":"meta"}\n\n'), {
       status: 200,
       headers: {
         'X-Router-Model': 'gemini-2.5-flash',
