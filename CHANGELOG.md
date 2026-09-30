@@ -8,6 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Explicit version reset (migration note).** The `2.0.0` version that has
+  appeared in `package.json` since the initial public commit is a historical
+  internal application marker, not a published release: no stable `2.0.0`
+  artifact was ever published to npm (the package is a private application,
+  now marked `"private": true` to make that explicit), and the only release
+  tag in this repository is the `v0.1.0` prerelease. That tag is retained
+  unchanged and history has not been retagged. Application/package/release
+  metadata now adopts the next unpublished prerelease line, `0.2.0-pre.1`,
+  which will be the basis for the next tagged release. Consumers of release
+  metadata should expect version numbers to move from `2.0.0` to the
+  `0.2.x-pre` line; no runtime interface changes accompany this reset.
+- Added `engines` (`node ^20.19.0 || >=22.12.0`, `npm >=10`) matching the
+  actual Vite 7 dependency floor, and an `.nvmrc` pinning Node 22.12.0 for
+  local development. The previous README claim of a plain `node >=20` floor
+  was incorrect for Node 20.0–20.18.
+
 ### Added
 - Explainable route contract: every Auto-routed decision now carries a UI-safe
   `RouteExplanation` (selection, role, model, gateway, reason, fallback status,
@@ -40,7 +57,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Frontend cost estimator mirrors backend fail-closed semantics: unknown
   pricing is displayed as unknown instead of $0.00
 
-## [2.0.0] - 2026
+## [2.0.0] - 2026 (historical internal application marker — never published as a stable release)
+
+> Note (2026-09-29): this version number was an internal application marker
+> carried in `package.json` since the initial public commit. It was never
+> published to npm and no `v2.0.0` tag exists; the only release tag is the
+> `v0.1.0` prerelease. See the version-reset migration note under
+> [Unreleased].
 
 ### Added
 - Multi-provider AI routing: Anthropic, OpenAI, Google Gemini, NVIDIA NIM, DeepInfra
