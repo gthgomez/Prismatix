@@ -40,6 +40,11 @@ export interface CostLogRecord {
   thinking_cost: number;
   total_cost: number;
   pricing_version?: string;
+  /** PX02: typed pricing provenance for the cost receipt. */
+  pricing_status?: string;
+  pricing_source_ref?: string | null;
+  pricing_effective_from?: string | null;
+  pricing_effective_until?: string | null;
   complexity_score?: number;
   route_rationale?: string;
   created_at?: string;

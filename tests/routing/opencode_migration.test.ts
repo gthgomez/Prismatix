@@ -121,11 +121,15 @@ describe('OpenCode Model Hub & Semantic Routing Migration', () => {
 
   describe('Pricing Registry & Fail-Closed Spend Policy', () => {
     it('accurately prices curated OpenCode models with modern Zen rates', () => {
+      // PX02: values corrected 2026-09-29 against the official Zen page,
+      // which lists a single rate per DeepSeek model (the old peak/off-peak
+      // 0.44/1.32 vs 0.22/0.66 schedule could not be verified and was
+      // dropped rather than kept as authoritative).
       const ds = getPricingForModel('deepseek-v4-flash');
-      expect(ds.inputRatePer1M).toBe(0.44);
-      expect(ds.outputRatePer1M).toBe(1.32);
-      expect(ds.offPeakInputRatePer1M).toBe(0.22);
-      expect(ds.offPeakOutputRatePer1M).toBe(0.66);
+      expect(ds.inputRatePer1M).toBe(0.14);
+      expect(ds.outputRatePer1M).toBe(0.28);
+      expect(ds.cachedReadRatePer1M).toBe(0.028);
+      expect(ds.offPeakInputRatePer1M).toBeUndefined();
       expect(ds.isEligibleForAutoRouting).toBe(true);
 
       const luna = getPricingForModel('gpt-5.6-luna');
@@ -136,20 +140,21 @@ describe('OpenCode Model Hub & Semantic Routing Migration', () => {
       expect(haiku.inputRatePer1M).toBe(1.00);
       expect(haiku.outputRatePer1M).toBe(5.00);
 
+      // PX02: sol corrected to the official 2026-09-29 tariff (was 5/30).
       const sol = getPricingForModel('gpt-5.6-sol');
-      expect(sol.inputRatePer1M).toBe(5.00);
-      expect(sol.outputRatePer1M).toBe(30.00);
+      expect(sol.inputRatePer1M).toBe(4.00);
+      expect(sol.outputRatePer1M).toBe(20.00);
       expect(sol.longContextThreshold).toBe(272000);
 
-      // Base context calculation
+      // Base context calculation: 1k * $4/M + 0.5k * $20/M = $0.014
       const costBase = calculateEstimatedCostUsd('gpt-5.6-sol', 1000, 500, 1000);
       expect(costBase.isLongContext).toBe(false);
-      expect(costBase.costUsd).toBeCloseTo(0.02, 5);
+      expect(costBase.costUsd).toBeCloseTo(0.014, 5);
 
-      // Long context threshold calculation (> 272k tokens): 300k * $10/M + 1k * $45/M = $3.045
+      // Long context threshold calculation (> 272k tokens): 300k * $8/M + 1k * $30/M = $2.43
       const costLong = calculateEstimatedCostUsd('gpt-5.6-sol', 300000, 1000, 300000);
       expect(costLong.isLongContext).toBe(true);
-      expect(costLong.costUsd).toBeCloseTo(3.045, 3);
+      expect(costLong.costUsd).toBeCloseTo(2.43, 3);
 
       // Grok 4.6 tiered cache reads: base cached read ($0.50/M) vs long-context cached read ($1.00/M)
       const grokBase = calculateEstimatedCostUsd('grok-4.6', 10000, 1000, 10000, 8000);

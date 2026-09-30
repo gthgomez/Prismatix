@@ -1,7 +1,7 @@
 // router_logic.ts - Pure routing + message transform logic (no Deno.serve side effects)
 
 import { CURATED_ROUTE_POLICY, Gateway, RouteRole, resolveRoleCandidates } from './models_hub.ts';
-import { getPricingForModel } from './pricing_registry.ts';
+import { lookupPrice } from './pricing_registry.ts';
 
 export type Provider = 'opencode' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
 
@@ -636,7 +636,8 @@ function buildDecision(
 }
 
 function priceIsKnown(modelTier: RouterModel): boolean {
-  return !getPricingForModel(modelTier).isUnknown;
+  // PX02: only a fresh, known rate counts as "known" for route explanations.
+  return lookupPrice(modelTier).status === 'known';
 }
 
 export function determineRouteRole(params: RouterParams): RouteRole {

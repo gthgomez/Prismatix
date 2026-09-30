@@ -15,16 +15,17 @@ import {
   type RouteDecision,
   type RouterModel,
 } from './router_logic.ts';
-import { getPricingForModel } from './pricing_registry.ts';
+import { lookupPrice } from './pricing_registry.ts';
 
 /** Conservative cost basis (input+output rates per 1M) used to bound fallback escalation. */
 export function modelRateBasis(modelTier: RouterModel): number {
-  const pricing = getPricingForModel(modelTier);
-  // Unknown pricing is treated as infinitely expensive: a fallback must never
-  // silently replace an unpriced decision with a priced (and billable) one.
-  return pricing.isUnknown
+  const lookup = lookupPrice(modelTier);
+  // Unknown or stale pricing is treated as infinitely expensive: a fallback
+  // must never silently replace an unpriced (or stale-priced) decision with a
+  // rate that no longer reflects current billing.
+  return lookup.pricing === null || lookup.status !== 'known'
     ? Number.POSITIVE_INFINITY
-    : pricing.inputRatePer1M + pricing.outputRatePer1M;
+    : lookup.pricing.inputRatePer1M + lookup.pricing.outputRatePer1M;
 }
 
 /** Deterministic, price-known fallback order for provider-unavailable re-routing. */
@@ -35,7 +36,8 @@ export const PROVIDER_UNAVAILABLE_FALLBACKS: RouterModel[] = [
 ];
 
 export function priceKnownFor(modelTier: RouterModel): boolean {
-  return !getPricingForModel(modelTier).isUnknown;
+  // PX02: stale rates are not "known" for provider-unavailable re-routing.
+  return lookupPrice(modelTier).status === 'known';
 }
 
 export function decisionFromModel(

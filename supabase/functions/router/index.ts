@@ -1810,6 +1810,8 @@ Deno.serve(async (req: Request) => {
       // eligible for automatic routing, so the client can show the right reason.
       const autoSendError = autoSendCheck.reason === 'auto_not_eligible'
         ? 'auto_route_ineligible'
+        : autoSendCheck.reason === 'stale_pricing'
+        ? 'stale_model_pricing'
         : 'unknown_model_pricing';
       return new Response(
         JSON.stringify({
@@ -2159,6 +2161,10 @@ Deno.serve(async (req: Request) => {
               thinking_cost: costBreakdown.reasoningCostUsd,
               total_cost: costBreakdown.totalUsd,
               pricing_version: costBreakdown.pricingVersion,
+              pricing_status: costBreakdown.pricingStatus,
+              pricing_source_ref: costBreakdown.pricingSourceRef,
+              pricing_effective_from: costBreakdown.pricingEffectiveFrom,
+              pricing_effective_until: costBreakdown.pricingEffectiveUntil,
               complexity_score: responseDecision.complexityScore,
               route_rationale: responseDecision.rationaleTag,
             },
@@ -2218,6 +2224,8 @@ Deno.serve(async (req: Request) => {
         'X-Memory-Tokens': String(memoryRetrieval.tokenCount),
         'X-Cost-Estimate-USD': effectiveCostEstimateUsd.toFixed(6),
         'X-Cost-Pricing-Version': preFlightCost.pricingVersion,
+        'X-Cost-Pricing-Status': preFlightCost.pricingStatus,
+        'X-Cost-Pricing-Source': encodeURIComponent(preFlightCost.pricingSourceRef ?? 'unknown'),
         // Debate headers are emitted ONLY when debate ran (absent = debate did not run).
         ...buildDebateHeaders({
           debateActive,

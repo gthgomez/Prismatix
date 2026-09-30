@@ -1,6 +1,8 @@
 // models_hub.ts
 // Multi-plane model hub abstractions: Gateway, Protocol, Family, Role, and Curated Policy.
 
+import { lookupPrice } from './pricing_registry.ts';
+
 export type Gateway = 'opencode' | 'direct_fallback';
 
 export type ModelProtocol =
@@ -39,6 +41,12 @@ export interface ModelPricing {
   source: string;
   verifiedAt: string;
   isUnknown?: boolean;
+  /** All hub rates are quoted in USD per 1M tokens. */
+  currency?: 'USD';
+  /** Concrete citable source page for the rate (PX02 provenance). */
+  sourceUrl?: string;
+  /** Inclusive end of the rate's validity window (e.g. promo expiry). */
+  effectiveUntil?: string;
 }
 
 export interface ModelConfig {
@@ -81,8 +89,11 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
     pricing: {
       inputPer1M: 0.14,
       outputPer1M: 0.28,
+      cachedReadPer1M: 0.028,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
   'deepseek-v4-pro': {
@@ -96,8 +107,11 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
     pricing: {
       inputPer1M: 1.74,
       outputPer1M: 3.48,
+      cachedReadPer1M: 0.145,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
   'gpt-5.6-luna': {
@@ -112,7 +126,9 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
       inputPer1M: 0.20,
       outputPer1M: 1.20,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
   'gpt-5.6-terra': {
@@ -127,7 +143,9 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
       inputPer1M: 2.00,
       outputPer1M: 12.00,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
   'gpt-5.6-sol': {
@@ -139,10 +157,15 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
     supportsImages: true,
     budgetCap: 32768,
     pricing: {
-      inputPer1M: 5.00,
-      outputPer1M: 30.00,
+      // Corrected 2026-09-29 against the official tariff (was 5.00/30.00).
+      inputPer1M: 4.00,
+      outputPer1M: 20.00,
+      cachedReadPer1M: 0.40,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
+      effectiveUntil: '2026-11-21',
     },
   },
   'grok-4.6': {
@@ -157,7 +180,9 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
       inputPer1M: 2.00,
       outputPer1M: 6.00,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
   'claude-sonnet-5': {
@@ -172,7 +197,9 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
       inputPer1M: 2.00,
       outputPer1M: 10.00,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
   'claude-opus-5': {
@@ -187,7 +214,9 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
       inputPer1M: 5.00,
       outputPer1M: 25.00,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
   'claude-haiku-4-5': {
@@ -203,7 +232,9 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
       outputPer1M: 5.00,
       cachedReadPer1M: 0.10,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
   'gemini-3.7-flash': {
@@ -217,8 +248,11 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
     pricing: {
       inputPer1M: 1.50,
       outputPer1M: 7.50,
+      cachedReadPer1M: 0.15,
       source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
 
@@ -236,7 +270,9 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
       inputPer1M: 0.0,
       outputPer1M: 0.0,
       source: 'opencode-zen-free-tier',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
   'mimo-v2.5-free': {
@@ -252,7 +288,9 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
       inputPer1M: 0.0,
       outputPer1M: 0.0,
       source: 'opencode-zen-free-tier',
-      verifiedAt: '2026-08-16',
+      verifiedAt: '2026-09-29',
+      currency: 'USD',
+      sourceUrl: 'https://opencode.ai/docs/zen',
     },
   },
 };
@@ -328,6 +366,7 @@ export type CandidateRejectionReason =
   | 'not-in-registry'
   | 'experimental-free'
   | 'pricing-unknown'
+  | 'pricing-stale'
   | 'not-discovered';
 
 export interface CandidateRejection {
@@ -348,6 +387,7 @@ export interface RoleResolution {
 export function resolveRoleCandidates(
   role: RouteRole,
   discoveredModelIds?: Set<string>,
+  evaluationDate: Date = new Date(),
 ): RoleResolution {
   const policy = CURATED_ROUTE_POLICY[role];
   if (!policy) {
@@ -370,9 +410,16 @@ export function resolveRoleCandidates(
       continue;
     }
 
-    // Fail closed if pricing is unknown
+    // Fail closed if pricing is unknown OR stale (PX02): a stale rate must
+    // not masquerade as current, so it is just as disqualifying for
+    // automatic routing as an unknown one.
     if (config.pricing.isUnknown) {
       attempted.push({ modelId, reason: 'pricing-unknown' });
+      continue;
+    }
+    const priceLookup = lookupPrice(modelId, 0, evaluationDate);
+    if (priceLookup.status === 'stale') {
+      attempted.push({ modelId, reason: 'pricing-stale' });
       continue;
     }
 

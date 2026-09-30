@@ -37,44 +37,42 @@ describe('Router Production Module Graph & Smoke Tests', () => {
     expect(breakdown.totalUsd).toBeGreaterThan(0);
   });
 
-  it('calculates off-peak vs peak rates for DeepSeek models correctly', () => {
-    // Peak date: 12:00 UTC (720 min -> peak)
-    const peakDate = new Date('2026-08-16T12:00:00Z');
-    expect(isDeepSeekOffPeak(peakDate)).toBe(false);
-
-    const peakCost = calculateEstimatedCostUsd(
+  it('uses the single official DeepSeek tariff (no unverified off-peak rates)', () => {
+    // PX02: the official Zen page lists one rate per DeepSeek model; the
+    // previously registered peak/off-peak schedule could not be verified and
+    // was dropped. The cost must be identical regardless of time of day.
+    const noon = new Date('2026-09-29T12:00:00Z');
+    expect(isDeepSeekOffPeak(noon)).toBe(false);
+    const noonCost = calculateEstimatedCostUsd(
       'deepseek-v4-flash',
       1_000_000,
       1_000_000,
       1_000_000,
       0,
       0,
-      peakDate,
+      noon,
     );
-    // Peak rate: $0.44 input + $1.32 output = $1.76
-    expect(peakCost.costUsd).toBeCloseTo(1.76, 3);
-    expect(peakCost.isOffPeak).toBe(false);
+    // Official rate: $0.14 input + $0.28 output = $0.42
+    expect(noonCost.costUsd).toBeCloseTo(0.42, 3);
+    expect(noonCost.isOffPeak).toBe(false);
 
-    // Off-peak date: 20:00 UTC (1200 min -> off-peak)
-    const offPeakDate = new Date('2026-08-16T20:00:00Z');
-    expect(isDeepSeekOffPeak(offPeakDate)).toBe(true);
-
-    const offPeakCost = calculateEstimatedCostUsd(
+    const night = new Date('2026-09-29T20:00:00Z');
+    expect(isDeepSeekOffPeak(night)).toBe(true);
+    const nightCost = calculateEstimatedCostUsd(
       'deepseek-v4-flash',
       1_000_000,
       1_000_000,
       1_000_000,
       0,
       0,
-      offPeakDate,
+      night,
     );
-    // Off-peak rate: $0.22 input + $0.66 output = $0.88
-    expect(offPeakCost.costUsd).toBeCloseTo(0.88, 3);
-    expect(offPeakCost.isOffPeak).toBe(true);
+    expect(nightCost.costUsd).toBeCloseTo(0.42, 3);
+    expect(nightCost.isOffPeak).toBe(false);
   });
 
   it('calculates long-context cached write rate doubling on GPT-5.6 Sol', () => {
-    // Base context (<= 272k): cached write is $6.25/M
+    // Base context (<= 272k): cached write is $5.00/M (official 2026-09-29 tariff)
     const baseCost = calculateEstimatedCostUsd(
       'gpt-5.6-sol',
       100_000,
@@ -83,11 +81,10 @@ describe('Router Production Module Graph & Smoke Tests', () => {
       0,
       100_000, // 100k cached write
     );
-    // Uncached input (100k): $0.50, Output (1k): $0.03, Cached write (100k * $6.25/M): $0.625
-    // Total = $0.50 + $0.03 + $0.625 = $1.155
-    expect(baseCost.breakdown?.cachedWriteCost).toBeCloseTo(0.625, 4);
+    // Cached write (100k * $5.00/M): $0.50
+    expect(baseCost.breakdown?.cachedWriteCost).toBeCloseTo(0.5, 4);
 
-    // Long context (> 272k): cached write doubles to $12.50/M
+    // Long context (> 272k): cached write is $10.00/M
     const longCost = calculateEstimatedCostUsd(
       'gpt-5.6-sol',
       300_000,
@@ -96,9 +93,9 @@ describe('Router Production Module Graph & Smoke Tests', () => {
       0,
       300_000, // 300k cached write
     );
-    // Cached write (300k * $12.50/M): $3.75
+    // Cached write (300k * $10.00/M): $3.00
     expect(longCost.isLongContext).toBe(true);
-    expect(longCost.breakdown?.cachedWriteCost).toBeCloseTo(3.75, 3);
+    expect(longCost.breakdown?.cachedWriteCost).toBeCloseTo(3.0, 3);
   });
 
   it('verifies OpenAI Responses adapter builds structured messages for text-only and multimodal', async () => {
