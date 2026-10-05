@@ -2,17 +2,18 @@
 
 Purpose: first-read context for Prismatix in this workspace.
 
-Repository: `C:\Workspace\Project_SaaS\Prismatix`
+Repository: this repository (Prismatix; clone root is the folder above `docs/`).
 Product: multi-provider chat and routing system with streaming responses, cost tracking, debate mode, and Supabase-backed conversation storage.
 
 ## Required Startup Order
 
-1. Read `..\PROJECT_SAAS_BIBLE.md`.
+1. Read `../../PROJECT_SAAS_BIBLE.md` (workspace file one level above this repository; if present).
 2. Read this file.
 3. Read `prismatix_PROJECT_CONTEXT.md`.
-4. Read `AGENTS.md`.
-5. If running Gemini, read `GEMINI.md`.
-6. Load only the smallest additional file set needed for the active task.
+4. Read the root `AGENTS.md`.
+5. Load only the smallest additional file set needed for the active task.
+
+Note: the root `AGENTS.md` is the sole instruction authority. Vendor instruction files (`GEMINI.md`, `CLAUDE.md`, `CODEX.md`) and nested `AGENTS.md` files are prohibited and have been retired.
 
 ## What This Repo Is
 
@@ -79,11 +80,11 @@ deno lint .\supabase\functions\router\
 If the user says `use Babel`, `read the Bible`, `use the Babel system`, or asks for prompt-stack assembly, layer routing, or control-plane guidance, treat Babel Local Mode as active.
 
 Canonical entrypoint:
-`C:\Workspace\Babel-private\BABEL_BIBLE.md`
+`../../Babel-private/BABEL_BIBLE.md` (workspace `Babel-private` checkout, one level above the repository's parent folder)
 
 In Babel Local Mode:
 1. Read `BABEL_BIBLE.md`.
-2. Read `C:\Workspace\Babel-private\PROJECT_CONTEXT.md`.
+2. Read the `Babel-private` checkout's `PROJECT_CONTEXT.md`.
 3. Read this repo `PROJECT_CONTEXT.md`.
 4. Load only the relevant Babel layers and any repo rules or skills.
 5. Follow the assembled stack before planning or acting.
