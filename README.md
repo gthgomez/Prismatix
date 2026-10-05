@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/gthgomez/Prismatix/actions/workflows/ci.yml/badge.svg)](https://github.com/gthgomez/Prismatix/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/node-%5E20.19%20%7C%7C%20%3E%3D22.12-brightgreen)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
 
 **A personal AI chat client with a cost-aware multi-provider router. Auto picks a model, shows why, and will not spend what it cannot price.**
@@ -106,6 +106,8 @@ OPENAI_API_KEY
 GOOGLE_API_KEY
 NVIDIA_API_KEY
 DEEPINFRA_API_KEY
+OPENCODE_API_KEY
+OPENCODE_BASE_URL (optional; defaults to https://opencode.ai/zen/v1)
 ALLOWED_ORIGIN=https://your-frontend.vercel.app
 ENABLE_DEBATE_MODE=false
 ENABLE_SMD_LIGHT=false
@@ -145,6 +147,7 @@ MAX_ACTIVE_STREAMS_PER_USER=2
    supabase secrets set GOOGLE_API_KEY=...
    supabase secrets set NVIDIA_API_KEY=...
    supabase secrets set DEEPINFRA_API_KEY=...
+   supabase secrets set OPENCODE_API_KEY=...
    supabase secrets set ALLOWED_ORIGIN=http://localhost:5173
    supabase secrets set ENABLE_DEBATE_MODE=false
    supabase secrets set ENABLE_SMD_LIGHT=false
@@ -188,6 +191,21 @@ supabase functions deploy spend_stats
 ```
 
 ---
+
+## Versioning
+
+Prismatix is a private application, not a published npm package (`"private": true`).
+Version history here is release metadata only:
+
+- The `2.0.0` version that appeared in `package.json` for most of this
+  repository's life was a historical internal application marker — never
+  published to npm and never tagged. See the version-reset migration note in
+  [CHANGELOG.md](./CHANGELOG.md).
+- The only release tag is the `v0.1.0` prerelease, which is retained unchanged.
+- Active development uses the `0.2.0-pre` prerelease line (current:
+  `0.2.0-pre.1`). Node/npm floors are declared in `package.json` `engines`
+  (`node ^20.19.0 || >=22.12.0`, `npm >=10`) and `.nvmrc` pins Node 22.12.0
+  for local development.
 
 ## Changelog
 

@@ -1,8 +1,13 @@
 {
   "name": "prismatix",
-  "version": "2.0.0",
+  "version": "0.2.0-pre.1",
+  "private": true,
   "description": "Intelligent multi-provider AI model router with streaming, cost tracking, and debate mode",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0",
+    "npm": ">=10"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
