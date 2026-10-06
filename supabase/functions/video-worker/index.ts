@@ -33,8 +33,21 @@ interface VideoJobRow {
   created_at?: string;
 }
 
+// PostgREST embeds the many-to-one video_jobs -> video_assets relation as a
+// single object at runtime, while the untyped supabase-js select parser types
+// any embed as an array. Model both shapes and normalize at read time.
+interface EmbeddedAssetOwner {
+  user_id: string;
+}
+
 interface QueuedJobWithOwner extends VideoJobRow {
-  video_assets?: { user_id: string } | null;
+  video_assets?: EmbeddedAssetOwner | EmbeddedAssetOwner[] | null;
+}
+
+// Reads the asset owner from either embed shape.
+function embeddedAssetOwnerId(embedded: EmbeddedAssetOwner | EmbeddedAssetOwner[] | null | undefined): string | undefined {
+  const ownerRow = Array.isArray(embedded) ? embedded[0] : embedded;
+  return ownerRow?.user_id;
 }
 
 interface VideoAssetRow {
@@ -192,7 +205,7 @@ Deno.serve(async (req: Request) => {
   // queue mutation (lock) or provider call. Fail closed on lookup errors: the
   // job stays queued for a later retry with zero mutations and zero provider
   // calls; a definitively unentitled owner is failed closed permanently.
-  const ownerId = queuedJob.video_assets?.user_id;
+  const ownerId = embeddedAssetOwnerId(queuedJob.video_assets);
   if (!ownerId) {
     devError('[video-worker] queued job is missing its asset owner:', queuedJob.id);
     return new Response(JSON.stringify({ error: 'Failed to resolve asset owner' }), { status: 500 });

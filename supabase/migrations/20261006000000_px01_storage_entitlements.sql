@@ -2,10 +2,11 @@
 -- Findings addressed: F01, F04, F08, F19, F22.
 --
 -- SECURITY: fail closed. Removes the drifted dashboard-created broad storage
--- policies, strips client write access to authoritative cost/worker fields,
--- and gates paid execution behind service-managed grants. No user entitlement
--- is granted by default; rows in prismatix_internal.access_grants are created
--- out-of-band by operators (service_role only).
+-- policies, strips client write access to authoritative cost/worker fields and
+-- to the video job queue, and gates paid execution behind service-managed
+-- grants. No user entitlement is granted by default; rows in
+-- prismatix_internal.access_grants are created out-of-band by operators
+-- (service_role only).
 --
 -- Idempotent: safe to re-run. Verify with tests/security/storage-isolation.sql
 -- (run from the repo root against an already-migrated database):
@@ -129,3 +130,11 @@ create trigger enforce_video_asset_client_write
 before insert or update on public.video_assets
 for each row
 execute function public.enforce_video_asset_client_write();
+
+-- ---------------------------------------------------------------------------
+-- 5) video_jobs: enqueueing is service-role only. The sole enqueue path is the
+--    entitlement-gated video-intake function (service_role client); clients
+--    can no longer INSERT queue rows directly via PostgREST without any
+--    entitlement. Owner SELECT (video_jobs_select_own) is preserved.
+-- ---------------------------------------------------------------------------
+drop policy if exists video_jobs_insert_own on public.video_jobs;

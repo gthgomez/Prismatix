@@ -332,6 +332,7 @@ function workerRequest(secretHeaderValue?: string): Request {
 }
 
 function queuedJobRow(ownerId: string): Record<string, unknown> {
+  // PostgREST many-to-one embed: a single object at runtime.
   return {
     id: JOB_ID,
     asset_id: ASSET_ID,
@@ -339,6 +340,14 @@ function queuedJobRow(ownerId: string): Record<string, unknown> {
     attempt: 0,
     created_at: '2026-10-06T00:00:00.000Z',
     video_assets: { user_id: ownerId },
+  };
+}
+
+function queuedJobRowArrayEmbed(ownerId: string): Record<string, unknown> {
+  // Array embed shape (as typed by the untyped supabase-js select parser).
+  return {
+    ...queuedJobRow(ownerId),
+    video_assets: [{ user_id: ownerId }],
   };
 }
 
@@ -456,7 +465,8 @@ describe('video-worker auth gate (real handler)', () => {
   it('fails closed without any mutation when the entitlement lookup errors', async () => {
     const calls = installFetchRecorder((call) => {
       if (call.method === 'GET' && call.url.includes('/rest/v1/video_jobs')) {
-        return jsonResponse([queuedJobRow(SUBJECT_B)]);
+        // Array embed shape must resolve the owner identically.
+        return jsonResponse([queuedJobRowArrayEmbed(SUBJECT_B)]);
       }
       if (call.url.includes('/rest/v1/rpc/get_access_grant')) {
         return jsonResponse(

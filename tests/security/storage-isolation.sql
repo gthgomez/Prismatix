@@ -560,6 +560,59 @@ exception
 end $$;
 reset role;
 
+-- 3i) video_jobs: clients cannot enqueue directly. The only enqueue path is
+-- the entitlement-gated video-intake function (service_role client); the
+-- owner SELECT path (video_jobs_select_own) is preserved.
+do $$
+begin
+  perform set_config('px01.probe_asset_id', id::text, true)
+  from public.video_assets
+  where storage_path = current_setting('px01.probe_path');
+end $$;
+
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', current_setting('px01.user_a'), 'role', 'authenticated')::text, true);
+select set_config('request.jwt.claim.sub', current_setting('px01.user_a'), true);
+do $$
+begin
+  insert into public.video_jobs (asset_id, status)
+  values (current_setting('px01.probe_asset_id')::uuid, 'queued');
+  raise exception 'PX01 FAIL: client insert into video_jobs succeeded after the migration (enqueue without entitlement possible)';
+exception
+  when insufficient_privilege then
+    null; -- expected: denied (video_jobs_insert_own removed)
+end $$;
+reset role;
+
+set local role service_role;
+do $$
+declare
+  affected bigint;
+begin
+  insert into public.video_jobs (asset_id, status)
+  values (current_setting('px01.probe_asset_id')::uuid, 'queued');
+  get diagnostics affected = row_count;
+  if affected <> 1 then
+    raise exception 'PX01 FAIL: service_role could not enqueue a video_jobs row (gated video-intake path broken)';
+  end if;
+end $$;
+reset role;
+
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', current_setting('px01.user_a'), 'role', 'authenticated')::text, true);
+select set_config('request.jwt.claim.sub', current_setting('px01.user_a'), true);
+do $$
+declare
+  visible bigint;
+begin
+  select count(*) into visible from public.video_jobs
+   where asset_id = current_setting('px01.probe_asset_id')::uuid;
+  if visible <> 1 then
+    raise exception 'PX01 FAIL: owner A cannot see the job row for its own asset (video_jobs_select_own broken)';
+  end if;
+end $$;
+reset role;
+
 rollback;
 
 \echo 'tests/security/storage-isolation.sql: PASS (all PX01 containment assertions held)'
