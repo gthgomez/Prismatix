@@ -1677,10 +1677,18 @@ Deno.serve(async (req: Request) => {
       userId,
     );
     if (!ownership.valid) {
-      return new Response(JSON.stringify({ error: 'Forbidden: Invalid conversation ownership' }), {
-        status: 403,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      });
+      const isDbError = ownership.error === 'db_error';
+      return new Response(
+        JSON.stringify({
+          error: isDbError
+            ? 'Service unavailable: database error'
+            : 'Forbidden: Invalid conversation ownership',
+        }),
+        {
+          status: isDbError ? 503 : 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
     }
 
     const videoValidation = await validateReadyVideoAssets(
@@ -2144,25 +2152,37 @@ Deno.serve(async (req: Request) => {
             reasoningTokens: 0,
           });
 
-          await persistCostLog(
-            supabaseClient as unknown as ReturnType<typeof createClient>,
-            {
-              user_id: userId,
-              conversation_id: conversationId,
-              model: responseDecision.modelTier,
-              provider: responseDecision.provider,
-              input_tokens: costBreakdown.promptTokens,
-              output_tokens: costBreakdown.completionTokens,
-              thinking_tokens: costBreakdown.reasoningTokens,
-              input_cost: costBreakdown.inputCostUsd,
-              output_cost: costBreakdown.outputCostUsd,
-              thinking_cost: costBreakdown.reasoningCostUsd,
-              total_cost: costBreakdown.totalUsd,
-              pricing_version: costBreakdown.pricingVersion,
-              complexity_score: responseDecision.complexityScore,
-              route_rationale: responseDecision.rationaleTag,
-            },
-          );
+          const costLogRecord = {
+            user_id: userId,
+            conversation_id: conversationId,
+            model: responseDecision.modelTier,
+            provider: responseDecision.provider,
+            input_tokens: costBreakdown.promptTokens,
+            output_tokens: costBreakdown.completionTokens,
+            thinking_tokens: costBreakdown.reasoningTokens,
+            input_cost: costBreakdown.inputCostUsd,
+            output_cost: costBreakdown.outputCostUsd,
+            thinking_cost: costBreakdown.reasoningCostUsd,
+            total_cost: costBreakdown.totalUsd,
+            pricing_version: costBreakdown.pricingVersion,
+            complexity_score: responseDecision.complexityScore,
+            route_rationale: responseDecision.rationaleTag,
+          };
+          try {
+            await persistCostLog(
+              supabaseClient as unknown as ReturnType<typeof createClient>,
+              costLogRecord,
+            );
+          } catch (costLogError) {
+            // Dead-letter: the stream already completed, so we cannot fail the
+            // response. Log the full record for later reconciliation.
+            console.error('[DB] Cost log dead-letter:', {
+              conversationId,
+              userId,
+              error: costLogError instanceof Error ? costLogError.message : String(costLogError),
+              record: costLogRecord,
+            });
+          }
 
           if (assistantText.trim()) {
             persistMessageAsync(
