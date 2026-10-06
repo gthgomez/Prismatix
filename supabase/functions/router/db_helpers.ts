@@ -42,18 +42,56 @@ export interface CostLogRecord {
   pricing_version?: string;
   complexity_score?: number;
   route_rationale?: string;
+  idempotency_key?: string;
   created_at?: string;
+}
+
+// ============================================================================
+// IDEMPOTENCY
+// ============================================================================
+
+/**
+ * Builds a deterministic idempotency key from cost-log content fields.
+ * The same logical cost log (same conversation, model, token counts, and
+ * costs) always produces the same key, so retries collapse onto one row.
+ * `created_at` is intentionally excluded: the database generates it, so
+ * including it would defeat deduplication across retries.
+ */
+export function buildCostLogIdempotencyKey(record: CostLogRecord): string {
+  return [
+    record.conversation_id,
+    record.user_id,
+    record.model,
+    record.provider,
+    record.input_tokens,
+    record.output_tokens,
+    record.thinking_tokens,
+    record.input_cost,
+    record.output_cost,
+    record.thinking_cost,
+    record.total_cost,
+    record.pricing_version ?? '',
+    record.complexity_score ?? '',
+    record.route_rationale ?? '',
+  ].join('::');
 }
 
 // ============================================================================
 // CONVERSATION HELPERS
 // ============================================================================
 
+export interface ConversationValidationResult {
+  valid: boolean;
+  tokenCount: number;
+  /** Present when a database error occurred (caller should return 503). */
+  error?: 'db_error';
+}
+
 export async function validateConversation(
   supabase: ReturnType<typeof createClient>,
   conversationId: string,
   userId: string,
-): Promise<{ valid: boolean; tokenCount: number }> {
+): Promise<ConversationValidationResult> {
   if (!isUuid(conversationId) || !isUuid(userId)) {
     return { valid: false, tokenCount: 0 };
   }
@@ -69,7 +107,7 @@ export async function validateConversation(
       code: error.code,
       message: error.message,
     });
-    return { valid: false, tokenCount: 0 };
+    return { valid: false, tokenCount: 0, error: 'db_error' };
   }
 
   if (!conv) {
@@ -87,7 +125,7 @@ export async function validateConversation(
           code: insertError.code,
           message: insertError.message,
         });
-        return { valid: false, tokenCount: 0 };
+        return { valid: false, tokenCount: 0, error: 'db_error' };
       }
 
       const existingConversation = retryConv as Conversation;
@@ -129,14 +167,35 @@ export function persistMessageAsync(
         image_url: imageUrl || undefined,
       };
 
-      await Promise.all([
-        supabase.from('messages').insert(messageRecord as never),
-        supabase.rpc('increment_token_count_for_user', {
-          p_conversation_id: conversationId,
-          p_user_id: userId,
-          p_tokens: tokenCount,
-        } as never),
-      ]);
+      // Sequential awaits: insert the message first, then bump the token
+      // counter. Running these concurrently (Promise.all) risks a partial
+      // failure where the message row exists but the counter was not
+      // incremented (or vice-versa), causing silent token-count drift.
+      const { error: insertError } = await supabase.from('messages').insert(messageRecord as never);
+      if (insertError) {
+        console.error('[DB] Message insert failed:', {
+          code: insertError.code,
+          message: insertError.message,
+        });
+        return;
+      }
+
+      const { error: rpcError } = await supabase.rpc('increment_token_count_for_user', {
+        p_conversation_id: conversationId,
+        p_user_id: userId,
+        p_tokens: tokenCount,
+      } as never);
+      if (rpcError) {
+        // The message row is already persisted; the counter was not bumped.
+        // Log loudly so the drift is visible and can be reconciled.
+        console.error('[DB] Token count increment failed after message insert:', {
+          code: rpcError.code,
+          message: rpcError.message,
+          conversationId,
+          userId,
+          tokenCount,
+        });
+      }
     } catch (err) {
       console.error('[DB] Persist failed:', err);
     }
@@ -151,10 +210,25 @@ export async function persistCostLog(
   supabase: ReturnType<typeof createClient>,
   record: CostLogRecord,
 ): Promise<void> {
-  try {
-    await supabase.from('cost_logs').insert(record as never);
-  } catch (err) {
-    console.error('[DB] Cost log persist failed:', err);
+  const idempotencyKey = buildCostLogIdempotencyKey(record);
+  const recordWithKey: CostLogRecord = { ...record, idempotency_key: idempotencyKey };
+
+  const { error } = await supabase
+    .from('cost_logs')
+    .upsert(recordWithKey as never, {
+      ignoreDuplicates: true,
+      onConflict: 'idempotency_key',
+    });
+
+  if (error) {
+    console.error('[DB] Cost log persist failed:', {
+      code: error.code,
+      message: error.message,
+      idempotencyKey,
+    });
+    // Re-throw so the caller can decide whether to dead-letter or retry.
+    // Swallowing here silently loses cost data.
+    throw new Error(`Cost log persist failed: ${error.message}`);
   }
 }
 
