@@ -506,6 +506,100 @@ describe('capabilities contract (router)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 3b. Capabilities size guards & body-error precedence (PX02 fix round 1)
+// ---------------------------------------------------------------------------
+
+describe('capabilities size guards & body-error precedence (PX02 fix round 1)', () => {
+  const TOO_LARGE_ERROR = 'Payload too large. Max allowed size is 8MB.';
+
+  it('rejects a declared-oversized authenticated capabilities body with 413 (hoisted header guard)', async () => {
+    const calls = installFetchRecorder(supabaseRoutes());
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const req = routerRequest({ action: 'capabilities' }, 'px02-user-token');
+    req.headers.set('content-length', String(9 * 1024 * 1024));
+
+    const res = await handler(req);
+
+    // The hoisted header-only guard fires before any capabilities dispatch:
+    // 413, never a 200 capabilities payload.
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: TOO_LARGE_ERROR });
+    expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it('rejects a genuinely oversized authenticated capabilities body with 413, not 200', async () => {
+    const calls = installFetchRecorder(supabaseRoutes());
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const padding = 'x'.repeat(8 * 1024 * 1024 + 64); // > MAX_REQUEST_BYTES
+    const res = await handler(
+      routerRequest({ action: 'capabilities', padding }, 'px02-user-token'),
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: TOO_LARGE_ERROR });
+    expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it('still returns 200 for a normal-size capabilities request after the reorder', async () => {
+    installFetchRecorder(supabaseRoutes());
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(routerRequest({ action: 'capabilities' }, 'px02-user-token'));
+
+    expect(res.status).toBe(200);
+    const payload = await res.json();
+    expect(payload.capabilities.modes).toEqual(['chat']);
+    expect(payload.release.releaseSha).toBe('abc123testsha');
+  });
+
+  it('preserves precedence: unentitled + malformed JSON body gets 403 not_entitled (not 400)', async () => {
+    installFetchRecorder((call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return jsonResponse({ id: SUBJECT_A, aud: 'authenticated', role: 'authenticated' });
+      }
+      if (call.url.includes('/rest/v1/rpc/get_access_grant')) {
+        return jsonResponse(null); // no grant row -> not entitled
+      }
+      return null;
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const req = new Request('http://127.0.0.1:54321/functions/v1/router', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer px02-user-token',
+        'content-type': 'application/json',
+      },
+      body: 'this-is-not-json{',
+    });
+    const res = await handler(req);
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'not_entitled' });
+  });
+
+  it('preserves precedence: entitled + malformed JSON body gets the canonical 400 Invalid JSON', async () => {
+    installFetchRecorder(supabaseRoutes());
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const req = new Request('http://127.0.0.1:54321/functions/v1/router', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer px02-user-token',
+        'content-type': 'application/json',
+      },
+      body: 'this-is-not-json{',
+    });
+    const res = await handler(req);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Bad Request: Invalid JSON' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 4. Strict unknown manual model rejection (F17)
 // ---------------------------------------------------------------------------
 

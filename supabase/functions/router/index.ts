@@ -1531,21 +1531,16 @@ function buildCapabilitiesPayload(): CapabilitiesPayload {
   };
 }
 
-// Peeks the request body via clone() for { action: 'capabilities' }. The
-// original body is left unconsumed so the canonical parse/validate path below
-// is unchanged. An unreadable or non-JSON body is not a capabilities request;
-// the canonical path rejects it with its normal error.
-async function isCapabilitiesRequest(req: Request): Promise<boolean> {
-  try {
-    const parsed: unknown = JSON.parse(await req.clone().text());
-    return (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      (parsed as { action?: unknown }).action === 'capabilities'
-    );
-  } catch {
-    return false;
-  }
+// PX02 fix round 1: detects { action: 'capabilities' } from the ALREADY
+// parsed canonical body — the single read that happens after the size guards
+// in the handler. No clone/pre-guard peek: an unreadable or non-JSON body is
+// never a capabilities request; it defers to the canonical 400 path.
+function isCapabilitiesAction(parsedBody: unknown): boolean {
+  return (
+    typeof parsedBody === 'object' &&
+    parsedBody !== null &&
+    (parsedBody as { action?: unknown }).action === 'capabilities'
+  );
 }
 
 
@@ -1623,10 +1618,69 @@ Deno.serve(async (req: Request) => {
 
     const userId = user.id;
 
+    // PX02 fix round 1: hoisted header-only size guard. Runs immediately after
+    // authentication and BEFORE any body buffering or action dispatch
+    // (including capabilities), so a declared-oversized payload can never
+    // bypass the 413.
+    const contentLengthHeader = req.headers.get('content-length');
+    if (contentLengthHeader) {
+      const contentLength = Number(contentLengthHeader);
+      if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BYTES) {
+        return new Response(
+          JSON.stringify({
+            error: `Payload too large. Max allowed size is ${Math.round(MAX_REQUEST_BYTES / (1024 * 1024))}MB.`,
+          }),
+          {
+            status: 413,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+    }
+
+    // PX02 fix round 1: the request body is read exactly ONCE, here — after
+    // the hoisted content-length guard and before capabilities detection. No
+    // pre-guard clone/peek: chat requests are no longer double-buffered.
+    // Read/parse failures are deferred as their canonical 400s until after
+    // the entitlement/rate/provider gates below, preserving the historical
+    // rejection precedence for malformed non-capabilities requests.
+    let deferredBodyError: { status: number; error: string } | null = null;
+    let body: unknown = undefined;
+
+    let rawBody = '';
+    try {
+      rawBody = await req.text();
+    } catch {
+      deferredBodyError = { status: 400, error: 'Bad Request: Unable to read request body' };
+    }
+
+    if (!deferredBodyError && rawBody.length > MAX_REQUEST_BYTES) {
+      // Size guards MUST apply before capabilities detection: an oversized
+      // { action: 'capabilities' } body gets a 413, never a 200.
+      return new Response(
+        JSON.stringify({
+          error: `Payload too large. Max allowed size is ${Math.round(MAX_REQUEST_BYTES / (1024 * 1024))}MB.`,
+        }),
+        {
+          status: 413,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
+    if (!deferredBodyError) {
+      try {
+        body = JSON.parse(rawBody);
+      } catch {
+        deferredBodyError = { status: 400, error: 'Bad Request: Invalid JSON' };
+      }
+    }
+
     // PX02: Authenticated capabilities contract. Read-only release/capability
     // view: it requires a valid user token but NOT a chat entitlement, so it
-    // is handled after auth.getUser and BEFORE the entitlement gate below.
-    if (await isCapabilitiesRequest(req)) {
+    // is handled after auth.getUser and the size guards, and BEFORE the
+    // entitlement gate below — detected from the single canonical body read.
+    if (!deferredBodyError && isCapabilitiesAction(body)) {
       return new Response(JSON.stringify(buildCapabilitiesPayload()), {
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -1675,51 +1729,13 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    let body: unknown;
-
-    const contentLengthHeader = req.headers.get('content-length');
-    if (contentLengthHeader) {
-      const contentLength = Number(contentLengthHeader);
-      if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BYTES) {
-        return new Response(
-          JSON.stringify({
-            error: `Payload too large. Max allowed size is ${Math.round(MAX_REQUEST_BYTES / (1024 * 1024))}MB.`,
-          }),
-          {
-            status: 413,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-    }
-
-    let rawBody = '';
-    try {
-      rawBody = await req.text();
-    } catch {
-      return new Response(JSON.stringify({ error: 'Bad Request: Unable to read request body' }), {
-        status: 400,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (rawBody.length > MAX_REQUEST_BYTES) {
-      return new Response(
-        JSON.stringify({
-          error: `Payload too large. Max allowed size is ${Math.round(MAX_REQUEST_BYTES / (1024 * 1024))}MB.`,
-        }),
-        {
-          status: 413,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-
-    try {
-      body = JSON.parse(rawBody);
-    } catch {
-      return new Response(JSON.stringify({ error: 'Bad Request: Invalid JSON' }), {
-        status: 400,
+    // PX02 fix round 1: deferred canonical body error (read failure or
+    // invalid JSON), returned only after the entitlement/rate/provider gates
+    // above so the historical rejection precedence is preserved for
+    // malformed payloads.
+    if (deferredBodyError) {
+      return new Response(JSON.stringify({ error: deferredBodyError.error }), {
+        status: deferredBodyError.status,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       });
     }
