@@ -97,6 +97,11 @@ import {
   EntitlementError,
   loadAccessGrant,
 } from '../_shared/access_policy.ts';
+import {
+  releaseHeaders,
+  resolveReleaseIdentity,
+  type ReleaseIdentity,
+} from '../_shared/release_identity.ts';
 
 // ============================================================================
 // LOCAL TYPE DEFINITIONS
@@ -123,12 +128,21 @@ interface GoogleModelRecord {
 // Defaults to localhost for local development only.
 const _ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') || 'http://localhost:3000';
 
+// PX02: Release identity of the deployed revision, resolved once at module
+// load from project env (Supabase secrets). Stamped on EVERY response (spread
+// into CORS_HEADERS below) and served through the authenticated capabilities
+// contract. Unset fields fall back to labelled defaults; the release SHA
+// defaults to 'unknown' — never invented.
+const RELEASE_IDENTITY = resolveReleaseIdentity((key) => Deno.env.get(key));
+const RELEASE_HEADERS = releaseHeaders(RELEASE_IDENTITY);
+
 const CORS_HEADERS = {
+  ...RELEASE_HEADERS,
   'Access-Control-Allow-Origin': _ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-client-info, apikey',
   'Access-Control-Expose-Headers':
-    'X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Cost-Note, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path',
+    'X-Prismatix-Protocol, X-Prismatix-Schema, X-Prismatix-Catalog, X-Prismatix-Tariff, X-Prismatix-Release, X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Cost-Note, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path',
 };
 
 const FUNCTION_TIMEOUT_MS = 55000;
@@ -1466,6 +1480,76 @@ function extractBearerToken(authHeader: string): string | null {
 
 
 // ============================================================================
+// PX02: CAPABILITIES CONTRACT
+// ============================================================================
+
+interface CapabilitiesPayload {
+  release: ReleaseIdentity;
+  capabilities: {
+    modes: string[];
+    features: {
+      chat: boolean;
+      review: boolean;
+      video: boolean;
+      memory: boolean;
+      smd: boolean;
+    };
+    models: string[];
+  };
+}
+
+// Reflects ACTUAL runtime flags — no aspirational claims, no secrets:
+//   - video:  ENABLE_VIDEO_PIPELINE (default off; stays unavailable until the
+//             video pipeline passes its own qualification gate)
+//   - review: debate enablement (ENABLE_DEBATE_MODE)
+//   - smd:    experimental SMD flag (ENABLE_SMD_LIGHT, default off)
+//   - memory: server-side memory retrieval/summarization is always active for
+//             web-platform requests; mobile clients are their own memory
+//             authority (bypass invariant), which is a platform rule, not a
+//             feature toggle
+//   - models: the canonical manual model IDs accepted by
+//             normalizeModelOverride (the exact-match catalog — no substring
+//             mapping)
+function buildCapabilitiesPayload(): CapabilitiesPayload {
+  return {
+    release: RELEASE_IDENTITY,
+    capabilities: {
+      modes: [
+        'chat',
+        ...(ENABLE_DEBATE_MODE ? ['debate'] : []),
+        ...(ENABLE_SMD_LIGHT ? ['smd_light'] : []),
+      ],
+      features: {
+        chat: true,
+        review: ENABLE_DEBATE_MODE,
+        video: ENABLE_VIDEO_PIPELINE,
+        memory: true,
+        smd: ENABLE_SMD_LIGHT,
+      },
+      models: Object.keys(MODEL_REGISTRY),
+    },
+  };
+}
+
+// Peeks the request body via clone() for { action: 'capabilities' }. The
+// original body is left unconsumed so the canonical parse/validate path below
+// is unchanged. An unreadable or non-JSON body is not a capabilities request;
+// the canonical path rejects it with its normal error.
+async function isCapabilitiesRequest(req: Request): Promise<boolean> {
+  try {
+    const parsed: unknown = JSON.parse(await req.clone().text());
+    return (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      (parsed as { action?: unknown }).action === 'capabilities'
+    );
+  } catch {
+    return false;
+  }
+}
+
+
+// ============================================================================
 // MAIN HANDLER
 // ============================================================================
 
@@ -1538,6 +1622,16 @@ Deno.serve(async (req: Request) => {
     }
 
     const userId = user.id;
+
+    // PX02: Authenticated capabilities contract. Read-only release/capability
+    // view: it requires a valid user token but NOT a chat entitlement, so it
+    // is handled after auth.getUser and BEFORE the entitlement gate below.
+    if (await isCapabilitiesRequest(req)) {
+      return new Response(JSON.stringify(buildCapabilitiesPayload()), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
 
     // PX01: server-managed entitlement gate. Fail closed BEFORE the rate
     // limiter, spend gate, or any provider dispatch: no active chat grant, no
@@ -1771,9 +1865,29 @@ Deno.serve(async (req: Request) => {
     };
 
     const debateReq = parseDebateRequest(mode, modelOverride, debateProfile);
-    const normalizedOverride = normalizeModelOverride(
-      debateReq.suppressModelOverride ? undefined : modelOverride,
-    );
+    // The 'debate'/'debate:<profile>' compatibility toggle suppresses the
+    // override (it is a mode switch, not a manual model selection).
+    const manualModelOverride = debateReq.suppressModelOverride ? undefined : modelOverride;
+    // PX02 (F17): strict unknown manual model rejection. A manual selection
+    // that normalizeModelOverride cannot exact-match (registry key or synonym)
+    // is a 400 — never a silent fallback to Auto, and never a substring
+    // mapping of a new model generation onto an old one. Runs before routing,
+    // so zero provider calls happen for a rejected selection.
+    if (
+      typeof manualModelOverride === 'string' &&
+      manualModelOverride.trim() !== '' &&
+      manualModelOverride.trim().toLowerCase() !== 'auto' &&
+      normalizeModelOverride(manualModelOverride) === undefined
+    ) {
+      return new Response(
+        JSON.stringify({ error: 'unknown_model', code: 'unknown_model' }),
+        {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+    const normalizedOverride = normalizeModelOverride(manualModelOverride);
     let decision: RouteDecision;
     try {
       decision = await resolveProductionRoute(routerParams, normalizedOverride, {

@@ -30,7 +30,57 @@ function toNumber(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-Deno.serve(async (req: Request) => {
+// PX02: minimal exported testable seam. handleSpendStats contains the full
+// handler logic; Deno.serve below simply delegates to it, so behaviour is
+// byte-for-byte unchanged. This function validates the Bearer token manually
+// (supabase.auth.getUser), so authentication never depends on the gateway
+// verify_jwt setting — the deployed spend_stats gateway runs with
+// verify_jwt = false while the repo config.toml declares true (a known
+// divergence recorded in the deployment manifest). Either way: missing or
+// invalid tokens are rejected here.
+
+export interface SpendStatsUser {
+  id: string;
+}
+
+// Structural interface for the injected supabase-js client (same posture as
+// _shared/access_policy.ts): keeps tests free of the real SDK.
+export interface SpendStatsClient {
+  auth: {
+    getUser(token: string): PromiseLike<{
+      data: { user: SpendStatsUser | null };
+      error: { message?: string } | null;
+    }>;
+  };
+  rpc(
+    functionName: string,
+    params?: Record<string, unknown>,
+  ): PromiseLike<{ data?: unknown; error?: unknown }>;
+}
+
+export interface SpendStatsDeps {
+  getEnv?: (key: string) => string | undefined;
+  createClient?: (url: string, serviceRoleKey: string) => SpendStatsClient;
+}
+
+function createServiceRoleClient(url: string, serviceRoleKey: string): SpendStatsClient {
+  return createClient(url, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+    db: { schema: 'public' },
+  }) as unknown as SpendStatsClient;
+}
+
+export async function handleSpendStats(
+  req: Request,
+  deps: SpendStatsDeps = {},
+): Promise<Response> {
+  const getEnv = deps.getEnv ?? ((key: string): string | undefined => Deno.env.get(key));
+  const makeClient = deps.createClient ?? createServiceRoleClient;
+
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
   }
@@ -42,8 +92,8 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL');
-  const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  const supabaseUrl = getEnv('SUPABASE_URL');
+  const supabaseServiceRoleKey = getEnv('SUPABASE_SERVICE_ROLE_KEY');
 
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     return new Response(JSON.stringify({ error: 'Server misconfigured: missing Supabase env vars' }), {
@@ -60,14 +110,7 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-    db: { schema: 'public' },
-  });
+  const supabase = makeClient(supabaseUrl, supabaseServiceRoleKey);
 
   const {
     data: { user },
@@ -109,4 +152,6 @@ Deno.serve(async (req: Request) => {
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     },
   );
-});
+}
+
+Deno.serve((req: Request): Promise<Response> => handleSpendStats(req));

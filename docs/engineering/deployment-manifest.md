@@ -218,3 +218,119 @@ Updating this manifest: when the deployment changes deliberately, update the aff
 section **and** the expected fixture in the tests in the same change — the tests pin the
 six slugs, the pinned bundle hashes, the applied migration set, the schema anchors, and
 this file's sanitization.
+
+---
+
+## 12. Release identity contract (PX02)
+
+Every `router` response — including OPTIONS preflight, validation errors, and
+auth rejections — is stamped with the identity of the deployed revision via
+five response headers, resolved once at function startup from project env
+(Supabase secrets). The same identity is returned in the `release` field of
+the authenticated capabilities contract (`POST /functions/v1/router` with
+body `{ "action": "capabilities" }`; requires a valid user token, does NOT
+require a chat entitlement).
+
+| Header | Env var | Default when unset | Meaning |
+| --- | --- | --- | --- |
+| `X-Prismatix-Protocol` | `PRISMATIX_PROTOCOL_VERSION` | `1` (code constant `PROTOCOL_VERSION`) | Wire protocol version. `1` = first versioned protocol: capabilities contract + `X-Prismatix-*` headers (introduced by PX02). Bump when the contract changes in a way clients must detect. |
+| `X-Prismatix-Schema` | `PRISMATIX_SCHEMA_VERSION` | `unspecified` | Database schema/migration revision the deployed code is qualified against. |
+| `X-Prismatix-Catalog` | `PRISMATIX_CATALOG_VERSION` | `unspecified` | Model catalog revision (the exact-match set accepted by `normalizeModelOverride`). |
+| `X-Prismatix-Tariff` | `PRISMATIX_TARIFF_VERSION` | `unspecified` | Tariff/pricing revision used by the cost engine (cf. `PRICING_VERSION` in `supabase/functions/router/pricing_registry.ts`, surfaced per-request as `X-Cost-Pricing-Version`). |
+| `X-Prismatix-Release` | `RELEASE_SHA` | `unknown` | Git SHA of the deployed revision. |
+
+All five header names are listed in the router's
+`Access-Control-Expose-Headers`, so a cross-origin browser client can read
+them.
+
+### The `unknown` SHA rule
+
+`releaseSha` defaults to the literal string `unknown` and MUST NOT be
+replaced by any guessed, reconstructed, or "last known" value — in code, in
+tooling, or in this manifest. An `X-Prismatix-Release: unknown` header on a
+live deployment means the deployment pipeline did not inject `RELEASE_SHA`;
+that is a deployment-process defect to fix, not a value to paper over.
+Identity fields that are unset are reported as `unspecified` (or the code's
+own `PROTOCOL_VERSION` for the protocol) so drift is visible instead of
+hidden behind stale hardcoded values. Identity values are sanitized to
+printable ASCII before being emitted as headers.
+
+### Deployment checklist (release identity)
+
+1. Set in Supabase project secrets before deploying a contained release:
+   `RELEASE_SHA` (the exact deployed git SHA), `PRISMATIX_SCHEMA_VERSION`
+   (the newest applied migration, e.g. `20261006000000`), and — when the
+   catalog/tariff are pinned — `PRISMATIX_CATALOG_VERSION` /
+   `PRISMATIX_TARIFF_VERSION`.
+2. After deploy, verify from an allowed origin (or curl):
+   `X-Prismatix-Release` equals the deployed SHA and `X-Prismatix-Schema`
+   equals the approved patch manifest's schema revision.
+3. Acceptance item "live revision and schema match the approved patch
+   manifest" is an **authorized-production-run** item: it is verified against
+   the live deployment during the containment run, not claimed from the repo.
+
+## 13. Capabilities contract (PX02)
+
+`POST /functions/v1/router`, body `{ "action": "capabilities" }`, with
+`Authorization: Bearer <user token>`:
+
+- **200** for any authenticated user — the read-only view does not require a
+  chat entitlement (the entitlement gate still guards all paid execution).
+- **401** without a valid token.
+- Response shape:
+
+  ```json
+  {
+    "release": {
+      "protocolVersion": "1",
+      "schemaVersion": "unspecified",
+      "catalogVersion": "unspecified",
+      "tariffVersion": "unspecified",
+      "releaseSha": "unknown"
+    },
+    "capabilities": {
+      "modes": ["chat"],
+      "features": {
+        "chat": true,
+        "review": false,
+        "video": false,
+        "memory": true,
+        "smd": false
+      },
+      "models": ["<canonical model IDs accepted by normalizeModelOverride>"]
+    }
+  }
+  ```
+
+- Values reflect **actual runtime flags** — no aspirational claims:
+  `video` = `ENABLE_VIDEO_PIPELINE` (default **off**; video stays unavailable
+  until its own qualification gate passes), `review` = `ENABLE_DEBATE_MODE`
+  (debate enablement), `smd` = `ENABLE_SMD_LIGHT` (experimental; default
+  **off**), `memory` = server-side memory retrieval/summarization, which is
+  always active for web-platform requests (mobile clients are their own
+  memory authority — the bypass invariant). `modes` lists `chat` plus
+  `debate`/`smd_light` only when the corresponding flags are on. The payload
+  never contains secrets or provider keys.
+
+## 14. Model selection strictness (PX02, F17)
+
+An unknown manual `modelOverride` (a non-empty value other than `auto` that
+`normalizeModelOverride` cannot exact-match against the registry or synonym
+table) is rejected with **HTTP 400** `{ "error": "unknown_model", "code":
+"unknown_model" }` and **zero provider calls**. The router never silently
+falls back to Auto for an unknown manual selection and never substring-maps a
+new model generation onto an older one. The documented `debate` /
+`debate:<profile>` compatibility toggle is a mode switch, not a model
+selection, and remains accepted. Contract tests:
+`tests/integration/deployment-contract.test.ts`.
+
+## 15. Stats slugs (audit note, PX02)
+
+Two stats slugs are deployed: `spend_stats` (repo dir; gateway
+`verify_jwt = false` in production, while repo `supabase/config.toml`
+declares `true` — known divergence) and the legacy hyphenated `spend-stats`
+duplicate (no repo dir). `spend_stats` validates the Bearer token manually
+in-function, so authentication holds regardless of the gateway setting; the
+exported `handleSpendStats(req, deps)` seam makes this testable
+(`tests/integration/deployment-contract.test.ts`). Both slugs' consumers are
+preserved until retirement of the duplicate is safe in a later packet.
