@@ -1,4 +1,9 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import {
+  assertEntitled,
+  EntitlementError,
+  loadAccessGrant,
+} from '../_shared/access_policy.ts';
 
 // SECURITY: Lock CORS to the configured frontend origin.
 // Set ALLOWED_ORIGIN in Supabase project secrets (e.g. https://your-app.vercel.app).
@@ -159,6 +164,22 @@ Deno.serve(async (req: Request) => {
   if (userError || !user) {
     return new Response(JSON.stringify({ error: 'Unauthorized: Invalid or expired token' }), {
       status: 401,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  // PX01: server-managed entitlement gate. Fail closed BEFORE any asset row,
+  // queue mutation, signed upload URL, or provider work: no active video
+  // grant, no upload session. Lookup failures deny with a stable error code.
+  try {
+    const accessGrant = await loadAccessGrant(supabase, user.id);
+    assertEntitled(accessGrant, 'video');
+  } catch (entitlementError) {
+    const entitlementCode = entitlementError instanceof EntitlementError
+      ? entitlementError.code
+      : 'entitlement_unavailable';
+    return new Response(JSON.stringify({ error: entitlementCode }), {
+      status: 403,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });
   }

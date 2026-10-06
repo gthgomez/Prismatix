@@ -2,6 +2,11 @@
 // Authentication UI component with L3 Safety Gates
 
 import React, { useState } from 'react';
+import { CONFIG } from '../config';
+
+// PX01: signup UI is gated behind VITE_ALLOW_SIGNUP (default off). Server-side
+// signup is disabled independently; this only hides the client path.
+const ALLOW_SIGNUP = CONFIG.ALLOW_SIGNUP;
 
 interface AuthProps {
   onSignIn: (email: string, password: string) => Promise<{ error: Error | null }>;
@@ -28,6 +33,13 @@ export const Auth: React.FC<AuthProps> = ({
     e.preventDefault();
     setError(null);
     setSuccessMessage(null);
+
+    // PX01 gate: never submit a signup while signups are disabled.
+    if (mode === 'signup' && !ALLOW_SIGNUP) {
+      setError('Signups are currently disabled');
+      setMode('signin');
+      return;
+    }
 
     // L3 Gate: Validate inputs
     if (!email.trim()) {
@@ -90,6 +102,10 @@ export const Auth: React.FC<AuthProps> = ({
   };
 
   const toggleMode = () => {
+    if (!ALLOW_SIGNUP) {
+      setMode('signin');
+      return;
+    }
     setMode(mode === 'signin' ? 'signup' : 'signin');
     setError(null);
     setSuccessMessage(null);
@@ -115,13 +131,15 @@ export const Auth: React.FC<AuthProps> = ({
           >
             Sign In
           </button>
-          <button 
-            type="button"
-            className={`auth-tab ${mode === 'signup' ? 'active' : ''}`}
-            onClick={() => setMode('signup')}
-          >
-            Sign Up
-          </button>
+          {ALLOW_SIGNUP && (
+            <button 
+              type="button"
+              className={`auth-tab ${mode === 'signup' ? 'active' : ''}`}
+              onClick={() => setMode('signup')}
+            >
+              Sign Up
+            </button>
+          )}
         </div>
 
         {/* Messages */}
@@ -231,14 +249,16 @@ export const Auth: React.FC<AuthProps> = ({
         )}
 
         {/* Footer */}
-        <div className="auth-footer">
-          <p>
-            {mode === 'signin' ? "Don't have an account? " : "Already have an account? "}
-            <button type="button" onClick={toggleMode} className="auth-link">
-              {mode === 'signin' ? 'Sign Up' : 'Sign In'}
-            </button>
-          </p>
-        </div>
+        {ALLOW_SIGNUP && (
+          <div className="auth-footer">
+            <p>
+              {mode === 'signin' ? "Don't have an account? " : "Already have an account? "}
+              <button type="button" onClick={toggleMode} className="auth-link">
+                {mode === 'signin' ? 'Sign Up' : 'Sign In'}
+              </button>
+            </p>
+          </div>
+        )}
       </div>
 
       <style>{`

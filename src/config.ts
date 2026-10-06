@@ -21,6 +21,14 @@ const ENABLE_VIDEO_PIPELINE = (() => {
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
 })();
 
+// PX01: signup UI is gated behind VITE_ALLOW_SIGNUP and defaults to OFF.
+// Server-side signup must stay disabled (supabase/config.toml + production
+// auth settings) regardless of this flag.
+const ALLOW_SIGNUP = (() => {
+  const raw = String(import.meta.env.VITE_ALLOW_SIGNUP || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+})();
+
 function functionEndpoint(name: string): string {
   if (!SUPABASE_URL) return '';
   return `${String(SUPABASE_URL).replace(/\/$/, '')}/functions/v1/${name}`;
@@ -57,6 +65,7 @@ export const CONFIG = {
   // Model Configuration
   MODELS: MODEL_CATALOG,
   ENABLE_VIDEO_PIPELINE,
+  ALLOW_SIGNUP,
 } as const;
 
 // Validate required config
