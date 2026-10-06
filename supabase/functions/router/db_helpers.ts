@@ -1,5 +1,6 @@
 // db_helpers.ts - Database persistence helpers for conversations, messages, and cost logs
 
+// @ts-ignore - Deno-style import for Supabase Edge Functions
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { countTokens, countImageTokens, type ImageAttachment } from './router_logic.ts';
 import { isUuid } from './security_guards.ts';
