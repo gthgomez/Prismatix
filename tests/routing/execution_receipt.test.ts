@@ -1,9 +1,15 @@
+// @vitest-environment node
 // PX06 terminal receipt projection + authenticated lookup tests.
 //
 // `projectReceipt` is a pure projection over the PX03 execution ledger
 // (`executions`, `model_calls`) and the PX05 reservation. `loadExecutionReceipt`
 // talks to the service-role-only `px03_get_execution_receipt` RPC.
-import { describe, expect, it } from 'vitest';
+//
+// The final describe invokes the REAL router handler (Deno.serve stub seam, as
+// in tests/integration/deployment-contract.test.ts) to prove the authenticated
+// `{ action: 'execution_receipt' }` contract: owned → 200 receipt, unknown or
+// foreign → 404, missing id → 400, zero provider calls, no entitlement check.
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   TERMINAL_EXECUTION_STATUSES,
   projectReceipt,
@@ -213,5 +219,228 @@ describe('loadExecutionReceipt', () => {
     await expect(
       loadExecutionReceipt(fake.client, SUBJECT, 'e0000000-0000-4000-8000-000000000001'),
     ).rejects.toBeInstanceOf(ExecutionStoreError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Router action: { action: 'execution_receipt', executionId }
+// ---------------------------------------------------------------------------
+
+const ROUTER_ENTRY = ['../../supabase/functions/router/index.ts'].join('');
+const SUPABASE_URL = 'http://127.0.0.1:54321';
+const SERVICE_ROLE_KEY = 'px06-test-service-role-key';
+const ANTHROPIC_KEY = 'px06-test-anthropic-key';
+const USER_TOKEN = 'px06-user-token';
+const FOREIGN_EXECUTION_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+
+const BASE_ROUTER_ENV: Record<string, string> = {
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
+  ANTHROPIC_API_KEY: ANTHROPIC_KEY,
+};
+
+const PROVIDER_HOSTS = [
+  'api.anthropic.com',
+  'api.openai.com',
+  'generativelanguage.googleapis.com',
+  'opencode.ai',
+  'api.nvidia.com',
+  'api.deepinfra.com',
+];
+
+interface ServeHandler {
+  (req: Request): Promise<Response>;
+}
+
+interface FetchCall {
+  url: string;
+  method: string;
+  body: string;
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+function installFetchRecorder(
+  routes?: (call: FetchCall) => Response | null,
+): FetchCall[] {
+  const calls: FetchCall[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    let url: string;
+    let method: string;
+    if (typeof input === 'string') {
+      url = input;
+      method = init?.method ?? 'GET';
+    } else if (input instanceof URL) {
+      url = input.href;
+      method = init?.method ?? 'GET';
+    } else {
+      url = input.url;
+      method = init?.method ?? input.method;
+    }
+    const body = typeof init?.body === 'string' ? init.body : '';
+    const call = { url, method: method.toUpperCase(), body };
+    calls.push(call);
+    const routed = routes ? routes(call) : null;
+    return routed ?? jsonResponse(null);
+  });
+  return calls;
+}
+
+function installDenoStub(env: Record<string, string | undefined>): ServeHandler[] {
+  const handlers: ServeHandler[] = [];
+  (globalThis as unknown as Record<string, unknown>).Deno = {
+    env: {
+      get: (key: string): string | undefined => env[key],
+    },
+    serve: (handler: ServeHandler): void => {
+      handlers.push(handler);
+    },
+  };
+  return handlers;
+}
+
+async function loadRouterHandler(
+  env: Record<string, string | undefined>,
+): Promise<ServeHandler> {
+  vi.resetModules();
+  const handlers = installDenoStub(env);
+  await import(/* @vite-ignore */ ROUTER_ENTRY);
+  const handler = handlers[0];
+  if (!handler) throw new Error('router handler was not registered');
+  return handler;
+}
+
+function routerRequest(body: unknown): Request {
+  return new Request('http://127.0.0.1:54321/functions/v1/router', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${USER_TOKEN}`,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function providerCalls(calls: FetchCall[]): FetchCall[] {
+  return calls.filter((call) => PROVIDER_HOSTS.some((host) => call.url.includes(host)));
+}
+
+function ownedPayload(): Record<string, unknown> {
+  return {
+    execution: execution(),
+    calls: [call()],
+    reservation: reservation(),
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("action execution_receipt (real router handler)", () => {
+  function receiptRoutes(receipt: unknown): (call: FetchCall) => Response | null {
+    return (call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return jsonResponse({
+          id: SUBJECT,
+          aud: 'authenticated',
+          role: 'authenticated',
+          email: 'px06@example.test',
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px03_get_execution_receipt')) {
+        return jsonResponse(receipt);
+      }
+      return null;
+    };
+  }
+
+  it('requires authentication (401 without a valid token)', async () => {
+    installFetchRecorder((call) =>
+      call.url.includes('/auth/v1/user')
+        ? jsonResponse({ code: 401, msg: 'invalid token' }, 401)
+        : null,
+    );
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({ action: 'execution_receipt', executionId: FOREIGN_EXECUTION_ID }),
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 400 when executionId is missing', async () => {
+    const calls = installFetchRecorder(receiptRoutes(ownedPayload()));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(routerRequest({ action: 'execution_receipt' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Bad Request: executionId required' });
+    // No ledger lookup for a malformed request.
+    expect(calls.some((call) => call.url.includes('px03_get_execution_receipt'))).toBe(false);
+  });
+
+  it('returns the projected receipt for an owned execution WITHOUT requiring an entitlement', async () => {
+    const calls = installFetchRecorder(receiptRoutes(ownedPayload()));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({ action: 'execution_receipt', executionId: execution().id }),
+    );
+
+    expect(res.status).toBe(200);
+    const payload = await res.json();
+    expect(payload.executionId).toBe(execution().id);
+    expect(payload.status).toBe('completed');
+    expect(payload.settlement).toEqual({ state: 'settled', committedUsd: 0.25, pendingCalls: 0 });
+
+    // Read-only accounting view: entitlement gate is never consulted.
+    expect(calls.some((call) => call.url.includes('get_access_grant'))).toBe(false);
+    // Zero provider calls.
+    expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it('returns 404 for an unknown or foreign-subject execution (existence never leaked)', async () => {
+    const calls = installFetchRecorder(receiptRoutes(null));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({ action: 'execution_receipt', executionId: FOREIGN_EXECUTION_ID }),
+    );
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'execution_not_found' });
+    expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it('fails closed with 503 when the receipt ledger lookup errors', async () => {
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return jsonResponse({ id: SUBJECT, aud: 'authenticated', role: 'authenticated' });
+      }
+      if (call.url.includes('/rest/v1/rpc/px03_get_execution_receipt')) {
+        return jsonResponse({ code: '08006', message: 'ledger down' }, 500);
+      }
+      return null;
+    });
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({ action: 'execution_receipt', executionId: execution().id }),
+    );
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      error: 'accounting_unavailable',
+      code: 'accounting_unavailable',
+    });
+    expect(providerCalls(calls)).toEqual([]);
   });
 });
