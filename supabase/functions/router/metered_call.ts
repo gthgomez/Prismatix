@@ -8,10 +8,15 @@
 // calls always produce two rows even when their token counts are identical,
 // while a retry of the same accounting event dedupes to one row.
 //
-// FAIL-CLOSED ACCOUNTING: a missing or unknown usage/price never produces a
-// `settled` receipt and never fabricates `$0`. It stays `pending` and enqueues
-// a durable reconciliation job. A ledger write failure must not block the
-// answer stream, but it also must never look like a successful settlement.
+// FAIL-CLOSED ACCOUNTING:
+//   * A missing or unknown usage/price never produces a `settled` receipt and
+//     never fabricates `$0`; it stays `pending` with a durable reconciliation
+//     job.
+//   * If the PRE-dispatch call row cannot be written, the provider call is NOT
+//     dispatched (an unaccountable call is worse than a failed request); the
+//     caller receives MeteredCallAccountingError and a durable job is enqueued.
+//   * A POST-dispatch settle failure must not block an already-streaming answer,
+//     but it never looks like a successful settlement (the row stays `pending`).
 
 import {
   enqueueReconciliation,
@@ -19,7 +24,6 @@ import {
   type CostStatus,
   type ExecutionRecord,
   type ExecutionStoreClient,
-  type ModelCallRecord,
   type RecordModelCallInput,
 } from './execution_store.ts';
 
@@ -33,6 +37,20 @@ export interface NormalizedUsage {
   inputTokens: number;
   outputTokens: number;
   thinkingTokens: number;
+}
+
+// Thrown when a provider call cannot be accounted for. Callers MUST treat this
+// as a request failure and MUST NOT have dispatched the provider call.
+export class MeteredCallAccountingError extends Error {
+  readonly executionId: string;
+  readonly kind: string;
+
+  constructor(executionId: string, kind: string, message?: string) {
+    super(message ?? `metered_call_accounting_error: ${kind}`);
+    this.name = 'MeteredCallAccountingError';
+    this.executionId = executionId;
+    this.kind = kind;
+  }
 }
 
 // Server-supplied authoritative price snapshot. Callers cannot choose their own
@@ -158,8 +176,14 @@ async function safeEnqueue(
 ): Promise<void> {
   try {
     await enqueueReconciliation(store, { executionId, kind, payload });
-  } catch {
-    // Best-effort: a reconciliation-enqueue failure must not block the answer.
+  } catch (error) {
+    // Never swallow silently: an unpersisted reconciliation job is itself an
+    // accounting defect that must be visible.
+    console.error('[PX03] reconciliation enqueue failed:', {
+      kind,
+      executionId,
+      error: errorMessage(error),
+    });
   }
 }
 
@@ -182,9 +206,10 @@ async function safeRecord(
  * Records a model call before dispatch, invokes `dispatch`, then updates that
  * same row with served model / normalized usage / cost_status.
  *
- * Returns the dispatch's result so the caller's answer stream is never blocked
- * by accounting. Accounting failures are surfaced as durable reconciliation
- * jobs and a `pending` row, never a `settled` receipt.
+ * Fail-closed: if the pre-dispatch row cannot be written, the provider call is
+ * NOT dispatched and a MeteredCallAccountingError is thrown. Post-dispatch
+ * accounting failures leave a `pending` row + durable reconciliation job and
+ * never block the caller's answer stream.
  */
 export async function runMeteredCall<T>(
   input: RunMeteredCallInput,
@@ -203,18 +228,31 @@ export async function runMeteredCall<T>(
     price_snapshot: input.priceSnapshot ?? null,
   };
 
-  // 1) Durable pre-dispatch row. If this write fails, accounting fails closed
-  //    (no settled receipt) but the answer stream is NOT blocked.
-  let row: ModelCallRecord | null = null;
+  // 1) Durable pre-dispatch row. FAIL CLOSED: if we cannot record the call, we
+  //    do NOT dispatch it. An unaccountable provider call is exactly what this
+  //    ledger exists to prevent, so the request fails with a reconciliation job
+  //    instead of silently making an untracked call.
   try {
-    row = await recordModelCall(input.store, base);
+    await recordModelCall(input.store, base);
   } catch (error) {
+    console.error('[PX03] model_call pre-dispatch write failed; refusing to dispatch:', {
+      executionId: input.execution.id,
+      stage: input.stage,
+      participant: input.participant,
+      attemptNumber,
+      error: errorMessage(error),
+    });
     await safeEnqueue(input.store, input.execution.id, 'model_call_pre_dispatch_failed', {
       stage: input.stage,
       participant: input.participant,
       attemptNumber,
       error: errorMessage(error),
     });
+    throw new MeteredCallAccountingError(
+      input.execution.id,
+      'model_call_pre_dispatch_failed',
+      errorMessage(error),
+    );
   }
 
   // 2) Dispatch. A provider failure rethrows (the caller maps it to a 502) and
@@ -223,15 +261,8 @@ export async function runMeteredCall<T>(
   try {
     outcome = await dispatch();
   } catch (error) {
-    if (row) {
-      await safeRecord(input.store, { ...base, status: 'failed' });
-    }
+    await safeRecord(input.store, { ...base, status: 'failed' });
     throw error;
-  }
-
-  if (!row) {
-    // No ledger row exists; dispatch already happened. Nothing to settle.
-    return outcome.result;
   }
 
   // 3) Normalize usage and settle only when both usage and a server price are

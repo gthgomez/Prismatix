@@ -79,15 +79,15 @@ import {
 } from './db_helpers.ts';
 import {
   computePayloadHash,
-  createExecution,
   enqueueReconciliation,
   finalizeExecution,
-  RequestKeyConflictError,
   type ExecutionRecord,
   type ExecutionStatus,
   type ExecutionStoreClient,
 } from './execution_store.ts';
+import { openExecutionForRequest } from './execution_gate.ts';
 import {
+  MeteredCallAccountingError,
   runMeteredCall,
   type MeteredCallContext,
   type MeteredCallFactory,
@@ -711,12 +711,16 @@ async function maybeRunDebateMode(params: {
             plan.maxChallengerChars,
           );
           if (text) return { role: c.role, modelTier: workerTier, text };
-        } catch {
+        } catch (workerError) {
+          // Accounting failures must fail the request closed, never fall through
+          // to another provider call.
+          if (workerError instanceof MeteredCallAccountingError) throw workerError;
           // try next model in cascade
         }
       }
       return null;
-    } catch {
+    } catch (challengerError) {
+      if (challengerError instanceof MeteredCallAccountingError) throw challengerError;
       return null;
     } finally {
       clearTimeout(tid);
@@ -1608,6 +1612,9 @@ async function maybeRunSmdMode(params: {
 
     return { upstream: formatterUpstream, log };
   } catch (err) {
+    // Accounting failures must fail the request closed, never degrade to a
+    // baseline provider call that we also cannot account for.
+    if (err instanceof MeteredCallAccountingError) throw err;
     log.finalStatus = 'error';
     console.error(`[SMD][${runId}] unexpected error:`, err);
     console.log('[SMD] run:', JSON.stringify(log));
@@ -2197,7 +2204,7 @@ Deno.serve(async (req: Request) => {
     const payloadHash = await computePayloadHash(normalizedBody.value);
     let activeExecution: ExecutionRecord | null = null;
     try {
-      const created = await createExecution(storeClient, {
+      const opened = await openExecutionForRequest(storeClient, {
         subjectId: userId,
         conversationId,
         clientRequestKey,
@@ -2208,17 +2215,25 @@ Deno.serve(async (req: Request) => {
         pricingVersion: preFlightCost.pricingVersion,
         catalogVersion: RELEASE_IDENTITY.catalogVersion,
       });
-      activeExecution = created.execution;
-    } catch (executionError) {
-      if (executionError instanceof RequestKeyConflictError) {
+      if (opened.kind === 'rejected') {
+        // PX03 invariant: a duplicate/reused client request is never replayed.
+        // Same key + same payload_hash => duplicate_request (409, carries the
+        // execution id); same key + different payload_hash => request_key_conflict
+        // (409). Either way: ZERO provider calls.
         return new Response(
-          JSON.stringify({ error: 'request_key_conflict', code: 'request_key_conflict' }),
+          JSON.stringify({
+            error: opened.error,
+            code: opened.code,
+            ...(opened.executionId ? { executionId: opened.executionId } : {}),
+          }),
           {
-            status: 409,
+            status: opened.status,
             headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
           },
         );
       }
+      activeExecution = opened.execution;
+    } catch (executionError) {
       // Ledger unavailable: fail closed for the receipt (never fabricate one),
       // but do not block the answer stream.
       console.error('[PX03] execution create failed:', {
@@ -2447,6 +2462,18 @@ Deno.serve(async (req: Request) => {
       } // end: else (not smdEligible)
     } catch (upstreamError) {
       releaseStreamSlot();
+      if (upstreamError instanceof MeteredCallAccountingError) {
+        // FAIL CLOSED: the provider call was not dispatched because it could not
+        // be accounted for. Surface a retryable 503 with zero provider calls.
+        await finalizeLedger('failed', 'accounting_unavailable');
+        return new Response(
+          JSON.stringify({ error: 'accounting_unavailable', code: 'accounting_unavailable' }),
+          {
+            status: 503,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
       await finalizeLedger('failed', 'upstream_error');
       const message = upstreamError instanceof Error
         ? upstreamError.message
