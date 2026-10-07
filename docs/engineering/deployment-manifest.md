@@ -467,7 +467,7 @@ No chat entitlement is required (it is the caller's own accounting record) and
 **Unapplied:** the migration is committed but not yet applied to any
 environment; the RPC returns 404/fails closed until it is applied. Grants:
 `EXECUTE` revoked from `public`/`anon`/`authenticated`, granted only to
-`service_role` — the same posture as the other `px03_*` / `px05_*` RPCs. The
+`service-role` — the same posture as the other `px03_*` / `px05_*` RPCs. The
 `prismatix_internal` authority tables remain out of PostgREST, so this RPC is the
 only read path.
 
