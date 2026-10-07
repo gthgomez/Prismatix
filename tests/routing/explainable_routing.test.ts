@@ -44,7 +44,7 @@ describe('explainable route contract', () => {
   it('successful known-price Auto route carries a complete explanation', () => {
     const decision = determineRoute(baseParams(), undefined, true);
 
-    expect(decision.modelTier).toBe('deepseek-v4-flash');
+    expect(decision.modelTier).toBe('gpt-6-luna');
     expect(decision.explanation).toBeDefined();
     const e = decision.explanation as RouteExplanation;
     expect(e.selection).toBe('auto');
@@ -73,7 +73,7 @@ describe('explainable route contract', () => {
 });
 
 describe('cost safety: unknown price cannot auto-send', () => {
-  const flashEntry = CURATED_OPENCODE_REGISTRY['deepseek-v4-flash']!;
+  const flashEntry = CURATED_OPENCODE_REGISTRY['gpt-6-luna']!;
   const originalFlashPricing = flashEntry.pricing!;
 
   beforeEach(() => {
@@ -91,16 +91,16 @@ describe('cost safety: unknown price cannot auto-send', () => {
     const allIds = new Set(Object.keys(CURATED_OPENCODE_REGISTRY));
     const resolution = resolveRoleCandidates('economy', allIds);
 
-    // Primary deepseek-v4-flash is unknown-priced in this fixture -> skipped
-    expect(resolution.config.modelId).toBe('gpt-5.6-luna');
+    // Primary gpt-6-luna is unknown-priced in this fixture -> skipped
+    expect(resolution.config.modelId).toBe('deepseek-v4-flash');
     expect(resolution.attempted).toContainEqual({
-      modelId: 'deepseek-v4-flash',
+      modelId: 'gpt-6-luna',
       reason: 'pricing-unknown',
     });
   });
 
   it('fully unpriced role resolution fails closed instead of guessing', () => {
-    expect(() => resolveRoleCandidates('economy', new Set(['deepseek-v4-flash'])))
+    expect(() => resolveRoleCandidates('economy', new Set(['gpt-6-luna'])))
       .toThrow(ModelUnavailableError);
   });
 
@@ -171,7 +171,7 @@ describe('discovery failure fails closed (no expensive silent fallback)', () => 
   it('legacy direct mode remains available only as an explicit deployment posture', () => {
     const decision = determineRoute(baseParams(), undefined, false);
 
-    expect(decision.modelTier).toBe('qwen3-235b');
+    expect(decision.modelTier).toBe('gemini-2.5-flash');
     const e = decision.explanation as RouteExplanation;
     expect(e.selection).toBe('auto');
     expect(e.gateway).toBe('direct_fallback');
@@ -180,7 +180,7 @@ describe('discovery failure fails closed (no expensive silent fallback)', () => 
   });
 
   it('every legacy direct model referenced by the fallback chain is priced', () => {
-    for (const tier of ['gemini-3.1-pro', 'gemini-2.5-flash', 'opus-4.6', 'sonnet-4.6', 'deepseek-v3', 'qwen3-235b']) {
+    for (const tier of ['gemini-3.1-pro', 'gemini-2.5-flash', 'gemini-3-flash', 'opus-4.6', 'sonnet-4.6']) {
       const entry = PRICING_REGISTRY[tier];
       expect(entry, `legacy model ${tier} must have a pricing entry`).toBeDefined();
       expect(entry!.isUnknown).toBeFalsy();
@@ -190,18 +190,19 @@ describe('discovery failure fails closed (no expensive silent fallback)', () => 
 
 describe('fallback chains preserve explainability', () => {
   it('role fallback records the skipped primary and the fallbackUsed flag', () => {
-    // 'fast' primary is gpt-5.6-luna; only gemini-3.7-flash is discovered.
-    const discovered = new Set(['gemini-3.7-flash']);
+    // 'fast' primary is gpt-6-luna; only gemini-3.8-flash is discovered.
+    const discovered = new Set(['gemini-3.8-flash']);
     const resolution = resolveRoleCandidates('fast', discovered);
 
-    expect(resolution.config.modelId).toBe('gemini-3.7-flash');
+    expect(resolution.config.modelId).toBe('gemini-3.8-flash');
     expect(resolution.attempted).toContainEqual({
-      modelId: 'gpt-5.6-luna',
+      modelId: 'gpt-6-luna',
       reason: 'not-discovered',
     });
 
-    // vision_fast primary is gemini-3.7-flash; discovery only has gpt-5.6-luna.
-    const visionDiscovered = new Set(['gpt-5.6-luna']);
+    // vision_fast primary is gemini-3.8-flash; discovery only has the
+    // deepseek-v4-1-flash fallback.
+    const visionDiscovered = new Set(['deepseek-v4-1-flash']);
     const decision = determineRoute(
       baseParams({
         userQuery: 'What is shown in this screenshot?',
@@ -211,11 +212,11 @@ describe('fallback chains preserve explainability', () => {
       true,
       visionDiscovered,
     );
-    expect(decision.modelTier).toBe('gpt-5.6-luna');
+    expect(decision.modelTier).toBe('deepseek-v4-1-flash');
     const e = decision.explanation as RouteExplanation;
     expect(e.fallbackUsed).toBe(true);
     expect(e.attemptedModels).toBeDefined();
-    expect(e.attemptedModels?.some((m) => m.startsWith('gemini-3.7-flash:'))).toBe(true);
+    expect(e.attemptedModels?.some((m) => m.startsWith('gemini-3.8-flash:'))).toBe(true);
   });
 });
 
@@ -248,14 +249,14 @@ describe('provider-unavailable fallback cost guard', () => {
   const readyOnly = (...providers: string[]) => (p: string) => providers.includes(p);
 
   it('fallback candidate more expensive than the decided model is rejected', () => {
-    // Decided economy qwen3-235b (basis 0.25, deepinfra unavailable).
-    // gemini-2.5-flash (0.375), gpt-5.4-mini (0.75) and sonnet-4.6 (18) are
-    // all more expensive -> fail closed rather than silently escalate spend.
-    const decision = fixtureDecision('qwen3-235b', 'deepinfra');
+    // Decided economy gemini-2.5-flash (basis 0.375, google unavailable).
+    // The cheapest ready-provider alternative (anthropic sonnet-4.6, basis 18)
+    // is far more expensive -> fail closed rather than escalate spend.
+    const decision = fixtureDecision('gemini-2.5-flash', 'google');
     const result = normalizeDecisionAgainstProviderAvailability(
       decision,
       undefined,
-      readyOnly('google', 'openai', 'anthropic'),
+      readyOnly('openai', 'anthropic'),
     );
 
     expect(result.error).toBeDefined();
@@ -281,7 +282,7 @@ describe('provider-unavailable fallback cost guard', () => {
   });
 
   it('no ready provider at all fails closed', () => {
-    const decision = fixtureDecision('qwen3-235b', 'deepinfra');
+    const decision = fixtureDecision('gemini-2.5-flash', 'google');
     const result = normalizeDecisionAgainstProviderAvailability(
       decision,
       undefined,
@@ -291,11 +292,11 @@ describe('provider-unavailable fallback cost guard', () => {
   });
 
   it('override with unavailable provider never re-routes', () => {
-    const decision = fixtureDecision('qwen3-235b', 'deepinfra');
+    const decision = fixtureDecision('gemini-2.5-flash', 'google');
     const result = normalizeDecisionAgainstProviderAvailability(
       decision,
-      'qwen3-235b',
-      readyOnly('google'),
+      'gemini-2.5-flash',
+      readyOnly('anthropic'),
     );
     expect(result.error).toBeDefined();
     expect(result.error).toContain('Requested model');
@@ -304,7 +305,7 @@ describe('provider-unavailable fallback cost guard', () => {
   it('fallback order is deterministic and every entry is priced', () => {
     expect(PROVIDER_UNAVAILABLE_FALLBACKS).toEqual([
       'gemini-2.5-flash',
-      'gpt-5.4-mini',
+      'gemini-3-flash',
       'sonnet-4.6',
     ]);
     for (const tier of PROVIDER_UNAVAILABLE_FALLBACKS) {

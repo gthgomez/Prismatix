@@ -230,7 +230,7 @@ async function summarizeConversationWindow(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-5.4-mini',
+        model: 'gpt-6-luna',
         messages: [
           { role: 'system', content: 'You extract durable user memory for future chat context.' },
           { role: 'user', content: prompt },

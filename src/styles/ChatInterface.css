@@ -695,6 +695,12 @@
 .option-info { display: flex; flex-direction: column; gap: 1px; }
 .option-name { font-weight: 600; font-size: 0.85rem; color: var(--option-color); }
 .option-desc { font-size: 0.68rem; color: var(--color-text-dim); }
+.option-price {
+  font-size: 0.65rem;
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
 
 .user-menu-container { position: relative; }
 

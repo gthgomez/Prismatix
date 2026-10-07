@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PRICING_REGISTRY } from './pricingRegistry';
+import { MODEL_CATALOG } from './modelCatalog';
 import { getRouterModelOrderByListedOutputUsdPerM } from './modelEconomyOrder';
 
 describe('getRouterModelOrderByListedOutputUsdPerM', () => {
@@ -35,9 +36,11 @@ describe('getRouterModelOrderByListedOutputUsdPerM', () => {
     expect(desc[desc.length - 1]).toBeDefined();
   });
 
-  it('includes all pricing registry models', () => {
+  it('includes every cataloged model that has pricing, and only those', () => {
     const asc = getRouterModelOrderByListedOutputUsdPerM('asc');
-    const registryKeys = Object.keys(PRICING_REGISTRY).sort();
-    expect([...asc].sort()).toEqual(registryKeys);
+    const expected = Object.keys(PRICING_REGISTRY)
+      .filter((key) => key in MODEL_CATALOG)
+      .sort();
+    expect([...asc].sort()).toEqual(expected);
   });
 });

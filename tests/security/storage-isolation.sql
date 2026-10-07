@@ -329,29 +329,49 @@ begin
     raise exception 'PX01 FAIL: A can see other subjects'' access_grants rows';
   end if;
 
-  update prismatix_internal.access_grants
-     set enabled = true,
-         allowed_features = array['chat', 'review', 'video', 'memory', 'smd']::text[]
-   where subject_id = current_setting('px01.user_b')::uuid;
-  get diagnostics affected = row_count;
-  if affected <> 0 then
-    raise exception 'PX01 FAIL: A updated another subject''s grant (self-escalation possible)';
-  end if;
+  -- The migration grants `authenticated` SELECT only on access_grants, so
+  -- client writes are denied at the table ACL before RLS is ever consulted
+  -- (42501). That denial is the containment. If an environment ever loosens
+  -- the grants, RLS must still filter every row: 0 affected. Both outcomes
+  -- pass; any row actually read or written fails.
+  begin
+    update prismatix_internal.access_grants
+       set enabled = true,
+           allowed_features = array['chat', 'review', 'video', 'memory', 'smd']::text[]
+     where subject_id = current_setting('px01.user_b')::uuid;
+    get diagnostics affected = row_count;
+    if affected <> 0 then
+      raise exception 'PX01 FAIL: A updated another subject''s grant (self-escalation possible)';
+    end if;
+  exception
+    when insufficient_privilege then
+      null; -- expected: table-level ACL denies UPDATE to authenticated
+  end;
 
-  update prismatix_internal.access_grants
-     set enabled = true
-   where subject_id = current_setting('px01.user_a')::uuid;
-  get diagnostics affected = row_count;
-  if affected <> 0 then
-    raise exception 'PX01 FAIL: A updated its own grant (self-escalation possible)';
-  end if;
+  begin
+    update prismatix_internal.access_grants
+       set enabled = true
+     where subject_id = current_setting('px01.user_a')::uuid;
+    get diagnostics affected = row_count;
+    if affected <> 0 then
+      raise exception 'PX01 FAIL: A updated its own grant (self-escalation possible)';
+    end if;
+  exception
+    when insufficient_privilege then
+      null; -- expected: table-level ACL denies UPDATE to authenticated
+  end;
 
-  delete from prismatix_internal.access_grants
-   where subject_id = current_setting('px01.user_a')::uuid;
-  get diagnostics affected = row_count;
-  if affected <> 0 then
-    raise exception 'PX01 FAIL: A deleted access_grants rows';
-  end if;
+  begin
+    delete from prismatix_internal.access_grants
+     where subject_id = current_setting('px01.user_a')::uuid;
+    get diagnostics affected = row_count;
+    if affected <> 0 then
+      raise exception 'PX01 FAIL: A deleted access_grants rows';
+    end if;
+  exception
+    when insufficient_privilege then
+      null; -- expected: table-level ACL denies DELETE to authenticated
+  end;
 end $$;
 do $$
 begin
@@ -463,14 +483,23 @@ do $$
 declare
   affected bigint;
 begin
-  update public.video_assets
-     set status = 'ready',
-         metadata = '{"forged":true}'::jsonb
-   where storage_path = current_setting('px01.probe_path');
-  get diagnostics affected = row_count;
-  if affected <> 0 then
-    raise exception 'PX01 FAIL: client UPDATE on video_assets affected % rows (video_assets_update_own not removed)', affected;
-  end if;
+  -- Post-migration there is no UPDATE policy for authenticated. Where the
+  -- table grant still exists (Supabase default), RLS filters every row:
+  -- 0 affected. Where the grant was revoked, the ACL denies outright. Both
+  -- are containment; a row actually updated is not.
+  begin
+    update public.video_assets
+       set status = 'ready',
+           metadata = '{"forged":true}'::jsonb
+     where storage_path = current_setting('px01.probe_path');
+    get diagnostics affected = row_count;
+    if affected <> 0 then
+      raise exception 'PX01 FAIL: client UPDATE on video_assets affected % rows (video_assets_update_own not removed)', affected;
+    end if;
+  exception
+    when insufficient_privilege then
+      null; -- expected under revoked grants: denied before RLS
+  end;
 end $$;
 reset role;
 

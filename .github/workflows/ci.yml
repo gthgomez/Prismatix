@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, 'campaign/**']
 
 jobs:
   ci:
@@ -31,3 +31,6 @@ jobs:
 
       - name: Run tests
         run: npm run test
+
+      - name: Stale-model coupling budget
+        run: node scripts/audit-stale-models.mjs --check

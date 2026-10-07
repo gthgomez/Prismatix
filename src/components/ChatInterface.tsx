@@ -38,7 +38,7 @@ import type {
   Message,
   RouterModel,
 } from '../types';
-import { MODEL_CATALOG, MODEL_HIGHLIGHTS, MODEL_ORDER } from '../modelCatalog';
+import { MODEL_CATALOG, MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog';
 import { assistantModelPillDisplay, buildRouteExplanationRows } from '../modelDisplay';
 import { RouteExplanationList } from './RouteExplanationList';
 import {
@@ -768,7 +768,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
   };
 
-  const modelConfig = MODEL_CATALOG[currentModel];
+  // Server-selected IDs can be ahead of the deployed catalog; degrade, never crash.
+  const modelConfig = getCatalogEntry(currentModel);
   const composerValidationView = getComposerSendValidationView(sendValidationError);
 
   const openRoutingDebateMenu = () => {
@@ -1131,7 +1132,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                       msg.role === 'assistant' && (
                       <div className='message-thinking-loader'>
                         <PrismatixPulse
-                          color={msg.model ? MODEL_CATALOG[msg.model].color : modelConfig.color}
+                          color={msg.model ? getCatalogEntry(msg.model).color : modelConfig.color}
                           showLogo
                         />
                       </div>
