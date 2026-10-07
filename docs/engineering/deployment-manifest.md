@@ -382,3 +382,95 @@ Verification: `tests/routing/execution_identity.test.ts` (vitest, injected fake
 client) and `tests/integration/ledger-settlement.sql` (self-contained
 BEGIN/ROLLBACK; run against a migrated database per the storage-isolation
 runbook).
+
+## 17. Stream lifecycle, SSE wire contract and terminal receipts (PX06, invariant 7)
+
+PX06 makes downstream cancellation a distinct terminal path and exposes a
+structured terminal receipt. It deploys **one additive migration** (a read RPC
+only) and **no new edge function slug** and **no new table**. The mobile wire
+contract is unchanged: `content_block_delta` JSON and the `data: [DONE]`
+terminator are byte-for-byte identical; the `receipt` event is additive and old
+clients ignore it.
+
+### 17.1 SSE wire contract
+
+Responses are `Content-Type: text/event-stream`. The router normalizes every
+provider stream into these data events:
+
+| Event | Shape | Notes |
+| --- | --- | --- |
+| `content_block_delta` | `data:{"type":"content_block_delta","delta":{"text":"…"}}` | **Unchanged** mobile protocol. |
+| `thought` | `data:{"type":"thought","chunk":"…"}` | Thinking stream (existing). |
+| `meta` | `data:{"type":"meta",…}` | Cost/debate metadata (existing). |
+| `receipt` | `data:{"type":"receipt",…TerminalReceipt}` | **Additive.** Emitted as the final data event immediately before `[DONE]` on completion. |
+| terminator | `data: [DONE]` | **Unchanged**; always the last event. |
+| heartbeat | `: keepalive` | SSE comment emitted on an interval (default 15 s) while the router waits on upstream; it is not a data event. |
+
+`X-Prismatix-Execution-Id` is set on the `text/event-stream` response (and listed
+in `Access-Control-Expose-Headers`) so a browser client can correlate the stream
+with its execution before the receipt arrives.
+
+The `TerminalReceipt` projection is:
+
+```jsonc
+{
+  "executionId": "…", "status": "completed|cancelled|failed|indeterminate|started",
+  "terminalOutcome": "ok|client_cancelled|…|null",
+  "requestedModel": "…|null", "resolvedModel": "…|null", "servedModel": "…|null",
+  "createdAt": "…", "finalizedAt": "…|null",
+  "settlement": { "state": "settled|pending|released", "committedUsd": 0.0, "pendingCalls": 0 },
+  "calls": [{ "stage": "…|null", "participant": "…|null", "attemptNumber": 1,
+              "servedModel": "…|null", "costStatus": "settled|pending|estimated_legacy",
+              "totalCost": 0.0 }]
+}
+```
+
+Money safety: `settlement.state` is `released` only for zero calls with a
+released reservation, `pending` when any call is not `settled`, otherwise
+`settled`. Missing/unknown cost is `pending`, never `$0`.
+
+### 17.2 Cancellation semantics (invariant 7)
+
+- A downstream client disconnect finalizes the execution `cancelled`
+  (`terminal_outcome = 'client_cancelled'`) and settles the reservation from the
+  authoritative ledger. A disconnect is **never** reported as `completed`/`ok`.
+- A mid-stream upstream read error or an outer crash/timeout finalizes the
+  execution `indeterminate` (`terminal_outcome = 'aborted'` /
+  `'upstream_stream_error'`) when it is not already terminal.
+- Settlement follows the ledger: settled calls commit; any unsettled call keeps
+  the hold (`pending`); zero provider calls releases the hold.
+
+### 17.3 Authenticated receipt lookup
+
+`POST` the router with a valid user bearer token and:
+
+```jsonc
+{ "action": "execution_receipt", "executionId": "<uuid>" }
+```
+
+No chat entitlement is required (it is the caller's own accounting record) and
+**zero provider calls** are made. Responses:
+
+| Status | Body | Condition |
+| --- | --- | --- |
+| 200 | `TerminalReceipt` | owned by the authenticated subject |
+| 400 | `{ "error": "Bad Request: executionId required" }` | missing/blank id |
+| 404 | `{ "error": "execution_not_found" }` | unknown **or** not owned (existence never leaked) |
+| 503 | `{ "error": "accounting_unavailable", "code": "accounting_unavailable" }` | ledger lookup failure (fail closed) |
+
+### 17.4 Migration
+
+| File | Class | Notes |
+| --- | --- | --- |
+| `supabase/migrations/20261006030000_px06_execution_receipt.sql` | additive | Adds `public.px03_get_execution_receipt(p_subject_id uuid, p_execution_id uuid) returns jsonb`, `SECURITY DEFINER` with a fixed `search_path`. **Read RPC only — no new table.** Returns `NULL` unless an `executions` row matches BOTH the id and the subject id. |
+
+**Unapplied:** the migration is committed but not yet applied to any
+environment; the RPC returns 404/fails closed until it is applied. Grants:
+`EXECUTE` revoked from `public`/`anon`/`authenticated`, granted only to
+`service_role` — the same posture as the other `px03_*` / `px05_*` RPCs. The
+`prismatix_internal` authority tables remain out of PostgREST, so this RPC is the
+only read path.
+
+Verification: `tests/routing/sse_parser.test.ts`, `tests/routing/stream_lifecycle.test.ts`
+and `tests/routing/execution_receipt.test.ts` (vitest). The migration's SQL
+behaviour requires a psql/staging run (not available in the CI unit environment).
