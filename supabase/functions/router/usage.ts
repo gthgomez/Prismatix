@@ -13,6 +13,7 @@
 // estimate handles that case separately). Deno-free and unit-testable.
 
 import type { Provider } from './router_logic.ts';
+import { createSseParser, isDoneData } from '../_shared/sse_parser.ts';
 
 export interface NormalizedUsage {
   inputTokens: number;
@@ -106,41 +107,41 @@ export function createUsageTracker(provider: Provider): UsageTracker {
   return { observe, usage };
 }
 
-function observeDataLine(line: string, tracker: UsageTracker): void {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('data:')) return;
-  const dataStr = trimmed.slice(5).trim();
-  if (!dataStr || dataStr === '[DONE]') return;
-  try {
-    tracker.observe(JSON.parse(dataStr));
-  } catch {
-    // Ignore malformed frames; usage stays whatever was already observed.
-  }
-}
-
 /**
  * Consumes a teed SSE branch, feeding every data frame to the tracker, and
  * resolves with the accumulated usage once the stream ends (or errors). Never
  * throws: a stream error yields whatever was observed so far.
+ *
+ * Parsing is delegated to the shared SSE authority (`createSseParser`) so the
+ * router and the browser client agree on framing (CRLF/CR/LF, multi-line data,
+ * comments). This remains best-effort: malformed frames are ignored and no
+ * usage is ever invented.
  */
 export async function consumeStreamUsage(
   body: ReadableStream<Uint8Array>,
   tracker: UsageTracker,
 ): Promise<NormalizedUsage | null> {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  const parser = createSseParser();
+  const observeEvents = (events: ReturnType<typeof parser.push>): void => {
+    for (const event of events) {
+      if (event.comment || isDoneData(event)) continue;
+      if (!event.data) continue;
+      try {
+        tracker.observe(JSON.parse(event.data));
+      } catch {
+        // Ignore malformed frames; usage stays whatever was already observed.
+      }
+    }
+  };
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) observeDataLine(line, tracker);
+      observeEvents(parser.push(value));
     }
-    if (buffer.trim()) observeDataLine(buffer, tracker);
+    observeEvents(parser.flush());
   } catch {
     // Stream error: return whatever usage was observed before the failure.
   } finally {
