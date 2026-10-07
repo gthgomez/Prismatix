@@ -22,8 +22,10 @@ import {
 } from '../../supabase/functions/router/execution_store.ts';
 import {
   runMeteredCall,
+  MeteredCallAccountingError,
   type PriceSnapshot,
 } from '../../supabase/functions/router/metered_call.ts';
+import { openExecutionForRequest } from '../../supabase/functions/router/execution_gate.ts';
 
 // ============================================================================
 // FAKE SERVICE-ROLE CLIENT (in-memory px03_* RPCs)
@@ -304,6 +306,68 @@ describe('createExecution', () => {
 });
 
 // ============================================================================
+// openExecutionForRequest — duplicate/conflict gate (zero dispatch)
+// ============================================================================
+
+describe('openExecutionForRequest', () => {
+  it('rejects a reused key + same payload as duplicate_request (409) with the execution id', async () => {
+    const fake = createFakeClient();
+    const input = {
+      subjectId: SUBJECT,
+      conversationId: CONVERSATION,
+      clientRequestKey: 'req-gate',
+      payloadHash: 'hash-gate',
+    };
+
+    const first = await openExecutionForRequest(fake.client, input);
+    expect(first.kind).toBe('proceed');
+
+    const retry = await openExecutionForRequest(fake.client, input);
+
+    // The router dispatches providers ONLY when kind === 'proceed'. A rejected
+    // gate therefore makes zero provider calls.
+    let providerCalls = 0;
+    if (retry.kind === 'proceed') providerCalls += 1;
+    expect(providerCalls).toBe(0);
+    expect(retry.kind).toBe('rejected');
+    if (retry.kind !== 'rejected') throw new Error('expected a rejected duplicate');
+    expect(retry.status).toBe(409);
+    expect(retry.error).toBe('duplicate_request');
+    expect(retry.code).toBe('duplicate_request');
+    if (first.kind === 'proceed') {
+      expect(retry.executionId).toBe(first.execution.id);
+    }
+  });
+
+  it('rejects a reused key with a changed payload as request_key_conflict (409), zero dispatch', async () => {
+    const fake = createFakeClient();
+    await openExecutionForRequest(fake.client, {
+      subjectId: SUBJECT,
+      conversationId: CONVERSATION,
+      clientRequestKey: 'req-gate',
+      payloadHash: 'hash-gate',
+    });
+
+    const conflict = await openExecutionForRequest(fake.client, {
+      subjectId: SUBJECT,
+      conversationId: CONVERSATION,
+      clientRequestKey: 'req-gate',
+      payloadHash: 'hash-CHANGED',
+    });
+
+    let providerCalls = 0;
+    if (conflict.kind === 'proceed') providerCalls += 1;
+    expect(providerCalls).toBe(0);
+    expect(conflict.kind).toBe('rejected');
+    if (conflict.kind !== 'rejected') throw new Error('expected a rejected conflict');
+    expect(conflict.status).toBe(409);
+    expect(conflict.error).toBe('request_key_conflict');
+    expect(conflict.code).toBe('request_key_conflict');
+    expect(conflict.executionId).toBeUndefined();
+  });
+});
+
+// ============================================================================
 // recordModelCall — distinct provider calls are distinct rows
 // ============================================================================
 
@@ -471,6 +535,41 @@ describe('runMeteredCall', () => {
     // The failure is durable, not a console dead-letter.
     expect(fake.jobs).toHaveLength(1);
     expect(fake.jobs[0]!.kind).toBe('model_call_settlement_failed');
+  });
+
+  it('fails closed with zero dispatch when the pre-dispatch ledger write fails', async () => {
+    // The very first model_calls write (pre-dispatch) is injected to fail.
+    const fake = createFakeClient({ failRpc: 'px03_record_model_call', failAtCall: 1 });
+    const execution = await seedExecution(fake);
+
+    let dispatched = false;
+    await expect(
+      runMeteredCall(
+        {
+          store: fake.client,
+          execution,
+          stage: 'baseline',
+          participant: 'openai',
+          attemptNumber: 1,
+          requestedModel: 'gpt-5.6-sol',
+          priceSnapshot: PRICE,
+        },
+        async () => {
+          dispatched = true;
+          return {
+            result: 'must-not-be-reached',
+            usage: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0 },
+          };
+        },
+      ),
+    ).rejects.toBeInstanceOf(MeteredCallAccountingError);
+
+    // The provider call was never made and the failure is durable.
+    expect(dispatched).toBe(false);
+    expect(fake.modelCalls).toHaveLength(0);
+    expect(fake.jobs).toHaveLength(1);
+    expect(fake.jobs[0]!.kind).toBe('model_call_pre_dispatch_failed');
+    expect(fake.jobs[0]!.execution_id).toBe(execution.id);
   });
 });
 
