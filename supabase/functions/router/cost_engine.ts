@@ -101,8 +101,12 @@ export function calculateFinalCost(
     };
   }
 
+  // Reasoning tokens are a SUBSET of completion tokens (provider usage
+  // convention): bill the non-reasoning remainder at the output rate and the
+  // reasoning portion at the reasoning rate. Never charge reasoning twice.
+  const billableOutputTokens = Math.max(0, completionTokens - reasoningTokens);
   const inputCost = (promptTokens / TOKENS_PER_MILLION) * pricing.inputRatePer1M;
-  const outputCost = (completionTokens / TOKENS_PER_MILLION) * pricing.outputRatePer1M;
+  const outputCost = (billableOutputTokens / TOKENS_PER_MILLION) * pricing.outputRatePer1M;
   const reasoningRate = pricing.reasoningRatePer1M ?? pricing.outputRatePer1M;
   const reasoningCost = (reasoningTokens / TOKENS_PER_MILLION) * reasoningRate;
 
@@ -139,8 +143,12 @@ export function calculateCostBreakdown(
     };
   }
 
+  // Reasoning tokens are a SUBSET of completion tokens (provider usage
+  // convention): bill the non-reasoning remainder at the output rate and the
+  // reasoning portion at the reasoning rate. Never charge reasoning twice.
+  const billableOutputTokens = Math.max(0, completionTokens - reasoningTokens);
   const inputCost = roundUsd((promptTokens / TOKENS_PER_MILLION) * pricing.inputRatePer1M);
-  const outputCost = roundUsd((completionTokens / TOKENS_PER_MILLION) * pricing.outputRatePer1M);
+  const outputCost = roundUsd((billableOutputTokens / TOKENS_PER_MILLION) * pricing.outputRatePer1M);
   const reasoningRate = pricing.reasoningRatePer1M ?? pricing.outputRatePer1M;
   const reasoningCost = roundUsd((reasoningTokens / TOKENS_PER_MILLION) * reasoningRate);
 

@@ -1,6 +1,16 @@
 // Single source of truth lives in supabase/functions/_shared/model_tariff.ts.
 // This module re-exports it typed for the client and keeps the helpers.
-import { MODEL_TARIFF, MODEL_TARIFF_VERSION } from '../supabase/functions/_shared/model_tariff';
+import {
+  MODEL_TARIFF,
+  MODEL_TARIFF_VERSION,
+  isPriceExpired,
+} from '../supabase/functions/_shared/model_tariff';
+
+export {
+  assertPricingCurrent,
+  isPriceExpired,
+  StalePriceError,
+} from '../supabase/functions/_shared/model_tariff';
 
 export interface ModelPricing {
   inputRatePer1M: number;
@@ -20,6 +30,9 @@ export interface ModelPricing {
   sourceRef: string;
   isEstimated: boolean;
   isUnknown?: boolean;
+  isExpired?: boolean;
+  effectiveFrom?: string;
+  effectiveTo?: string;
   isEligibleForAutoRouting?: boolean;
 }
 
@@ -39,11 +52,28 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> =
 
 /**
  * Fail-Closed Pricing Retrieval.
- * If pricing is unknown, automatic routing is strictly forbidden.
+ * If pricing is unknown or its effective interval has expired, automatic
+ * routing is strictly forbidden and no live rate is ever returned.
  */
-export function getPricingForModel(model: string): ModelPricing {
+export function getPricingForModel(model: string, now: Date = new Date()): ModelPricing {
   const existing = PRICING_REGISTRY[model];
-  if (existing) return existing;
+  if (existing) {
+    if (isPriceExpired(existing, now)) {
+      // Expired price: same fail-closed posture as an unknown model, plus an
+      // explicit isExpired flag so callers can explain the difference.
+      return {
+        inputRatePer1M: 0.0,
+        outputRatePer1M: 0.0,
+        asOfDate: 'expired',
+        sourceRef: 'expired-fail-closed',
+        isEstimated: true,
+        isUnknown: true,
+        isExpired: true,
+        isEligibleForAutoRouting: false,
+      };
+    }
+    return existing;
+  }
 
   // Unknown model pricing: auto-routing forbidden
   return {

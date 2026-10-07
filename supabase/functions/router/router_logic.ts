@@ -186,6 +186,47 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
 export type AnthropicModel = 'opus-4.6' | 'sonnet-4.6' | 'haiku-4.5';
 export type RouterModel = string;
 
+// ---------------------------------------------------------------------------
+// Image-modality guard (PX04)
+//
+// Routing must never send image attachments to a model that cannot see them,
+// and must never silently downgrade/substitute a family to make the request
+// fit. The guard reads the same `supportsImages` registry used for routing.
+// Unknown routes fail CLOSED for images (they cannot be proven image-capable).
+// ---------------------------------------------------------------------------
+
+/** Typed failure raised when a request's modalities do not fit the route. */
+export class ModalityMismatchError extends Error {
+  readonly code = 'modality_mismatch';
+  readonly model: string;
+
+  constructor(model: string) {
+    super(`Model '${model}' does not support the supplied modality (images).`);
+    this.name = 'ModalityMismatchError';
+    this.model = model;
+  }
+}
+
+/** Whether the routing registry marks `model` as image-capable. */
+export function routeSupportsImages(model: string): boolean {
+  const config = MODEL_REGISTRY[model];
+  if (!config) return false; // unknown route -> fail closed for images
+  return config.supportsImages;
+}
+
+/**
+ * Throws `ModalityMismatchError` when images are supplied to a route whose
+ * registry entry has `supportsImages === false` (or is unknown).
+ */
+export function assertRouteSupportsModalities(
+  model: string,
+  modalities: { images?: boolean } = {},
+): void {
+  if (modalities.images && !routeSupportsImages(model)) {
+    throw new ModalityMismatchError(model);
+  }
+}
+
 export interface RoutingAnalysis {
   complexityScore: number;
   reasoningDifficulty: number;
