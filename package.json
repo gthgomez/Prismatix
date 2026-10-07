@@ -15,7 +15,8 @@
     "type-check": "tsc --noEmit",
     "lint": "eslint . --ext ts,tsx",
     "test": "vitest run",
-    "audit:models": "node scripts/audit-stale-models.mjs"
+    "audit:models": "node scripts/audit-stale-models.mjs",
+    "check:parity": "node scripts/check-deployment-parity.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
