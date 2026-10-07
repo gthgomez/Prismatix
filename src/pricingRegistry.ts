@@ -24,11 +24,18 @@ export interface ModelPricing {
 }
 
 /**
- * Checks if a given UTC time falls within DeepSeek's official off-peak window (16:30 - 08:30 UTC).
+ * DeepSeek peak window per https://api-docs.deepseek.com/quick_start/pricing/
+ * (verified 2026-10-07): peak = 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri.
+ * Weekends are off-peak; Chinese public holidays are also off-peak but are
+ * NOT modeled here (no holiday calendar) — off-peak estimates on those days
+ * will be conservative. Off-peak rates are half of peak.
  */
 export function isDeepSeekOffPeak(date: Date = new Date()): boolean {
-  const utcMinutes = date.getUTCHours() * 60 + date.getUTCMinutes();
-  return utcMinutes >= 990 || utcMinutes < 510;
+  const day = date.getUTCDay();
+  if (day === 0 || day === 6) return true; // Sat/Sun
+  const m = date.getUTCHours() * 60 + date.getUTCMinutes();
+  const peak = (m >= 60 && m < 240) || (m >= 360 && m < 600);
+  return !peak;
 }
 
 export const PRICING_VERSION: string = MODEL_TARIFF_VERSION;

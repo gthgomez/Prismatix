@@ -306,10 +306,10 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
     supportsImages: true,
     budgetCap: 8192,
     pricing: {
-      inputPer1M: 0.44,
-      outputPer1M: 1.32,
-      source: 'deepseek-estimate',
-      verifiedAt: '2026-10-06',
+      inputPer1M: 0.30,
+      outputPer1M: 1.20,
+      source: 'deepseek-official',
+      verifiedAt: '2026-10-07',
     },
   },
 

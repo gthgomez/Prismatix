@@ -38,8 +38,9 @@ describe('Router Production Module Graph & Smoke Tests', () => {
   });
 
   it('calculates off-peak vs peak rates for DeepSeek models correctly', () => {
-    // Peak date: 12:00 UTC (720 min -> peak)
-    const peakDate = new Date('2026-08-16T12:00:00Z');
+    // Peak date: Wednesday 02:00 UTC — inside the 01:00-04:00 UTC weekday
+    // peak window. Must be a weekday: weekends are always off-peak.
+    const peakDate = new Date('2026-08-12T02:00:00Z');
     expect(isDeepSeekOffPeak(peakDate)).toBe(false);
 
     const peakCost = calculateEstimatedCostUsd(
@@ -55,8 +56,9 @@ describe('Router Production Module Graph & Smoke Tests', () => {
     expect(peakCost.costUsd).toBeCloseTo(1.76, 3);
     expect(peakCost.isOffPeak).toBe(false);
 
-    // Off-peak date: 20:00 UTC (1200 min -> off-peak)
-    const offPeakDate = new Date('2026-08-16T20:00:00Z');
+    // Off-peak date: Wednesday 12:00 UTC — outside both peak windows
+    // (peak is only 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri).
+    const offPeakDate = new Date('2026-08-12T12:00:00Z');
     expect(isDeepSeekOffPeak(offPeakDate)).toBe(true);
 
     const offPeakCost = calculateEstimatedCostUsd(
