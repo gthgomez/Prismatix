@@ -63,11 +63,11 @@ export interface RolePolicy {
  * Pinned physical model descriptors validated against official OpenCode Zen documentation & live discovery.
  *
  * Wire Protocol Mappings:
- * - GPT-5.6 Sol / Terra / Luna -> /zen/v1/responses (openai-responses)
+ * - GPT-6 Sol / Luna and GPT-5.6 Sol / Terra / Luna -> /zen/v1/responses (openai-responses)
  * - Grok 4.6 -> /zen/v1/responses (openai-responses)
- * - Claude Sonnet 5 / Opus 5 / Haiku 4.5 -> /zen/v1/messages (anthropic-messages)
- * - Gemini 3.7 Flash -> /zen/v1/models/gemini-3.7-flash (gemini)
- * - DeepSeek V4 Flash / Pro -> /zen/v1/chat/completions (openai-chat)
+ * - Claude Sonnet 5.5 / Opus 5.5 / Sonnet 5 / Opus 5 / Haiku 4.5 -> /zen/v1/messages (anthropic-messages)
+ * - Gemini 3.8 Flash / 3.7 Flash -> /zen/v1/models/gemini-3.8-flash (gemini)
+ * - DeepSeek V4.1 Flash / V4 Flash / Pro -> /zen/v1/chat/completions (openai-chat)
  */
 export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
   'deepseek-v4-flash': {
@@ -222,6 +222,97 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
     },
   },
 
+  'gpt-6-sol': {
+    modelId: 'gpt-6-sol',
+    displayName: 'GPT-6 Sol',
+    gateway: 'opencode',
+    protocol: 'openai-responses',
+    family: 'openai',
+    supportsImages: true,
+    budgetCap: 32768,
+    pricing: {
+      inputPer1M: 2.00,
+      outputPer1M: 10.00,
+      source: 'openai-official',
+      verifiedAt: '2026-10-06',
+    },
+  },
+  'gpt-6-luna': {
+    modelId: 'gpt-6-luna',
+    displayName: 'GPT-6 Luna',
+    gateway: 'opencode',
+    protocol: 'openai-responses',
+    family: 'openai',
+    supportsImages: true,
+    budgetCap: 8192,
+    pricing: {
+      inputPer1M: 0.10,
+      outputPer1M: 0.50,
+      source: 'openai-official',
+      verifiedAt: '2026-10-06',
+    },
+  },
+  'claude-opus-5-5': {
+    modelId: 'claude-opus-5-5',
+    displayName: 'Claude Opus 5.5',
+    gateway: 'opencode',
+    protocol: 'anthropic-messages',
+    family: 'anthropic',
+    supportsImages: true,
+    budgetCap: 32768,
+    pricing: {
+      inputPer1M: 4.00,
+      outputPer1M: 20.00,
+      source: 'anthropic-official',
+      verifiedAt: '2026-10-06',
+    },
+  },
+  'claude-sonnet-5-5': {
+    modelId: 'claude-sonnet-5-5',
+    displayName: 'Claude Sonnet 5.5',
+    gateway: 'opencode',
+    protocol: 'anthropic-messages',
+    family: 'anthropic',
+    supportsImages: true,
+    budgetCap: 16384,
+    pricing: {
+      inputPer1M: 2.00,
+      outputPer1M: 10.00,
+      source: 'anthropic-official',
+      verifiedAt: '2026-10-06',
+    },
+  },
+  'gemini-3.8-flash': {
+    modelId: 'gemini-3.8-flash',
+    displayName: 'Gemini 3.8 Flash',
+    gateway: 'opencode',
+    protocol: 'gemini',
+    family: 'google',
+    supportsImages: true,
+    budgetCap: 8192,
+    pricing: {
+      inputPer1M: 0.75,
+      outputPer1M: 3.75,
+      source: 'google-official',
+      verifiedAt: '2026-10-06',
+    },
+  },
+  'deepseek-v4-1-flash': {
+    modelId: 'deepseek-v4-1-flash',
+    displayName: 'DeepSeek V4.1 Flash',
+    gateway: 'opencode',
+    protocol: 'openai-chat',
+    family: 'deepseek',
+    supportsImages: true,
+    budgetCap: 8192,
+    pricing: {
+      inputPer1M: 0.44,
+      outputPer1M: 1.32,
+      source: 'deepseek-estimate',
+      verifiedAt: '2026-10-06',
+    },
+  },
+
   // Quarantined Free/Experimental Models (NEVER in automatic production fallbacks)
   'deepseek-v4-flash-free': {
     modelId: 'deepseek-v4-flash-free',
@@ -265,40 +356,40 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
  */
 export const CURATED_ROUTE_POLICY: Record<RouteRole, RolePolicy> = {
   economy: {
-    primary: 'deepseek-v4-flash',
-    fallback: ['gpt-5.6-luna'],
+    primary: 'gpt-6-luna',
+    fallback: ['deepseek-v4-flash', 'deepseek-v4-1-flash'],
   },
   fast: {
-    primary: 'gpt-5.6-luna',
-    fallback: ['gemini-3.7-flash', 'deepseek-v4-flash'],
+    primary: 'gpt-6-luna',
+    fallback: ['gemini-3.8-flash', 'gpt-5.6-luna'],
   },
   balanced: {
-    primary: 'deepseek-v4-pro',
-    fallback: ['grok-4.6', 'gpt-5.6-terra'],
+    primary: 'deepseek-v4-1-flash',
+    fallback: ['deepseek-v4-pro', 'grok-4.6'],
   },
   strong: {
-    primary: 'claude-sonnet-5',
-    fallback: ['gpt-5.6-terra', 'grok-4.6'],
+    primary: 'claude-sonnet-5-5',
+    fallback: ['gpt-6-sol', 'claude-sonnet-5', 'grok-4.6'],
   },
   max: {
-    primary: 'gpt-5.6-sol',
-    fallback: ['claude-opus-5', 'claude-sonnet-5'],
+    primary: 'gpt-6-sol',
+    fallback: ['claude-opus-5-5', 'gpt-5.6-sol', 'claude-opus-5'],
   },
   vision_fast: {
-    primary: 'gemini-3.7-flash',
-    fallback: ['gpt-5.6-luna', 'claude-haiku-4-5'],
+    primary: 'gemini-3.8-flash',
+    fallback: ['deepseek-v4-1-flash', 'gemini-3.7-flash', 'claude-haiku-4-5'],
   },
   vision_strong: {
-    primary: 'claude-sonnet-5',
-    fallback: ['gpt-5.6-terra', 'gemini-3.7-flash'],
+    primary: 'claude-sonnet-5-5',
+    fallback: ['gpt-6-sol', 'claude-sonnet-5', 'gemini-3.8-flash'],
   },
   code_review: {
-    primary: 'claude-sonnet-5',
-    fallback: ['deepseek-v4-pro', 'gpt-5.6-terra'],
+    primary: 'claude-sonnet-5-5',
+    fallback: ['deepseek-v4-pro', 'gpt-6-sol'],
   },
   cheap_critic: {
-    primary: 'deepseek-v4-flash',
-    fallback: ['gpt-5.6-luna'],
+    primary: 'gpt-6-luna',
+    fallback: ['deepseek-v4-flash'],
   },
 };
 

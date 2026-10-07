@@ -31,7 +31,7 @@ describe('production discovery routing integration', () => {
 
   it('uses live discovery to pick OpenCode fallback when primary is absent from gateway', async () => {
     const discoveryPayload = {
-      data: ['gpt-5.6-luna', 'gemini-3.7-flash', 'claude-sonnet-5'],
+      data: ['gpt-6-luna', 'gemini-3.8-flash', 'claude-sonnet-5-5'],
     };
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -49,7 +49,7 @@ describe('production discovery routing integration', () => {
       openCodeBaseUrl: DEFAULT_OPENCODE_BASE_URL,
     });
 
-    expect(decision.modelTier).toBe('gpt-5.6-luna');
+    expect(decision.modelTier).toBe('gpt-6-luna');
     expect(decision.routeRole).toBe('economy');
     expect(decision.rationaleTag).toBe('opencode-economy');
   });
@@ -104,6 +104,6 @@ describe('production discovery routing integration', () => {
     });
 
     expect(fetchCalled).toBe(false);
-    expect(decision.modelTier).toBe('qwen3-235b');
+    expect(decision.modelTier).toBe('gemini-2.5-flash');
   });
 });

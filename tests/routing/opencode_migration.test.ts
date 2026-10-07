@@ -20,14 +20,14 @@ describe('OpenCode Model Hub & Semantic Routing Migration', () => {
     it('resolves primary paid model for every curated role when all models are available', () => {
       const allIds = new Set(Object.keys(CURATED_OPENCODE_REGISTRY));
 
-      expect(resolveModelForRole('economy', allIds).modelId).toBe('deepseek-v4-flash');
-      expect(resolveModelForRole('fast', allIds).modelId).toBe('gpt-5.6-luna');
-      expect(resolveModelForRole('balanced', allIds).modelId).toBe('deepseek-v4-pro');
-      expect(resolveModelForRole('strong', allIds).modelId).toBe('claude-sonnet-5');
-      expect(resolveModelForRole('max', allIds).modelId).toBe('gpt-5.6-sol');
-      expect(resolveModelForRole('vision_fast', allIds).modelId).toBe('gemini-3.7-flash');
-      expect(resolveModelForRole('code_review', allIds).modelId).toBe('claude-sonnet-5');
-      expect(resolveModelForRole('cheap_critic', allIds).modelId).toBe('deepseek-v4-flash');
+      expect(resolveModelForRole('economy', allIds).modelId).toBe('gpt-6-luna');
+      expect(resolveModelForRole('fast', allIds).modelId).toBe('gpt-6-luna');
+      expect(resolveModelForRole('balanced', allIds).modelId).toBe('deepseek-v4-1-flash');
+      expect(resolveModelForRole('strong', allIds).modelId).toBe('claude-sonnet-5-5');
+      expect(resolveModelForRole('max', allIds).modelId).toBe('gpt-6-sol');
+      expect(resolveModelForRole('vision_fast', allIds).modelId).toBe('gemini-3.8-flash');
+      expect(resolveModelForRole('code_review', allIds).modelId).toBe('claude-sonnet-5-5');
+      expect(resolveModelForRole('cheap_critic', allIds).modelId).toBe('gpt-6-luna');
     });
 
     it('NEVER silently falls back to a free/data-training endpoint in production auto-routing', () => {
@@ -49,10 +49,10 @@ describe('OpenCode Model Hub & Semantic Routing Migration', () => {
     });
 
     it('falls back to configured backup if primary is unavailable in discovery', () => {
-      // Primary 'gpt-5.6-luna' is missing for 'fast', should fall back to 'gemini-3.7-flash'
-      const subsetIds = new Set(['gemini-3.7-flash', 'claude-sonnet-5']);
+      // Primary 'gpt-6-luna' is missing for 'fast', should fall back to 'gemini-3.8-flash'
+      const subsetIds = new Set(['gemini-3.8-flash', 'claude-sonnet-5']);
       const resolved = resolveModelForRole('fast', subsetIds);
-      expect(resolved.modelId).toBe('gemini-3.7-flash');
+      expect(resolved.modelId).toBe('gemini-3.8-flash');
     });
 
     it('fails closed when no configured models for a role exist in discovery', () => {

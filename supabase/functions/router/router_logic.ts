@@ -101,6 +101,42 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
     budgetCap: 16384,
     supportsImages: true,
   },
+  'gpt-6-sol': {
+    provider: 'opencode',
+    modelId: 'gpt-6-sol',
+    budgetCap: 32768,
+    supportsImages: true,
+  },
+  'gpt-6-luna': {
+    provider: 'opencode',
+    modelId: 'gpt-6-luna',
+    budgetCap: 8192,
+    supportsImages: true,
+  },
+  'claude-opus-5-5': {
+    provider: 'opencode',
+    modelId: 'claude-opus-5-5',
+    budgetCap: 32768,
+    supportsImages: true,
+  },
+  'claude-sonnet-5-5': {
+    provider: 'opencode',
+    modelId: 'claude-sonnet-5-5',
+    budgetCap: 16384,
+    supportsImages: true,
+  },
+  'gemini-3.8-flash': {
+    provider: 'opencode',
+    modelId: 'gemini-3.8-flash',
+    budgetCap: 8192,
+    supportsImages: true,
+  },
+  'deepseek-v4-1-flash': {
+    provider: 'opencode',
+    modelId: 'deepseek-v4-1-flash',
+    budgetCap: 8192,
+    supportsImages: true,
+  },
   'mimo-v2.5-free': {
     provider: 'opencode',
     modelId: 'mimo-v2.5-free',
@@ -127,12 +163,6 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
     budgetCap: 16000,
     supportsImages: true,
   },
-  'gpt-5.4-mini': {
-    provider: 'openai',
-    modelId: 'gpt-5.4-mini',
-    budgetCap: 4096,
-    supportsImages: true,
-  },
   'gemini-3-flash': {
     provider: 'google',
     modelId: 'gemini-3-flash-preview',
@@ -150,90 +180,6 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
     modelId: 'gemini-3.1-pro-preview',
     budgetCap: 16384,
     supportsImages: true,
-  },
-  'nemotron-3-super': {
-    provider: 'nvidia',
-    modelId: 'nvidia/nemotron-3-super-120b-a12b',
-    budgetCap: 8192,
-    supportsImages: false,
-  },
-  'llama-4-scout': {
-    provider: 'deepinfra',
-    modelId: 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
-    budgetCap: 4096,
-    supportsImages: false,
-  },
-  'qwen3-235b': {
-    provider: 'deepinfra',
-    modelId: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
-    budgetCap: 8192,
-    supportsImages: false,
-  },
-  'llama-3.3-70b-turbo': {
-    provider: 'deepinfra',
-    modelId: 'meta-llama/Meta-Llama-3.3-70B-Instruct-Turbo',
-    budgetCap: 4096,
-    supportsImages: false,
-  },
-  'mistral-small-24b': {
-    provider: 'deepinfra',
-    modelId: 'mistralai/Mistral-Small-24B-Instruct-2501',
-    budgetCap: 4096,
-    supportsImages: false,
-  },
-  'qwen3-32b': {
-    provider: 'deepinfra',
-    modelId: 'Qwen/Qwen3-32B',
-    budgetCap: 8192,
-    supportsImages: false,
-  },
-  'deepseek-v3': {
-    provider: 'deepinfra',
-    modelId: 'deepseek-ai/DeepSeek-V3-0324',
-    budgetCap: 8192,
-    supportsImages: false,
-  },
-  'glm-4.7-flash': {
-    provider: 'deepinfra',
-    modelId: 'THUDM/GLM-4.7-Flash',
-    budgetCap: 4096,
-    supportsImages: false,
-  },
-  'qwen3.5-4b': {
-    provider: 'deepinfra',
-    modelId: 'Qwen/Qwen3.5-4B',
-    budgetCap: 4096,
-    supportsImages: false,
-  },
-  'qwen3.5-9b': {
-    provider: 'deepinfra',
-    modelId: 'Qwen/Qwen3.5-9B',
-    budgetCap: 4096,
-    supportsImages: false,
-  },
-  'step-3.5-flash': {
-    provider: 'deepinfra',
-    modelId: 'stepfun-ai/Step-3.5-Flash',
-    budgetCap: 4096,
-    supportsImages: false,
-  },
-  'llama-3.1-8b-turbo': {
-    provider: 'deepinfra',
-    modelId: 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
-    budgetCap: 4096,
-    supportsImages: false,
-  },
-  'mistral-nemo': {
-    provider: 'deepinfra',
-    modelId: 'mistralai/Mistral-Nemo-Instruct-2407',
-    budgetCap: 4096,
-    supportsImages: false,
-  },
-  'nemotron-nano-30b': {
-    provider: 'deepinfra',
-    modelId: 'nvidia/Nemotron-4-Mini-Hindi-4B-Instruct',
-    budgetCap: 4096,
-    supportsImages: false,
   },
 };
 
@@ -316,6 +262,17 @@ const OVERRIDE_SYNONYMS: Record<string, RouterModel> = {
   'claude-sonnet-5': 'claude-sonnet-5',
   'claude-opus-5': 'claude-opus-5',
   'gemini-3.7-flash': 'gemini-3.7-flash',
+  'gpt-6-sol': 'gpt-6-sol',
+  'openai:gpt-6-sol': 'gpt-6-sol',
+  'gpt-6-luna': 'gpt-6-luna',
+  'openai:gpt-6-luna': 'gpt-6-luna',
+  'claude-opus-5-5': 'claude-opus-5-5',
+  'anthropic:opus-5-5': 'claude-opus-5-5',
+  'claude-sonnet-5-5': 'claude-sonnet-5-5',
+  'anthropic:sonnet-5-5': 'claude-sonnet-5-5',
+  'gemini-3.8-flash': 'gemini-3.8-flash',
+  'google:gemini-3.8-flash': 'gemini-3.8-flash',
+  'deepseek-v4-1-flash': 'deepseek-v4-1-flash',
   // Anthropic
   'anthropic:haiku': 'haiku-4.5',
   'anthropic:haiku-4.5': 'haiku-4.5',
@@ -324,16 +281,10 @@ const OVERRIDE_SYNONYMS: Record<string, RouterModel> = {
   'anthropic:opus': 'opus-4.6',
   'anthropic:opus-4.6': 'opus-4.6',
   // OpenAI
-  'openai:gpt-5.4-mini': 'gpt-5.4-mini',
-  'openai:gpt-5-mini': 'gpt-5.4-mini',
-  'openai:gpt-mini': 'gpt-5.4-mini',
-  'gpt-5-mini': 'gpt-5.4-mini',
   // Google
   'google:gemini-3-flash': 'gemini-3-flash',
   'google:gemini-3.1-pro': 'gemini-3.1-pro',
   'google:gemini-2.5-flash': 'gemini-2.5-flash',
-  // DeepInfra
-  'deepinfra:deepseek-v3': 'deepseek-v3',
 };
 
 export function normalizeModelOverride(input?: string): RouterModel | undefined {
@@ -751,16 +702,16 @@ export function determineRoute(
     });
   }
   if (role === 'balanced') {
-    return buildDecision('deepseek-v3', 'balanced-fallback', analysis, {
+    return buildDecision('gemini-3-flash', 'balanced-fallback', analysis, {
       routeStep: 'balanced',
       routeRole: role,
-      explanation: legacyExplanation(role, 'deepseek-v3', 'Balanced queries map to a mid-cost legacy model.'),
+      explanation: legacyExplanation(role, 'gemini-3-flash', 'Balanced queries map to a mid-cost legacy model.'),
     });
   }
-  return buildDecision('qwen3-235b', 'economy-fallback', analysis, {
+  return buildDecision('gemini-2.5-flash', 'economy-fallback', analysis, {
     routeStep: 'economy',
     routeRole: role,
-    explanation: legacyExplanation(role, 'qwen3-235b', 'Economy queries map to the cheapest legacy model.'),
+    explanation: legacyExplanation(role, 'gemini-2.5-flash', 'Economy queries map to the cheapest legacy model.'),
   });
 }
 
