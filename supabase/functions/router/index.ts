@@ -91,6 +91,7 @@ import { openExecutionForRequest } from './execution_gate.ts';
 import {
   admitExecution,
   admissionDenialStatus,
+  commitEstimated,
   commitFromLedger,
   createExecutionOutputBudget,
   isAdmissionAllowed,
@@ -99,13 +100,22 @@ import {
   resolveEffectiveLimits,
   type AdmissionResult,
 } from './admission.ts';
-import { getModelPricing } from './pricing_registry.ts';
+import { getModelPricing, PRICING_VERSION } from './pricing_registry.ts';
 import {
   MeteredCallAccountingError,
   runMeteredCall,
+  settleMeteredCallFromUsage,
   type MeteredCallContext,
   type MeteredCallFactory,
+  type PriceSnapshot,
+  type RunMeteredCallInput,
 } from './metered_call.ts';
+import {
+  consumeStreamUsage,
+  createUsageTracker,
+  extractGoogleStructuredUsage,
+  type NormalizedUsage,
+} from './usage.ts';
 import {
   fetchRelevantMemories,
   maybeSummarizeConversationAsync,
@@ -142,6 +152,9 @@ interface UpstreamCallResult {
   extractDeltas: (payload: unknown) => string[];
   effectiveModelId: string;
   effectiveGeminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
+  // PX05: for streaming calls, resolves with the provider-reported usage once
+  // the (teed) response body has been consumed. Undefined for non-streaming.
+  usagePromise?: Promise<NormalizedUsage | null>;
 }
 
 // PX03: per-dispatch metering context is defined in metered_call.ts and shared
@@ -340,6 +353,20 @@ async function fetchDailySpendUsd(
     const value = Number((row as { total_cost?: unknown }).total_cost);
     return Number.isFinite(value) ? sum + value : sum;
   }, 0);
+}
+
+// PX05: server-side price snapshot captured at dispatch time from the pricing
+// authority. This is server authority, never client input. Unknown/expired
+// pricing returns null so the call can never settle at a fabricated rate.
+function priceSnapshotForTier(modelTier: string): PriceSnapshot | null {
+  const pricing = getModelPricing(modelTier);
+  if (pricing.isUnknown) return null;
+  return {
+    pricingVersion: PRICING_VERSION,
+    inputRatePer1M: pricing.inputRatePer1M,
+    outputRatePer1M: pricing.outputRatePer1M,
+    thinkingRatePer1M: pricing.reasoningRatePer1M ?? pricing.outputRatePer1M,
+  };
 }
 
 function checkUserRateLimit(userId: string): { allowed: boolean; retryAfterMs?: number } {
@@ -1014,14 +1041,14 @@ async function callOpenAI(
     });
 
   let openaiResponse = await doCall(
-    buildOpenAIStreamPayload(decision, allMessages, images),
+    buildOpenAIStreamPayload(decision, allMessages, images, true),
   );
 
   if (openaiResponse.status === 400) {
     const bodyText = await openaiResponse.text();
     if (bodyText.toLowerCase().includes('max_completion_tokens')) {
       openaiResponse = await doCall({
-        ...buildOpenAILegacyStreamPayload(decision, allMessages, images),
+        ...buildOpenAILegacyStreamPayload(decision, allMessages, images, true),
       });
     } else {
       openaiResponse = new Response(bodyText, {
@@ -1238,24 +1265,43 @@ async function callProviderStream(
 
   if (!meter) return await dispatch();
 
+  const meteredInput: RunMeteredCallInput = {
+    store: meter.store,
+    execution: meter.execution,
+    stage: meter.stage,
+    participant: meter.participant,
+    attemptNumber: meter.attemptNumber,
+    requestedModel: meter.requestedModel,
+    resolvedModel: decision.model,
+    priceSnapshot: meter.priceSnapshot,
+    // Streaming: the pre-dispatch row is written now, and the teed usage stream
+    // settles it after the body is consumed.
+    deferSettlement: true,
+  };
+
   return await runMeteredCall(
-    {
-      store: meter.store,
-      execution: meter.execution,
-      stage: meter.stage,
-      participant: meter.participant,
-      attemptNumber: meter.attemptNumber,
-      requestedModel: meter.requestedModel,
-      resolvedModel: decision.model,
-      priceSnapshot: meter.priceSnapshot,
-    },
+    meteredInput,
     async () => {
       const result = await dispatch();
-      return {
-        result,
-        servedModel: result.effectiveModelId || decision.model,
-        status: 'completed',
-      };
+      const servedModel = result.effectiveModelId || decision.model;
+      // PX05: tee the SSE body. The client branch streams through unchanged; a
+      // background parser accumulates provider-reported usage and settles the
+      // pre-dispatch row once the stream ends. No usage => the row stays pending
+      // (the execution-level bounded estimate handles it); never fabricated.
+      if (result.response.body) {
+        const [clientBody, usageBody] = result.response.body.tee();
+        result.response = new Response(clientBody, {
+          status: result.response.status,
+          statusText: result.response.statusText,
+          headers: result.response.headers,
+        });
+        const tracker = createUsageTracker(decision.provider);
+        result.usagePromise = consumeStreamUsage(usageBody, tracker).then(async (usage) => {
+          await settleMeteredCallFromUsage(meteredInput, usage, servedModel);
+          return usage;
+        });
+      }
+      return { result, servedModel, status: 'completed' };
     },
   );
 }
@@ -1343,10 +1389,14 @@ async function callGoogleStructured(
     },
     async () => {
       const result = await dispatch();
+      // PX05: non-streaming responses carry usageMetadata; extract it so priced
+      // SMD stages settle from what the provider actually reported.
+      const usage = result.ok ? extractGoogleStructuredUsage(result.responseText) : null;
       return {
         result,
         servedModel: decision.model,
         status: result.ok ? 'completed' : 'failed',
+        usage,
       };
     },
   );
@@ -2412,7 +2462,7 @@ Deno.serve(async (req: Request) => {
         participant,
         attemptNumber,
         requestedModel,
-        priceSnapshot,
+        priceSnapshot: priceSnapshot ?? priceSnapshotForTier(requestedModel),
         outputBudget: executionOutputBudget,
       };
     };
@@ -2446,15 +2496,36 @@ Deno.serve(async (req: Request) => {
     // partial/understated commit, never $0.00). Only a pre-dispatch failure with
     // zero provider calls is released. Settlement is idempotent.
     let admissionSettled = false;
-    const settleAdmission = async (mode: 'ledger' | 'release', reason?: string): Promise<void> => {
+    const settleAdmission = async (
+      mode: 'completion' | 'ledger' | 'release',
+      options?: { reason?: string; estimateUsd?: number },
+    ): Promise<void> => {
       if (admissionSettled || !admissionResult.admitted || !activeExecution) return;
       admissionSettled = true;
       try {
-        const result = mode === 'release'
-          ? await releaseReservation(storeClient, activeExecution.id, reason ?? 'no_provider_call')
-          : await commitFromLedger(storeClient, activeExecution.id);
-        if (!result.ok) {
-          throw new Error(result.error ?? 'admission settlement failed');
+        if (mode === 'release') {
+          const result = await releaseReservation(
+            storeClient,
+            activeExecution.id,
+            options?.reason ?? 'no_provider_call',
+          );
+          if (!result.ok) throw new Error(result.error ?? 'admission settlement failed');
+          return;
+        }
+
+        const ledger = await commitFromLedger(storeClient, activeExecution.id);
+        if (!ledger.ok) throw new Error(ledger.error ?? 'admission settlement failed');
+
+        // Normal completion with no settled calls: commit a conservative,
+        // reservation-capped ESTIMATE so committed_usd advances and the hold does
+        // not persist. Unknown price stays pending_reconcile inside the RPC.
+        if (mode === 'completion' && ledger.state === 'pending_reconcile') {
+          const estimated = await commitEstimated(
+            storeClient,
+            activeExecution.id,
+            options?.estimateUsd ?? 0,
+          );
+          if (!estimated.ok) throw new Error(estimated.error ?? 'admission estimate settlement failed');
         }
       } catch (settleError) {
         console.error('[PX05] admission settlement failed:', {
@@ -2491,7 +2562,7 @@ Deno.serve(async (req: Request) => {
     const releaseStreamSlot = acquireUserStreamSlot(userId);
     if (!releaseStreamSlot) {
       // No provider call was made: confirmed-zero work, so release the hold.
-      await settleAdmission('release', 'no_stream_slot');
+      await settleAdmission('release', { reason: 'no_stream_slot' });
       return new Response(JSON.stringify({ error: 'Too many active streams' }), {
         status: 429,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -2648,7 +2719,7 @@ Deno.serve(async (req: Request) => {
         // FAIL CLOSED: the provider call was not dispatched because it could not
         // be accounted for. Surface a retryable 503 with zero provider calls.
         // The reservation is confirmed-zero work, so it may be released.
-        await settleAdmission('release', 'pre_dispatch_accounting_failure');
+        await settleAdmission('release', { reason: 'pre_dispatch_accounting_failure' });
         await finalizeLedger('failed', 'accounting_unavailable');
         return new Response(
           JSON.stringify({ error: 'accounting_unavailable', code: 'accounting_unavailable' }),
@@ -2839,9 +2910,19 @@ Deno.serve(async (req: Request) => {
             }
           }
 
-          // PX05: settle from the ledger. All stages that actually dispatched are
-          // summed authoritatively; any unsettled call keeps the hold pending.
-          await settleAdmission('ledger');
+          // PX05: wait for the final streaming call's teed usage parser to settle
+          // its ledger row before computing the authoritative sum.
+          try {
+            await upstream.usagePromise;
+          } catch {
+            // best-effort; the row stays pending and the estimate path applies.
+          }
+
+          // PX05: settle from the ledger. All settled stages are summed
+          // authoritatively; if only priced calls remain pending (provider
+          // reported no usage) a conservative reservation-capped estimate is
+          // committed so the hold does not persist. Unknown price stays pending.
+          await settleAdmission('completion', { estimateUsd: costBreakdown.totalUsd });
 
           await finalizeLedger(
             receiptOk ? 'completed' : 'indeterminate',

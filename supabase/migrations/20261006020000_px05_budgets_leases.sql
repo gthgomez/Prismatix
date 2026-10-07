@@ -385,6 +385,12 @@ begin
       'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd);
   end if;
 
+  -- The execution has terminated: release its concurrency lease in the SAME
+  -- transaction (terminal settlement). Lease expiry still never forgives money.
+  update prismatix_internal.execution_leases
+     set released_at = v_now
+   where execution_id = p_execution_id and released_at is null;
+
   if p_actual_usd is null or p_actual_usd::text in ('NaN','Infinity','-Infinity')
      or p_actual_usd < 0 then
     update prismatix_internal.budget_reservations
@@ -467,6 +473,11 @@ begin
       'state', v_res.state, 'updated', false,
       'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd);
   end if;
+
+  -- Terminal settlement: release the execution lease in the same transaction.
+  update prismatix_internal.execution_leases
+     set released_at = v_now
+   where execution_id = p_execution_id and released_at is null;
 
   select
       count(*),
@@ -573,6 +584,11 @@ begin
       'reservation_id', v_res.id, 'reason', p_reason);
   end if;
 
+  -- Terminal settlement: release the execution lease in the same transaction.
+  update prismatix_internal.execution_leases
+     set released_at = v_now
+   where execution_id = p_execution_id and released_at is null;
+
   -- GUARD: uncertain work is never released.
   if v_res.state = 'pending_reconcile' then
     return jsonb_build_object(
@@ -652,6 +668,11 @@ begin
       'reservation_id', v_res.id, 'reason', p_reason);
   end if;
 
+  -- Terminal settlement: release the execution lease in the same transaction.
+  update prismatix_internal.execution_leases
+     set released_at = v_now
+   where execution_id = p_execution_id and released_at is null;
+
   if p_actual_usd is null or p_actual_usd::text in ('NaN','Infinity','-Infinity')
      or p_actual_usd < 0 then
     update prismatix_internal.budget_reservations
@@ -710,6 +731,171 @@ begin
 end;
 $$;
 
+-- Commit a conservative, reservation-capped ESTIMATE for priced work whose
+-- provider reported no usage, so committed_usd advances and the hold does not
+-- persist. Fail-closed ordering:
+--   1. any settled call  -> commit the authoritative settled sum;
+--   2. any pending call with NO price snapshot (unknown price) -> pending_reconcile
+--      (never $0.00);
+--   3. no calls at all -> release (confirmed-zero);
+--   4. all pending calls priced + positive estimate -> commit
+--      least(estimate, reservation) with an explicit `budget_estimated` audit row.
+-- The estimate is NEVER recorded as `settled`.
+create or replace function public.px05_commit_estimated(
+  p_execution_id uuid,
+  p_estimated_usd numeric
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, prismatix_internal
+as $$
+declare
+  c_project_subject constant uuid := '00000000-0000-0000-0000-000000000000';
+  v_now timestamptz := now();
+  v_res prismatix_internal.budget_reservations;
+  v_project prismatix_internal.budget_windows;
+  v_user prismatix_internal.budget_windows;
+  v_window_start timestamptz;
+  v_calls integer := 0;
+  v_settled integer := 0;
+  v_pending integer := 0;
+  v_unpriced integer := 0;
+  v_settled_sum numeric(12,6) := 0;
+  v_committed numeric(12,6);
+begin
+  if p_execution_id is null then
+    raise exception 'invalid_reservation_identity' using errcode = '22023';
+  end if;
+
+  select * into v_res
+  from prismatix_internal.budget_reservations
+  where execution_id = p_execution_id
+  for update;
+
+  if not found then
+    raise exception 'reservation_not_found' using errcode = 'P0002';
+  end if;
+
+  if v_res.state in ('committed','released') then
+    return jsonb_build_object(
+      'state', v_res.state, 'updated', false,
+      'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd);
+  end if;
+
+  -- Terminal settlement: release the execution lease in the same transaction.
+  update prismatix_internal.execution_leases
+     set released_at = v_now
+   where execution_id = p_execution_id and released_at is null;
+
+  select
+      count(*),
+      count(*) filter (where cost_status = 'settled'),
+      count(*) filter (where cost_status <> 'settled'),
+      count(*) filter (where cost_status <> 'settled' and price_snapshot is null),
+      coalesce(sum(total_cost) filter (where cost_status = 'settled'), 0)
+    into v_calls, v_settled, v_pending, v_unpriced, v_settled_sum
+  from prismatix_internal.model_calls
+  where execution_id = p_execution_id;
+
+  v_window_start := date_trunc('day', v_res.created_at);
+
+  -- Fixed lock order: project window THEN user window.
+  select * into v_project
+  from prismatix_internal.budget_windows
+  where scope = 'project' and subject_id = c_project_subject and window_start = v_window_start
+  for update;
+
+  select * into v_user
+  from prismatix_internal.budget_windows
+  where scope = 'user' and subject_id = v_res.subject_id and window_start = v_window_start
+  for update;
+
+  -- 1) Authoritative settled sum wins.
+  if v_settled > 0 then
+    v_committed := round(v_settled_sum, 6);
+    update prismatix_internal.budget_windows
+       set held_usd = greatest(0, held_usd - v_res.amount_usd),
+           committed_usd = committed_usd + v_committed
+     where id in (v_project.id, v_user.id);
+    update prismatix_internal.budget_reservations
+       set state = 'committed', committed_usd = v_committed, updated_at = v_now
+     where id = v_res.id
+    returning * into v_res;
+    return jsonb_build_object(
+      'state', 'committed', 'updated', true,
+      'reservation_id', v_res.id, 'committed_usd', v_committed, 'basis', 'settled');
+  end if;
+
+  -- 2) Unknown price: never estimate, never $0.
+  if v_unpriced > 0 then
+    update prismatix_internal.budget_reservations
+       set state = 'pending_reconcile', updated_at = v_now
+     where id = v_res.id
+    returning * into v_res;
+    return jsonb_build_object(
+      'state', 'pending_reconcile', 'updated', true,
+      'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd,
+      'basis', 'unknown_price');
+  end if;
+
+  -- 3) No metered dispatch at all => confirmed-zero => release.
+  if v_calls = 0 then
+    update prismatix_internal.budget_windows
+       set held_usd = greatest(0, held_usd - v_res.amount_usd)
+     where id in (v_project.id, v_user.id);
+    update prismatix_internal.budget_reservations
+       set state = 'released', updated_at = v_now
+     where id = v_res.id
+    returning * into v_res;
+    return jsonb_build_object(
+      'state', 'released', 'updated', true,
+      'reservation_id', v_res.id, 'committed_usd', 0, 'basis', 'no_calls');
+  end if;
+
+  -- 4) Priced-but-no-usage: require a positive estimate, capped by the reservation.
+  if p_estimated_usd is null or p_estimated_usd::text in ('NaN','Infinity','-Infinity')
+     or p_estimated_usd <= 0 then
+    update prismatix_internal.budget_reservations
+       set state = 'pending_reconcile', updated_at = v_now
+     where id = v_res.id
+    returning * into v_res;
+    return jsonb_build_object(
+      'state', 'pending_reconcile', 'updated', true,
+      'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd,
+      'basis', 'no_estimate');
+  end if;
+
+  v_committed := least(round(p_estimated_usd, 6), v_res.amount_usd);
+
+  update prismatix_internal.budget_windows
+     set held_usd = greatest(0, held_usd - v_res.amount_usd),
+         committed_usd = committed_usd + v_committed
+   where id in (v_project.id, v_user.id);
+
+  update prismatix_internal.budget_reservations
+     set state = 'committed', committed_usd = v_committed, updated_at = v_now
+   where id = v_res.id
+  returning * into v_res;
+
+  insert into prismatix_internal.reconciliation_jobs (execution_id, kind, payload)
+  values (
+    p_execution_id,
+    'budget_estimated',
+    jsonb_build_object(
+      'estimated_usd', p_estimated_usd,
+      'committed_usd', v_committed,
+      'reservation_amount_usd', v_res.amount_usd,
+      'provenance', 'estimated_no_provider_usage'
+    )
+  );
+
+  return jsonb_build_object(
+    'state', 'committed', 'updated', true,
+    'reservation_id', v_res.id, 'committed_usd', v_committed, 'basis', 'estimated');
+end;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- 5) RPC grants: service_role only. No client may execute.
 -- ---------------------------------------------------------------------------
@@ -738,3 +924,8 @@ revoke all on function public.px05_reconcile_reservation(uuid, numeric, text) fr
 revoke all on function public.px05_reconcile_reservation(uuid, numeric, text) from anon;
 revoke all on function public.px05_reconcile_reservation(uuid, numeric, text) from authenticated;
 grant execute on function public.px05_reconcile_reservation(uuid, numeric, text) to service_role;
+
+revoke all on function public.px05_commit_estimated(uuid, numeric) from public;
+revoke all on function public.px05_commit_estimated(uuid, numeric) from anon;
+revoke all on function public.px05_commit_estimated(uuid, numeric) from authenticated;
+grant execute on function public.px05_commit_estimated(uuid, numeric) to service_role;

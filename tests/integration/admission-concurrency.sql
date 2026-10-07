@@ -86,16 +86,16 @@ begin
     raise exception 'PX05 FAIL: missing partial unique active-lease index';
   end if;
 
-  -- The five RPCs exist.
+  -- The six RPCs exist.
   select count(*) into n
   from pg_proc p
   join pg_namespace ns on ns.oid = p.pronamespace
   where ns.nspname = 'public'
     and p.proname in (
       'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
-      'px05_release_reservation','px05_reconcile_reservation');
-  if n <> 5 then
-    raise exception 'PX05 FAIL: expected 5 px05_* RPCs, found %', n;
+      'px05_commit_estimated','px05_release_reservation','px05_reconcile_reservation');
+  if n <> 6 then
+    raise exception 'PX05 FAIL: expected 6 px05_* RPCs, found %', n;
   end if;
 end $$;
 
@@ -109,7 +109,7 @@ declare
 begin
   foreach fn in array array[
     'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
-    'px05_release_reservation','px05_reconcile_reservation'
+    'px05_commit_estimated','px05_release_reservation','px05_reconcile_reservation'
   ] loop
     select pg_get_functiondef(p.oid) into def
     from pg_proc p
@@ -139,7 +139,7 @@ begin
   where routine_schema = 'public'
     and routine_name in (
       'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
-      'px05_release_reservation','px05_reconcile_reservation')
+      'px05_commit_estimated','px05_release_reservation','px05_reconcile_reservation')
     and grantee = 'authenticated';
   if n <> 0 then
     raise exception 'PX05 FAIL: authenticated can execute a px05_* RPC (% grants)', n;
@@ -150,7 +150,7 @@ begin
   where routine_schema = 'public'
     and routine_name in (
       'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
-      'px05_release_reservation','px05_reconcile_reservation')
+      'px05_commit_estimated','px05_release_reservation','px05_reconcile_reservation')
     and grantee = 'anon';
   if n <> 0 then
     raise exception 'PX05 FAIL: anon can execute a px05_* RPC (% grants)', n;
@@ -161,9 +161,9 @@ begin
   where routine_schema = 'public'
     and routine_name in (
       'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
-      'px05_release_reservation','px05_reconcile_reservation')
+      'px05_commit_estimated','px05_release_reservation','px05_reconcile_reservation')
     and grantee = 'service_role';
-  if n <> 5 then
+  if n <> 6 then
     raise exception 'PX05 FAIL: service_role is missing px05_* execute grants (found %)', n;
   end if;
 end $$;
@@ -180,7 +180,9 @@ begin;
 insert into auth.users (id, aud, role, email, encrypted_password, created_at, updated_at)
 values
   ('a0000000-0000-4000-8000-000000000008','authenticated','authenticated','px05-u8@example.invalid','x', now(), now()),
-  ('a0000000-0000-4000-8000-000000000009','authenticated','authenticated','px05-u9@example.invalid','x', now(), now());
+  ('a0000000-0000-4000-8000-000000000009','authenticated','authenticated','px05-u9@example.invalid','x', now(), now()),
+  ('a0000000-0000-4000-8000-000000000011','authenticated','authenticated','px05-u11@example.invalid','x', now(), now()),
+  ('a0000000-0000-4000-8000-000000000012','authenticated','authenticated','px05-u12@example.invalid','x', now(), now());
 
 set local role service_role;
 
@@ -197,6 +199,8 @@ declare
   u8 uuid := 'a0000000-0000-4000-8000-000000000008';
   u9 uuid := 'a0000000-0000-4000-8000-000000000009';
   u10 uuid := 'a0000000-0000-4000-8000-000000000010';
+  u11 uuid := 'a0000000-0000-4000-8000-000000000011';
+  u12 uuid := 'a0000000-0000-4000-8000-000000000012';
   v_exec uuid;
   v_exec2 uuid;
   v_exec3 uuid;
@@ -406,6 +410,12 @@ begin
     raise exception 'PX05 FAIL: ledger commit window math wrong (held=%, committed=%)',
       held, committed;
   end if;
+  if not exists (
+    select 1 from prismatix_internal.execution_leases
+    where execution_id = v_exec and released_at is not null
+  ) then
+    raise exception 'PX05 FAIL: ledger commit did not release the execution lease';
+  end if;
 
   -- 2k) Any unsettled call keeps the hold pending_reconcile (no partial commit).
   v_exec2 := (public.px03_create_execution(u9, null, 'px05-ledger-2', 'hash-2')
@@ -449,6 +459,77 @@ begin
       and payload->>'reason' = 'video_processing_complete'
   ) then
     raise exception 'PX05 FAIL: reconcile did not record an audit reason';
+  end if;
+
+  -- 2m) Priced-but-no-usage: a positive estimate commits (capped by the
+  --     reservation) and frees the hold; the model_call stays `pending` (never
+  --     `settled`) with an explicit `budget_estimated` provenance row, and the
+  --     execution lease is released.
+  v_exec := (public.px03_create_execution(u11, null, 'px05-est-1', 'hash-est-1')
+               -> 'execution' ->> 'id')::uuid;
+  perform public.px03_record_model_call(
+    v_exec, 'baseline', 'primary', 1, null, null, null, null, 'completed',
+    0, 0, 0, 0, 0, 0, 0, '{"inputRatePer1M":1}'::jsonb, 'pending');
+
+  v := public.px05_admit_execution(u11, v_exec, 0.05, 0.5, 900, 100, 100, 100, 1);
+  if (v->>'admitted')::boolean is not true then
+    raise exception 'PX05 FAIL: estimate admit denied (%)', v;
+  end if;
+  v := public.px05_commit_from_ledger(v_exec);
+  if v->>'state' <> 'pending_reconcile' then
+    raise exception 'PX05 FAIL: priced-no-usage was not pending before the estimate (%)', v;
+  end if;
+  v := public.px05_commit_estimated(v_exec, 0.05);
+  if v->>'state' <> 'committed' or v->>'basis' <> 'estimated'
+     or (v->>'committed_usd')::numeric <> 0.05 then
+    raise exception 'PX05 FAIL: estimated commit wrong (%)', v;
+  end if;
+  select held_usd, committed_usd into held, committed
+    from prismatix_internal.budget_windows
+   where scope = 'user' and subject_id = u11 and window_start = date_trunc('day', now());
+  if held <> 0 or committed <> 0.05 then
+    raise exception 'PX05 FAIL: estimated commit window math wrong (held=%, committed=%)',
+      held, committed;
+  end if;
+  if exists (
+    select 1 from prismatix_internal.model_calls
+    where execution_id = v_exec and cost_status = 'settled'
+  ) then
+    raise exception 'PX05 FAIL: estimated commit marked a call settled';
+  end if;
+  if not exists (
+    select 1 from prismatix_internal.reconciliation_jobs
+    where execution_id = v_exec and kind = 'budget_estimated'
+      and payload->>'provenance' = 'estimated_no_provider_usage'
+  ) then
+    raise exception 'PX05 FAIL: estimated commit did not record provenance';
+  end if;
+  if not exists (
+    select 1 from prismatix_internal.execution_leases
+    where execution_id = v_exec and released_at is not null
+  ) then
+    raise exception 'PX05 FAIL: estimated commit did not release the lease';
+  end if;
+
+  -- 2n) Unknown price never becomes an estimate or $0: it stays pending_reconcile.
+  v_exec := (public.px03_create_execution(u12, null, 'px05-est-2', 'hash-est-2')
+               -> 'execution' ->> 'id')::uuid;
+  perform public.px03_record_model_call(
+    v_exec, 'baseline', 'primary', 1, null, null, null, null, 'completed',
+    0, 0, 0, 0, 0, 0, 0, null, 'pending');
+
+  v := public.px05_admit_execution(u12, v_exec, 0.05, 0.5, 900, 100, 100, 100, 1);
+  if (v->>'admitted')::boolean is not true then
+    raise exception 'PX05 FAIL: unknown-price admit denied (%)', v;
+  end if;
+  v := public.px05_commit_estimated(v_exec, 0.05);
+  if v->>'state' <> 'pending_reconcile' or v->>'basis' <> 'unknown_price' then
+    raise exception 'PX05 FAIL: unknown price was estimated/forgiven (%)', v;
+  end if;
+  select held_usd into held from prismatix_internal.budget_windows
+   where scope = 'user' and subject_id = u12 and window_start = date_trunc('day', now());
+  if held <> 0.5 then
+    raise exception 'PX05 FAIL: unknown price forgave the hold (held=%)', held;
   end if;
 end $$;
 

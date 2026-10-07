@@ -29,12 +29,17 @@ export function buildOpenAIStreamPayload(
   decision: RouteDecision,
   allMessages: Message[],
   images: ImageAttachment[],
+  includeUsage = false,
 ): Record<string, unknown> {
   return {
     model: decision.model,
     messages: transformMessagesForOpenAI(allMessages, images),
     stream: true,
     max_completion_tokens: decision.budgetCap,
+    // PX05: request the final usage chunk so streaming calls can settle from
+    // provider-reported usage. Only sent for OpenAI proper (not the
+    // OpenAI-compatible gateways, which may not support the option).
+    ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
   };
 }
 
@@ -42,12 +47,14 @@ export function buildOpenAILegacyStreamPayload(
   decision: RouteDecision,
   allMessages: Message[],
   images: ImageAttachment[],
+  includeUsage = false,
 ): Record<string, unknown> {
   return {
     model: decision.model,
     messages: transformMessagesForOpenAI(allMessages, images),
     stream: true,
     max_tokens: decision.budgetCap,
+    ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
   };
 }
 

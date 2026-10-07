@@ -40,7 +40,14 @@ import {
 } from '../../supabase/functions/router/admission.ts';
 import {
   runMeteredCall,
+  settleMeteredCallFromUsage,
+  type RunMeteredCallInput,
 } from '../../supabase/functions/router/metered_call.ts';
+import {
+  consumeStreamUsage,
+  createUsageTracker,
+  extractGoogleStructuredUsage,
+} from '../../supabase/functions/router/usage.ts';
 import type {
   ExecutionRecord,
   ExecutionStoreClient,
@@ -589,6 +596,138 @@ describe('reconcileReservation', () => {
     });
     expect(result.ok).toBe(true);
     expect(result.state).toBe('released');
+  });
+});
+
+// ============================================================================
+// Provider usage extraction (real seams)
+// ============================================================================
+
+function sseStream(frames: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(frame));
+      controller.close();
+    },
+  });
+}
+
+describe('provider usage extraction (real SSE seams)', () => {
+  it('accumulates Anthropic message_start + message_delta usage', async () => {
+    const tracker = createUsageTracker('anthropic');
+    const usage = await consumeStreamUsage(
+      sseStream([
+        'data: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":12,"output_tokens":0}}}\n\n',
+        'data: {"type":"content_block_delta","delta":{"text":"hi"}}\n\n',
+        'data: {"type":"message_delta","usage":{"output_tokens":7}}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+      tracker,
+    );
+    expect(usage).toEqual({ inputTokens: 12, outputTokens: 7, thinkingTokens: 0 });
+  });
+
+  it('extracts OpenAI usage and keeps reasoning tokens separate (no double bill)', async () => {
+    const tracker = createUsageTracker('openai');
+    const usage = await consumeStreamUsage(
+      sseStream([
+        'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+        'data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":4,"completion_tokens_details":{"reasoning_tokens":1}}}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+      tracker,
+    );
+    expect(usage).toEqual({ inputTokens: 9, outputTokens: 3, thinkingTokens: 1 });
+  });
+
+  it('extracts Google usageMetadata from a stream', async () => {
+    const tracker = createUsageTracker('google');
+    const usage = await consumeStreamUsage(
+      sseStream([
+        'data: {"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}\n\n',
+        'data: {"candidates":[],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":6,"thoughtsTokenCount":2}}\n\n',
+      ]),
+      tracker,
+    );
+    expect(usage).toEqual({ inputTokens: 5, outputTokens: 6, thinkingTokens: 2 });
+  });
+
+  it('returns null when the provider reports no usage (never invents)', async () => {
+    const tracker = createUsageTracker('anthropic');
+    const usage = await consumeStreamUsage(
+      sseStream(['data: {"type":"content_block_delta","delta":{"text":"hi"}}\n\n']),
+      tracker,
+    );
+    expect(usage).toBeNull();
+  });
+
+  it('extracts Google structured (non-streaming) usageMetadata', () => {
+    const usage = extractGoogleStructuredUsage(
+      JSON.stringify({
+        candidates: [{ content: { parts: [{ text: '{}' }] } }],
+        usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 6, thoughtsTokenCount: 2 },
+      }),
+    );
+    expect(usage).toEqual({ inputTokens: 5, outputTokens: 6, thinkingTokens: 2 });
+    expect(extractGoogleStructuredUsage('not json')).toBeNull();
+  });
+});
+
+// ============================================================================
+// settleMeteredCallFromUsage — priced + usage settles; no usage stays pending
+// ============================================================================
+
+describe('settleMeteredCallFromUsage (real ledger seam)', () => {
+  const PRICE = {
+    pricingVersion: 'test',
+    inputRatePer1M: 1,
+    outputRatePer1M: 2,
+    thinkingRatePer1M: 0,
+  };
+
+  function meteredInput(store: ExecutionStoreClient, priceSnapshot: typeof PRICE | null): RunMeteredCallInput {
+    return {
+      store,
+      execution: EXECUTION,
+      stage: 'baseline',
+      participant: 'anthropic',
+      attemptNumber: 1,
+      requestedModel: 'haiku-4.5',
+      resolvedModel: 'claude-haiku',
+      priceSnapshot,
+    };
+  }
+
+  it('records a settled row with the computed cost when usage AND price are present', async () => {
+    const store = fakeExecutionStore();
+    await settleMeteredCallFromUsage(
+      meteredInput(store.client, PRICE),
+      { inputTokens: 10, outputTokens: 5, thinkingTokens: 0 },
+      'claude-haiku',
+    );
+
+    expect(store.modelCalls).toHaveLength(1);
+    const row = store.modelCalls[0]!;
+    expect(row.p_cost_status).toBe('settled');
+    expect(row.p_input_tokens).toBe(10);
+    expect(row.p_output_tokens).toBe(5);
+    expect(row.p_total_cost).toBeCloseTo(10 / 1_000_000 + (5 / 1_000_000) * 2, 9);
+  });
+
+  it('does NOT settle (no row) when the provider reported no usage', async () => {
+    const store = fakeExecutionStore();
+    await settleMeteredCallFromUsage(meteredInput(store.client, PRICE), null);
+    expect(store.modelCalls).toHaveLength(0);
+  });
+
+  it('does NOT settle when the price is unknown (null snapshot)', async () => {
+    const store = fakeExecutionStore();
+    await settleMeteredCallFromUsage(
+      meteredInput(store.client, null),
+      { inputTokens: 10, outputTokens: 5, thinkingTokens: 0 },
+    );
+    expect(store.modelCalls).toHaveLength(0);
   });
 });
 

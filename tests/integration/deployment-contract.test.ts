@@ -189,6 +189,15 @@ function px03Routes(call: FetchCall): Response | null {
       calls: 1,
     });
   }
+  if (call.url.includes('/rest/v1/rpc/px05_commit_estimated')) {
+    return jsonResponse({
+      state: 'committed',
+      updated: true,
+      reservation_id: 'r0000000-0000-4000-8000-000000000001',
+      committed_usd: '0.01',
+      basis: 'estimated',
+    });
+  }
   if (call.url.includes('/rest/v1/rpc/px05_commit_reservation')) {
     return jsonResponse({
       state: 'committed',
@@ -950,6 +959,48 @@ describe('PX05 admission gate (real handler)', () => {
     expect(await res.json()).toEqual({ error: 'rate_limited', code: 'rate_limited' });
     await flushAsync();
     expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it('commits a bounded estimate when the ledger has priced-but-unsettled calls (real handler)', async () => {
+    const happy = supabaseRoutes();
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/rest/v1/rpc/px05_commit_from_ledger')) {
+        return jsonResponse({
+          state: 'pending_reconcile',
+          updated: true,
+          committed_usd: '0',
+          pending_calls: 1,
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px05_commit_estimated')) {
+        return jsonResponse({
+          state: 'committed',
+          updated: true,
+          committed_usd: '0.01',
+          basis: 'estimated',
+        });
+      }
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest(
+        chatBody({ platform: 'mobile', modelOverride: 'anthropic:haiku' }),
+        'px02-user-token',
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    await res.text();
+    await flushAsync();
+
+    const estimateCall = calls.find((call) =>
+      call.url.includes('/rest/v1/rpc/px05_commit_estimated'),
+    );
+    expect(estimateCall).toBeTruthy();
+    const params = JSON.parse(estimateCall!.body) as { p_estimated_usd?: number };
+    expect(params.p_estimated_usd).toBeGreaterThan(0);
   });
 
   it('fails CLOSED with 503 admission_unavailable when the admission RPC errors', async () => {

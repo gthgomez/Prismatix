@@ -420,6 +420,25 @@ export function commitFromLedger(
 }
 
 /**
+ * Commits a conservative, reservation-capped ESTIMATE for priced work whose
+ * provider reported no usage, so `committed_usd` advances and the hold does not
+ * persist. The database accepts the estimate only when there are no settled
+ * calls, at least one pending PRICED call, and the estimate is positive; a
+ * pending call with unknown price stays `pending_reconcile` (never $0.00). The
+ * estimate is recorded with an explicit provenance marker (not `settled`).
+ */
+export function commitEstimated(
+  client: AdmissionClient,
+  executionId: string,
+  estimatedUsd: number,
+): Promise<ReservationMutationResult> {
+  return mutateReservation(client, 'px05_commit_estimated', {
+    p_execution_id: executionId,
+    p_estimated_usd: Number.isFinite(estimatedUsd) && estimatedUsd > 0 ? estimatedUsd : 0,
+  });
+}
+
+/**
  * Explicit reconciliation for work whose cost is not metered by the ledger
  * (e.g. video processing). A positive actual commits; 0 releases (recorded with
  * the reason); null/negative keeps the hold as `pending_reconcile`. Unlike
