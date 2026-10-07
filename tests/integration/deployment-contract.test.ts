@@ -107,6 +107,70 @@ function grantRow(): Record<string, unknown> {
   };
 }
 
+// PX03: the router now establishes a ledger execution before any dispatch and
+// records each provider call through the `px03_*` service-role RPCs. These are
+// stubbed for the happy-path handler tests; the fail-closed test overrides the
+// create RPC with a 500.
+const EXECUTION_ID = 'e0000000-0000-4000-8000-000000000001';
+
+function px03Routes(call: FetchCall): Response | null {
+  if (call.url.includes('/rest/v1/rpc/px03_create_execution')) {
+    return jsonResponse({
+      execution: {
+        id: EXECUTION_ID,
+        subject_id: SUBJECT_A,
+        conversation_id: CONVERSATION_ID,
+        client_request_key: 'px02-test-key',
+        payload_hash: 'px02-test-hash',
+        status: 'started',
+        requested_mode: null,
+        requested_model: null,
+        resolved_model: null,
+        served_model: null,
+        route_version: null,
+        pricing_version: null,
+        catalog_version: null,
+        terminal_outcome: null,
+        created_at: '2026-10-06T00:00:00.000Z',
+        updated_at: '2026-10-06T00:00:00.000Z',
+      },
+      reused: false,
+    });
+  }
+  if (call.url.includes('/rest/v1/rpc/px03_record_model_call')) {
+    return jsonResponse({
+      id: 'c0000000-0000-4000-8000-000000000001',
+      execution_id: EXECUTION_ID,
+      stage: 'baseline',
+      participant: 'anthropic',
+      attempt_number: 1,
+      status: 'completed',
+      input_tokens: 0,
+      output_tokens: 0,
+      thinking_tokens: 0,
+      input_cost: 0,
+      output_cost: 0,
+      thinking_cost: 0,
+      total_cost: 0,
+      cost_status: 'pending',
+    });
+  }
+  if (call.url.includes('/rest/v1/rpc/px03_finalize_execution')) {
+    return jsonResponse({
+      execution: { id: EXECUTION_ID, status: 'completed', terminal_outcome: 'ok' },
+      finalized: true,
+    });
+  }
+  if (call.url.includes('/rest/v1/rpc/px03_enqueue_reconciliation')) {
+    return jsonResponse({
+      id: 'j0000000-0000-4000-8000-000000000001',
+      kind: 'model_call_unsettled',
+      status: 'pending',
+    });
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Deno stub + fetch recorder (same seam pattern as tests/security/entitlements)
 // ---------------------------------------------------------------------------
@@ -271,6 +335,10 @@ function supabaseRoutes(options?: { authOk?: boolean }): (call: FetchCall) => Re
     }
     if (call.url.includes('/rest/v1/messages')) {
       return jsonResponse([]);
+    }
+    const px03 = px03Routes(call);
+    if (px03) {
+      return px03;
     }
     if (call.url.includes('api.anthropic.com')) {
       return anthropicSseResponse();
@@ -749,6 +817,46 @@ describe('mobile memory isolation (real handler)', () => {
     await flushAsync();
 
     expect(calls.some((call) => call.url.includes('user_memories'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b. PX03 execution ledger fail-closed (real handler)
+// ---------------------------------------------------------------------------
+
+describe('PX03 execution ledger fail-closed (real handler)', () => {
+  it('returns 503 accounting_unavailable with ZERO provider calls when execution create fails', async () => {
+    const happy = supabaseRoutes();
+    const calls = installFetchRecorder((call) => {
+      // Override the ledger create RPC with a hard failure.
+      if (call.url.includes('/rest/v1/rpc/px03_create_execution')) {
+        return jsonResponse({ code: '08006', message: 'ledger unavailable' }, 500);
+      }
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest(
+        chatBody({ platform: 'mobile', modelOverride: 'anthropic:haiku' }),
+        'px02-user-token',
+      ),
+    );
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      error: 'accounting_unavailable',
+      code: 'accounting_unavailable',
+    });
+    await flushAsync();
+
+    // Fail closed: the execution could not be established, so NO provider call
+    // was made (an unmetered inference is what PX03 forbids).
+    expect(providerCalls(calls)).toEqual([]);
+    // The failure was recorded durably (reconciliation job enqueued) first.
+    expect(
+      calls.some((call) => call.url.includes('/rest/v1/rpc/px03_enqueue_reconciliation')),
+    ).toBe(true);
   });
 });
 

@@ -1476,6 +1476,7 @@ async function maybeRunSmdMode(params: {
           params.meter?.('smd-skeptic', 'primary', skepticDecision.modelTier, null) ?? undefined,
         );
       } catch (fetchErr) {
+        if (fetchErr instanceof MeteredCallAccountingError) throw fetchErr;
         console.warn(`[SMD][${runId}] skeptic fetch error (attempt ${attempt}):`, fetchErr);
         break;
       }
@@ -1533,6 +1534,7 @@ async function maybeRunSmdMode(params: {
           params.meter?.('smd-synth', 'primary', synthDecisionModel.modelTier, null) ?? undefined,
         );
       } catch (fetchErr) {
+        if (fetchErr instanceof MeteredCallAccountingError) throw fetchErr;
         console.warn(`[SMD][${runId}] synth fetch error (attempt ${attempt}):`, fetchErr);
         break;
       }
@@ -2203,47 +2205,63 @@ Deno.serve(async (req: Request) => {
     const clientRequestKey = deriveClientRequestKey(req, body);
     const payloadHash = await computePayloadHash(normalizedBody.value);
     let activeExecution: ExecutionRecord | null = null;
-    try {
-      const opened = await openExecutionForRequest(storeClient, {
-        subjectId: userId,
-        conversationId,
-        clientRequestKey,
-        payloadHash,
-        requestedMode: mode ?? null,
-        requestedModel: normalizedOverride ?? manualModelOverride ?? null,
-        routeVersion: RELEASE_IDENTITY.protocolVersion,
-        pricingVersion: preFlightCost.pricingVersion,
-        catalogVersion: RELEASE_IDENTITY.catalogVersion,
-      });
-      if (opened.kind === 'rejected') {
-        // PX03 invariant: a duplicate/reused client request is never replayed.
-        // Same key + same payload_hash => duplicate_request (409, carries the
-        // execution id); same key + different payload_hash => request_key_conflict
-        // (409). Either way: ZERO provider calls.
-        return new Response(
-          JSON.stringify({
-            error: opened.error,
-            code: opened.code,
-            ...(opened.executionId ? { executionId: opened.executionId } : {}),
-          }),
-          {
-            status: opened.status,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-      activeExecution = opened.execution;
-    } catch (executionError) {
-      // Ledger unavailable: fail closed for the receipt (never fabricate one),
-      // but do not block the answer stream.
-      console.error('[PX03] execution create failed:', {
-        error: executionError instanceof Error ? executionError.message : String(executionError),
-      });
-      void safeEnqueueReconciliation(storeClient, null, 'execution_create_failed', {
-        subjectId: userId,
-        conversationId,
-        clientRequestKey,
-      });
+
+    // PX03 invariant: EVERY upstream inference attempt carries an execution id
+    // and a distinct call id. The gate fails closed, so the only way past this
+    // point is a `proceed` with an execution.
+    const opened = await openExecutionForRequest(storeClient, {
+      subjectId: userId,
+      conversationId,
+      clientRequestKey,
+      payloadHash,
+      requestedMode: mode ?? null,
+      requestedModel: normalizedOverride ?? manualModelOverride ?? null,
+      routeVersion: RELEASE_IDENTITY.protocolVersion,
+      pricingVersion: preFlightCost.pricingVersion,
+      catalogVersion: RELEASE_IDENTITY.catalogVersion,
+    });
+    if (opened.kind === 'rejected') {
+      // PX03 invariant: a duplicate/reused client request is never replayed.
+      // Same key + same payload_hash => duplicate_request (409, carries the
+      // execution id); same key + different payload_hash => request_key_conflict
+      // (409). Either way: ZERO provider calls.
+      return new Response(
+        JSON.stringify({
+          error: opened.error,
+          code: opened.code,
+          ...(opened.executionId ? { executionId: opened.executionId } : {}),
+        }),
+        {
+          status: opened.status,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+    if (opened.kind === 'unavailable') {
+      // FAIL CLOSED: the ledger could not be written, so no provider call may be
+      // made (it would be unmetered). The gate already enqueued the durable
+      // reconciliation job.
+      console.error('[PX03] execution create failed; refusing request (503)');
+      return new Response(
+        JSON.stringify({ error: opened.error, code: opened.code }),
+        {
+          status: opened.status,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+    activeExecution = opened.execution;
+
+    if (!activeExecution) {
+      // Unreachable by construction (the gate returns on every non-proceed
+      // path). Belt-and-suspenders: never dispatch an unmetered provider call.
+      return new Response(
+        JSON.stringify({ error: 'accounting_unavailable', code: 'accounting_unavailable' }),
+        {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
     }
 
     // Per-dispatch attempt allocation: distinct dispatches get distinct ledger

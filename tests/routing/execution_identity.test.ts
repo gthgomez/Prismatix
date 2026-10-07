@@ -365,6 +365,33 @@ describe('openExecutionForRequest', () => {
     expect(conflict.code).toBe('request_key_conflict');
     expect(conflict.executionId).toBeUndefined();
   });
+
+  it('fails closed with 503 accounting_unavailable, a durable job, and zero dispatch when execution create fails', async () => {
+    const fake = createFakeClient({ failRpc: 'px03_create_execution', failAtCall: 1 });
+
+    const opened = await openExecutionForRequest(fake.client, {
+      subjectId: SUBJECT,
+      conversationId: CONVERSATION,
+      clientRequestKey: 'req-unavailable',
+      payloadHash: 'hash-unavailable',
+    });
+
+    // The router dispatches providers ONLY when kind === 'proceed'.
+    let providerCalls = 0;
+    if (opened.kind === 'proceed') providerCalls += 1;
+    expect(providerCalls).toBe(0);
+
+    expect(opened.kind).toBe('unavailable');
+    if (opened.kind !== 'unavailable') throw new Error('expected an unavailable gate');
+    expect(opened.status).toBe(503);
+    expect(opened.error).toBe('accounting_unavailable');
+    expect(opened.code).toBe('accounting_unavailable');
+
+    // A durable reconciliation job was enqueued before refusing the request.
+    expect(fake.jobs).toHaveLength(1);
+    expect(fake.jobs[0]!.kind).toBe('execution_create_failed');
+    expect(fake.jobs[0]!.execution_id).toBeNull();
+  });
 });
 
 // ============================================================================
