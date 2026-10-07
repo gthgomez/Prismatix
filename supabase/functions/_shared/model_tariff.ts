@@ -14,7 +14,11 @@ export interface TariffEntry {
   cachedWriteRatePer1M?: number | string | boolean;
   /** ISO `YYYY-MM-DD` from which this rate is authoritative (optional). */
   effectiveFrom?: string;
-  /** ISO `YYYY-MM-DD` after which this rate must no longer be billed (optional). */
+  /**
+   * ISO `YYYY-MM-DD`, INCLUSIVE: the last UTC day on which this rate may be
+   * billed. Billing is allowed for the whole of that UTC day; the rate expires
+   * at 00:00:00Z of the following day (optional).
+   */
   effectiveTo?: string;
   inputRatePer1M?: number | string | boolean;
   isEligibleForAutoRouting?: number | string | boolean;
@@ -411,7 +415,10 @@ function parseIsoDateUtc(value: unknown): Date | undefined {
 }
 
 /**
- * True when `entry.effectiveTo` is a valid date strictly before `now`.
+ * True when `entry.effectiveTo` has passed. `effectiveTo` is INCLUSIVE: it is
+ * the last UTC day the rate may be billed, so this returns false for any time
+ * during the `effectiveTo` UTC day and true from 00:00:00Z of the following
+ * UTC day onward.
  * A MALFORMED `effectiveTo` fails CLOSED (returns true), never false.
  * A missing `effectiveTo` means the rate has no expiry bound.
  */
@@ -421,9 +428,11 @@ export function isPriceExpired(
 ): boolean {
   const raw = entry?.effectiveTo;
   if (raw === undefined || raw === null || raw === '') return false;
-  const expiry = parseIsoDateUtc(raw);
-  if (!expiry) return true; // malformed -> fail closed
-  return expiry.getTime() < now.getTime();
+  const lastBillableDay = parseIsoDateUtc(raw);
+  if (!lastBillableDay) return true; // malformed -> fail closed
+  // Exclusive end boundary: the start of the UTC day after `effectiveTo`.
+  const expiresAt = lastBillableDay.getTime() + 86_400_000;
+  return now.getTime() >= expiresAt;
 }
 
 /**

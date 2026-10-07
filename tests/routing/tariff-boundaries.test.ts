@@ -130,11 +130,29 @@ describe('effective-interval expiry fails closed', () => {
     expect(isPriceExpired({ effectiveTo: '2020-01-01' }, now)).toBe(true);
     expect(isPriceExpired({ effectiveTo: '2030-01-01' }, now)).toBe(false);
     expect(isPriceExpired({}, now)).toBe(false);
-    // Equal to "now" is not strictly before now.
+    // The whole effectiveTo UTC day is billable (inclusive).
     expect(isPriceExpired({ effectiveTo: '2026-10-07' }, now)).toBe(false);
   });
 
+  it('effectiveTo is inclusive of its last billable UTC day', () => {
+    const lastDay = '2026-12-31';
+    // Any instant during the effectiveTo day is still live...
+    expect(isPriceExpired({ effectiveTo: lastDay }, new Date('2026-12-31T00:00:00Z'))).toBe(false);
+    expect(isPriceExpired({ effectiveTo: lastDay }, new Date('2026-12-31T23:59:59Z'))).toBe(false);
+    // ...and it expires at the start of the following UTC day.
+    expect(isPriceExpired({ effectiveTo: lastDay }, new Date('2027-01-01T00:00:00Z'))).toBe(true);
+    expect(isPriceExpired({ effectiveTo: lastDay }, new Date('2027-01-01T00:00:01Z'))).toBe(true);
+  });
+
   it('getPricingForModel returns the fail-closed marker for an expired entry', () => {
+    // Gemini 3.8 Flash intro rate is billable through (and including) 2026-12-31.
+    const duringLastDay = getPricingForModel(
+      'gemini-3.8-flash',
+      new Date('2026-12-31T23:59:59Z'),
+    );
+    expect(duringLastDay.isUnknown).toBeFalsy();
+    expect(duringLastDay.inputRatePer1M).toBe(0.75);
+
     const afterExpiry = new Date('2027-01-01T00:00:00Z');
     const expired = getPricingForModel('gemini-3.8-flash', afterExpiry);
 
