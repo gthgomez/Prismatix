@@ -693,6 +693,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         abortController.signal,
       );
 
+      // PX06: an abort mid-stream makes readRouterStream resolve with the
+      // partial content; surface the cancellation instead of a completion.
+      if (abortController.signal.aborted) {
+        setStreamOutcome({ status: 'cancelled', executionId });
+        scheduleCostEstimatorHide(1500);
+        return;
+      }
+
       // PX06: surface the terminal receipt (execution id + settlement state).
       setStreamOutcome({
         status: 'receipt',
@@ -744,11 +752,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         // PX06: a user Stop is a cancellation, not an error. Surface it and the
         // execution identity (the server finalizes the execution `cancelled`).
         setStreamOutcome({ status: 'cancelled', executionId: executionIdRef.current });
-        setMessages((prev) => [...prev, {
-          role: 'assistant',
-          content: '⏹ Cancelled',
-          timestamp: Date.now(),
-        }]);
         scheduleCostEstimatorHide(1500);
       } else {
         console.error('Stream error:', error);
