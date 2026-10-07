@@ -31,3 +31,6 @@ jobs:
 
       - name: Run tests
         run: npm run test
+
+      - name: Stale-model coupling budget
+        run: node scripts/audit-stale-models.mjs --check
