@@ -17,6 +17,14 @@ export interface ModelPricing {
   isEstimated: boolean;
   isUnknown?: boolean;
   isEligibleForAutoRouting?: boolean;
+  // PX04: authoritative source metadata. Optional so existing entries keep
+  // working while `catalog/prices.json` becomes the validated authority.
+  effectiveFrom?: string;
+  effectiveTo?: string;
+  sourceUrl?: string;
+  verifiedAt?: string;
+  /** True when the fail-closed marker was produced because the price lapsed. */
+  isExpired?: boolean;
 }
 
 export const PRICING_VERSION = '2026-08-16-v7';
@@ -421,12 +429,59 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
 };
 
 /**
- * Fail-Closed Pricing Retrieval.
- * If pricing is unknown, automatic routing is strictly forbidden.
+ * Typed failure raised when a price is unknown or has lapsed. Callers that must
+ * not proceed on stale data use `assertPricingCurrent`.
  */
-export function getPricingForModel(model: string): ModelPricing {
+export class StalePriceError extends Error {
+  readonly model: string;
+  readonly reason: 'expired' | 'unknown';
+
+  constructor(model: string, reason: 'expired' | 'unknown') {
+    super(
+      reason === 'expired'
+        ? `Pricing for model '${model}' has expired; refusing to price or auto-route it.`
+        : `No pricing is registered for model '${model}'; refusing to price or auto-route it.`,
+    );
+    this.name = 'StalePriceError';
+    this.model = model;
+    this.reason = reason;
+  }
+}
+
+/**
+ * True when a price declares an `effectiveTo` date that has passed. The whole
+ * `effectiveTo` day remains valid (expiry is exclusive of the next day).
+ */
+export function isPriceExpired(pricing: ModelPricing, now: Date = new Date()): boolean {
+  if (!pricing.effectiveTo) return false;
+  const endOfDay = new Date(`${pricing.effectiveTo}T23:59:59.999Z`).getTime();
+  if (Number.isNaN(endOfDay)) return false;
+  return now.getTime() > endOfDay;
+}
+
+/**
+ * Fail-Closed Pricing Retrieval.
+ * If pricing is unknown OR expired, automatic routing is strictly forbidden and
+ * the returned marker is `isUnknown: true` rather than a silently assumed rate.
+ */
+export function getPricingForModel(model: string, now: Date = new Date()): ModelPricing {
   const existing = PRICING_REGISTRY[model];
-  if (existing) return existing;
+  if (existing) {
+    if (isPriceExpired(existing, now)) {
+      return {
+        inputRatePer1M: 0.0,
+        outputRatePer1M: 0.0,
+        asOfDate: existing.asOfDate,
+        sourceRef: 'expired-price-fail-closed',
+        isEstimated: true,
+        isUnknown: true,
+        isExpired: true,
+        isEligibleForAutoRouting: false,
+        effectiveTo: existing.effectiveTo,
+      };
+    }
+    return existing;
+  }
 
   // Unknown model pricing: auto-routing forbidden
   return {
@@ -438,6 +493,17 @@ export function getPricingForModel(model: string): ModelPricing {
     isUnknown: true,
     isEligibleForAutoRouting: false,
   };
+}
+
+/**
+ * Strict variant of `getPricingForModel` for callers that must throw rather than
+ * branch on a marker. Throws `StalePriceError` for unknown or expired prices.
+ */
+export function assertPricingCurrent(model: string, now: Date = new Date()): ModelPricing {
+  const existing = PRICING_REGISTRY[model];
+  if (!existing) throw new StalePriceError(model, 'unknown');
+  if (isPriceExpired(existing, now)) throw new StalePriceError(model, 'expired');
+  return existing;
 }
 
 /**

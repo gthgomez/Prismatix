@@ -350,6 +350,53 @@ export function normalizeModelOverride(input?: string): RouterModel | undefined 
   return undefined;
 }
 
+/**
+ * PX04: resolves a user-facing override/alias to the canonical catalog model id
+ * BEFORE any price lookup. Unknown inputs return `undefined` — an unknown model
+ * is never silently substituted for a different family.
+ */
+export function resolveCanonicalModelId(input?: string): RouterModel | undefined {
+  return normalizeModelOverride(input);
+}
+
+/**
+ * Raised when a route would send an image/video request to an endpoint that
+ * cannot accept that modality. The request is rejected rather than downgraded.
+ */
+export class ModalityMismatchError extends Error {
+  readonly modelTier: RouterModel;
+  readonly missing: 'image' | 'video';
+
+  constructor(modelTier: RouterModel, missing: 'image' | 'video') {
+    super(
+      `Model '${modelTier}' does not support ${missing} input; refusing to route this request.`,
+    );
+    this.name = 'ModalityMismatchError';
+    this.modelTier = modelTier;
+    this.missing = missing;
+  }
+}
+
+/**
+ * PX04: an approved model whose endpoint lacks a required modality (e.g. image
+ * input on a text-only endpoint) must be rejected for that request, never
+ * silently downgraded to a different model.
+ */
+export function assertRouteSupportsModalities(
+  modelTier: RouterModel,
+  request: { hasImages?: boolean; hasVideoAssets?: boolean },
+): void {
+  const config = MODEL_REGISTRY[modelTier];
+  const missing: 'image' | 'video' = request.hasImages ? 'image' : 'video';
+  if (!config) throw new ModalityMismatchError(modelTier, missing);
+  if (request.hasImages && !config.supportsImages) {
+    throw new ModalityMismatchError(modelTier, 'image');
+  }
+  if (request.hasVideoAssets && !config.supportsImages) {
+    throw new ModalityMismatchError(modelTier, 'video');
+  }
+}
+
 const COMPLEXITY_INDICATORS = {
   opus: [
     'analyze',
@@ -669,6 +716,12 @@ export function determineRoute(
   const analysis = analyzeRouting(params);
 
   if (modelOverride && MODEL_REGISTRY[modelOverride]) {
+    // PX04: reject a manual selection that cannot serve the request modality
+    // instead of silently downgrading to another model.
+    assertRouteSupportsModalities(modelOverride, {
+      hasImages: analysis.hasImages,
+      hasVideoAssets: analysis.hasVideoAssets,
+    });
     return buildDecision(modelOverride, 'manual-override', analysis, {
       routeStep: 'manual-override',
       explanation: {

@@ -1,0 +1,134 @@
+{
+  "deepseek-v4-flash": {
+    "gateway": "opencode",
+    "endpointModelId": "deepseek-v4-flash",
+    "inputPer1M": "0.44",
+    "outputPer1M": "1.32",
+    "cachedReadPer1M": "0.014",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "gpt-5.6-luna": {
+    "gateway": "opencode",
+    "endpointModelId": "gpt-5.6-luna",
+    "inputPer1M": "0.20",
+    "outputPer1M": "1.20",
+    "cachedReadPer1M": "0.02",
+    "cachedWritePer1M": "0.25",
+    "longContextThreshold": 272000,
+    "longContextInputPer1M": "0.40",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "deepseek-v4-pro": {
+    "gateway": "opencode",
+    "endpointModelId": "deepseek-v4-pro",
+    "inputPer1M": "1.32",
+    "outputPer1M": "3.96",
+    "cachedReadPer1M": "0.044",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "grok-4.6": {
+    "gateway": "opencode",
+    "endpointModelId": "grok-4.6",
+    "inputPer1M": "2.00",
+    "outputPer1M": "6.00",
+    "cachedReadPer1M": "0.50",
+    "longContextThreshold": 200000,
+    "longContextInputPer1M": "4.00",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "claude-sonnet-5": {
+    "gateway": "opencode",
+    "endpointModelId": "claude-sonnet-5",
+    "inputPer1M": "2.00",
+    "outputPer1M": "10.00",
+    "cachedReadPer1M": "0.20",
+    "cachedWritePer1M": "2.50",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "gpt-5.6-terra": {
+    "gateway": "opencode",
+    "endpointModelId": "gpt-5.6-terra",
+    "inputPer1M": "2.00",
+    "outputPer1M": "12.00",
+    "cachedReadPer1M": "0.20",
+    "cachedWritePer1M": "2.50",
+    "longContextThreshold": 272000,
+    "longContextInputPer1M": "4.00",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "claude-opus-5": {
+    "gateway": "opencode",
+    "endpointModelId": "claude-opus-5",
+    "inputPer1M": "5.00",
+    "outputPer1M": "25.00",
+    "cachedReadPer1M": "0.50",
+    "cachedWritePer1M": "6.25",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "gpt-5.6-sol": {
+    "gateway": "opencode",
+    "endpointModelId": "gpt-5.6-sol",
+    "inputPer1M": "5.00",
+    "outputPer1M": "30.00",
+    "cachedReadPer1M": "0.50",
+    "cachedWritePer1M": "6.25",
+    "longContextThreshold": 272000,
+    "longContextInputPer1M": "10.00",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "gemini-3.7-flash": {
+    "gateway": "opencode",
+    "endpointModelId": "gemini-3.7-flash",
+    "inputPer1M": "1.50",
+    "outputPer1M": "7.50",
+    "cachedReadPer1M": "0.05",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "claude-haiku-4-5": {
+    "gateway": "opencode",
+    "endpointModelId": "claude-haiku-4-5",
+    "inputPer1M": "1.00",
+    "outputPer1M": "5.00",
+    "cachedReadPer1M": "0.10",
+    "cachedWritePer1M": "1.25",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "deepseek-v4-flash-free": {
+    "gateway": "opencode",
+    "endpointModelId": "deepseek-v4-flash-free",
+    "inputPer1M": "0.00",
+    "outputPer1M": "0.00",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  },
+  "mimo-v2.5-free": {
+    "gateway": "opencode",
+    "endpointModelId": "mimo-v2.5-free",
+    "inputPer1M": "0.00",
+    "outputPer1M": "0.00",
+    "effectiveFrom": "2026-08-16",
+    "sourceUrl": "https://opencode.ai/docs/zen/",
+    "verifiedAt": "2026-08-16"
+  }
+}

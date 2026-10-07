@@ -7,6 +7,8 @@ import {
   type ImageAttachment,
   type Message,
   MODEL_REGISTRY,
+  ModalityMismatchError,
+  assertRouteSupportsModalities,
   normalizeModelOverride,
   type Provider,
   type RouteDecision,
@@ -2084,6 +2086,17 @@ Deno.serve(async (req: Request) => {
           },
         );
       }
+      // PX04: a manual model that cannot serve the request modality (e.g. image
+      // input on a text-only endpoint) is a 400, never a silent downgrade.
+      if (routeError instanceof ModalityMismatchError) {
+        return new Response(
+          JSON.stringify({ error: 'modality_mismatch', message: routeError.message }),
+          {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
       throw routeError;
     }
 
@@ -2099,6 +2112,27 @@ Deno.serve(async (req: Request) => {
       });
     }
     decision = availabilityCheck.decision;
+
+    // PX04: final modality check across every admission path (auto, manual
+    // override, legacy/provider fallback). An endpoint that cannot accept the
+    // request's images/video is a 400, never a silent downgrade.
+    try {
+      assertRouteSupportsModalities(decision.modelTier, {
+        hasImages: imageAttachments.length > 0,
+        hasVideoAssets,
+      });
+    } catch (modalityError) {
+      if (modalityError instanceof ModalityMismatchError) {
+        return new Response(
+          JSON.stringify({ error: 'modality_mismatch', message: modalityError.message }),
+          {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+      throw modalityError;
+    }
 
     const historyContext = history
       .map((msg) => `${msg.role}: ${msg.content}`)
