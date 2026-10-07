@@ -6,7 +6,7 @@
 // asOfDate policy: first-party rates carry the audit date; anything else is
 // isEstimated: true until verified.
 
-export const MODEL_TARIFF_VERSION = '2026-10-06-v8' as const;
+export const MODEL_TARIFF_VERSION = '2026-10-07-v9' as const;
 
 export interface TariffEntry {
   asOfDate?: number | string | boolean;
@@ -111,18 +111,25 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
-  // Rate card pending first-party verification; estimated at V4 Flash tier.
+  // DeepSeek first-party rates verified 2026-10-07 against
+  // https://api-docs.deepseek.com/quick_start/pricing/ (peak = input cache-miss
+  // / output; cache-hit input billed at cachedReadRatePer1M). Off-peak is half
+  // of peak; the peak window is 01:00-04:00 and 06:00-10:00 UTC Mon-Fri
+  // (weekends and CN public holidays are off-peak — see isDeepSeekOffPeak).
   'deepseek-v4-1-flash': {
-    inputRatePer1M: 0.44,
-    outputRatePer1M: 1.32,
-    cachedReadRatePer1M: 0.014,
-    asOfDate: '2026-10-06',
-    sourceRef: 'deepseek-estimate',
-    isEstimated: true,
+    inputRatePer1M: 0.30,
+    outputRatePer1M: 1.20,
+    cachedReadRatePer1M: 0.006,
+    offPeakInputRatePer1M: 0.15,
+    offPeakOutputRatePer1M: 0.60,
+    offPeakCachedReadRatePer1M: 0.003,
+    asOfDate: '2026-10-07',
+    sourceRef: 'deepseek-official',
+    isEstimated: false,
     isEligibleForAutoRouting: true,
   },
-  // DeepSeek V4 Flash: peak rate is the conservative routing ceiling; the
-  // off-peak window (16:30-08:30 UTC, see isDeepSeekOffPeak) bills roughly half.
+  // Zen reseller rate card for the V4 Flash tier; conservative routing ceiling
+  // (first-party DeepSeek pricing is lower — see deepseek-v4-1-flash).
   'deepseek-v4-flash': {
     inputRatePer1M: 0.44,
     outputRatePer1M: 1.32,
@@ -150,8 +157,8 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     offPeakInputRatePer1M: 0.66,
     offPeakOutputRatePer1M: 1.98,
     offPeakCachedReadRatePer1M: 0.022,
-    asOfDate: '2026-08-16',
-    sourceRef: 'opencode-zen-official',
+    asOfDate: '2026-10-07',
+    sourceRef: 'deepseek-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
