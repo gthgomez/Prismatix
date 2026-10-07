@@ -4,6 +4,14 @@ import {
   EntitlementError,
   loadAccessGrant,
 } from '../_shared/access_policy.ts';
+import {
+  admitExecution,
+  admissionDenialStatus,
+  commitReservation,
+  loadAdmissionConfig,
+  releaseReservation,
+  type AdmissionClient,
+} from '../router/admission.ts';
 
 // SECURITY: Lock CORS to the configured frontend origin.
 // Set ALLOWED_ORIGIN in Supabase project secrets (e.g. https://your-app.vercel.app).
@@ -17,6 +25,9 @@ const CORS_HEADERS = {
 
 const VIDEO_UPLOAD_BUCKET = 'video-uploads';
 const ENABLE_VIDEO_PIPELINE = envFlag('ENABLE_VIDEO_PIPELINE', false);
+// PX05: DB-authoritative quota admission (validated once at startup; malformed
+// numeric config throws so the function fails closed rather than booting open).
+const ADMISSION_CONFIG = loadAdmissionConfig((key) => Deno.env.get(key) ?? undefined);
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_JSON_BODY_BYTES = 16 * 1024;
 const MAX_ACTIVE_JOBS_PER_USER = 2;
@@ -403,17 +414,56 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  // PX05: the enqueue path goes through the SAME DB-authoritative admission as
+  // the router. Video has no execution-ledger row yet, so a generated id is the
+  // reservation/lease key. A denial consumes nothing and makes zero provider
+  // calls; a failed enqueue releases the (confirmed-zero) reservation.
+  const admissionClient = supabase as unknown as AdmissionClient;
+  const videoExecutionId = crypto.randomUUID();
+  const admission = await admitExecution(admissionClient, {
+    subjectId: user.id,
+    executionId: videoExecutionId,
+    estimateUsd: ADMISSION_CONFIG.maxPerExecutionUsd,
+    maxUsd: ADMISSION_CONFIG.maxPerExecutionUsd,
+    leaseSeconds: ADMISSION_CONFIG.leaseSeconds,
+    requestLimit: ADMISSION_CONFIG.requestLimitPerMinute,
+    userDailyUsd: ADMISSION_CONFIG.userDailyUsd,
+    projectDailyUsd: ADMISSION_CONFIG.projectDailyUsd,
+    activeLimit: ADMISSION_CONFIG.activeLimit,
+  });
+
+  if (!admission.admitted) {
+    const status = admissionDenialStatus(admission.reason);
+    return new Response(JSON.stringify({ error: admission.reason }), {
+      status,
+      headers: {
+        ...CORS_HEADERS,
+        'Content-Type': 'application/json',
+        ...(admission.retryAfterSeconds > 0
+          ? { 'Retry-After': String(admission.retryAfterSeconds) }
+          : {}),
+      },
+    });
+  }
+
   const { error: jobInsertError } = await supabase
     .from('video_jobs')
     .insert({ asset_id: assetId, status: 'queued' });
 
   if (jobInsertError) {
     devError('[video-intake] insert job failed:', jobInsertError);
+    // No job was enqueued: this is confirmed-zero work, so return the hold.
+    await releaseReservation(admissionClient, videoExecutionId, 'video_enqueue_failed');
     return new Response(JSON.stringify({ error: 'Failed to enqueue processing job' }), {
       status: 500,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });
   }
+
+  // Video billing is not metered yet, so the work is UNCERTAIN: mark the
+  // reservation pending_reconcile. The hold is kept (never silently forgiven,
+  // never $0.00) until a metered worker commits the real cost.
+  await commitReservation(admissionClient, videoExecutionId, null);
 
   return new Response(JSON.stringify({
     ok: true,

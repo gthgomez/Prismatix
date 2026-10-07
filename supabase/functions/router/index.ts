@@ -89,6 +89,17 @@ import {
 } from './execution_store.ts';
 import { openExecutionForRequest } from './execution_gate.ts';
 import {
+  admitExecution,
+  admissionDenialStatus,
+  commitReservation,
+  deriveOutputTokenCap,
+  loadAdmissionConfig,
+  releaseReservation,
+  resolveEffectiveLimits,
+  type AdmissionResult,
+} from './admission.ts';
+import { getModelPricing } from './pricing_registry.ts';
+import {
   MeteredCallAccountingError,
   runMeteredCall,
   type MeteredCallContext,
@@ -113,6 +124,7 @@ import {
   assertEntitled,
   EntitlementError,
   loadAccessGrant,
+  type AccessGrant,
 } from '../_shared/access_policy.ts';
 import {
   releaseHeaders,
@@ -233,6 +245,13 @@ const PER_REQUEST_COST_LIMIT_USD = Number(Deno.env.get('PER_REQUEST_COST_LIMIT_U
 const USER_RATE_LIMIT_WINDOW_MS = Number(Deno.env.get('USER_RATE_LIMIT_WINDOW_MS') || '') || 60_000;
 const USER_RATE_LIMIT_MAX_REQUESTS = Number(Deno.env.get('USER_RATE_LIMIT_MAX_REQUESTS') || '') || 20;
 const MAX_ACTIVE_STREAMS_PER_USER = Number(Deno.env.get('MAX_ACTIVE_STREAMS_PER_USER') || '') || 2;
+
+// PX05: the DB is the SINGLE authority for budgets/rate/concurrency. This
+// config is validated once at module load; a malformed/negative/nonfinite
+// numeric throws AdmissionConfigError so the function fails closed at startup
+// rather than running with a permissive default. The in-memory Maps above
+// remain only as a non-authoritative fast pre-check.
+const ADMISSION_CONFIG = loadAdmissionConfig((key) => Deno.env.get(key) ?? undefined);
 
 const GOOGLE_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
 let googleModelsCache: { fetchedAt: number; models: GoogleModelRecord[] } | null = null;
@@ -1847,9 +1866,10 @@ Deno.serve(async (req: Request) => {
     // PX01: server-managed entitlement gate. Fail closed BEFORE the rate
     // limiter, spend gate, or any provider dispatch: no active chat grant, no
     // paid execution. Lookup failures deny with a stable error code.
+    let activeGrant: AccessGrant | null = null;
     try {
-      const accessGrant = await loadAccessGrant(supabaseClient, userId);
-      assertEntitled(accessGrant, 'chat');
+      activeGrant = await loadAccessGrant(supabaseClient, userId);
+      assertEntitled(activeGrant, 'chat');
     } catch (entitlementError) {
       const entitlementCode = entitlementError instanceof EntitlementError
         ? entitlementError.code
@@ -2285,6 +2305,56 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // PX05: DB-authoritative admission. After entitlement and the PX03
+    // execution identity, and BEFORE any provider dispatch or stream slot,
+    // reserve the configured MAXIMUM billable work and acquire the concurrency
+    // lease in ONE transaction. A denial returns 402 (budget) or 429
+    // (rate/active) with a stable code and ZERO provider calls. Any authority
+    // failure fails closed (503) — this gate never admits on uncertainty.
+    const effectiveLimits = resolveEffectiveLimits(ADMISSION_CONFIG, activeGrant);
+    const admissionResult: AdmissionResult = await admitExecution(storeClient, {
+      subjectId: userId,
+      executionId: activeExecution.id,
+      estimateUsd: preFlightCost.estimatedUsd,
+      maxUsd: effectiveLimits.maxPerExecutionUsd,
+      leaseSeconds: ADMISSION_CONFIG.leaseSeconds,
+      requestLimit: ADMISSION_CONFIG.requestLimitPerMinute,
+      userDailyUsd: effectiveLimits.userDailyUsd,
+      projectDailyUsd: ADMISSION_CONFIG.projectDailyUsd,
+      activeLimit: ADMISSION_CONFIG.activeLimit,
+    });
+    if (!admissionResult.admitted) {
+      const status = admissionDenialStatus(admissionResult.reason);
+      if (status === 503) {
+        console.error('[PX05] admission unavailable; refusing request (503)');
+      }
+      return new Response(
+        JSON.stringify({ error: admissionResult.reason, code: admissionResult.reason }),
+        {
+          status,
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'application/json',
+            ...(admissionResult.retryAfterSeconds > 0
+              ? { 'Retry-After': String(admissionResult.retryAfterSeconds) }
+              : {}),
+          },
+        },
+      );
+    }
+
+    // Size output caps from the admitted budget: one execution cannot emit more
+    // than it reserved. The reservation still bounds actual spend via commit.
+    const admittedPricing = getModelPricing(decision.modelTier);
+    const admittedOutputCap = deriveOutputTokenCap(
+      effectiveLimits.maxPerExecutionUsd,
+      admittedPricing.outputRatePer1M,
+      decision.budgetCap,
+    );
+    if (admittedOutputCap > 0 && admittedOutputCap < decision.budgetCap) {
+      decision = { ...decision, budgetCap: admittedOutputCap };
+    }
+
     // Per-dispatch attempt allocation: distinct dispatches get distinct ledger
     // identities even when their token counts are identical.
     const attemptCounters = new Map<string, number>();
@@ -2329,6 +2399,40 @@ Deno.serve(async (req: Request) => {
           activeExecution.id,
           'execution_finalize_failed',
           { status, terminalOutcome },
+        );
+      }
+    };
+    // PX05: settle the reservation against actual cost. Unknown/ambiguous work
+    // (receipt failure, unknown pricing, a provider error after dispatch, a
+    // timeout/abort) becomes `pending_reconcile` so the hold is NEVER silently
+    // forgiven and never fabricated as $0.00. Only a pre-dispatch failure with
+    // zero provider calls is released.
+    const settleAdmission = async (
+      mode: 'commit' | 'pending' | 'release',
+      actualUsd?: number | null,
+      reason?: string,
+    ): Promise<void> => {
+      if (!admissionResult.admitted || !activeExecution) return;
+      try {
+        const result = mode === 'release'
+          ? await releaseReservation(storeClient, activeExecution.id, reason ?? 'no_provider_call')
+          : mode === 'pending'
+            ? await commitReservation(storeClient, activeExecution.id, null)
+            : await commitReservation(storeClient, activeExecution.id, actualUsd ?? null);
+        if (!result.ok) {
+          throw new Error(result.error ?? 'admission settlement failed');
+        }
+      } catch (settleError) {
+        console.error('[PX05] admission settlement failed:', {
+          executionId: activeExecution.id,
+          mode,
+          error: settleError instanceof Error ? settleError.message : String(settleError),
+        });
+        await safeEnqueueReconciliation(
+          storeClient,
+          activeExecution.id,
+          'admission_settlement_failed',
+          { mode, actualUsd: actualUsd ?? null },
         );
       }
     };
@@ -2504,6 +2608,8 @@ Deno.serve(async (req: Request) => {
       if (upstreamError instanceof MeteredCallAccountingError) {
         // FAIL CLOSED: the provider call was not dispatched because it could not
         // be accounted for. Surface a retryable 503 with zero provider calls.
+        // The reservation is confirmed-zero work, so it may be released.
+        await settleAdmission('release', null, 'pre_dispatch_accounting_failure');
         await finalizeLedger('failed', 'accounting_unavailable');
         return new Response(
           JSON.stringify({ error: 'accounting_unavailable', code: 'accounting_unavailable' }),
@@ -2513,6 +2619,8 @@ Deno.serve(async (req: Request) => {
           },
         );
       }
+      // A provider error may still have been billed; keep the hold pending.
+      await settleAdmission('pending');
       await finalizeLedger('failed', 'upstream_error');
       const message = upstreamError instanceof Error
         ? upstreamError.message
@@ -2537,6 +2645,8 @@ Deno.serve(async (req: Request) => {
 
     if (!upstream.response.ok) {
       releaseStreamSlot();
+      // The provider responded with an error; it may have been billed.
+      await settleAdmission('pending');
       await finalizeLedger('failed', 'upstream_status');
       if (DEV_MODE) {
         console.error(
@@ -2573,6 +2683,8 @@ Deno.serve(async (req: Request) => {
 
     if (!upstream.response.body) {
       releaseStreamSlot();
+      // The provider was called but returned no stream; keep the hold pending.
+      await settleAdmission('pending');
       await finalizeLedger('failed', 'empty_stream');
       return new Response(JSON.stringify({ error: 'Upstream provider returned empty stream' }), {
         status: 502,
@@ -2685,6 +2797,14 @@ Deno.serve(async (req: Request) => {
                 makeMeter,
               );
             }
+          }
+
+          // PX05: commit the reservation with the known actual cost. Unknown
+          // pricing or a failed receipt is ambiguous paid work -> pending_reconcile.
+          if (receiptOk && !costBreakdown.hasUnknownRate) {
+            await settleAdmission('commit', costBreakdown.totalUsd);
+          } else {
+            await settleAdmission('pending');
           }
 
           await finalizeLedger(
