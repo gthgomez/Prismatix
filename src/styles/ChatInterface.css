@@ -55,6 +55,16 @@
   flex-shrink: 1;
 }
 
+.catalog-skew-hint {
+  font-size: 0.65rem;
+  color: var(--color-text-dim);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm, 4px);
+  padding: 2px 6px;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .header-button {
   width: 40px; height: 40px;
   border-radius: var(--radius-md);

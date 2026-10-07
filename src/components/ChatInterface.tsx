@@ -3,6 +3,12 @@
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useContextManager } from '../hooks/useContextManager';
+import {
+  isCatalogSkewed,
+  subscribeCatalogSkew,
+  getServerTariffVersion,
+  CLIENT_TARIFF_VERSION,
+} from '../catalogSkew';
 import { ContextWarning } from './ContextWarning';
 import { ContextStatus } from './ContextStatus';
 import { FileUpload } from './FileUpload';
@@ -120,6 +126,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [currentComplexity, setCurrentComplexity] = useState<number>(50);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
+  // Server/client tariff skew (PX02 release identity): subtle hint only.
+  const [catalogSkewed, setCatalogSkewed] = useState(isCatalogSkewed());
+  useEffect(() => subscribeCatalogSkew(() => setCatalogSkewed(isCatalogSkewed())), []);
   const [manualModelOverride, setManualModelOverride] = useState<RouterModel | null>(null);
   const [geminiFlashThinkingLevel, setGeminiFlashThinkingLevel] = useState<
     GeminiFlashThinkingLevel
@@ -787,6 +796,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <span className='header-subtitle'>Adaptive Model Orchestration</span>
           </div>
           <div className='header-actions'>
+            {catalogSkewed && (
+              <span
+                className='catalog-skew-hint'
+                title={`Server model catalog (${getServerTariffVersion()}) differs from this client's (${CLIENT_TARIFF_VERSION}); prices and availability may not match.`}
+              >
+                catalog may be outdated
+              </span>
+            )}
             {contextStatus && <ContextStatus contextStatus={contextStatus} />}
             <SpendTracker refreshKey={spendRefreshKey} />
 

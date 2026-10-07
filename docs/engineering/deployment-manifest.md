@@ -236,7 +236,7 @@ require a chat entitlement).
 | `X-Prismatix-Protocol` | `PRISMATIX_PROTOCOL_VERSION` | `1` (code constant `PROTOCOL_VERSION`) | Wire protocol version. `1` = first versioned protocol: capabilities contract + `X-Prismatix-*` headers (introduced by PX02). Bump when the contract changes in a way clients must detect. |
 | `X-Prismatix-Schema` | `PRISMATIX_SCHEMA_VERSION` | `unspecified` | Database schema/migration revision the deployed code is qualified against. |
 | `X-Prismatix-Catalog` | `PRISMATIX_CATALOG_VERSION` | `unspecified` | Model catalog revision (the exact-match set accepted by `normalizeModelOverride`). |
-| `X-Prismatix-Tariff` | `PRISMATIX_TARIFF_VERSION` | `unspecified` | Tariff/pricing revision used by the cost engine (cf. `PRICING_VERSION` in `supabase/functions/router/pricing_registry.ts`, surfaced per-request as `X-Cost-Pricing-Version`). |
+| `X-Prismatix-Tariff` | `PRISMATIX_TARIFF_VERSION` | `unspecified` | Tariff/pricing revision used by the cost engine. Single source: `supabase/functions/_shared/model_tariff.ts` (`MODEL_TARIFF_VERSION`) — both `src/pricingRegistry.ts` and `supabase/functions/router/pricing_registry.ts` re-export it. Surfaced per-request as `X-Cost-Pricing-Version`. Set the secret to the same string. |
 | `X-Prismatix-Release` | `RELEASE_SHA` | `unknown` | Git SHA of the deployed revision. |
 
 All five header names are listed in the router's

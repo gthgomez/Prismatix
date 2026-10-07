@@ -4,6 +4,7 @@
 import { supabase } from './lib/supabase';
 import { CONFIG } from './config';
 import { devLog, devWarn, devError } from './utils';
+import { noteServerTariffVersion } from './catalogSkew';
 import type {
   DebateParticipant,
   DebateProfile,
@@ -417,6 +418,8 @@ export async function askPrismatix(
     const rationaleHeader = response.headers.get('X-Router-Rationale');
     const costEstimateHeader = response.headers.get('X-Cost-Estimate-USD');
     const costPricingVersion = response.headers.get('X-Cost-Pricing-Version') || undefined;
+    // PX02 release identity: record the server tariff version for skew detection.
+    noteServerTariffVersion(response.headers.get('X-Prismatix-Tariff'));
     const routeDecisionHeader = response.headers.get('X-Route-Decision');
     const routeInfo = parseRouteDecisionHeader(routeDecisionHeader);
     const debateModeHeader = response.headers.get('X-Debate-Mode');
