@@ -30,7 +30,7 @@ export function modelRateBasis(modelTier: RouterModel): number {
 /** Deterministic, price-known fallback order for provider-unavailable re-routing. */
 export const PROVIDER_UNAVAILABLE_FALLBACKS: RouterModel[] = [
   'gemini-2.5-flash',
-  'gpt-5.4-mini',
+  'gemini-3-flash',
   'sonnet-4.6',
 ];
 

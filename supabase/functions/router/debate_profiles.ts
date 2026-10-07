@@ -16,25 +16,22 @@ export const DEFAULT_DEBATE_THRESHOLD = 85;
 
 export const GENERAL_CHALLENGER_FALLBACKS: RouterModel[] = [
   'deepseek-v4-flash',
-  'gpt-5.6-luna',
-  'qwen3.5-4b',
-  'glm-4.7-flash',
-  'llama-3.1-8b-turbo',
+  'gpt-6-luna',
+  'gemini-3.8-flash',
+  'deepseek-v4-1-flash',
 ];
 
 export const CODE_CRITIC_FALLBACKS: RouterModel[] = [
   'deepseek-v4-flash',
   'deepseek-v4-pro',
+  'claude-sonnet-5-5',
   'claude-sonnet-5',
-  'deepseek-v3',
-  'glm-4.7-flash',
 ];
 
 export const CODE_IMPLEMENTER_FALLBACKS: RouterModel[] = [
   'deepseek-v4-pro',
+  'gpt-6-sol',
   'gpt-5.6-terra',
-  'step-3.5-flash',
-  'mistral-nemo',
 ];
 
 export const DEBATE_COST_CASCADE: RouterModel[] = GENERAL_CHALLENGER_FALLBACKS;

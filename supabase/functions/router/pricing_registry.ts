@@ -19,7 +19,7 @@ export interface ModelPricing {
   isEligibleForAutoRouting?: boolean;
 }
 
-export const PRICING_VERSION = '2026-08-16-v7';
+export const PRICING_VERSION = '2026-10-06-v8';
 
 /**
  * Checks if a given UTC time falls within DeepSeek's official off-peak window (16:30 - 08:30 UTC).
@@ -175,6 +175,68 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     isEligibleForAutoRouting: false,
   },
 
+  // 2026 September/October frontier wave (first-party rates; 2026-10-06 audit)
+  'gpt-6-sol': {
+    inputRatePer1M: 2.00,
+    outputRatePer1M: 10.00,
+    cachedReadRatePer1M: 0.20,
+    cachedWriteRatePer1M: 2.50,
+    asOfDate: '2026-10-06',
+    sourceRef: 'openai-official',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'gpt-6-luna': {
+    inputRatePer1M: 0.10,
+    outputRatePer1M: 0.50,
+    cachedReadRatePer1M: 0.0125,
+    cachedWriteRatePer1M: 0.125,
+    asOfDate: '2026-10-06',
+    sourceRef: 'openai-official',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'claude-opus-5-5': {
+    inputRatePer1M: 4.00,
+    outputRatePer1M: 20.00,
+    cachedReadRatePer1M: 0.40,
+    cachedWriteRatePer1M: 5.00,
+    asOfDate: '2026-10-06',
+    sourceRef: 'anthropic-official',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'claude-sonnet-5-5': {
+    inputRatePer1M: 2.00,
+    outputRatePer1M: 10.00,
+    cachedReadRatePer1M: 0.20,
+    cachedWriteRatePer1M: 2.50,
+    asOfDate: '2026-10-06',
+    sourceRef: 'anthropic-official',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  // Gemini 3.8 Flash: intro rates effective through 2026-12-31; scheduled to double 2027-01-01.
+  'gemini-3.8-flash': {
+    inputRatePer1M: 0.75,
+    outputRatePer1M: 3.75,
+    cachedReadRatePer1M: 0.075,
+    asOfDate: '2026-10-06',
+    sourceRef: 'google-official',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  // DeepSeek V4.1 Flash: rate card pending first-party verification; estimate at V4 Flash tier.
+  'deepseek-v4-1-flash': {
+    inputRatePer1M: 0.44,
+    outputRatePer1M: 1.32,
+    cachedReadRatePer1M: 0.014,
+    asOfDate: '2026-10-06',
+    sourceRef: 'deepseek-estimate',
+    isEstimated: true,
+    isEligibleForAutoRouting: true,
+  },
+
   // Legacy / Direct Router Model Mappings
   'haiku-4.5': {
     inputRatePer1M: 0.80,
@@ -200,14 +262,6 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
-  'gpt-5.4-mini': {
-    inputRatePer1M: 0.15,
-    outputRatePer1M: 0.60,
-    asOfDate: '2026-04-13',
-    sourceRef: 'openai-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
   'gemini-3-flash': {
     inputRatePer1M: 0.075,
     outputRatePer1M: 0.30,
@@ -221,54 +275,6 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
     outputRatePer1M: 5.00,
     asOfDate: '2026-04-13',
     sourceRef: 'google-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'nemotron-3-super': {
-    inputRatePer1M: 0.10,
-    outputRatePer1M: 0.16,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'llama-4-scout': {
-    inputRatePer1M: 0.10,
-    outputRatePer1M: 0.30,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'qwen3-235b': {
-    inputRatePer1M: 0.05,
-    outputRatePer1M: 0.10,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'llama-3.3-70b-turbo': {
-    inputRatePer1M: 0.02,
-    outputRatePer1M: 0.03,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'mistral-small-24b': {
-    inputRatePer1M: 0.03,
-    outputRatePer1M: 0.08,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'qwen3-32b': {
-    inputRatePer1M: 0.08,
-    outputRatePer1M: 0.28,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },
@@ -350,70 +356,6 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> = {
   'deepseek-r1': {
     inputRatePer1M: 0.55,
     outputRatePer1M: 2.19,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'deepseek-v3': {
-    inputRatePer1M: 0.20,
-    outputRatePer1M: 0.77,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'glm-4.7-flash': {
-    inputRatePer1M: 0.06,
-    outputRatePer1M: 0.40,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'qwen3.5-4b': {
-    inputRatePer1M: 0.03,
-    outputRatePer1M: 0.15,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'qwen3.5-9b': {
-    inputRatePer1M: 0.04,
-    outputRatePer1M: 0.20,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'step-3.5-flash': {
-    inputRatePer1M: 0.10,
-    outputRatePer1M: 0.30,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'llama-3.1-8b-turbo': {
-    inputRatePer1M: 0.02,
-    outputRatePer1M: 0.03,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'mistral-nemo': {
-    inputRatePer1M: 0.02,
-    outputRatePer1M: 0.04,
-    asOfDate: '2026-04-13',
-    sourceRef: 'deepinfra-pricing',
-    isEstimated: false,
-    isEligibleForAutoRouting: true,
-  },
-  'nemotron-nano-30b': {
-    inputRatePer1M: 0.10,
-    outputRatePer1M: 0.16,
     asOfDate: '2026-04-13',
     sourceRef: 'deepinfra-pricing',
     isEstimated: false,
