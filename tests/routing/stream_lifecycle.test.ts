@@ -5,10 +5,14 @@
 // `onComplete` does NOT. Completion emits an optional terminal receipt as the
 // final data event before `data: [DONE]`. A heartbeat comment keeps an idle
 // stream open, and every terminal handler runs at most once.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNormalizedProxyStream } from '../../supabase/functions/router/sse_normalizer.ts';
 import type { TerminalReceipt } from '../../supabase/functions/_shared/execution_receipt.ts';
 import { readRouterStream } from '../../src/hooks/useStreamHandler.ts';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -233,6 +237,64 @@ describe('createNormalizedProxyStream heartbeat', () => {
     // Allow several heartbeat periods to elapse after close.
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(text.endsWith('data: [DONE]\n\n')).toBe(true);
+  });
+
+  it('clears the heartbeat interval on cancellation', async () => {
+    const setSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval');
+    const heartbeatMs = 4321;
+
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      start() {
+        // Idle upstream: never enqueues, never closes.
+      },
+    });
+    const proxy = createNormalizedProxyStream({
+      upstreamBody,
+      extractDeltas,
+      onDelta: () => {},
+      onComplete: () => {},
+      onCancel: () => {},
+      heartbeatMs,
+    });
+
+    const intervalIdx = setSpy.mock.calls.findIndex((call) => call[1] === heartbeatMs);
+    expect(intervalIdx).toBeGreaterThanOrEqual(0);
+    const handle = setSpy.mock.results[intervalIdx]!.value;
+
+    const reader = proxy.getReader();
+    await reader.cancel('client navigated away');
+
+    expect(clearSpy).toHaveBeenCalledWith(handle);
+  });
+
+  it('clears the heartbeat interval on a mid-stream upstream error', async () => {
+    const setSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval');
+    const heartbeatMs = 4322;
+
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error('upstream exploded'));
+      },
+    });
+    const proxy = createNormalizedProxyStream({
+      upstreamBody,
+      extractDeltas,
+      onDelta: () => {},
+      onComplete: () => {},
+      onError: () => {},
+      heartbeatMs,
+    });
+
+    const intervalIdx = setSpy.mock.calls.findIndex((call) => call[1] === heartbeatMs);
+    expect(intervalIdx).toBeGreaterThanOrEqual(0);
+    const handle = setSpy.mock.results[intervalIdx]!.value;
+
+    const reader = proxy.getReader();
+    await expect(reader.read()).rejects.toThrow('upstream exploded');
+
+    expect(clearSpy).toHaveBeenCalledWith(handle);
   });
 });
 

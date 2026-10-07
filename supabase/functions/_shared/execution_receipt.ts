@@ -73,7 +73,7 @@ export interface RawReceiptCall {
 // reservation row exists for the execution.
 export interface RawReceiptReservation {
   state: 'held' | 'committed' | 'released' | 'pending_reconcile';
-  committed_usd: number | string;
+  committed_usd: number | string | null;
 }
 
 export interface RawReceiptPayload {
@@ -136,7 +136,7 @@ export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
   }
 
   const committedUsd = roundUsd(
-    reservation !== null ? toUsd(reservation.committed_usd) : settledSum,
+    toUsd(reservation?.committed_usd ?? settledSum),
   );
 
   const finalizedAt = TERMINAL_EXECUTION_STATUSES.has(execution.status)

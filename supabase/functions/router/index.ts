@@ -1813,6 +1813,11 @@ function isExecutionReceiptAction(parsedBody: unknown): boolean {
   );
 }
 
+// Reject a malformed execution id BEFORE the RPC so a bad uuid does not surface
+// as a Postgres cast error (503 accounting_unavailable).
+const EXECUTION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 
 // ============================================================================
 // MAIN HANDLER
@@ -1847,8 +1852,9 @@ Deno.serve(async (req: Request) => {
   // outer catch/timeout) invokes it so a hold can never linger as 'held'.
   let settleAdmissionOnExit: (() => Promise<void>) | null = null;
   // PX06: single-run terminal guard. `executionFinalized` is set by the one
-  // finalizeLedger call that wins; `finalizeOnExit` finalizes indeterminate /
-  // aborted for an outer crash/timeout exactly once.
+  // finalizeLedger call that wins; `finalizeOnExit` finalizes the outer
+  // crash/timeout path exactly once, honoring `clientCancelled` (a disconnect →
+  // `cancelled` / `client_cancelled`, otherwise `indeterminate` / `aborted`).
   let executionFinalized = false;
   let finalizeOnExit: (() => Promise<void>) | null = null;
 
@@ -1982,6 +1988,12 @@ Deno.serve(async (req: Request) => {
       const executionId = (body as { executionId?: unknown }).executionId;
       if (typeof executionId !== 'string' || executionId.trim() === '') {
         return new Response(JSON.stringify({ error: 'Bad Request: executionId required' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!EXECUTION_ID_PATTERN.test(executionId.trim())) {
+        return new Response(JSON.stringify({ error: 'invalid_execution_id' }), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         });
@@ -2919,25 +2931,25 @@ Deno.serve(async (req: Request) => {
         await settleAdmission('ledger');
         await finalizeLedger('cancelled', 'client_cancelled');
       },
-      onError: (err) => {
+      onError: async (err) => {
         // A mid-stream upstream read error after the response has been returned
         // is not reachable by the outer catch. If it was caused by a client
         // disconnect (the request signal aborted, or onCancel already flagged
         // it), finalize `cancelled` — a disconnect is never an indeterminate
         // crash. Any other read error/timeout finalizes indeterminate and
         // settles so the execution is never left `started` with a lingering hold.
+        // AWAITED by the normalizer so a reclaimed isolate cannot drop the
+        // terminal settlement.
         const disconnected = clientCancelled || req.signal.aborted;
         console.error('[PX06] upstream stream error:', err);
         clearTimeout(timeoutId);
         releaseStreamSlot();
-        void (async () => {
-          await settleAdmission('ledger');
-          if (disconnected) {
-            await finalizeLedger('cancelled', 'client_cancelled');
-          } else {
-            await finalizeLedger('indeterminate', 'upstream_stream_error');
-          }
-        })();
+        await settleAdmission('ledger');
+        if (disconnected) {
+          await finalizeLedger('cancelled', 'client_cancelled');
+        } else {
+          await finalizeLedger('indeterminate', 'upstream_stream_error');
+        }
       },
       onComplete: async () => {
         try {

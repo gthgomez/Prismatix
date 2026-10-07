@@ -36,7 +36,7 @@ export interface NormalizedProxyStreamParams {
     | { receipt?: TerminalReceipt }
     | void;
   onCancel?: (reason: unknown) => void | Promise<void>;
-  onError?: (err: unknown) => void;
+  onError?: (err: unknown) => void | Promise<void>;
   /** Heartbeat interval while waiting on upstream. Defaults to 15s. */
   heartbeatMs?: number;
 }
@@ -138,15 +138,10 @@ export function createNormalizedProxyStream(
     }
   };
 
-  const runError = (err: unknown): void => {
+  const runError = async (err: unknown): Promise<void> => {
     if (terminalRan) return;
     terminalRan = true;
     clearHeartbeat();
-    try {
-      params.onError?.(err);
-    } catch {
-      // onError must not escape
-    }
     closed = true;
     if (controller) {
       try {
@@ -154,6 +149,13 @@ export function createNormalizedProxyStream(
       } catch {
         // already errored/closed
       }
+    }
+    // Await the router's terminal handling so a reclaimed isolate cannot drop
+    // the settlement/finalize (mirrors runComplete awaiting onComplete).
+    try {
+      await params.onError?.(err);
+    } catch (onErrorErr) {
+      console.error('[sse_normalizer] onError failed:', onErrorErr);
     }
   };
 
@@ -191,7 +193,7 @@ export function createNormalizedProxyStream(
           // Upstream completion is the ONLY path to onComplete.
           await runComplete();
         } catch (err) {
-          runError(err);
+          await runError(err);
         }
       })();
     },

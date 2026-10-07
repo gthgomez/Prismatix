@@ -24,6 +24,29 @@ import {
   type ExecutionStoreRpcResponse,
 } from '../../supabase/functions/router/execution_store.ts';
 
+// PX06 final-review: inject a deterministic synchronous throw in the response
+// HEADER region (after admission, outside the upstream try/catch) so the outer
+// catch/timeout path can be exercised. `buildDebateHeaders` is called only while
+// building the stream response headers.
+const debateHeaderInject = vi.hoisted(() => ({ shouldThrow: false }));
+
+vi.mock('../../supabase/functions/router/debate_runtime.ts', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../../supabase/functions/router/debate_runtime.ts')
+  >();
+  return {
+    ...actual,
+    buildDebateHeaders: (
+      params: Parameters<typeof actual.buildDebateHeaders>[0],
+    ): ReturnType<typeof actual.buildDebateHeaders> => {
+      if (debateHeaderInject.shouldThrow) {
+        throw new Error('injected post-admission header failure');
+      }
+      return actual.buildDebateHeaders(params);
+    },
+  };
+});
+
 const SUBJECT = '11111111-1111-4111-8111-111111111111';
 
 function execution(overrides: Partial<RawReceiptExecution> = {}): RawReceiptExecution {
@@ -139,6 +162,17 @@ describe('projectReceipt', () => {
       execution: execution(),
       calls: [call({ total_cost: 0.1 }), call({ participant: 'openai', total_cost: 0.2 })],
       reservation: null,
+    });
+
+    expect(receipt.settlement.state).toBe('settled');
+    expect(receipt.settlement.committedUsd).toBeCloseTo(0.3, 6);
+  });
+
+  it('falls back to the settled call sum when the reservation committed_usd is null', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ total_cost: 0.1 }), call({ participant: 'openai', total_cost: 0.2 })],
+      reservation: reservation({ state: 'committed', committed_usd: null }),
     });
 
     expect(receipt.settlement.state).toBe('settled');
@@ -406,6 +440,21 @@ describe("action execution_receipt (real router handler)", () => {
     expect(await res.json()).toEqual({ error: 'Bad Request: executionId required' });
     // No ledger lookup for a malformed request.
     expect(calls.some((call) => call.url.includes('px03_get_execution_receipt'))).toBe(false);
+  });
+
+  it('returns 400 invalid_execution_id for a non-UUID id before calling the RPC', async () => {
+    const calls = installFetchRecorder(receiptRoutes(ownedPayload()));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({ action: 'execution_receipt', executionId: 'not-a-uuid' }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_execution_id' });
+    // The malformed id must never reach Postgres as a cast error (503).
+    expect(calls.some((call) => call.url.includes('px03_get_execution_receipt'))).toBe(false);
+    expect(providerCalls(calls)).toEqual([]);
   });
 
   it('returns the projected receipt for an owned execution WITHOUT requiring an entitlement', async () => {
@@ -769,5 +818,130 @@ describe('PX06 finding 1: abort-driven upstream error finalizes cancelled', () =
     expect(finalize).toBeTruthy();
     expect(finalize!.p_status).toBe('indeterminate');
     expect(finalize!.p_terminal_outcome).toBe('upstream_stream_error');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PX06 final-review, important #2: the outer catch/timeout path finalizes
+// `indeterminate` / `aborted` for a crash after admission.
+// ---------------------------------------------------------------------------
+
+describe('PX06 outer catch: post-admission crash finalizes indeterminate', () => {
+  it('finalizes indeterminate/aborted when the handler throws after admission', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const finalizeBodies: Array<Record<string, unknown>> = [];
+    installFetchRecorder((call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return jsonResponse({ id: SUBJECT, aud: 'authenticated', role: 'authenticated' });
+      }
+      if (call.url.includes('/rest/v1/rpc/get_access_grant')) return jsonResponse(streamGrantRow());
+      if (call.url.includes('/rest/v1/conversations')) {
+        return jsonResponse({ user_id: SUBJECT, total_tokens: 0 });
+      }
+      if (call.url.includes('/rest/v1/cost_logs')) return jsonResponse([]);
+      if (call.url.includes('/rest/v1/user_memories')) return jsonResponse([]);
+      if (call.url.includes('/rest/v1/conversation_memory_state')) return jsonResponse(null);
+      if (call.url.includes('/rest/v1/messages')) return jsonResponse([]);
+      if (call.url.includes('/rest/v1/rpc/px03_create_execution')) {
+        return jsonResponse({
+          execution: {
+            id: STREAM_EXECUTION_ID,
+            subject_id: SUBJECT,
+            conversation_id: STREAM_CONVERSATION_ID,
+            client_request_key: 'px06-outer-catch-key',
+            payload_hash: 'px06-outer-catch-hash',
+            status: 'started',
+            requested_mode: null,
+            requested_model: 'haiku-4.5',
+            resolved_model: null,
+            served_model: null,
+            route_version: null,
+            pricing_version: null,
+            catalog_version: null,
+            terminal_outcome: null,
+            created_at: '2026-10-06T00:00:00.000Z',
+            updated_at: '2026-10-06T00:00:00.000Z',
+          },
+          reused: false,
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px03_record_model_call')) {
+        return jsonResponse({
+          id: 'c0000000-0000-4000-8000-0000000000cc',
+          execution_id: STREAM_EXECUTION_ID,
+          stage: 'baseline',
+          participant: 'anthropic',
+          attempt_number: 1,
+          status: 'streaming',
+          input_tokens: 0,
+          output_tokens: 0,
+          thinking_tokens: 0,
+          input_cost: 0,
+          output_cost: 0,
+          thinking_cost: 0,
+          total_cost: 0,
+          cost_status: 'pending',
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px05_admit_execution')) {
+        return jsonResponse({
+          admitted: true,
+          reason: 'admitted',
+          reservation_id: 'r0000000-0000-4000-8000-0000000000cc',
+          lease_id: 'l0000000-0000-4000-8000-0000000000cc',
+          retry_after_seconds: 0,
+          remaining_usd: '1.5',
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px05_commit_from_ledger')) {
+        return jsonResponse({
+          state: 'pending_reconcile',
+          updated: true,
+          reservation_id: 'r0000000-0000-4000-8000-0000000000cc',
+          committed_usd: '0',
+          pending_calls: 1,
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px03_finalize_execution')) {
+        finalizeBodies.push(JSON.parse(call.body) as Record<string, unknown>);
+        return jsonResponse({ execution: { id: STREAM_EXECUTION_ID, status: 'indeterminate' }, finalized: true });
+      }
+      if (call.url.includes('api.anthropic.com')) {
+        return new Response(
+          'data: {"type":"message_start","message":{"id":"m"}}\n\n' +
+            'data: {"type":"content_block_delta","delta":{"text":"hi"}}\n\n',
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        );
+      }
+      return null;
+    });
+
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    debateHeaderInject.shouldThrow = true;
+    let res: Response;
+    try {
+      res = await handler(
+        routerRequest({
+          conversationId: STREAM_CONVERSATION_ID,
+          query: 'Hello from Prism',
+          platform: 'mobile',
+          history: [],
+          modelOverride: 'anthropic:haiku',
+        }),
+      );
+    } finally {
+      debateHeaderInject.shouldThrow = false;
+    }
+
+    // The injected throw happens outside the upstream try/catch (while building
+    // the stream response headers) and is caught by the outer catch.
+    expect(res.status).toBe(500);
+
+    const finalize = finalizeBodies.find((body) => body.p_status !== undefined);
+    expect(finalize).toBeTruthy();
+    expect(finalize!.p_status).toBe('indeterminate');
+    expect(finalize!.p_terminal_outcome).toBe('aborted');
   });
 });
