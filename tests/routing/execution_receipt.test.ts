@@ -113,6 +113,27 @@ describe('projectReceipt', () => {
     expect(receipt.calls).toEqual([]);
   });
 
+  it('reports pending (never settled $0) for zero calls with a held/pending_reconcile reservation', () => {
+    for (const state of ['held', 'pending_reconcile'] as const) {
+      const receipt = projectReceipt({
+        execution: execution({ status: 'cancelled', terminal_outcome: 'client_cancelled' }),
+        calls: [],
+        reservation: reservation({ state, committed_usd: 0 }),
+      });
+      expect(receipt.settlement).toEqual({ state: 'pending', committedUsd: 0, pendingCalls: 0 });
+    }
+  });
+
+  it('reports pending for zero calls with no reservation row at all', () => {
+    const receipt = projectReceipt({
+      execution: execution({ status: 'started', terminal_outcome: null }),
+      calls: [],
+      reservation: null,
+    });
+
+    expect(receipt.settlement).toEqual({ state: 'pending', committedUsd: 0, pendingCalls: 0 });
+  });
+
   it('falls back to the settled call sum when there is no reservation', () => {
     const receipt = projectReceipt({
       execution: execution(),
@@ -442,5 +463,311 @@ describe("action execution_receipt (real router handler)", () => {
       code: 'accounting_unavailable',
     });
     expect(providerCalls(calls)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PX06 fix round 1, finding 1: a client disconnect that rejects the upstream
+// read must finalize `cancelled`, not `indeterminate`.
+// ---------------------------------------------------------------------------
+
+const STREAM_EXECUTION_ID = 'e0000000-0000-4000-8000-0000000000aa';
+const STREAM_CONVERSATION_ID = '33333333-3333-4333-8333-333333333333';
+
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 150));
+}
+
+function streamGrantRow(): Record<string, unknown> {
+  return {
+    subject_id: SUBJECT,
+    role: 'user',
+    enabled: true,
+    allowed_features: ['chat'],
+    max_daily_usd: '5.000000',
+    max_per_execution_usd: '1.000000',
+    created_at: '2026-10-06T00:00:00.000Z',
+    updated_at: '2026-10-06T00:00:00.000Z',
+    updated_by: null,
+  };
+}
+
+describe('PX06 finding 1: abort-driven upstream error finalizes cancelled', () => {
+  it('finalizes cancelled/client_cancelled when a disconnect rejects the upstream read', async () => {
+    // Silence the intentional error-path logging for clean output.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    let upstreamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const encoder = new TextEncoder();
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        upstreamController = controller;
+        controller.enqueue(
+          encoder.encode('data: {"type":"content_block_delta","delta":{"text":"partial"}}\n\n'),
+        );
+        // Stay open: the disconnect/error below is the terminal event.
+      },
+    });
+
+    const finalizeBodies: Array<Record<string, unknown>> = [];
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return jsonResponse({ id: SUBJECT, aud: 'authenticated', role: 'authenticated' });
+      }
+      if (call.url.includes('/rest/v1/rpc/get_access_grant')) {
+        return jsonResponse(streamGrantRow());
+      }
+      if (call.url.includes('/rest/v1/conversations')) {
+        return jsonResponse({ user_id: SUBJECT, total_tokens: 0 });
+      }
+      if (call.url.includes('/rest/v1/cost_logs')) return jsonResponse([]);
+      if (call.url.includes('/rest/v1/user_memories')) return jsonResponse([]);
+      if (call.url.includes('/rest/v1/conversation_memory_state')) return jsonResponse(null);
+      if (call.url.includes('/rest/v1/messages')) return jsonResponse([]);
+      if (call.url.includes('/rest/v1/rpc/px03_create_execution')) {
+        return jsonResponse({
+          execution: {
+            id: STREAM_EXECUTION_ID,
+            subject_id: SUBJECT,
+            conversation_id: STREAM_CONVERSATION_ID,
+            client_request_key: 'px06-disconnect-key',
+            payload_hash: 'px06-disconnect-hash',
+            status: 'started',
+            requested_mode: null,
+            requested_model: 'haiku-4.5',
+            resolved_model: null,
+            served_model: null,
+            route_version: null,
+            pricing_version: null,
+            catalog_version: null,
+            terminal_outcome: null,
+            created_at: '2026-10-06T00:00:00.000Z',
+            updated_at: '2026-10-06T00:00:00.000Z',
+          },
+          reused: false,
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px03_record_model_call')) {
+        return jsonResponse({
+          id: 'c0000000-0000-4000-8000-0000000000aa',
+          execution_id: STREAM_EXECUTION_ID,
+          stage: 'baseline',
+          participant: 'anthropic',
+          attempt_number: 1,
+          status: 'streaming',
+          input_tokens: 0,
+          output_tokens: 0,
+          thinking_tokens: 0,
+          input_cost: 0,
+          output_cost: 0,
+          thinking_cost: 0,
+          total_cost: 0,
+          cost_status: 'pending',
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px05_admit_execution')) {
+        return jsonResponse({
+          admitted: true,
+          reason: 'admitted',
+          reservation_id: 'r0000000-0000-4000-8000-0000000000aa',
+          lease_id: 'l0000000-0000-4000-8000-0000000000aa',
+          retry_after_seconds: 0,
+          remaining_usd: '1.5',
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px05_commit_from_ledger')) {
+        return jsonResponse({
+          state: 'pending_reconcile',
+          updated: true,
+          reservation_id: 'r0000000-0000-4000-8000-0000000000aa',
+          committed_usd: '0',
+          pending_calls: 1,
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px03_finalize_execution')) {
+        finalizeBodies.push(JSON.parse(call.body) as Record<string, unknown>);
+        return jsonResponse({ execution: { id: STREAM_EXECUTION_ID, status: 'cancelled' }, finalized: true });
+      }
+      if (call.url.includes('api.anthropic.com')) {
+        return new Response(upstreamBody, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      return null;
+    });
+
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+    const abortController = new AbortController();
+    const req = new Request('http://127.0.0.1:54321/functions/v1/router', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${USER_TOKEN}`,
+      },
+      body: JSON.stringify({
+        conversationId: STREAM_CONVERSATION_ID,
+        query: 'Hello from Prism',
+        platform: 'mobile',
+        history: [],
+        modelOverride: 'anthropic:haiku',
+      }),
+      signal: abortController.signal,
+    });
+
+    const res = await handler(req);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('X-Prismatix-Execution-Id')).toBe(STREAM_EXECUTION_ID);
+
+    const reader = res.body!.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+
+    // The client disconnects: req.signal aborts (sets clientCancelled) and the
+    // upstream read is rejected before the proxy stream's cancel() runs.
+    abortController.abort();
+    upstreamController!.error(new Error('client disconnected'));
+    await reader.read().catch(() => {});
+    await flushAsync();
+
+    const finalize = finalizeBodies.find((body) => body.p_status !== undefined);
+    expect(finalize).toBeTruthy();
+    expect(finalize!.p_status).toBe('cancelled');
+    expect(finalize!.p_terminal_outcome).toBe('client_cancelled');
+    // Zero provider calls beyond the (mocked) anthropic stream.
+    expect(providerCalls(calls).every((c) => c.url.includes('api.anthropic.com'))).toBe(true);
+  });
+
+  it('still finalizes indeterminate for an upstream read error with no disconnect', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    let upstreamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        upstreamController = controller;
+        controller.enqueue(
+          new TextEncoder().encode(
+            'data: {"type":"content_block_delta","delta":{"text":"partial"}}\n\n',
+          ),
+        );
+      },
+    });
+
+    const finalizeBodies: Array<Record<string, unknown>> = [];
+    installFetchRecorder((call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return jsonResponse({ id: SUBJECT, aud: 'authenticated', role: 'authenticated' });
+      }
+      if (call.url.includes('/rest/v1/rpc/get_access_grant')) return jsonResponse(streamGrantRow());
+      if (call.url.includes('/rest/v1/conversations')) {
+        return jsonResponse({ user_id: SUBJECT, total_tokens: 0 });
+      }
+      if (call.url.includes('/rest/v1/cost_logs')) return jsonResponse([]);
+      if (call.url.includes('/rest/v1/user_memories')) return jsonResponse([]);
+      if (call.url.includes('/rest/v1/conversation_memory_state')) return jsonResponse(null);
+      if (call.url.includes('/rest/v1/messages')) return jsonResponse([]);
+      if (call.url.includes('/rest/v1/rpc/px03_create_execution')) {
+        return jsonResponse({
+          execution: {
+            id: STREAM_EXECUTION_ID,
+            subject_id: SUBJECT,
+            conversation_id: STREAM_CONVERSATION_ID,
+            client_request_key: 'px06-nodisconnect-key',
+            payload_hash: 'px06-nodisconnect-hash',
+            status: 'started',
+            requested_mode: null,
+            requested_model: 'haiku-4.5',
+            resolved_model: null,
+            served_model: null,
+            route_version: null,
+            pricing_version: null,
+            catalog_version: null,
+            terminal_outcome: null,
+            created_at: '2026-10-06T00:00:00.000Z',
+            updated_at: '2026-10-06T00:00:00.000Z',
+          },
+          reused: false,
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px03_record_model_call')) {
+        return jsonResponse({
+          id: 'c0000000-0000-4000-8000-0000000000bb',
+          execution_id: STREAM_EXECUTION_ID,
+          stage: 'baseline',
+          participant: 'anthropic',
+          attempt_number: 1,
+          status: 'streaming',
+          input_tokens: 0,
+          output_tokens: 0,
+          thinking_tokens: 0,
+          input_cost: 0,
+          output_cost: 0,
+          thinking_cost: 0,
+          total_cost: 0,
+          cost_status: 'pending',
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px05_admit_execution')) {
+        return jsonResponse({
+          admitted: true,
+          reason: 'admitted',
+          reservation_id: 'r0000000-0000-4000-8000-0000000000bb',
+          lease_id: 'l0000000-0000-4000-8000-0000000000bb',
+          retry_after_seconds: 0,
+          remaining_usd: '1.5',
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px05_commit_from_ledger')) {
+        return jsonResponse({
+          state: 'pending_reconcile',
+          updated: true,
+          reservation_id: 'r0000000-0000-4000-8000-0000000000bb',
+          committed_usd: '0',
+          pending_calls: 1,
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px03_finalize_execution')) {
+        finalizeBodies.push(JSON.parse(call.body) as Record<string, unknown>);
+        return jsonResponse({ execution: { id: STREAM_EXECUTION_ID, status: 'indeterminate' }, finalized: true });
+      }
+      if (call.url.includes('api.anthropic.com')) {
+        return new Response(upstreamBody, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      return null;
+    });
+
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+    const req = new Request('http://127.0.0.1:54321/functions/v1/router', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${USER_TOKEN}`,
+      },
+      body: JSON.stringify({
+        conversationId: STREAM_CONVERSATION_ID,
+        query: 'Hello from Prism',
+        platform: 'mobile',
+        history: [],
+        modelOverride: 'anthropic:haiku',
+      }),
+    });
+
+    const res = await handler(req);
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    await reader.read();
+
+    // Upstream explodes without any client disconnect.
+    upstreamController!.error(new Error('provider reset'));
+    await reader.read().catch(() => {});
+    await flushAsync();
+
+    const finalize = finalizeBodies.find((body) => body.p_status !== undefined);
+    expect(finalize).toBeTruthy();
+    expect(finalize!.p_status).toBe('indeterminate');
+    expect(finalize!.p_terminal_outcome).toBe('upstream_stream_error');
   });
 });

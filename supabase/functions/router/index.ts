@@ -1830,8 +1830,16 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  // PX06: records that a downstream client disconnect is the terminal cause, so
+  // a disconnect is never relabeled as an indeterminate crash. Declared before
+  // the request-abort listener so `onReqAbort` can set it safely.
+  let clientCancelled = false;
   const controller = new AbortController();
-  const onReqAbort = () => controller.abort();
+  const onReqAbort = () => {
+    // A disconnect is a cancellation cause, not a timeout/crash.
+    clientCancelled = true;
+    controller.abort();
+  };
   req.signal.addEventListener('abort', onReqAbort, { once: true });
   const timeoutId = setTimeout(() => controller.abort(), FUNCTION_TIMEOUT_MS);
   let streamReturned = false;
@@ -1840,11 +1848,8 @@ Deno.serve(async (req: Request) => {
   let settleAdmissionOnExit: (() => Promise<void>) | null = null;
   // PX06: single-run terminal guard. `executionFinalized` is set by the one
   // finalizeLedger call that wins; `finalizeOnExit` finalizes indeterminate /
-  // aborted for an outer crash/timeout exactly once. `clientCancelled` records
-  // that a downstream disconnect is the terminal cause, so the exit path can
-  // never relabel a cancellation as an indeterminate crash.
+  // aborted for an outer crash/timeout exactly once.
   let executionFinalized = false;
-  let clientCancelled = false;
   let finalizeOnExit: (() => Promise<void>) | null = null;
 
   try {
@@ -2916,14 +2921,22 @@ Deno.serve(async (req: Request) => {
       },
       onError: (err) => {
         // A mid-stream upstream read error after the response has been returned
-        // is not reachable by the outer catch; finalize indeterminate and settle
-        // so the execution is never left `started` with a lingering hold.
+        // is not reachable by the outer catch. If it was caused by a client
+        // disconnect (the request signal aborted, or onCancel already flagged
+        // it), finalize `cancelled` — a disconnect is never an indeterminate
+        // crash. Any other read error/timeout finalizes indeterminate and
+        // settles so the execution is never left `started` with a lingering hold.
+        const disconnected = clientCancelled || req.signal.aborted;
         console.error('[PX06] upstream stream error:', err);
         clearTimeout(timeoutId);
         releaseStreamSlot();
         void (async () => {
           await settleAdmission('ledger');
-          await finalizeLedger('indeterminate', 'upstream_stream_error');
+          if (disconnected) {
+            await finalizeLedger('cancelled', 'client_cancelled');
+          } else {
+            await finalizeLedger('indeterminate', 'upstream_stream_error');
+          }
         })();
       },
       onComplete: async () => {

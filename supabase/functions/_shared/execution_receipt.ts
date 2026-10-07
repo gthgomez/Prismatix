@@ -107,10 +107,12 @@ function roundUsd(value: number): number {
  * Pure projection of the ledger payload into a `TerminalReceipt`.
  *
  * Settlement rules (money safety):
- *   * `released` only for zero calls with a `released` reservation;
- *   * `pending` when ANY call is not `settled` (unknown/unsettled cost is never
- *     reported as success or as $0-settled);
- *   * otherwise `settled`.
+ *   * zero calls with a `released` reservation → `released`;
+ *   * zero calls with an absent or non-`released` reservation → `pending`
+ *     (a hold that was never released must never be reported as settled $0);
+ *   * any call that is not `settled` → `pending` (unknown/unsettled cost is
+ *     never reported as success or as $0-settled);
+ *   * otherwise → `settled`.
  * `committedUsd` prefers the reservation's committed amount and falls back to
  * the sum of settled call costs (e.g. for legacy rows with no reservation).
  */
@@ -125,8 +127,8 @@ export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
   const pendingCalls = calls.filter((call) => call.cost_status !== 'settled').length;
 
   let state: SettlementState;
-  if (calls.length === 0 && reservation?.state === 'released') {
-    state = 'released';
+  if (calls.length === 0) {
+    state = reservation?.state === 'released' ? 'released' : 'pending';
   } else if (pendingCalls > 0) {
     state = 'pending';
   } else {
