@@ -5,6 +5,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { countTokens, countImageTokens, type ImageAttachment } from './router_logic.ts';
 import { isUuid } from './security_guards.ts';
+import type { CostStatus } from './execution_store.ts';
 
 // ============================================================================
 // TYPES
@@ -44,38 +45,12 @@ export interface CostLogRecord {
   pricing_version?: string;
   complexity_score?: number;
   route_rationale?: string;
+  // Authoritative identity for the projection: supplied by the caller from the
+  // execution/call ledger. Never synthesized from content. Rows written before
+  // PX03 carry `legacy:` keys and are treated as estimated_legacy provenance.
   idempotency_key?: string;
+  cost_status?: CostStatus;
   created_at?: string;
-}
-
-// ============================================================================
-// IDEMPOTENCY
-// ============================================================================
-
-/**
- * Builds a deterministic idempotency key from cost-log content fields.
- * The same logical cost log (same conversation, model, token counts, and
- * costs) always produces the same key, so retries collapse onto one row.
- * `created_at` is intentionally excluded: the database generates it, so
- * including it would defeat deduplication across retries.
- */
-export function buildCostLogIdempotencyKey(record: CostLogRecord): string {
-  return [
-    record.conversation_id,
-    record.user_id,
-    record.model,
-    record.provider,
-    record.input_tokens,
-    record.output_tokens,
-    record.thinking_tokens,
-    record.input_cost,
-    record.output_cost,
-    record.thinking_cost,
-    record.total_cost,
-    record.pricing_version ?? '',
-    record.complexity_score ?? '',
-    record.route_rationale ?? '',
-  ].join('::');
 }
 
 // ============================================================================
@@ -212,12 +187,13 @@ export async function persistCostLog(
   supabase: ReturnType<typeof createClient>,
   record: CostLogRecord,
 ): Promise<void> {
-  const idempotencyKey = buildCostLogIdempotencyKey(record);
-  const recordWithKey: CostLogRecord = { ...record, idempotency_key: idempotencyKey };
-
+  // PX03 (F07): the authoritative identity is the execution/call ID supplied by
+  // the caller. This projection NEVER synthesizes a content-based key and NEVER
+  // replaces a caller-supplied `idempotency_key`. cost_logs remains a
+  // server-written compatibility projection; the ledger owns authority.
   const { error } = await supabase
     .from('cost_logs')
-    .upsert(recordWithKey as never, {
+    .upsert(record as never, {
       ignoreDuplicates: true,
       onConflict: 'idempotency_key',
     });
@@ -226,7 +202,7 @@ export async function persistCostLog(
     console.error('[DB] Cost log persist failed:', {
       code: error.code,
       message: error.message,
-      idempotencyKey,
+      idempotencyKey: record.idempotency_key ?? null,
     });
     // Re-throw so the caller can decide whether to dead-letter or retry.
     // Swallowing here silently loses cost data.

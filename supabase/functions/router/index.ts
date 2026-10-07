@@ -78,6 +78,21 @@ import {
   validateConversation,
 } from './db_helpers.ts';
 import {
+  computePayloadHash,
+  createExecution,
+  enqueueReconciliation,
+  finalizeExecution,
+  RequestKeyConflictError,
+  type ExecutionRecord,
+  type ExecutionStatus,
+  type ExecutionStoreClient,
+} from './execution_store.ts';
+import {
+  runMeteredCall,
+  type MeteredCallContext,
+  type MeteredCallFactory,
+} from './metered_call.ts';
+import {
   fetchRelevantMemories,
   maybeSummarizeConversationAsync,
   type MemoryRetrievalResult,
@@ -113,6 +128,9 @@ interface UpstreamCallResult {
   effectiveModelId: string;
   effectiveGeminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
 }
+
+// PX03: per-dispatch metering context is defined in metered_call.ts and shared
+// with the memory summarization path.
 
 interface GoogleModelRecord {
   name: string;
@@ -349,6 +367,64 @@ function promptTokensForCost(
 }
 
 // ============================================================================
+// PX03 LEDGER HELPERS
+// ============================================================================
+
+const CLIENT_REQUEST_ID_HEADERS = ['x-client-request-id', 'x-request-id'] as const;
+const CLIENT_REQUEST_KEY_MAX_CHARS = 200;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * Derives the subject-scoped client_request_key: the client's request ID when
+ * present (header or body), otherwise a server-generated UUID. Oversized or
+ * blank values fall back to the server UUID.
+ */
+function deriveClientRequestKey(req: Request, body: unknown): string {
+  let candidate = '';
+  for (const header of CLIENT_REQUEST_ID_HEADERS) {
+    const value = req.headers.get(header);
+    if (value && value.trim()) {
+      candidate = value.trim();
+      break;
+    }
+  }
+  if (!candidate) {
+    const record = asRecord(body);
+    const bodyValue = record?.clientRequestId ?? record?.requestId;
+    if (typeof bodyValue === 'string' && bodyValue.trim()) {
+      candidate = bodyValue.trim();
+    }
+  }
+  if (candidate && candidate.length <= CLIENT_REQUEST_KEY_MAX_CHARS) {
+    return candidate;
+  }
+  return crypto.randomUUID();
+}
+
+// Best-effort durable reconciliation enqueue for the accounting path. Never
+// blocks the answer stream on a ledger write failure.
+async function safeEnqueueReconciliation(
+  store: ExecutionStoreClient,
+  executionId: string | null,
+  kind: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await enqueueReconciliation(store, { executionId, kind, payload });
+  } catch (error) {
+    console.error('[PX03] reconciliation enqueue failed:', {
+      kind,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+// ============================================================================
 // DEBATE MODE HELPERS
 // ============================================================================
 
@@ -537,6 +613,7 @@ async function maybeRunDebateMode(params: {
   synthesisMaxTokens?: number;
   videoNotesJson?: string;
   debateWasExplicit: boolean;
+  meter?: MeteredCallFactory;
 }): Promise<DebateRunResult | null> {
   const isVideoUi = params.debateProfile === 'video_ui';
   if (!isVideoUi && (params.images.length > 0 || params.hasVideo)) return null;
@@ -621,6 +698,12 @@ async function maybeRunDebateMode(params: {
             [],
             workerController.signal,
             params.geminiFlashThinkingLevel,
+            params.meter?.(
+              'debate-challenger',
+              `worker-${c.role}`,
+              workerTier,
+              null,
+            ) ?? undefined,
           );
           const text = await consumeUpstreamToText(
             upstream,
@@ -677,6 +760,12 @@ async function maybeRunDebateMode(params: {
     [],
     params.signal,
     params.geminiFlashThinkingLevel,
+    params.meter?.(
+      'debate-synthesis',
+      'primary',
+      synthesisDecision.modelTier,
+      null,
+    ) ?? undefined,
   );
 
   return {
@@ -1083,21 +1172,47 @@ async function callProviderStream(
   images: ImageAttachment[],
   signal: AbortSignal,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel,
+  meter?: MeteredCallContext,
 ): Promise<UpstreamCallResult> {
-  switch (decision.provider) {
-    case 'opencode':
-      return await callOpenCode(decision, allMessages, images, signal);
-    case 'anthropic':
-      return await callAnthropic(decision, allMessages, images, signal);
-    case 'openai':
-      return await callOpenAI(decision, allMessages, images, signal);
-    case 'google':
-      return await callGoogle(decision, allMessages, images, signal, geminiFlashThinkingLevel);
-    case 'nvidia':
-      return await callNvidia(decision, allMessages, signal);
-    case 'deepinfra':
-      return await callDeepInfra(decision, allMessages, signal);
-  }
+  const dispatch = async (): Promise<UpstreamCallResult> => {
+    switch (decision.provider) {
+      case 'opencode':
+        return await callOpenCode(decision, allMessages, images, signal);
+      case 'anthropic':
+        return await callAnthropic(decision, allMessages, images, signal);
+      case 'openai':
+        return await callOpenAI(decision, allMessages, images, signal);
+      case 'google':
+        return await callGoogle(decision, allMessages, images, signal, geminiFlashThinkingLevel);
+      case 'nvidia':
+        return await callNvidia(decision, allMessages, signal);
+      case 'deepinfra':
+        return await callDeepInfra(decision, allMessages, signal);
+    }
+  };
+
+  if (!meter) return await dispatch();
+
+  return await runMeteredCall(
+    {
+      store: meter.store,
+      execution: meter.execution,
+      stage: meter.stage,
+      participant: meter.participant,
+      attemptNumber: meter.attemptNumber,
+      requestedModel: meter.requestedModel,
+      resolvedModel: decision.model,
+      priceSnapshot: meter.priceSnapshot,
+    },
+    async () => {
+      const result = await dispatch();
+      return {
+        result,
+        servedModel: result.effectiveModelId || decision.model,
+        status: 'completed',
+      };
+    },
+  );
 }
 
 // ============================================================================
@@ -1133,26 +1248,52 @@ async function callGoogleStructured(
   allMessages: Message[],
   responseSchema: Record<string, unknown>,
   signal: AbortSignal,
+  meter?: MeteredCallContext,
 ): Promise<{ responseText: string; ok: boolean; status: number }> {
-  const resolvedModel = await resolveGoogleModelAlias(decision.model, signal);
-  const endpoint =
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(resolvedModel)}` +
-    ':generateContent';
+  const dispatch = async (): Promise<{ responseText: string; ok: boolean; status: number }> => {
+    const resolvedModel = await resolveGoogleModelAlias(decision.model, signal);
+    const endpoint =
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(resolvedModel)}` +
+      ':generateContent';
 
-  const payload = buildGoogleJsonPayload(decision, allMessages, responseSchema);
+    const payload = buildGoogleJsonPayload(decision, allMessages, responseSchema);
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': GOOGLE_API_KEY,
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': GOOGLE_API_KEY,
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+
+    const responseText = await response.text();
+    return { responseText, ok: response.ok, status: response.status };
+  };
+
+  if (!meter) return await dispatch();
+
+  return await runMeteredCall(
+    {
+      store: meter.store,
+      execution: meter.execution,
+      stage: meter.stage,
+      participant: meter.participant,
+      attemptNumber: meter.attemptNumber,
+      requestedModel: meter.requestedModel,
+      resolvedModel: decision.model,
+      priceSnapshot: meter.priceSnapshot,
     },
-    body: JSON.stringify(payload),
-    signal,
-  });
-
-  const responseText = await response.text();
-  return { responseText, ok: response.ok, status: response.status };
+    async () => {
+      const result = await dispatch();
+      return {
+        result,
+        servedModel: decision.model,
+        status: result.ok ? 'completed' : 'failed',
+      };
+    },
+  );
 }
 
 // ============================================================================
@@ -1251,6 +1392,7 @@ async function maybeRunSmdMode(params: {
   allMessages: Message[];
   signal: AbortSignal;
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
+  meter?: MeteredCallFactory;
 }): Promise<SmdRunResult | null> {
   const runId = crypto.randomUUID().slice(0, 8);
   const smdDecisionBase = decisionFromModel(SMD_MODEL_TIER, 50, 'smd-light');
@@ -1296,6 +1438,7 @@ async function maybeRunSmdMode(params: {
       [],
       params.signal,
       params.geminiFlashThinkingLevel,
+      params.meter?.('smd-draft', 'primary', draftDecision.modelTier, null) ?? undefined,
     );
     const draftText = await consumeUpstreamToText(draftUpstream, params.signal, SMD_DRAFT_MAX_CHARS);
     log.draftLatencyMs = Date.now() - draftStart;
@@ -1326,6 +1469,7 @@ async function maybeRunSmdMode(params: {
           skepticMessages,
           SKEPTIC_GEMINI_SCHEMA,
           params.signal,
+          params.meter?.('smd-skeptic', 'primary', skepticDecision.modelTier, null) ?? undefined,
         );
       } catch (fetchErr) {
         console.warn(`[SMD][${runId}] skeptic fetch error (attempt ${attempt}):`, fetchErr);
@@ -1382,6 +1526,7 @@ async function maybeRunSmdMode(params: {
           synthMessages,
           SYNTH_DECISION_GEMINI_SCHEMA,
           params.signal,
+          params.meter?.('smd-synth', 'primary', synthDecisionModel.modelTier, null) ?? undefined,
         );
       } catch (fetchErr) {
         console.warn(`[SMD][${runId}] synth fetch error (attempt ${attempt}):`, fetchErr);
@@ -1454,6 +1599,7 @@ async function maybeRunSmdMode(params: {
       [],
       params.signal,
       params.geminiFlashThinkingLevel,
+      params.meter?.('smd-formatter', 'primary', formatterDecision.modelTier, null) ?? undefined,
     );
     log.formatterLatencyMs = Date.now() - formatterStart;
     log.finalStatus = 'complete';
@@ -2042,6 +2188,97 @@ Deno.serve(async (req: Request) => {
 
     const allMessages = [...history, userMsg];
 
+    // PX03: create the durable execution identity early (after entitlement and
+    // routing, before any provider dispatch). The client_request_key is bound
+    // to a stable payload_hash: reusing the key with different content is a
+    // hard conflict and dispatches nothing.
+    const storeClient = supabaseClient as unknown as ExecutionStoreClient;
+    const clientRequestKey = deriveClientRequestKey(req, body);
+    const payloadHash = await computePayloadHash(normalizedBody.value);
+    let activeExecution: ExecutionRecord | null = null;
+    try {
+      const created = await createExecution(storeClient, {
+        subjectId: userId,
+        conversationId,
+        clientRequestKey,
+        payloadHash,
+        requestedMode: mode ?? null,
+        requestedModel: normalizedOverride ?? manualModelOverride ?? null,
+        routeVersion: RELEASE_IDENTITY.protocolVersion,
+        pricingVersion: preFlightCost.pricingVersion,
+        catalogVersion: RELEASE_IDENTITY.catalogVersion,
+      });
+      activeExecution = created.execution;
+    } catch (executionError) {
+      if (executionError instanceof RequestKeyConflictError) {
+        return new Response(
+          JSON.stringify({ error: 'request_key_conflict', code: 'request_key_conflict' }),
+          {
+            status: 409,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+      // Ledger unavailable: fail closed for the receipt (never fabricate one),
+      // but do not block the answer stream.
+      console.error('[PX03] execution create failed:', {
+        error: executionError instanceof Error ? executionError.message : String(executionError),
+      });
+      void safeEnqueueReconciliation(storeClient, null, 'execution_create_failed', {
+        subjectId: userId,
+        conversationId,
+        clientRequestKey,
+      });
+    }
+
+    // Per-dispatch attempt allocation: distinct dispatches get distinct ledger
+    // identities even when their token counts are identical.
+    const attemptCounters = new Map<string, number>();
+    const makeMeter: MeteredCallFactory = (
+      stage,
+      participant,
+      requestedModel,
+      priceSnapshot = null,
+    ) => {
+      if (!activeExecution) return null;
+      const key = `${stage}::${participant}`;
+      const attemptNumber = (attemptCounters.get(key) ?? 0) + 1;
+      attemptCounters.set(key, attemptNumber);
+      return {
+        store: storeClient,
+        execution: activeExecution,
+        stage,
+        participant,
+        attemptNumber,
+        requestedModel,
+        priceSnapshot,
+      };
+    };
+    const finalizeLedger = async (
+      status: ExecutionStatus,
+      terminalOutcome: string,
+      servedModel?: string,
+    ): Promise<void> => {
+      if (!activeExecution) return;
+      try {
+        await finalizeExecution(storeClient, activeExecution.id, {
+          status,
+          terminalOutcome,
+          ...(servedModel ? { servedModel } : {}),
+        });
+      } catch (finalizeError) {
+        console.error('[PX03] execution finalize failed:', {
+          error: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
+        });
+        await safeEnqueueReconciliation(
+          storeClient,
+          activeExecution.id,
+          'execution_finalize_failed',
+          { status, terminalOutcome },
+        );
+      }
+    };
+
     // Debate state — declared before try so both the catch and response-building can see them.
     let debateActive = false;
     let debateProfileEffective: DebateProfile = 'general';
@@ -2089,6 +2326,7 @@ Deno.serve(async (req: Request) => {
             imageAttachments,
             controller.signal,
             normalizedGeminiFlashThinkingLevel,
+            makeMeter('smd-fastpath', decision.provider, decision.modelTier) ?? undefined,
           );
         } else {
           const smdResult = await maybeRunSmdMode({
@@ -2096,6 +2334,7 @@ Deno.serve(async (req: Request) => {
             allMessages,
             signal: controller.signal,
             geminiFlashThinkingLevel: normalizedGeminiFlashThinkingLevel,
+            meter: makeMeter,
           });
 
           if (smdResult) {
@@ -2117,6 +2356,7 @@ Deno.serve(async (req: Request) => {
               imageAttachments,
               controller.signal,
               normalizedGeminiFlashThinkingLevel,
+              makeMeter('baseline', decision.provider, decision.modelTier) ?? undefined,
             );
           }
         }
@@ -2171,6 +2411,7 @@ Deno.serve(async (req: Request) => {
               ? { synthesisMaxTokens: DEBATE_VIDEO_UI_SYNTHESIS_MAX_TOKENS }
               : {}),
             ...(videoUiNotesJson ? { videoNotesJson: videoUiNotesJson } : {}),
+            meter: makeMeter,
           }),
         });
         // On failure (no challengers succeeded), fall through silently to the normal path.
@@ -2190,6 +2431,7 @@ Deno.serve(async (req: Request) => {
             imageAttachments,
             controller.signal,
             normalizedGeminiFlashThinkingLevel,
+            makeMeter('baseline', decision.provider, decision.modelTier) ?? undefined,
           );
         }
       } else {
@@ -2199,11 +2441,13 @@ Deno.serve(async (req: Request) => {
           imageAttachments,
           controller.signal,
           normalizedGeminiFlashThinkingLevel,
+          makeMeter('baseline', decision.provider, decision.modelTier) ?? undefined,
         );
       }
       } // end: else (not smdEligible)
     } catch (upstreamError) {
       releaseStreamSlot();
+      await finalizeLedger('failed', 'upstream_error');
       const message = upstreamError instanceof Error
         ? upstreamError.message
         : String(upstreamError);
@@ -2227,6 +2471,7 @@ Deno.serve(async (req: Request) => {
 
     if (!upstream.response.ok) {
       releaseStreamSlot();
+      await finalizeLedger('failed', 'upstream_status');
       if (DEV_MODE) {
         console.error(
           `[Upstream:${responseDecision.provider}] Error ${upstream.response.status}:`,
@@ -2262,6 +2507,7 @@ Deno.serve(async (req: Request) => {
 
     if (!upstream.response.body) {
       releaseStreamSlot();
+      await finalizeLedger('failed', 'empty_stream');
       return new Response(JSON.stringify({ error: 'Upstream provider returned empty stream' }), {
         status: 502,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -2318,21 +2564,37 @@ Deno.serve(async (req: Request) => {
             pricing_version: costBreakdown.pricingVersion,
             complexity_score: responseDecision.complexityScore,
             route_rationale: responseDecision.rationaleTag,
+            // PX03: the authoritative identity is the execution id, never a
+            // content hash. cost_logs stays a server-written projection and the
+            // projection is pending until the ledger settles.
+            idempotency_key: activeExecution?.id,
+            cost_status: 'pending' as const,
           };
+          let receiptOk = true;
           try {
             await persistCostLog(
               supabaseClient as unknown as ReturnType<typeof createClient>,
               costLogRecord,
             );
           } catch (costLogError) {
-            // Dead-letter: the stream already completed, so we cannot fail the
-            // response. Log the full record for later reconciliation.
-            console.error('[DB] Cost log dead-letter:', {
+            // Accounting authority fails closed for the receipt: the stream
+            // already completed, so we cannot fail the response — but we never
+            // pretend the receipt succeeded. Record it durably instead of a
+            // console dead-letter, and mark the execution indeterminate below.
+            receiptOk = false;
+            console.error('[DB] Cost log receipt failed:', {
               conversationId,
               userId,
               error: costLogError instanceof Error ? costLogError.message : String(costLogError),
-              record: costLogRecord,
             });
+            if (activeExecution) {
+              await safeEnqueueReconciliation(
+                storeClient,
+                activeExecution.id,
+                'cost_projection_failed',
+                { conversationId, userId, model: responseDecision.modelTier },
+              );
+            }
           }
 
           if (assistantText.trim()) {
@@ -2354,9 +2616,16 @@ Deno.serve(async (req: Request) => {
                 conversationId,
                 ownership.tokenCount + userTokenCount + assistantTokenCount,
                 { openai: OPENAI_API_KEY, anthropic: ANTHROPIC_API_KEY, google: GOOGLE_API_KEY },
+                makeMeter,
               );
             }
           }
+
+          await finalizeLedger(
+            receiptOk ? 'completed' : 'indeterminate',
+            receiptOk ? 'ok' : 'receipt_write_failed',
+            effectiveModelId,
+          );
         } finally {
           clearTimeout(timeoutId);
           releaseStreamSlot();
