@@ -2,6 +2,11 @@
 // index.ts - native Gemini File API integration
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { GoogleAIFileManager, FileState } from 'npm:@google/generative-ai/server';
+import {
+  assertEntitled,
+  EntitlementError,
+  loadAccessGrant,
+} from '../_shared/access_policy.ts';
 
 // SECURITY: Lock CORS to the configured frontend origin.
 // Set ALLOWED_ORIGIN in Supabase project secrets (e.g. https://your-app.vercel.app).
@@ -26,6 +31,23 @@ interface VideoJobRow {
   status: VideoJobStatus;
   attempt: number;
   created_at?: string;
+}
+
+// PostgREST embeds the many-to-one video_jobs -> video_assets relation as a
+// single object at runtime, while the untyped supabase-js select parser types
+// any embed as an array. Model both shapes and normalize at read time.
+interface EmbeddedAssetOwner {
+  user_id: string;
+}
+
+interface QueuedJobWithOwner extends VideoJobRow {
+  video_assets?: EmbeddedAssetOwner | EmbeddedAssetOwner[] | null;
+}
+
+// Reads the asset owner from either embed shape.
+function embeddedAssetOwnerId(embedded: EmbeddedAssetOwner | EmbeddedAssetOwner[] | null | undefined): string | undefined {
+  const ownerRow = Array.isArray(embedded) ? embedded[0] : embedded;
+  return ownerRow?.user_id;
 }
 
 interface VideoAssetRow {
@@ -163,7 +185,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: queuedJobRaw, error: queuedError } = await supabase
     .from('video_jobs')
-    .select('id, asset_id, status, attempt, created_at')
+    .select('id, asset_id, status, attempt, created_at, video_assets(user_id)')
     .eq('status', 'queued')
     .order('created_at', { ascending: true })
     .limit(1)
@@ -177,7 +199,31 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ ok: true, processed: 0, message: 'No queued jobs' }), { status: 200, headers: CORS_HEADERS });
   }
 
-  const queuedJob = queuedJobRaw as VideoJobRow;
+  const queuedJob = queuedJobRaw as QueuedJobWithOwner;
+
+  // PX01: the asset owner must hold an active video entitlement BEFORE any
+  // queue mutation (lock) or provider call. Fail closed on lookup errors: the
+  // job stays queued for a later retry with zero mutations and zero provider
+  // calls; a definitively unentitled owner is failed closed permanently.
+  const ownerId = embeddedAssetOwnerId(queuedJob.video_assets);
+  if (!ownerId) {
+    devError('[video-worker] queued job is missing its asset owner:', queuedJob.id);
+    return new Response(JSON.stringify({ error: 'Failed to resolve asset owner' }), { status: 500 });
+  }
+
+  try {
+    const ownerGrant = await loadAccessGrant(supabase, ownerId);
+    assertEntitled(ownerGrant, 'video');
+  } catch (entitlementError) {
+    if (entitlementError instanceof EntitlementError && entitlementError.code === 'not_entitled') {
+      devError('[video-worker] asset owner has no active video entitlement; failing job closed:', queuedJob.id);
+      await markJobFailed(supabase, queuedJob.id, queuedJob.asset_id, 'not_entitled', 'Asset owner has no active video entitlement');
+      return new Response(JSON.stringify({ ok: false, error: 'not_entitled' }), { status: 403, headers: CORS_HEADERS });
+    }
+    devError('[video-worker] entitlement lookup failed; leaving job queued:', entitlementError);
+    return new Response(JSON.stringify({ error: 'entitlement_unavailable' }), { status: 500, headers: CORS_HEADERS });
+  }
+
   const nowIso = new Date().toISOString();
 
   const { data: runningJob, error: lockError } = await supabase

@@ -1,6 +1,7 @@
 // src/hooks/useAuth.ts
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { CONFIG } from '../config';
 import type { Session, User } from '@supabase/supabase-js';
 
 interface AuthState {
@@ -108,6 +109,13 @@ export const useAuth = (): UseAuthReturn => {
   }, []);
 
   const signUp = useCallback(async (email: string, password: string) => {
+    // PX01: signups are gated behind VITE_ALLOW_SIGNUP (default off). This is
+    // client-side defense in depth only; server-side signup must stay disabled
+    // until beta readiness.
+    if (!CONFIG.ALLOW_SIGNUP) {
+      return { error: new Error('Signups are currently disabled') };
+    }
+
     const validationError = validateCredentials(email, password);
     if (validationError) return { error: validationError };
 

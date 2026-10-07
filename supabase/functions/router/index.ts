@@ -92,6 +92,11 @@ import {
   evaluateSpendGate,
   normalizeRouterRequestBody,
 } from './security_guards.ts';
+import {
+  assertEntitled,
+  EntitlementError,
+  loadAccessGrant,
+} from '../_shared/access_policy.ts';
 
 // ============================================================================
 // LOCAL TYPE DEFINITIONS
@@ -1533,6 +1538,22 @@ Deno.serve(async (req: Request) => {
     }
 
     const userId = user.id;
+
+    // PX01: server-managed entitlement gate. Fail closed BEFORE the rate
+    // limiter, spend gate, or any provider dispatch: no active chat grant, no
+    // paid execution. Lookup failures deny with a stable error code.
+    try {
+      const accessGrant = await loadAccessGrant(supabaseClient, userId);
+      assertEntitled(accessGrant, 'chat');
+    } catch (entitlementError) {
+      const entitlementCode = entitlementError instanceof EntitlementError
+        ? entitlementError.code
+        : 'entitlement_unavailable';
+      return new Response(JSON.stringify({ error: entitlementCode }), {
+        status: 403,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
 
     const rateLimit = checkUserRateLimit(userId);
     if (!rateLimit.allowed) {

@@ -14,6 +14,13 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* Deno-style npm: specifiers used by supabase/functions modules that are
+       type-checked through test imports (resolved natively by Deno, and by the
+       deno-npm-stubs vite plugin at vitest runtime). */
+    "paths": {
+      "npm:@supabase/supabase-js@2": ["./node_modules/@supabase/supabase-js"]
+    },
+
     /* Linting */
     "strict": true,
     "noUnusedLocals": false,
