@@ -3,10 +3,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { GeminiFlashThinkingLevel, RouterModel, RouterProvider } from '../types';
 import {
-  MODEL_CATALOG,
   MODEL_EXTENDED_ORDER,
   MODEL_HIGHLIGHTS,
   MODEL_ORDER,
+  formatModelPriceLabel,
+  getCatalogEntry,
 } from '../modelCatalog';
 import { DEBATE_SELECTIONS, type DebateSelection } from '../debateMode';
 import {
@@ -87,7 +88,6 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   onClearValidationError,
   onClose,
 }) => {
-  const modelConfig = MODEL_CATALOG;
   const [activeTab, setActiveTab] = useState<SelectorTab>(() =>
     sendValidationError ? 'routing' : readStoredTab(),
   );
@@ -149,13 +149,13 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
       provider,
       label: PROVIDER_LABEL[provider],
       models: MODEL_ORDER.filter(
-        (id) => keySet.has(id) && modelConfig[id].provider === provider,
+        (id) => keySet.has(id) && getCatalogEntry(id).provider === provider,
       ),
     })).filter((g) => g.models.length > 0);
-  }, [visibleOverrideKeys, modelConfig]);
+  }, [visibleOverrideKeys]);
 
   const renderModelButton = (key: RouterModel) => {
-    const config = modelConfig[key];
+    const config = getCatalogEntry(key);
     return (
       <button
         key={key}
@@ -170,6 +170,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
         <div className='option-info'>
           <span className='option-name'>{config.shortName}</span>
           <span className='option-desc'>{config.description}</span>
+          <span className='option-price'>{formatModelPriceLabel(key)}</span>
         </div>
       </button>
     );

@@ -291,6 +291,29 @@ export const MODEL_CATALOG: Record<RouterModel, ModelCatalogEntry> = {
 /** Listed output $/M ascending (cheapest → priciest) for list order and provider sub-order. */
 export const MODEL_ORDER: RouterModel[] = getRouterModelOrderByListedOutputUsdPerM('asc');
 
+/**
+ * Fallback entry for model IDs the client does not know. The router and this
+ * catalog are deployed independently, so a server can return an ID absent
+ * here (e.g. mid-rollout); UI lookups must degrade instead of crashing.
+ */
+export const UNKNOWN_MODEL_ENTRY: ModelCatalogEntry = {
+  provider: 'other',
+  name: 'Unknown model',
+  shortName: 'Unknown model',
+  description: 'Not in local catalog',
+  color: '#8b949e',
+  icon: '❔',
+};
+
+/** Catalog entry for any ID, with the neutral fallback for unknown ones. */
+export function getCatalogEntry(modelId: string): ModelCatalogEntry {
+  return MODEL_CATALOG[modelId as RouterModel] ?? UNKNOWN_MODEL_ENTRY;
+}
+
+export function isKnownModel(modelId: string): modelId is RouterModel {
+  return modelId in MODEL_CATALOG;
+}
+
 /** Curated subset for empty state and compact override UI. */
 export const MODEL_HIGHLIGHTS: RouterModel[] = [
   'deepseek-v4-flash-free',
