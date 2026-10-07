@@ -343,6 +343,11 @@ $$;
 -- A NULL / negative / nonfinite actual means UNKNOWN or AMBIGUOUS usage: the
 -- hold is kept and the reservation becomes `pending_reconcile` (never $0.00,
 -- never silently released).
+-- LOCK ORDER: every reservation mutator locks the PROJECT window row and then
+-- the USER window row FOR UPDATE, exactly like px05_admit_execution. A single
+-- unordered UPDATE of both windows (as an earlier revision did) could lock the
+-- user window before the project window and deadlock against a concurrent
+-- admit. The fixed order removes any lock cycle.
 create or replace function public.px05_commit_reservation(
   p_execution_id uuid,
   p_actual_usd numeric
@@ -356,6 +361,8 @@ declare
   c_project_subject constant uuid := '00000000-0000-0000-0000-000000000000';
   v_now timestamptz := now();
   v_res prismatix_internal.budget_reservations;
+  v_project prismatix_internal.budget_windows;
+  v_user prismatix_internal.budget_windows;
   v_window_start timestamptz;
   v_committed numeric(12,6);
 begin
@@ -392,12 +399,21 @@ begin
   v_committed := round(p_actual_usd, 6);
   v_window_start := date_trunc('day', v_res.created_at);
 
+  -- Fixed lock order: project window THEN user window.
+  select * into v_project
+  from prismatix_internal.budget_windows
+  where scope = 'project' and subject_id = c_project_subject and window_start = v_window_start
+  for update;
+
+  select * into v_user
+  from prismatix_internal.budget_windows
+  where scope = 'user' and subject_id = v_res.subject_id and window_start = v_window_start
+  for update;
+
   update prismatix_internal.budget_windows
      set held_usd = greatest(0, held_usd - v_res.amount_usd),
          committed_usd = committed_usd + v_committed
-   where window_start = v_window_start
-     and ((scope = 'user' and subject_id = v_res.subject_id)
-          or (scope = 'project' and subject_id = c_project_subject));
+   where id in (v_project.id, v_user.id);
 
   update prismatix_internal.budget_reservations
      set state = 'committed', committed_usd = v_committed, updated_at = v_now
@@ -410,8 +426,117 @@ begin
 end;
 $$;
 
+-- Settle from the AUTHORITATIVE ledger: sum the execution's settled
+-- model_calls.total_cost. If ANY call is still unsettled (pending /
+-- estimated_legacy) the hold is kept as `pending_reconcile` rather than
+-- committing a partial/understated amount. With no metered calls at all the
+-- work is confirmed-zero and is released.
+create or replace function public.px05_commit_from_ledger(p_execution_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, prismatix_internal
+as $$
+declare
+  c_project_subject constant uuid := '00000000-0000-0000-0000-000000000000';
+  v_now timestamptz := now();
+  v_res prismatix_internal.budget_reservations;
+  v_project prismatix_internal.budget_windows;
+  v_user prismatix_internal.budget_windows;
+  v_window_start timestamptz;
+  v_calls integer := 0;
+  v_pending integer := 0;
+  v_total numeric(12,6) := 0;
+  v_committed numeric(12,6);
+begin
+  if p_execution_id is null then
+    raise exception 'invalid_reservation_identity' using errcode = '22023';
+  end if;
+
+  select * into v_res
+  from prismatix_internal.budget_reservations
+  where execution_id = p_execution_id
+  for update;
+
+  if not found then
+    raise exception 'reservation_not_found' using errcode = 'P0002';
+  end if;
+
+  if v_res.state in ('committed','released') then
+    return jsonb_build_object(
+      'state', v_res.state, 'updated', false,
+      'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd);
+  end if;
+
+  select
+      count(*),
+      count(*) filter (where cost_status <> 'settled'),
+      coalesce(sum(total_cost) filter (where cost_status = 'settled'), 0)
+    into v_calls, v_pending, v_total
+  from prismatix_internal.model_calls
+  where execution_id = p_execution_id;
+
+  v_window_start := date_trunc('day', v_res.created_at);
+
+  -- Fixed lock order: project window THEN user window.
+  select * into v_project
+  from prismatix_internal.budget_windows
+  where scope = 'project' and subject_id = c_project_subject and window_start = v_window_start
+  for update;
+
+  select * into v_user
+  from prismatix_internal.budget_windows
+  where scope = 'user' and subject_id = v_res.subject_id and window_start = v_window_start
+  for update;
+
+  if v_pending > 0 then
+    update prismatix_internal.budget_reservations
+       set state = 'pending_reconcile', updated_at = v_now
+     where id = v_res.id
+    returning * into v_res;
+    return jsonb_build_object(
+      'state', 'pending_reconcile', 'updated', true,
+      'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd,
+      'calls', v_calls, 'pending_calls', v_pending);
+  end if;
+
+  if v_calls = 0 then
+    -- No metered dispatch at all => confirmed-zero work => release.
+    update prismatix_internal.budget_windows
+       set held_usd = greatest(0, held_usd - v_res.amount_usd)
+     where id in (v_project.id, v_user.id);
+    update prismatix_internal.budget_reservations
+       set state = 'released', updated_at = v_now
+     where id = v_res.id
+    returning * into v_res;
+    return jsonb_build_object(
+      'state', 'released', 'updated', true,
+      'reservation_id', v_res.id, 'committed_usd', 0, 'calls', 0);
+  end if;
+
+  v_committed := round(v_total, 6);
+
+  update prismatix_internal.budget_windows
+     set held_usd = greatest(0, held_usd - v_res.amount_usd),
+         committed_usd = committed_usd + v_committed
+   where id in (v_project.id, v_user.id);
+
+  update prismatix_internal.budget_reservations
+     set state = 'committed', committed_usd = v_committed, updated_at = v_now
+   where id = v_res.id
+  returning * into v_res;
+
+  return jsonb_build_object(
+    'state', 'committed', 'updated', true,
+    'reservation_id', v_res.id, 'committed_usd', v_committed, 'calls', v_calls);
+end;
+$$;
+
 -- release is ONLY for confirmed-zero work (no provider call was made). It
--- decrements held_usd. Never call this for uncertain paid work.
+-- decrements held_usd. It REFUSES to release a `pending_reconcile` reservation:
+-- uncertain paid work must not be forgiven by a release mis-call. Explicit
+-- reconciliation (px05_reconcile_reservation) is the only path that resolves a
+-- pending_reconcile hold.
 create or replace function public.px05_release_reservation(
   p_execution_id uuid,
   p_reason text
@@ -425,6 +550,8 @@ declare
   c_project_subject constant uuid := '00000000-0000-0000-0000-000000000000';
   v_now timestamptz := now();
   v_res prismatix_internal.budget_reservations;
+  v_project prismatix_internal.budget_windows;
+  v_user prismatix_internal.budget_windows;
   v_window_start timestamptz;
 begin
   if p_execution_id is null then
@@ -446,13 +573,30 @@ begin
       'reservation_id', v_res.id, 'reason', p_reason);
   end if;
 
+  -- GUARD: uncertain work is never released.
+  if v_res.state = 'pending_reconcile' then
+    return jsonb_build_object(
+      'state', 'pending_reconcile', 'updated', false,
+      'reservation_id', v_res.id,
+      'reason', coalesce(nullif(p_reason, ''), 'uncertain_work'));
+  end if;
+
   v_window_start := date_trunc('day', v_res.created_at);
+
+  -- Fixed lock order: project window THEN user window.
+  select * into v_project
+  from prismatix_internal.budget_windows
+  where scope = 'project' and subject_id = c_project_subject and window_start = v_window_start
+  for update;
+
+  select * into v_user
+  from prismatix_internal.budget_windows
+  where scope = 'user' and subject_id = v_res.subject_id and window_start = v_window_start
+  for update;
 
   update prismatix_internal.budget_windows
      set held_usd = greatest(0, held_usd - v_res.amount_usd)
-   where window_start = v_window_start
-     and ((scope = 'user' and subject_id = v_res.subject_id)
-          or (scope = 'project' and subject_id = c_project_subject));
+   where id in (v_project.id, v_user.id);
 
   update prismatix_internal.budget_reservations
      set state = 'released', updated_at = v_now
@@ -462,6 +606,107 @@ begin
   return jsonb_build_object(
     'state', 'released', 'updated', true,
     'reservation_id', v_res.id, 'reason', p_reason);
+end;
+$$;
+
+-- Explicit reconciliation for work whose cost is not metered by the ledger
+-- (e.g. video processing). A positive actual commits; 0 releases; NULL/negative
+-- keeps the hold as `pending_reconcile`. This IS allowed to resolve a
+-- `pending_reconcile` reservation because it carries an explicit outcome, and it
+-- records a durable audit row in reconciliation_jobs.
+create or replace function public.px05_reconcile_reservation(
+  p_execution_id uuid,
+  p_actual_usd numeric,
+  p_reason text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, prismatix_internal
+as $$
+declare
+  c_project_subject constant uuid := '00000000-0000-0000-0000-000000000000';
+  v_now timestamptz := now();
+  v_res prismatix_internal.budget_reservations;
+  v_project prismatix_internal.budget_windows;
+  v_user prismatix_internal.budget_windows;
+  v_window_start timestamptz;
+  v_committed numeric(12,6);
+begin
+  if p_execution_id is null then
+    raise exception 'invalid_reservation_identity' using errcode = '22023';
+  end if;
+
+  select * into v_res
+  from prismatix_internal.budget_reservations
+  where execution_id = p_execution_id
+  for update;
+
+  if not found then
+    raise exception 'reservation_not_found' using errcode = 'P0002';
+  end if;
+
+  if v_res.state in ('committed','released') then
+    return jsonb_build_object(
+      'state', v_res.state, 'updated', false,
+      'reservation_id', v_res.id, 'reason', p_reason);
+  end if;
+
+  if p_actual_usd is null or p_actual_usd::text in ('NaN','Infinity','-Infinity')
+     or p_actual_usd < 0 then
+    update prismatix_internal.budget_reservations
+       set state = 'pending_reconcile', updated_at = v_now
+     where id = v_res.id
+    returning * into v_res;
+    return jsonb_build_object(
+      'state', 'pending_reconcile', 'updated', true,
+      'reservation_id', v_res.id, 'reason', p_reason);
+  end if;
+
+  v_window_start := date_trunc('day', v_res.created_at);
+
+  -- Fixed lock order: project window THEN user window.
+  select * into v_project
+  from prismatix_internal.budget_windows
+  where scope = 'project' and subject_id = c_project_subject and window_start = v_window_start
+  for update;
+
+  select * into v_user
+  from prismatix_internal.budget_windows
+  where scope = 'user' and subject_id = v_res.subject_id and window_start = v_window_start
+  for update;
+
+  if p_actual_usd = 0 then
+    update prismatix_internal.budget_windows
+       set held_usd = greatest(0, held_usd - v_res.amount_usd)
+     where id in (v_project.id, v_user.id);
+    update prismatix_internal.budget_reservations
+       set state = 'released', updated_at = v_now
+     where id = v_res.id
+    returning * into v_res;
+  else
+    v_committed := round(p_actual_usd, 6);
+    update prismatix_internal.budget_windows
+       set held_usd = greatest(0, held_usd - v_res.amount_usd),
+           committed_usd = committed_usd + v_committed
+     where id in (v_project.id, v_user.id);
+    update prismatix_internal.budget_reservations
+       set state = 'committed', committed_usd = v_committed, updated_at = v_now
+     where id = v_res.id
+    returning * into v_res;
+  end if;
+
+  insert into prismatix_internal.reconciliation_jobs (execution_id, kind, payload)
+  values (
+    p_execution_id,
+    'budget_reconciled',
+    jsonb_build_object('actual_usd', p_actual_usd, 'reason', p_reason)
+  );
+
+  return jsonb_build_object(
+    'state', v_res.state, 'updated', true,
+    'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd,
+    'reason', p_reason);
 end;
 $$;
 
@@ -483,3 +728,13 @@ revoke all on function public.px05_release_reservation(uuid, text) from public;
 revoke all on function public.px05_release_reservation(uuid, text) from anon;
 revoke all on function public.px05_release_reservation(uuid, text) from authenticated;
 grant execute on function public.px05_release_reservation(uuid, text) to service_role;
+
+revoke all on function public.px05_commit_from_ledger(uuid) from public;
+revoke all on function public.px05_commit_from_ledger(uuid) from anon;
+revoke all on function public.px05_commit_from_ledger(uuid) from authenticated;
+grant execute on function public.px05_commit_from_ledger(uuid) to service_role;
+
+revoke all on function public.px05_reconcile_reservation(uuid, numeric, text) from public;
+revoke all on function public.px05_reconcile_reservation(uuid, numeric, text) from anon;
+revoke all on function public.px05_reconcile_reservation(uuid, numeric, text) from authenticated;
+grant execute on function public.px05_reconcile_reservation(uuid, numeric, text) to service_role;

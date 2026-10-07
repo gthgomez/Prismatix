@@ -86,15 +86,47 @@ begin
     raise exception 'PX05 FAIL: missing partial unique active-lease index';
   end if;
 
-  -- The three RPCs exist.
+  -- The five RPCs exist.
   select count(*) into n
   from pg_proc p
   join pg_namespace ns on ns.oid = p.pronamespace
   where ns.nspname = 'public'
-    and p.proname in ('px05_admit_execution','px05_commit_reservation','px05_release_reservation');
-  if n <> 3 then
-    raise exception 'PX05 FAIL: expected 3 px05_* RPCs, found %', n;
+    and p.proname in (
+      'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
+      'px05_release_reservation','px05_reconcile_reservation');
+  if n <> 5 then
+    raise exception 'PX05 FAIL: expected 5 px05_* RPCs, found %', n;
   end if;
+end $$;
+
+-- Every reservation mutator locks the PROJECT window before the USER window
+-- (same fixed order as admit), so no lock cycle is possible. Assert the static
+-- ordering from the stored function definitions.
+do $$
+declare
+  fn text;
+  def text;
+begin
+  foreach fn in array array[
+    'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
+    'px05_release_reservation','px05_reconcile_reservation'
+  ] loop
+    select pg_get_functiondef(p.oid) into def
+    from pg_proc p
+    join pg_namespace ns on ns.oid = p.pronamespace
+    where ns.nspname = 'public' and p.proname = fn;
+
+    if def is null then
+      raise exception 'PX05 FAIL: function % not found', fn;
+    end if;
+    if position('scope = ''project''' in def) = 0
+       or position('scope = ''user''' in def) = 0 then
+      raise exception 'PX05 FAIL: % does not lock both windows', fn;
+    end if;
+    if position('scope = ''project''' in def) > position('scope = ''user''' in def) then
+      raise exception 'PX05 FAIL: % locks the user window before the project window', fn;
+    end if;
+  end loop;
 end $$;
 
 -- service_role may execute; authenticated/anon may not.
@@ -105,7 +137,9 @@ begin
   select count(*) into n
   from information_schema.routine_privileges
   where routine_schema = 'public'
-    and routine_name in ('px05_admit_execution','px05_commit_reservation','px05_release_reservation')
+    and routine_name in (
+      'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
+      'px05_release_reservation','px05_reconcile_reservation')
     and grantee = 'authenticated';
   if n <> 0 then
     raise exception 'PX05 FAIL: authenticated can execute a px05_* RPC (% grants)', n;
@@ -114,7 +148,9 @@ begin
   select count(*) into n
   from information_schema.routine_privileges
   where routine_schema = 'public'
-    and routine_name in ('px05_admit_execution','px05_commit_reservation','px05_release_reservation')
+    and routine_name in (
+      'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
+      'px05_release_reservation','px05_reconcile_reservation')
     and grantee = 'anon';
   if n <> 0 then
     raise exception 'PX05 FAIL: anon can execute a px05_* RPC (% grants)', n;
@@ -123,9 +159,11 @@ begin
   select count(*) into n
   from information_schema.routine_privileges
   where routine_schema = 'public'
-    and routine_name in ('px05_admit_execution','px05_commit_reservation','px05_release_reservation')
+    and routine_name in (
+      'px05_admit_execution','px05_commit_reservation','px05_commit_from_ledger',
+      'px05_release_reservation','px05_reconcile_reservation')
     and grantee = 'service_role';
-  if n <> 3 then
+  if n <> 5 then
     raise exception 'PX05 FAIL: service_role is missing px05_* execute grants (found %)', n;
   end if;
 end $$;
@@ -136,6 +174,13 @@ rollback;
 -- 2) Functional admission assertions (self-contained, rolled back).
 -- ---------------------------------------------------------------------------
 begin;
+
+-- The ledger-summed commit assertions create real executions, which FK to
+-- auth.users; create the two subjects they need (rolled back at the end).
+insert into auth.users (id, aud, role, email, encrypted_password, created_at, updated_at)
+values
+  ('a0000000-0000-4000-8000-000000000008','authenticated','authenticated','px05-u8@example.invalid','x', now(), now()),
+  ('a0000000-0000-4000-8000-000000000009','authenticated','authenticated','px05-u9@example.invalid','x', now(), now());
 
 set local role service_role;
 
@@ -149,6 +194,12 @@ declare
   u5 uuid := 'a0000000-0000-4000-8000-000000000005';
   u6 uuid := 'a0000000-0000-4000-8000-000000000006';
   u7 uuid := 'a0000000-0000-4000-8000-000000000007';
+  u8 uuid := 'a0000000-0000-4000-8000-000000000008';
+  u9 uuid := 'a0000000-0000-4000-8000-000000000009';
+  u10 uuid := 'a0000000-0000-4000-8000-000000000010';
+  v_exec uuid;
+  v_exec2 uuid;
+  v_exec3 uuid;
   e1 uuid := 'b0000000-0000-4000-8000-000000000001';
   e2 uuid := 'b0000000-0000-4000-8000-000000000002';
   e3 uuid := 'b0000000-0000-4000-8000-000000000003';
@@ -199,6 +250,17 @@ begin
    where scope = 'user' and subject_id = u1 and window_start = date_trunc('day', now());
   if held <> 0.10 then
     raise exception 'PX05 FAIL: unknown usage forgave held money (held=%)', held;
+  end if;
+
+  -- 2b-guard) A release mis-call must NOT forgive pending_reconcile work.
+  v := public.px05_release_reservation(e1, 'mis-call');
+  if (v->>'updated')::boolean is not false or v->>'state' <> 'pending_reconcile' then
+    raise exception 'PX05 FAIL: release forgave pending_reconcile work (%)', v;
+  end if;
+  select held_usd into held from prismatix_internal.budget_windows
+   where scope = 'user' and subject_id = u1 and window_start = date_trunc('day', now());
+  if held <> 0.10 then
+    raise exception 'PX05 FAIL: release mis-call changed held_usd to %', held;
   end if;
 
   -- 2c) Known actual commits: held decremented by the reserved amount, committed
@@ -314,6 +376,79 @@ begin
    where scope = 'user' and subject_id = u7 and window_start = date_trunc('day', now());
   if held <> 0 then
     raise exception 'PX05 FAIL: release did not return the hold (held=%)', held;
+  end if;
+
+  -- 2j) Authoritative ledger-summed commit: the committed amount is the SUM of
+  --     the execution's settled model_calls (all stages), not a single-stage
+  --     estimate. This is what makes the daily window reflect true multi-stage
+  --     cost.
+  v_exec := (public.px03_create_execution(u8, null, 'px05-ledger-1', 'hash-1')
+               -> 'execution' ->> 'id')::uuid;
+  perform public.px03_record_model_call(
+    v_exec, 'baseline', 'primary', 1, null, null, null, null, 'completed',
+    10, 5, 0, 0.010, 0.020, 0, 0.030, null, 'settled');
+  perform public.px03_record_model_call(
+    v_exec, 'debate-challenger', 'worker', 1, null, null, null, null, 'completed',
+    10, 5, 0, 0.005, 0.005, 0, 0.010, null, 'settled');
+
+  v := public.px05_admit_execution(u8, v_exec, 0.05, 0.5, 900, 100, 100, 100, 1);
+  if (v->>'admitted')::boolean is not true then
+    raise exception 'PX05 FAIL: ledger commit admit denied (%)', v;
+  end if;
+  v := public.px05_commit_from_ledger(v_exec);
+  if v->>'state' <> 'committed' or (v->>'committed_usd')::numeric <> 0.04 then
+    raise exception 'PX05 FAIL: ledger commit did not sum settled calls (%)', v;
+  end if;
+  select held_usd, committed_usd into held, committed
+    from prismatix_internal.budget_windows
+   where scope = 'user' and subject_id = u8 and window_start = date_trunc('day', now());
+  if held <> 0 or committed <> 0.04 then
+    raise exception 'PX05 FAIL: ledger commit window math wrong (held=%, committed=%)',
+      held, committed;
+  end if;
+
+  -- 2k) Any unsettled call keeps the hold pending_reconcile (no partial commit).
+  v_exec2 := (public.px03_create_execution(u9, null, 'px05-ledger-2', 'hash-2')
+                -> 'execution' ->> 'id')::uuid;
+  perform public.px03_record_model_call(
+    v_exec2, 'baseline', 'primary', 1, null, null, null, null, 'completed',
+    10, 5, 0, 0, 0, 0, 0, null, 'pending');
+
+  v := public.px05_admit_execution(u9, v_exec2, 0.05, 0.5, 900, 100, 100, 100, 1);
+  if (v->>'admitted')::boolean is not true then
+    raise exception 'PX05 FAIL: pending-ledger admit denied (%)', v;
+  end if;
+  v := public.px05_commit_from_ledger(v_exec2);
+  if v->>'state' <> 'pending_reconcile' then
+    raise exception 'PX05 FAIL: pending call committed a partial amount (%)', v;
+  end if;
+  select held_usd into held from prismatix_internal.budget_windows
+   where scope = 'user' and subject_id = u9 and window_start = date_trunc('day', now());
+  if held <> 0.5 then
+    raise exception 'PX05 FAIL: pending-ledger commit forgave held (held=%)', held;
+  end if;
+
+  -- 2l) Explicit reconciliation resolves a pending hold with a recorded reason.
+  v_exec3 := gen_random_uuid();
+  v := public.px05_admit_execution(u10, v_exec3, 0.2, 0.2, 900, 100, 100, 100, 1);
+  if (v->>'admitted')::boolean is not true then
+    raise exception 'PX05 FAIL: reconcile admit denied (%)', v;
+  end if;
+  v := public.px05_reconcile_reservation(v_exec3, 0, 'video_processing_complete');
+  if v->>'state' <> 'released' then
+    raise exception 'PX05 FAIL: reconcile did not release (%)', v;
+  end if;
+  select held_usd into held from prismatix_internal.budget_windows
+   where scope = 'user' and subject_id = u10 and window_start = date_trunc('day', now());
+  if held <> 0 then
+    raise exception 'PX05 FAIL: reconcile did not return the hold (held=%)', held;
+  end if;
+  if not exists (
+    select 1 from prismatix_internal.reconciliation_jobs
+    where kind = 'budget_reconciled'
+      and payload->>'reason' = 'video_processing_complete'
+  ) then
+    raise exception 'PX05 FAIL: reconcile did not record an audit reason';
   end if;
 end $$;
 

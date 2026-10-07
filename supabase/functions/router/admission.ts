@@ -126,6 +126,7 @@ export interface ReservationMutationResult {
   ok: boolean;
   state: string;
   updated: boolean;
+  committedUsd?: number;
   error?: string;
 }
 
@@ -192,10 +193,13 @@ export function loadAdmissionConfig(getEnv: AdmissionEnvReader): AdmissionConfig
   };
 }
 
-function positiveOrNull(value: string | number | null | undefined): number | null {
+// An explicit 0 is a REAL ceiling (deny), not "unset": only null/undefined or a
+// malformed value falls back to the configured policy. A $0 grant must clamp to
+// $0 rather than silently loosening to the full configured budget.
+function nonNegativeOrNull(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined) return null;
   const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
   return parsed;
 }
 
@@ -208,8 +212,8 @@ export function resolveEffectiveLimits(
   config: AdmissionConfig,
   grant?: AdmissionLimitGrant | null,
 ): EffectiveAdmissionLimits {
-  const grantDaily = positiveOrNull(grant?.max_daily_usd);
-  const grantPerExecution = positiveOrNull(grant?.max_per_execution_usd);
+  const grantDaily = nonNegativeOrNull(grant?.max_daily_usd);
+  const grantPerExecution = nonNegativeOrNull(grant?.max_per_execution_usd);
   return {
     maxPerExecutionUsd: grantPerExecution === null
       ? config.maxPerExecutionUsd
@@ -218,6 +222,11 @@ export function resolveEffectiveLimits(
       ? config.userDailyUsd
       : Math.min(config.userDailyUsd, grantDaily),
   };
+}
+
+// False when either ceiling is 0: an explicit $0 grant means no paid execution.
+export function isAdmissionAllowed(limits: EffectiveAdmissionLimits): boolean {
+  return limits.maxPerExecutionUsd > 0 && limits.userDailyUsd > 0;
 }
 
 // ============================================================================
@@ -351,10 +360,14 @@ async function mutateReservation(
   }
 
   const record = data as Record<string, unknown>;
+  const committedUsd = record.committed_usd === undefined || record.committed_usd === null
+    ? undefined
+    : asNonNegativeNumber(record.committed_usd);
   return {
     ok: true,
     state: typeof record.state === 'string' ? record.state : 'unknown',
     updated: record.updated === true,
+    ...(committedUsd === undefined ? {} : { committedUsd }),
   };
 }
 
@@ -390,6 +403,42 @@ export function releaseReservation(
   });
 }
 
+/**
+ * Settles the reservation from the AUTHORITATIVE ledger: the database sums the
+ * execution's `model_calls.total_cost` and commits that amount. If ANY call is
+ * still unsettled (pending/estimated), the reservation is kept as
+ * `pending_reconcile` instead of committing a partial/understated amount. With
+ * no metered calls at all the work is confirmed-zero and is released.
+ */
+export function commitFromLedger(
+  client: AdmissionClient,
+  executionId: string,
+): Promise<ReservationMutationResult> {
+  return mutateReservation(client, 'px05_commit_from_ledger', {
+    p_execution_id: executionId,
+  });
+}
+
+/**
+ * Explicit reconciliation for work whose cost is not metered by the ledger
+ * (e.g. video processing). A positive actual commits; 0 releases (recorded with
+ * the reason); null/negative keeps the hold as `pending_reconcile`. Unlike
+ * releaseReservation, this IS allowed to resolve a `pending_reconcile`
+ * reservation because it carries an explicit, caller-attested outcome.
+ */
+export function reconcileReservation(
+  client: AdmissionClient,
+  executionId: string,
+  actualUsd: number | null,
+  reason: string,
+): Promise<ReservationMutationResult> {
+  return mutateReservation(client, 'px05_reconcile_reservation', {
+    p_execution_id: executionId,
+    p_actual_usd: actualUsd === null || !Number.isFinite(actualUsd) ? null : actualUsd,
+    p_reason: reason,
+  });
+}
+
 // ============================================================================
 // OUTPUT CAP SIZING
 // ============================================================================
@@ -415,4 +464,35 @@ export function deriveOutputTokenCap(
   }
   const affordable = Math.floor((admittedBudgetUsd / outputRatePer1M) * TOKENS_PER_MILLION);
   return Math.max(0, Math.min(hardCap, affordable));
+}
+
+/**
+ * A per-execution, stage-shared output budget. Every provider dispatch clamps
+ * its output-token cap through this object and the granted maximum output cost
+ * is charged against the admitted per-execution ceiling, so the SUM of all
+ * stage output maxima over one execution cannot exceed the reservation. This is
+ * what makes the single up-front reservation actually bound multi-stage
+ * (debate/SMD) cost instead of only the primary stage.
+ */
+export interface ExecutionOutputBudget {
+  remainingUsd(): number;
+  clampTokenCap(requestedTokens: number, outputRatePer1M: number): number;
+}
+
+export function createExecutionOutputBudget(admittedBudgetUsd: number): ExecutionOutputBudget {
+  let remaining = Number.isFinite(admittedBudgetUsd) && admittedBudgetUsd > 0
+    ? admittedBudgetUsd
+    : 0;
+  return {
+    remainingUsd(): number {
+      return remaining;
+    },
+    clampTokenCap(requestedTokens: number, outputRatePer1M: number): number {
+      if (!Number.isFinite(requestedTokens) || requestedTokens <= 0) return requestedTokens;
+      if (!Number.isFinite(outputRatePer1M) || outputRatePer1M <= 0) return requestedTokens;
+      const granted = Math.max(0, Math.min(requestedTokens, deriveOutputTokenCap(remaining, outputRatePer1M, requestedTokens)));
+      remaining = Math.max(0, remaining - (granted / TOKENS_PER_MILLION) * outputRatePer1M);
+      return granted;
+    },
+  };
 }

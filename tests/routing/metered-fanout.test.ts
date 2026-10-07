@@ -25,9 +25,13 @@ import {
   DEFAULT_ADMISSION_CONFIG,
   admitExecution,
   admissionDenialStatus,
+  commitFromLedger,
   commitReservation,
+  createExecutionOutputBudget,
   deriveOutputTokenCap,
+  isAdmissionAllowed,
   loadAdmissionConfig,
+  reconcileReservation,
   releaseReservation,
   resolveEffectiveLimits,
   ADMISSION_ENV_KEYS,
@@ -275,6 +279,21 @@ describe('resolveEffectiveLimits', () => {
       userDailyUsd: DEFAULT_ADMISSION_CONFIG.userDailyUsd,
     });
   });
+
+  it('treats an explicit $0 grant as a real ceiling of 0 (deny, never loosen)', () => {
+    const limits = resolveEffectiveLimits(DEFAULT_ADMISSION_CONFIG, {
+      max_daily_usd: '0',
+      max_per_execution_usd: 0,
+    });
+    expect(limits).toEqual({ maxPerExecutionUsd: 0, userDailyUsd: 0 });
+    expect(isAdmissionAllowed(limits)).toBe(false);
+  });
+
+  it('isAdmissionAllowed is true only for strictly positive ceilings', () => {
+    expect(isAdmissionAllowed(DEFAULT_ADMISSION_CONFIG)).toBe(true);
+    expect(isAdmissionAllowed({ maxPerExecutionUsd: 0, userDailyUsd: 5 })).toBe(false);
+    expect(isAdmissionAllowed({ maxPerExecutionUsd: 1, userDailyUsd: 0 })).toBe(false);
+  });
 });
 
 // ============================================================================
@@ -403,7 +422,8 @@ describe('commitReservation', () => {
       p_execution_id: EXECUTION_ID,
       p_actual_usd: 0.0123,
     });
-    expect(result).toEqual({ ok: true, state: 'committed', updated: true });
+    expect(result).toMatchObject({ ok: true, state: 'committed', updated: true });
+    expect(result.committedUsd).toBe(0.0123);
   });
 
   it('marks unknown usage pending_reconcile (passes null actual, never $0)', async () => {
@@ -479,6 +499,96 @@ describe('deriveOutputTokenCap', () => {
     expect(deriveOutputTokenCap(-1, 15, 8192)).toBe(0);
     expect(deriveOutputTokenCap(Number.NaN, 15, 8192)).toBe(0);
     expect(deriveOutputTokenCap(Number.POSITIVE_INFINITY, 15, 8192)).toBe(0);
+  });
+});
+
+// ============================================================================
+// createExecutionOutputBudget — aggregate bound across all stages
+// ============================================================================
+
+describe('createExecutionOutputBudget', () => {
+  it('bounds the SUM of stage output maxima by the admitted budget', () => {
+    const budget = createExecutionOutputBudget(0.5);
+    const caps = [0, 1, 2, 3].map(() => budget.clampTokenCap(1_000_000, 15));
+    const totalCost = caps.reduce((sum, cap) => sum + (cap / 1_000_000) * 15, 0);
+    expect(totalCost).toBeLessThanOrEqual(0.5 + 1e-9);
+    expect(budget.remainingUsd()).toBeGreaterThanOrEqual(0);
+    // The first stage gets a real cap; later stages are bounded to what remains.
+    expect(caps[0]!).toBeGreaterThan(0);
+    expect(caps[1]!).toBe(0);
+  });
+
+  it('keeps the requested cap when it fits comfortably', () => {
+    const budget = createExecutionOutputBudget(100);
+    expect(budget.clampTokenCap(1000, 15)).toBe(1000);
+  });
+
+  it('does not tighten when the output rate is unknown', () => {
+    const budget = createExecutionOutputBudget(0.5);
+    expect(budget.clampTokenCap(8192, 0)).toBe(8192);
+  });
+
+  it('grants nothing when the budget is already exhausted', () => {
+    const budget = createExecutionOutputBudget(0);
+    expect(budget.clampTokenCap(8192, 15)).toBe(0);
+  });
+});
+
+// ============================================================================
+// commitFromLedger / reconcileReservation — authoritative settlement
+// ============================================================================
+
+describe('commitFromLedger', () => {
+  it('calls the ledger-summing RPC and reports the committed sum', async () => {
+    const { client, calls } = fakeAdmissionClient(() => ({
+      data: { state: 'committed', updated: true, committed_usd: '0.03', calls: 2 },
+      error: null,
+    }));
+
+    const result = await commitFromLedger(client, EXECUTION_ID);
+
+    expect(calls[0]!.fn).toBe('px05_commit_from_ledger');
+    expect(calls[0]!.params).toEqual({ p_execution_id: EXECUTION_ID });
+    expect(result.ok).toBe(true);
+    expect(result.state).toBe('committed');
+    expect(result.committedUsd).toBe(0.03);
+  });
+
+  it('reports pending_reconcile when the ledger has unsettled calls', async () => {
+    const { client } = fakeAdmissionClient(() => ({
+      data: { state: 'pending_reconcile', updated: true, committed_usd: '0', pending_calls: 1 },
+      error: null,
+    }));
+
+    const result = await commitFromLedger(client, EXECUTION_ID);
+    expect(result.ok).toBe(true);
+    expect(result.state).toBe('pending_reconcile');
+  });
+
+  it('does NOT report success when the ledger RPC fails', async () => {
+    const { client } = fakeAdmissionClient(() => ({ data: null, error: { message: 'boom' } }));
+    const result = await commitFromLedger(client, EXECUTION_ID);
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('reconcileReservation', () => {
+  it('passes the actual and reason and reports the terminal state', async () => {
+    const { client, calls } = fakeAdmissionClient(() => ({
+      data: { state: 'released', updated: true, reason: 'video_processing_complete' },
+      error: null,
+    }));
+
+    const result = await reconcileReservation(client, EXECUTION_ID, 0, 'video_processing_complete');
+
+    expect(calls[0]!.fn).toBe('px05_reconcile_reservation');
+    expect(calls[0]!.params).toEqual({
+      p_execution_id: EXECUTION_ID,
+      p_actual_usd: 0,
+      p_reason: 'video_processing_complete',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.state).toBe('released');
   });
 });
 
@@ -590,6 +700,7 @@ describe('metered fan-out contract', () => {
 // ============================================================================
 
 const INTAKE_ENTRY = ['../../supabase/functions/video-intake/index.ts'].join('');
+const WORKER_ENTRY = ['../../supabase/functions/video-worker/index.ts'].join('');
 
 interface ServeHandler {
   (req: Request): Promise<Response>;
@@ -769,5 +880,82 @@ describe('video enqueue admission (real handler)', () => {
     expect(
       calls.some((call) => call.method === 'POST' && call.url.includes('/rest/v1/video_jobs')),
     ).toBe(false);
+  });
+});
+
+// ============================================================================
+// Video worker budget reconciliation (real handler)
+// ============================================================================
+
+describe('video worker budget reconciliation (real handler)', () => {
+  const WORKER_SECRET = 'px05-test-worker-secret';
+  const ASSET_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const JOB_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+  it('reconciles the enqueue-time reservation when a job fails terminally', async () => {
+    const calls = installIntakeFetchRecorder((call) => {
+      if (call.method === 'GET' && call.url.includes('/rest/v1/video_jobs')) {
+        return jsonResponse([
+          {
+            id: JOB_ID,
+            asset_id: ASSET_ID,
+            status: 'queued',
+            attempt: 0,
+            created_at: '2026-10-06T00:00:00.000Z',
+            video_assets: { user_id: SUBJECT },
+          },
+        ]);
+      }
+      if (call.url.includes('/rest/v1/rpc/get_access_grant')) {
+        return jsonResponse({
+          subject_id: SUBJECT,
+          role: 'user',
+          enabled: true,
+          allowed_features: ['video'],
+          max_daily_usd: null,
+          max_per_execution_usd: null,
+          created_at: '2026-10-06T00:00:00.000Z',
+          updated_at: '2026-10-06T00:00:00.000Z',
+          updated_by: null,
+        });
+      }
+      if (call.method === 'PATCH' && call.body.includes('"running"')) {
+        return jsonResponse({ id: JOB_ID, asset_id: ASSET_ID, status: 'running', attempt: 1 });
+      }
+      if (call.method === 'PATCH') {
+        return emptyResponse();
+      }
+      if (call.method === 'GET' && call.url.includes('/rest/v1/video_assets')) {
+        return jsonResponse(null); // asset missing -> terminal failure
+      }
+      if (call.url.includes('/rest/v1/rpc/px05_reconcile_reservation')) {
+        return jsonResponse({ state: 'released', updated: true, reason: 'asset_not_found' });
+      }
+      return null;
+    });
+    vi.resetModules();
+    const handlers = installDenoStub({
+      ENABLE_VIDEO_PIPELINE: 'true',
+      SUPABASE_URL: 'http://127.0.0.1:54321',
+      SUPABASE_SERVICE_ROLE_KEY: 'test-key',
+      GOOGLE_API_KEY: 'test-google-key',
+      VIDEO_WORKER_SECRET: WORKER_SECRET,
+    });
+    await import(/* @vite-ignore */ WORKER_ENTRY);
+    const handler = handlers[0]!;
+
+    const res = await handler(
+      new Request('http://127.0.0.1:54321/functions/v1/video-worker', {
+        method: 'POST',
+        headers: { 'x-worker-secret': WORKER_SECRET },
+      }),
+    );
+
+    expect(res.status).toBe(404);
+    const reconcile = calls.find((call) =>
+      call.url.includes('/rest/v1/rpc/px05_reconcile_reservation'),
+    );
+    expect(reconcile).toBeTruthy();
+    expect(reconcile!.body).toContain(ASSET_ID);
   });
 });

@@ -7,7 +7,6 @@ import {
 import {
   admitExecution,
   admissionDenialStatus,
-  commitReservation,
   loadAdmissionConfig,
   releaseReservation,
   type AdmissionClient,
@@ -415,11 +414,12 @@ Deno.serve(async (req: Request) => {
   }
 
   // PX05: the enqueue path goes through the SAME DB-authoritative admission as
-  // the router. Video has no execution-ledger row yet, so a generated id is the
-  // reservation/lease key. A denial consumes nothing and makes zero provider
-  // calls; a failed enqueue releases the (confirmed-zero) reservation.
+  // the router. The asset id is the reservation/lease key so the WORKER can
+  // resolve the hold at its terminal state (succeeded/failed) instead of leaving
+  // it to permanently consume budget. A denial consumes nothing and makes zero
+  // provider calls; a failed enqueue releases the (confirmed-zero) reservation.
   const admissionClient = supabase as unknown as AdmissionClient;
-  const videoExecutionId = crypto.randomUUID();
+  const videoExecutionId = assetId;
   const admission = await admitExecution(admissionClient, {
     subjectId: user.id,
     executionId: videoExecutionId,
@@ -460,10 +460,9 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  // Video billing is not metered yet, so the work is UNCERTAIN: mark the
-  // reservation pending_reconcile. The hold is kept (never silently forgiven,
-  // never $0.00) until a metered worker commits the real cost.
-  await commitReservation(admissionClient, videoExecutionId, null);
+  // The reservation stays 'held' (never silently forgiven, never $0.00). The
+  // video WORKER resolves it at its terminal state via px05_reconcile_reservation
+  // (video processing cost is not metered), so the hold is never permanent.
 
   return new Response(JSON.stringify({
     ok: true,

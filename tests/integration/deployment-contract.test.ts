@@ -180,6 +180,15 @@ function px03Routes(call: FetchCall): Response | null {
       remaining_usd: '1.5',
     });
   }
+  if (call.url.includes('/rest/v1/rpc/px05_commit_from_ledger')) {
+    return jsonResponse({
+      state: 'committed',
+      updated: true,
+      reservation_id: 'r0000000-0000-4000-8000-000000000001',
+      committed_usd: '0.01',
+      calls: 1,
+    });
+  }
   if (call.url.includes('/rest/v1/rpc/px05_commit_reservation')) {
     return jsonResponse({
       state: 'committed',

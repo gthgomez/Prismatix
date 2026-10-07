@@ -26,6 +26,7 @@ import {
   type ExecutionStoreClient,
   type RecordModelCallInput,
 } from './execution_store.ts';
+import type { ExecutionOutputBudget } from './admission.ts';
 
 const TOKENS_PER_MILLION = 1_000_000;
 
@@ -93,6 +94,9 @@ export interface MeteredCallContext {
   attemptNumber: number;
   requestedModel: string;
   priceSnapshot: PriceSnapshot | null;
+  // PX05: shared per-execution output budget. Every dispatch clamps its output
+  // cap through this so the SUM of stage maxima cannot exceed the reservation.
+  outputBudget?: ExecutionOutputBudget;
 }
 
 export type MeteredCallFactory = (
