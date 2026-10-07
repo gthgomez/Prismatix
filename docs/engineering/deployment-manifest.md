@@ -334,3 +334,51 @@ in-function, so authentication holds regardless of the gateway setting; the
 exported `handleSpendStats(req, deps)` seam makes this testable
 (`tests/integration/deployment-contract.test.ts`). Both slugs' consumers are
 preserved until retirement of the duplicate is safe in a later packet.
+
+## 16. Execution / model-call ledger (PX03, F03/F06/F07/F19/F21)
+
+PX03 replaces the content-hashed `cost_logs` idempotency key with a durable
+execution/call ledger. It deploys **one additive migration** and **no new edge
+function slug** (the ledger is written by the existing `router` function).
+
+### 16.1 Migration
+
+| File | Class | Notes |
+| --- | --- | --- |
+| `supabase/migrations/20261006010000_px03_execution_ledger.sql` | additive | Adds `prismatix_internal.executions`, `prismatix_internal.model_calls`, `prismatix_internal.reconciliation_jobs`; adds `public.cost_logs.cost_status` (default `estimated_legacy`). No fabricated historical backfill. |
+
+**Deploy order (required): apply this migration BEFORE deploying the router
+build that writes the ledger.** The router writes `cost_logs.cost_status` and
+calls the `px03_*` RPCs; against a pre-PX03 schema those writes fail closed
+(the execution is marked `indeterminate` and a reconciliation job is enqueued)
+rather than corrupting data, but the ledger is not populated until the schema
+is present.
+
+### 16.2 Authority tables and access
+
+The three authority tables live in `prismatix_internal`, which stays **out of
+PostgREST** (`[api].schemas = public, graphql_public`) exactly as PX01
+established. All writes go through service-role-only `security definer` RPCs in
+the exposed `public` schema — `px03_create_execution`, `px03_record_model_call`,
+`px03_finalize_execution`, `px03_enqueue_reconciliation` — mirroring
+`public.get_access_grant`. RLS is enabled on all three tables with no
+INSERT/UPDATE/DELETE policy for `anon`/`authenticated` and SELECT-own policies
+on `executions` / `model_calls` (defence-in-depth; the schema is not exposed).
+
+### 16.3 Identity contract
+
+- `executions` is keyed by `(subject_id, client_request_key)` and bound to a
+  `payload_hash`. Reusing a key with a different payload is **HTTP 409**
+  `request_key_conflict` (`SQLSTATE PT409`) and dispatches nothing.
+- `model_calls` is keyed by `(execution_id, stage, participant,
+  attempt_number)`. Distinct provider dispatches are distinct rows; a retry of
+  the same accounting event dedupes to one row.
+- `cost_status ∈ { settled, pending, estimated_legacy }`. Missing/unknown
+  provider usage is `pending` with a durable `reconciliation_jobs` row — never
+  a fabricated `$0`, never `settled`. Existing `cost_logs` rows keep their
+  `legacy:` keys and are labelled `estimated_legacy`.
+
+Verification: `tests/routing/execution_identity.test.ts` (vitest, injected fake
+client) and `tests/integration/ledger-settlement.sql` (self-contained
+BEGIN/ROLLBACK; run against a migrated database per the storage-isolation
+runbook).

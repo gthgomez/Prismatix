@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildCostLogIdempotencyKey,
   persistCostLog,
   persistMessageAsync,
   validateConversation,
@@ -158,39 +157,7 @@ const VALID_CONVERSATION = '22222222-2222-4222-8222-222222222222';
 const OTHER_USER = '99999999-9999-4999-8999-999999999999';
 
 // ============================================================================
-// buildCostLogIdempotencyKey
-// ============================================================================
-
-describe('buildCostLogIdempotencyKey', () => {
-  it('produces the same key for identical records', () => {
-    const a = makeCostLogRecord();
-    const b = makeCostLogRecord();
-    expect(buildCostLogIdempotencyKey(a)).toBe(buildCostLogIdempotencyKey(b));
-  });
-
-  it('produces different keys when content differs', () => {
-    const base = makeCostLogRecord();
-    const changed = makeCostLogRecord({ output_tokens: 999 });
-    expect(buildCostLogIdempotencyKey(base)).not.toBe(buildCostLogIdempotencyKey(changed));
-  });
-
-  it('produces different keys for different conversations', () => {
-    const a = makeCostLogRecord();
-    const b = makeCostLogRecord({ conversation_id: '33333333-3333-4333-8333-333333333333' });
-    expect(buildCostLogIdempotencyKey(a)).not.toBe(buildCostLogIdempotencyKey(b));
-  });
-
-  it('is deterministic across calls (no randomness)', () => {
-    const record = makeCostLogRecord();
-    const keys = new Set(
-      Array.from({ length: 10 }, () => buildCostLogIdempotencyKey(record)),
-    );
-    expect(keys.size).toBe(1);
-  });
-});
-
-// ============================================================================
-// persistCostLog — idempotency
+// persistCostLog — server-written compatibility projection (PX03/F07)
 // ============================================================================
 
 describe('persistCostLog idempotency', () => {
@@ -199,52 +166,58 @@ describe('persistCostLog idempotency', () => {
       upsertResult: { data: { id: 'abc' }, error: null },
     });
 
-    const record = makeCostLogRecord();
+    const record = makeCostLogRecord({ idempotency_key: 'exec-123' });
     await persistCostLog(client as never, record);
 
     expect(fromCalls.length).toBe(1);
     const qb = fromCalls[0]!;
-    const upsertCall =qb.calls.find((c) => c.method === 'upsert');
+    const upsertCall = qb.calls.find((c) => c.method === 'upsert');
     expect(upsertCall).toBeDefined();
     const [values, options] = upsertCall!.args as [Record<string, unknown>, UpsertOptions];
     expect(options.ignoreDuplicates).toBe(true);
     expect(options.onConflict).toBe('idempotency_key');
-    expect(values.idempotency_key).toBe(buildCostLogIdempotencyKey(record));
+    // The authoritative identity is the caller-supplied execution/call ID.
+    expect(values.idempotency_key).toBe('exec-123');
   });
 
-  it('calling twice with the same record produces the same idempotency key (dedup at DB)', async () => {
-    const { client } = createMockClient({
+  it('does NOT replace a caller-supplied idempotency_key (no content hashing)', async () => {
+    const { client, fromCalls } = createMockClient({
       upsertResult: { data: { id: 'abc' }, error: null },
     });
 
-    const record = makeCostLogRecord();
-    await persistCostLog(client as never, record);
+    const record = makeCostLogRecord({ idempotency_key: 'execution:abc:baseline:primary:1' });
     await persistCostLog(client as never, record);
 
-    // Both calls carry the same key; the DB unique index + ON CONFLICT
-    // DO NOTHING ensures only one row is created.
-    const key = buildCostLogIdempotencyKey(record);
-    expect(key).toBe(buildCostLogIdempotencyKey(record));
+    const upsertCall = fromCalls[0]!.calls.find((c) => c.method === 'upsert');
+    const [values] = upsertCall!.args as [Record<string, unknown>];
+    expect(values.idempotency_key).toBe('execution:abc:baseline:primary:1');
   });
 
-  it('concurrent writes with the same record use the same idempotency key', async () => {
+  it('preserves a null idempotency_key rather than fabricating one', async () => {
     const { client, fromCalls } = createMockClient({
       upsertResult: { data: { id: 'abc' }, error: null },
     });
 
     const record = makeCostLogRecord();
-    await Promise.all([
-      persistCostLog(client as never, record),
-      persistCostLog(client as never, record),
-      persistCostLog(client as never, record),
-    ]);
+    delete record.idempotency_key;
+    await persistCostLog(client as never, record);
 
-    // All three upserts carry the same key → DB collapses them to one row.
-    const keys = fromCalls.map((qb) => {
-      const upsertCall = qb.calls.find((c) => c.method === 'upsert');
-      return (upsertCall!.args[0] as Record<string, unknown>).idempotency_key;
+    const upsertCall = fromCalls[0]!.calls.find((c) => c.method === 'upsert');
+    const [values] = upsertCall!.args as [Record<string, unknown>];
+    expect(values.idempotency_key).toBeUndefined();
+  });
+
+  it('passes cost_status provenance through unchanged', async () => {
+    const { client, fromCalls } = createMockClient({
+      upsertResult: { data: { id: 'abc' }, error: null },
     });
-    expect(new Set(keys).size).toBe(1);
+
+    const record = makeCostLogRecord({ cost_status: 'pending' });
+    await persistCostLog(client as never, record);
+
+    const upsertCall = fromCalls[0]!.calls.find((c) => c.method === 'upsert');
+    const [values] = upsertCall!.args as [Record<string, unknown>];
+    expect(values.cost_status).toBe('pending');
   });
 });
 
