@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { createNormalizedProxyStream } from '../../supabase/functions/router/sse_normalizer.ts';
 import type { TerminalReceipt } from '../../supabase/functions/_shared/execution_receipt.ts';
+import { readRouterStream } from '../../src/hooks/useStreamHandler.ts';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -269,5 +270,56 @@ describe('createNormalizedProxyStream upstream error', () => {
     expect(errors).toHaveLength(1);
     expect(completed).toBe(0);
     expect(cancelled).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Browser client (readRouterStream) — shared parser, receipt, abort
+// ---------------------------------------------------------------------------
+
+const noopCallbacks = {
+  onFirstToken: () => {},
+  onUsageUpdate: () => {},
+  onContentUpdate: () => {},
+};
+
+describe('readRouterStream (client)', () => {
+  it('parses content_block_delta through the shared parser', async () => {
+    const stream = streamFrom(
+      'data: {"type":"content_block_delta","delta":{"text":"Hello"}}\n\ndata: [DONE]\n\n',
+    );
+    const result = await readRouterStream(stream, 3, noopCallbacks);
+    expect(result.assistantContent).toBe('Hello');
+  });
+
+  it('surfaces the terminal receipt event on the result', async () => {
+    const stream = streamFrom(
+      `data: ${JSON.stringify({ type: 'receipt', ...RECEIPT })}\n\ndata: [DONE]\n\n`,
+    );
+    const result = await readRouterStream(stream, 0, noopCallbacks);
+    expect(result.receipt).toEqual(RECEIPT);
+  });
+
+  it('cancels the reader when the supplied AbortSignal fires', async () => {
+    let upstreamCancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode('data: {"type":"content_block_delta","delta":{"text":"hi"}}\n\n'),
+        );
+        // Never closes: the abort is the only way out.
+      },
+      cancel() {
+        upstreamCancelled = true;
+      },
+    });
+
+    const abortController = new AbortController();
+    const pending = readRouterStream(stream, 0, noopCallbacks, abortController.signal);
+    abortController.abort();
+
+    const result = await pending;
+    expect(upstreamCancelled).toBe(true);
+    expect(typeof result.assistantContent).toBe('string');
   });
 });

@@ -1139,6 +1139,28 @@
 .send-button:active:not(:disabled) { transform: translateY(0); }
 .send-button:disabled { opacity: 0.4; cursor: not-allowed; filter: grayscale(1); }
 
+/* PX06: Stop control shown while a response is streaming. */
+.stop-button {
+  width: 48px; height: 48px;
+  border-radius: var(--radius-lg);
+  background: rgba(255, 107, 107, 0.16);
+  border: 1px solid rgba(255, 107, 107, 0.5);
+  color: #ff8f8f; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.stop-button:hover { background: rgba(255, 107, 107, 0.28); }
+.stop-button:active { transform: translateY(1px); }
+
+/* PX06: terminal-outcome notice (cancelled state / receipt settlement). */
+.stream-outcome {
+  border-radius: var(--radius-md);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: 0.75rem;
+  color: var(--color-text-secondary, #b8c1cc);
+  letter-spacing: 0.01em;
+}
+
 .send-validation-error {
   border: 1px solid rgba(255, 107, 107, 0.45);
   background: rgba(255, 107, 107, 0.08);

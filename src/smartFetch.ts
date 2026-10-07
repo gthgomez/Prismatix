@@ -69,6 +69,8 @@ export interface RouterResponseBase {
   debateModel?: string;
   debateCostNote?: string;
   debateParticipants?: DebateParticipant[];
+  /** PX06: server-issued execution identity (correlates the terminal receipt). */
+  executionId?: string;
 }
 
 /**
@@ -261,6 +263,7 @@ export async function askPrismatix(
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel = 'high',
   debateOptions?: DebateRequestOptions,
   imageStorageUrl?: string,
+  signal?: AbortSignal,
 ): Promise<(RouterResponseBase & { stream: ReadableStream<Uint8Array> }) | null> {
   try {
     const routerEndpoint = CONFIG.ROUTER_ENDPOINT || getEnvVar('VITE_ROUTER_ENDPOINT');
@@ -355,7 +358,8 @@ export async function askPrismatix(
         'Authorization': `Bearer ${token}`,
         ...(CONFIG.SUPABASE_ANON_KEY ? { 'apikey': CONFIG.SUPABASE_ANON_KEY } : {})
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      ...(signal ? { signal } : {}),
     });
 
     let response = await doFetch(accessToken);
@@ -418,6 +422,8 @@ export async function askPrismatix(
     const rationaleHeader = response.headers.get('X-Router-Rationale');
     const costEstimateHeader = response.headers.get('X-Cost-Estimate-USD');
     const costPricingVersion = response.headers.get('X-Cost-Pricing-Version') || undefined;
+    // PX06: execution identity for the terminal receipt correlation/lookup.
+    const executionId = response.headers.get('X-Prismatix-Execution-Id') || undefined;
     // PX02 release identity: record the server tariff version for skew detection.
     noteServerTariffVersion(response.headers.get('X-Prismatix-Tariff'));
     const routeDecisionHeader = response.headers.get('X-Route-Decision');
@@ -486,6 +492,7 @@ export async function askPrismatix(
       debateTrigger: debateMetadata.debateTrigger,
       debateModel: debateMetadata.debateModel,
       debateCostNote: debateMetadata.debateCostNote,
+      executionId,
     };
   } catch (error) {
     devError('[smartFetch] Error:', error);
