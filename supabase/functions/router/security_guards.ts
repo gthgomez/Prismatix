@@ -1,5 +1,9 @@
 import type { ImageAttachment, Message } from './router_logic.ts';
-import type { AttachmentRef } from '../_shared/conversation_attachments.ts';
+import {
+  MAX_ATTACHMENT_REFS,
+  MAX_STORAGE_REF_CHARS,
+  type AttachmentRef,
+} from '../_shared/conversation_attachments.ts';
 
 export const REQUEST_LIMITS = {
   maxQueryChars: 50_000,
@@ -379,14 +383,17 @@ function normalizeAttachmentRefs(input: unknown): GuardResult<AttachmentRef[]> {
   if (!Array.isArray(input)) {
     return reject(400, 'Bad Request: attachmentRefs must be an array');
   }
+  if (input.length > MAX_ATTACHMENT_REFS) {
+    return reject(413, 'Payload Too Large: too many attachmentRefs');
+  }
 
   const refs: AttachmentRef[] = [];
   for (const item of input) {
     if (!isRecord(item)) {
       return reject(400, 'Bad Request: each attachmentRef must be an object');
     }
-    if (item.kind !== 'image' && item.kind !== 'video') {
-      return reject(400, 'Bad Request: attachmentRef kind must be image or video');
+    if (item.kind !== 'image' && item.kind !== 'video' && item.kind !== 'file') {
+      return reject(400, 'Bad Request: attachmentRef kind must be image, video, or file');
     }
     if (
       typeof item.ordinal !== 'number' ||
@@ -399,9 +406,23 @@ function normalizeAttachmentRefs(input: unknown): GuardResult<AttachmentRef[]> {
     if (storageRef !== null && typeof storageRef !== 'string') {
       return reject(400, 'Bad Request: attachmentRef storageRef must be a string or null');
     }
+    if (storageRef !== null && storageRef.length > MAX_STORAGE_REF_CHARS) {
+      return reject(413, 'Payload Too Large: attachmentRef storageRef exceeds maximum length');
+    }
     const videoAssetId = item.videoAssetId ?? null;
     if (videoAssetId !== null && !isUuid(videoAssetId)) {
       return reject(400, 'Bad Request: attachmentRef videoAssetId must be a UUID or null');
+    }
+    const name = item.name ?? null;
+    if (name !== null && typeof name !== 'string') {
+      return reject(400, 'Bad Request: attachmentRef name must be a string or null');
+    }
+    const size = item.size ?? null;
+    if (
+      size !== null &&
+      (typeof size !== 'number' || !Number.isFinite(size) || size < 0)
+    ) {
+      return reject(400, 'Bad Request: attachmentRef size must be a non-negative number or null');
     }
     refs.push({
       ordinal: item.ordinal,
@@ -409,6 +430,8 @@ function normalizeAttachmentRefs(input: unknown): GuardResult<AttachmentRef[]> {
       storageRef,
       videoAssetId,
       available: item.available === true,
+      ...(name === null ? {} : { name }),
+      ...(size === null ? {} : { size }),
     });
   }
 

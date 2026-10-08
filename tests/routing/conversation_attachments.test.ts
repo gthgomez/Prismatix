@@ -58,7 +58,6 @@ describe('attachmentRefIsOwned', () => {
   it('accepts an image under the subject folder of the chat-uploads bucket', () => {
     expect(attachmentRefIsOwned(imageRef(), SUBJECT)).toBe(true);
   });
-
   it('rejects another subject path', () => {
     expect(
       attachmentRefIsOwned(
@@ -105,6 +104,15 @@ describe('attachmentRefIsOwned', () => {
       ),
     ).toBe(false);
   });
+
+  it('treats a file (text/code) ref as not storage-owned', () => {
+    expect(
+      attachmentRefIsOwned(
+        { ordinal: 2, kind: 'file', storageRef: null, videoAssetId: null, available: true, name: 'notes.md', size: 12 },
+        SUBJECT,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('normalizeAttachments', () => {
@@ -140,6 +148,58 @@ describe('normalizeAttachments', () => {
         available: false,
       },
     ]);
+  });
+
+  it('keeps file (text/code) metadata without a storage ref or signed URL', () => {
+    const normalized = normalizeAttachments([
+      { ordinal: 0, kind: 'file', name: 'notes.md', size: 123, storageRef: 'ignored', content: 'huge body' },
+      { ordinal: 1, kind: 'file', name: 'main.ts' },
+      { ordinal: 2, kind: 'file', size: 10 },
+    ]);
+
+    expect(normalized).toEqual([
+      {
+        ordinal: 0,
+        kind: 'file',
+        storageRef: null,
+        videoAssetId: null,
+        available: true,
+        name: 'notes.md',
+        size: 123,
+      },
+      {
+        ordinal: 1,
+        kind: 'file',
+        storageRef: null,
+        videoAssetId: null,
+        available: true,
+        name: 'main.ts',
+        size: null,
+      },
+      {
+        ordinal: 2,
+        kind: 'file',
+        storageRef: null,
+        videoAssetId: null,
+        available: true,
+        name: null,
+        size: 10,
+      },
+    ]);
+  });
+
+  it('bounds the array to 16 entries and the storageRef to 2048 chars', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      kind: 'image',
+      storageRef: `supabase://chat-uploads/u/${i}.png`,
+      available: true,
+    }));
+    expect(normalizeAttachments(many)).toHaveLength(16);
+
+    const oversized = normalizeAttachments([
+      { kind: 'image', storageRef: `supabase://chat-uploads/u/${'x'.repeat(2048)}`, available: true },
+    ]);
+    expect(oversized[0]!.storageRef).toBeNull();
   });
 
   it('returns an empty array for non-array input', () => {

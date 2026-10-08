@@ -2191,18 +2191,30 @@ Deno.serve(async (req: Request) => {
     const readyVideoIds = new Set(videoValidation.ids);
     const persistedAttachments: AttachmentRef[] = [];
     for (const ref of attachmentRefs) {
-      if (ref.kind === 'image') {
+      if (ref.kind === 'file') {
+        // Text/code metadata only: name/size, never content, never an object.
+        persistedAttachments.push(ref);
+      } else if (ref.kind === 'image') {
         if (attachmentRefIsOwned(ref, userId)) persistedAttachments.push(ref);
       } else if (ref.videoAssetId && readyVideoIds.has(ref.videoAssetId)) {
         persistedAttachments.push(ref);
       }
     }
-    // Back-compat projection of the first persisted image (or the legacy single
-    // image storage ref when no descriptor list was supplied).
-    const legacyImageUrl =
-      persistedAttachments.find((ref) => ref.kind === 'image')?.storageRef ??
-      imageStorageUrl ??
-      null;
+    // Back-compat projection of the first persisted image (or an
+    // OWNERSHIP-VALIDATED legacy single-image storage ref). A foreign path is
+    // never persisted, even via the legacy field.
+    let legacyImageUrl =
+      persistedAttachments.find((ref) => ref.kind === 'image')?.storageRef ?? null;
+    if (!legacyImageUrl && imageStorageUrl) {
+      const legacyCandidate: AttachmentRef = {
+        ordinal: 0,
+        kind: 'image',
+        storageRef: imageStorageUrl,
+        videoAssetId: null,
+        available: true,
+      };
+      if (attachmentRefIsOwned(legacyCandidate, userId)) legacyImageUrl = imageStorageUrl;
+    }
 
     let memoryRetrieval: MemoryRetrievalResult = {
       contextBlock: '',
@@ -3074,7 +3086,7 @@ Deno.serve(async (req: Request) => {
           let transcript: { saved: boolean } | undefined;
           if (assistantText.trim()) {
             try {
-              await persistExecutionMessage(storeClient, {
+              const assistantPersist = await persistExecutionMessage(storeClient, {
                 subjectId: userId,
                 conversationId,
                 executionId: activeExecution.id,
@@ -3084,7 +3096,23 @@ Deno.serve(async (req: Request) => {
                 modelUsed: `${responseDecision.provider}:${effectiveModelId}`,
                 attachments: [],
               });
-              transcript = { saved: true };
+              if (assistantPersist.conflict) {
+                // A (execution_id, role) conflict means the durable row already
+                // exists with DIFFERENT content: never claim it was saved.
+                transcript = { saved: false };
+                console.error('[PX07] assistant persist conflict; transcript.saved=false', {
+                  conversationId,
+                  executionId: activeExecution.id,
+                });
+                await safeEnqueueReconciliation(
+                  storeClient,
+                  activeExecution.id,
+                  'assistant_transcript_conflict',
+                  { conversationId, userId },
+                );
+              } else {
+                transcript = { saved: true };
+              }
             } catch (assistantPersistError) {
               transcript = { saved: false };
               console.error('[PX07] post-inference assistant persist failed:', {

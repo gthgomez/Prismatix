@@ -12,10 +12,14 @@
 
 export interface AttachmentRef {
   ordinal: number;
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'file';
   storageRef: string | null;
   videoAssetId: string | null;
   available: boolean;
+  /** Present for `file` (text/code) entries: display name, never content. */
+  name?: string | null;
+  /** Present for `file` entries: byte size (optional). */
+  size?: number | null;
 }
 
 export interface ParsedStorageReference {
@@ -25,6 +29,9 @@ export interface ParsedStorageReference {
 
 const STORAGE_SCHEME = 'supabase://';
 export const CHAT_UPLOADS_BUCKET = 'chat-uploads';
+export const MAX_ATTACHMENT_REFS = 16;
+export const MAX_STORAGE_REF_CHARS = 2048;
+const MAX_FILE_NAME_CHARS = 512;
 
 /**
  * Parses a `supabase://<bucket>/<path>` private reference. Returns null for a
@@ -56,6 +63,7 @@ export function attachmentRefIsOwned(ref: AttachmentRef, subjectId: string): boo
   if (ref.kind === 'video') {
     return typeof ref.videoAssetId === 'string' && ref.videoAssetId.length > 0;
   }
+  // `file` entries are pure metadata (no object in the subject's storage).
   return false;
 }
 
@@ -63,22 +71,50 @@ function asStringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+function boundedStorageRef(value: unknown): string | null {
+  const ref = asStringOrNull(value);
+  if (ref === null) return null;
+  return ref.length > MAX_STORAGE_REF_CHARS ? null : ref;
+}
+
+function boundedSize(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 /**
  * Coerces untrusted persisted/JSONB input into the canonical element list.
  * Unknown kinds are dropped and ordinals are reset to the resulting array
- * position (0..n-1) so a corrupted ordinal can never reorder the display.
+ * position (0..n-1) so a corrupted ordinal can never reorder the display. The
+ * array is bounded to {@link MAX_ATTACHMENT_REFS} entries and an over-long
+ * storage reference is discarded. `file` entries keep only `name`/`size`
+ * metadata — their content is never persisted.
  */
 export function normalizeAttachments(input: unknown): AttachmentRef[] {
   if (!Array.isArray(input)) return [];
   const normalized: AttachmentRef[] = [];
   for (const item of input) {
+    if (normalized.length >= MAX_ATTACHMENT_REFS) break;
     if (typeof item !== 'object' || item === null || Array.isArray(item)) continue;
     const record = item as Record<string, unknown>;
-    if (record.kind !== 'image' && record.kind !== 'video') continue;
+    if (record.kind !== 'image' && record.kind !== 'video' && record.kind !== 'file') continue;
+
+    if (record.kind === 'file') {
+      normalized.push({
+        ordinal: normalized.length,
+        kind: 'file',
+        storageRef: null,
+        videoAssetId: null,
+        available: true,
+        name: asStringOrNull(record.name)?.slice(0, MAX_FILE_NAME_CHARS) ?? null,
+        size: boundedSize(record.size),
+      });
+      continue;
+    }
+
     normalized.push({
       ordinal: normalized.length,
       kind: record.kind,
-      storageRef: asStringOrNull(record.storageRef),
+      storageRef: boundedStorageRef(record.storageRef),
       videoAssetId: asStringOrNull(record.videoAssetId),
       available: record.available === true,
     });

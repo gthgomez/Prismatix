@@ -496,10 +496,14 @@ A partial unique index, `messages_execution_role_uidx` on
 rejected with SQLSTATE `PT409` (`message_conflict`).
 
 The attachment element shape is
-`{ ordinal, kind: "image"|"video", storageRef, videoAssetId, available }`. Base64,
-signed URLs, and another subject's storage path are never stored. Image refs are
-private `supabase://chat-uploads/<subject>/<path>` references; video refs carry a
-`video_assets` id whose ownership is checked by the RPC.
+`{ ordinal, kind: "image"|"video"|"file", storageRef, videoAssetId, available,
+name?, size? }`. Base64, signed URLs, file content, and another subject's
+storage path are never stored. Image refs are private
+`supabase://chat-uploads/<subject>/<path>` references; video refs carry a
+`video_assets` id whose ownership is checked by the RPC; `file` (text/code)
+entries carry only `name`/`size` metadata (content stays model-input-only). The
+array is bounded to 16 entries and each `storageRef` to 2048 chars, in both
+`normalizeAttachments` and the RPC.
 
 ### 18.2 Write RPC
 

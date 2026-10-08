@@ -22,7 +22,13 @@ vi.mock('./lib/supabase', () => ({
   },
 }));
 
-import { askPrismatix, DuplicateRequestError, resetConversation } from './smartFetch';
+import {
+  askPrismatix,
+  DuplicateRequestError,
+  getConversationId,
+  resetConversation,
+} from './smartFetch';
+import { planInitialConversation, readSelectedConversation } from './services/conversationState';
 
 function createJwt(iss: string): string {
   const enc = (value: unknown) =>
@@ -56,6 +62,16 @@ describe('PX07 smartFetch continuity', () => {
       error: null,
     });
     signOutMock.mockResolvedValue(undefined);
+  });
+
+  it('does not leak the shared conversation id across an account change', () => {
+    const accountAId = getConversationId();
+    // Account B has no per-user selection: the shared id must be reset before B
+    // can send, so it can never target account A's conversation.
+    const plan = planInitialConversation(readSelectedConversation('account-b'));
+    expect(plan.resetGlobalConversation).toBe(true);
+    if (plan.resetGlobalConversation) resetConversation();
+    expect(getConversationId()).not.toBe(accountAId);
   });
 
   it('sends a stable x-client-request-id and reuses it on the 401 retry', async () => {

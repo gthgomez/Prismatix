@@ -106,6 +106,9 @@ begin
   if jsonb_typeof(v_attachments) <> 'array' then
     raise exception 'invalid_attachment' using errcode = '22023';
   end if;
+  if jsonb_array_length(v_attachments) > 16 then
+    raise exception 'invalid_attachment' using errcode = '22023';
+  end if;
 
   -- conversation: create it for a user message, require ownership otherwise.
   select user_id into v_conv_owner
@@ -155,12 +158,24 @@ begin
   -- validate every attachment element.
   for v_att in select value from jsonb_array_elements(v_attachments) loop
     v_kind := v_att->>'kind';
-    if v_kind is null or v_kind not in ('image', 'video') then
+    if v_kind is null or v_kind not in ('image', 'video', 'file') then
       raise exception 'invalid_attachment' using errcode = '22023';
+    end if;
+
+    -- `file` entries are text/code metadata only (name/size); their content is
+    -- never persisted and there is no object to validate.
+    if v_kind = 'file' then
+      if coalesce(v_att->>'name', '') = '' then
+        raise exception 'invalid_attachment' using errcode = '22023';
+      end if;
+      continue;
     end if;
 
     if v_kind = 'image' then
       v_storage_ref := v_att->>'storageRef';
+      if v_storage_ref is not null and length(v_storage_ref) > 2048 then
+        raise exception 'invalid_attachment' using errcode = '22023';
+      end if;
       if v_storage_ref is null
          or v_storage_ref not like 'supabase://chat-uploads/%' then
         raise exception 'invalid_attachment' using errcode = '22023';

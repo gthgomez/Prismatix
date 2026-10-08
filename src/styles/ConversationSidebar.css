@@ -132,6 +132,17 @@
   opacity: 0.8;
 }
 
+.message-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+}
+
 /* Sidebar + chat layout */
 .app-with-sidebar {
   display: flex;

@@ -223,12 +223,20 @@ export async function deleteConversation(
   for (const storageRef of refs) {
     const parsed = parseStorageReference(storageRef);
     if (!parsed) continue;
-    const { data: stillReferenced } = await client
+    // Referenced by another message's attachments JSONB?
+    const { data: referencedByAttachments } = await client
       .from('messages')
       .select('id')
       .contains('attachments', [{ storageRef }])
       .limit(1);
-    if (stillReferenced && stillReferenced.length > 0) continue;
+    if (referencedByAttachments && referencedByAttachments.length > 0) continue;
+    // …or by another message's legacy image_url projection?
+    const { data: referencedByLegacyUrl } = await client
+      .from('messages')
+      .select('id')
+      .eq('image_url', storageRef)
+      .limit(1);
+    if (referencedByLegacyUrl && referencedByLegacyUrl.length > 0) continue;
     await client.storage.from(parsed.bucket).remove([parsed.path]);
   }
 }

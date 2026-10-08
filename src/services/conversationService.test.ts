@@ -203,6 +203,42 @@ describe('loadConversation', () => {
     expect(calls).toContain('order:id');
   });
 
+  it('maps file (text/code) attachments as metadata with no signed URL', async () => {
+    const fake = makeClient({
+      messages: [
+        {
+          data: [
+            {
+              id: MSG,
+              role: 'user',
+              content: 'process this',
+              created_at: '2026-10-01T00:00:00Z',
+              attachments: [{ ordinal: 0, kind: 'file', name: 'notes.md', size: 9 }],
+              image_url: null,
+            },
+          ],
+          error: null,
+        },
+      ],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV, { limit: 50 });
+
+    expect(messages[0]!.attachments).toEqual([
+      {
+        ordinal: 0,
+        kind: 'file',
+        storageRef: null,
+        videoAssetId: null,
+        available: true,
+        name: 'notes.md',
+        size: 9,
+      },
+    ]);
+    // A file attachment never triggers a storage signed URL.
+    expect(fake.signedUrls).toEqual([]);
+  });
+
   it('applies a (created_at, id) cursor and limit', async () => {
     const fake = makeClient({ messages: [{ data: [], error: null }] });
 
@@ -250,8 +286,11 @@ describe('deleteConversation', () => {
     const fake = makeClient({
       messages: [
         { data: [{ attachments: [imageRef(sole), imageRef(shared, 1)], image_url: null }], error: null },
-        // sole: no other message references it → remove. shared: still referenced → keep.
-        // Order of the reference probes follows the collected ref order.
+        // sole: no attachments reference, no legacy image_url → remove.
+        { data: [], error: null },
+        { data: [], error: null },
+        // shared: no attachments reference, but another row's legacy image_url
+        // still points at it → keep.
         { data: [], error: null },
         { data: [{ id: 'other' }], error: null },
       ],

@@ -42,6 +42,7 @@ import {
 } from '../services/conversationService';
 import {
   NEW_CHAT_SELECTION,
+  planInitialConversation,
   readSelectedConversation,
   streamUpdateAppliesToActive,
   writeSelectedConversation,
@@ -494,6 +495,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             isImage: true,
             storageUrl: signed ?? ref.storageRef ?? undefined,
           });
+        } else if (ref.kind === 'file') {
+          attachments.push({
+            name: ref.name ?? 'file',
+            kind: 'text',
+            isImage: false,
+            ...(ref.size !== null && ref.size !== undefined ? { size: ref.size } : {}),
+          });
         } else {
           attachments.push({
             name: 'video',
@@ -577,10 +585,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   // Per-account selection: restore on sign-in/account change, isolated by user.
   useEffect(() => {
-    const stored = readSelectedConversation(user?.id ?? null);
+    const plan = planInitialConversation(readSelectedConversation(user?.id ?? null));
+    // Account-change isolation: a new account with no stored selection must not
+    // inherit the shared `prismatix_conversation_id` from the previous account.
+    if (plan.resetGlobalConversation) {
+      resetConversation();
+    }
     void refreshConversations();
-    if (stored && stored !== NEW_CHAT_SELECTION) {
-      void openConversation(stored);
+    if (plan.conversationId) {
+      void openConversation(plan.conversationId);
     } else {
       selectedConversationIdRef.current = null;
       setSelectedConversationId(null);
@@ -775,6 +788,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             storageRef: null,
             videoAssetId: file.videoAssetId,
             available: true,
+          });
+        } else if (!file.isImage && file.kind !== 'video') {
+          // Text/code attachments are persisted as metadata only (name/size);
+          // their content stays in the model input.
+          attachmentRefs.push({
+            ordinal,
+            kind: 'file',
+            storageRef: null,
+            videoAssetId: null,
+            available: true,
+            name: file.name ?? null,
+            size: file.size ?? file.sizeBytes ?? null,
           });
         }
       });
@@ -1427,6 +1452,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                             return (
                               <div className='message-video-placeholder' key={attachmentIndex}>
                                 🎞 video attachment
+                              </div>
+                            );
+                          }
+                          if (attachment.kind === 'text') {
+                            const size = attachment.size ?? attachment.sizeBytes;
+                            return (
+                              <div className='message-file-chip' key={attachmentIndex}>
+                                📄 {attachment.name}
+                                {typeof size === 'number'
+                                  ? ` · ${size < 1024 ? `${size} B` : `${Math.round(size / 1024)} KB`}`
+                                  : ''}
                               </div>
                             );
                           }

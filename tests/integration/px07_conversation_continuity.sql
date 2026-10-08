@@ -410,6 +410,59 @@ begin
   ) then
     raise exception 'PX07 FAIL: owned image attachment was not persisted/ordinal-preserved';
   end if;
+
+  -- A file (text/code) attachment is accepted as metadata only.
+  v_exec_id := (
+    public.px03_create_execution(
+      current_setting('px07.user_a')::uuid,
+      current_setting('px07.conv_a')::uuid,
+      'px07-req-file', 'px07-hash-file'
+    )->'execution'->>'id'
+  )::uuid;
+  perform public.px07_persist_message(
+    current_setting('px07.user_a')::uuid,
+    current_setting('px07.conv_a')::uuid,
+    v_exec_id, 'user', 'with file', 0, null,
+    jsonb_build_array(
+      jsonb_build_object(
+        'ordinal', 0, 'kind', 'file', 'available', true,
+        'storageRef', null, 'videoAssetId', null,
+        'name', 'notes.md', 'size', 42
+      )
+    ),
+    null
+  );
+  if not exists (
+    select 1 from public.messages
+     where conversation_id = current_setting('px07.conv_a')::uuid
+       and content = 'with file'
+       and attachments->0->>'kind' = 'file'
+       and attachments->0->>'name' = 'notes.md'
+  ) then
+    raise exception 'PX07 FAIL: file attachment metadata was not persisted';
+  end if;
+
+  -- An over-long attachment array is rejected.
+  v_exec_id := (
+    public.px03_create_execution(
+      current_setting('px07.user_a')::uuid,
+      current_setting('px07.conv_a')::uuid,
+      'px07-req-toomany', 'px07-hash-toomany'
+    )->'execution'->>'id'
+  )::uuid;
+  begin
+    perform public.px07_persist_message(
+      current_setting('px07.user_a')::uuid,
+      current_setting('px07.conv_a')::uuid,
+      v_exec_id, 'user', 'too many', 0, null,
+      (select jsonb_agg(jsonb_build_object('ordinal', i, 'kind', 'file', 'name', 'f'))
+         from generate_series(0, 16) as i),
+      null
+    );
+    raise exception 'PX07 FAIL: over-long attachment array was accepted';
+  exception
+    when sqlstate '22023' then null; -- expected invalid_attachment
+  end;
 end $$;
 
 reset role;

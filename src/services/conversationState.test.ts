@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   NEW_CHAT_SELECTION,
+  planInitialConversation,
   readSelectedConversation,
   selectedConversationKey,
   streamUpdateAppliesToActive,
@@ -36,6 +37,30 @@ describe('per-account selected conversation', () => {
   it('returns null for an account with no stored selection (account change isolated)', () => {
     writeSelectedConversation(USER_A, CONV_A);
     expect(readSelectedConversation(USER_B)).toBeNull();
+  });
+});
+
+describe('initial conversation plan (account-change isolation)', () => {
+  it('opens a concrete stored conversation without resetting the shared id', () => {
+    expect(planInitialConversation(CONV_A)).toEqual({
+      conversationId: CONV_A,
+      resetGlobalConversation: false,
+    });
+  });
+
+  it('resets the shared conversation id for a New Chat draft', () => {
+    expect(planInitialConversation(NEW_CHAT_SELECTION)).toEqual({
+      conversationId: null,
+      resetGlobalConversation: true,
+    });
+  });
+
+  it('resets the shared conversation id for an account with no stored selection', () => {
+    // Account A selected CONV_A; account B has no per-user selection. B must
+    // reset the shared id so it can never send to A's conversation.
+    writeSelectedConversation(USER_A, CONV_A);
+    const plan = planInitialConversation(readSelectedConversation(USER_B));
+    expect(plan).toEqual({ conversationId: null, resetGlobalConversation: true });
   });
 });
 

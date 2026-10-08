@@ -516,6 +516,115 @@ describe('PX07 post-inference assistant persistence failure', () => {
     const receipt = receiptFromStream(await readAll(res.body!));
     expect(receipt!.transcript).toEqual({ saved: true });
   });
+
+  it('reports transcript.saved = false (never true) when the assistant turn conflicts', async () => {
+    const calls = installFetchRecorder(
+      makeRoutes((body) =>
+        body.p_role === 'assistant'
+          ? jsonResponse({ code: 'PT409', message: 'message_conflict' }, 409)
+          : null,
+      ),
+    );
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+
+    const text = await readAll(res.body!);
+    expect(text).toContain('[DONE]');
+    const receipt = receiptFromStream(text);
+    expect(receipt!.transcript).toEqual({ saved: false });
+    expect(receipt!.status).toBe('completed');
+    const enqueue = calls.find((call) =>
+      call.url.includes('/rpc/px03_enqueue_reconciliation') &&
+      call.body.includes('assistant_transcript_conflict'),
+    );
+    expect(enqueue).toBeTruthy();
+  });
+});
+
+describe('PX07 legacy image_url ownership', () => {
+  it('never persists a foreign legacy imageStorageUrl', async () => {
+    const calls = installFetchRecorder(makeRoutes(() => null));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        imageStorageUrl: 'supabase://chat-uploads/99999999-9999-4999-8999-999999999999/foreign.png',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const userPersist = persistBodies(calls).find((body) => body.p_role === 'user');
+    expect(userPersist!.p_legacy_image_url).toBeNull();
+    await readAll(res.body!);
+  });
+
+  it('persists an owned legacy imageStorageUrl', async () => {
+    const calls = installFetchRecorder(makeRoutes(() => null));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        imageStorageUrl: `supabase://chat-uploads/${SUBJECT}/owned.png`,
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const userPersist = persistBodies(calls).find((body) => body.p_role === 'user');
+    expect(userPersist!.p_legacy_image_url).toBe(`supabase://chat-uploads/${SUBJECT}/owned.png`);
+    await readAll(res.body!);
+  });
+
+  it('persists text-file metadata with its original ordinal and no content', async () => {
+    const calls = installFetchRecorder(makeRoutes(() => null));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Process this file',
+        attachmentRefs: [
+          {
+            ordinal: 2,
+            kind: 'file',
+            storageRef: null,
+            videoAssetId: null,
+            available: true,
+            name: 'notes.md',
+            size: 42,
+          },
+        ],
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const userPersist = persistBodies(calls).find((body) => body.p_role === 'user');
+    expect(userPersist!.p_attachments).toEqual([
+      {
+        ordinal: 2,
+        kind: 'file',
+        storageRef: null,
+        videoAssetId: null,
+        available: true,
+        name: 'notes.md',
+        size: 42,
+      },
+    ]);
+    await readAll(res.body!);
+  });
 });
 
 describe('projectReceipt transcript passthrough', () => {
