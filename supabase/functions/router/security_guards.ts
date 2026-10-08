@@ -1,4 +1,5 @@
 import type { ImageAttachment, Message } from './router_logic.ts';
+import type { AttachmentRef } from '../_shared/conversation_attachments.ts';
 
 export const REQUEST_LIMITS = {
   maxQueryChars: 50_000,
@@ -32,6 +33,7 @@ export interface NormalizedRouterRequest {
   history: Message[];
   images: ImageAttachment[];
   videoAssetIds: string[];
+  attachmentRefs: AttachmentRef[];
   imageStorageUrl?: string;
   modelOverride?: string;
   geminiFlashThinkingLevel?: string;
@@ -105,6 +107,11 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
     return videoAssetIdsResult;
   }
 
+  const attachmentRefsResult = normalizeAttachmentRefs(input.attachmentRefs);
+  if (!attachmentRefsResult.ok) {
+    return attachmentRefsResult;
+  }
+
   const platformResult = normalizePlatform(input.platform);
   if (!platformResult.ok) {
     return platformResult;
@@ -144,6 +151,7 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
       history: historyResult.value,
       images: imagesResult.value,
       videoAssetIds: videoAssetIdsResult.value,
+      attachmentRefs: attachmentRefsResult.value,
       imageStorageUrl: imageStorageUrlResult.value,
       modelOverride: modelOverrideResult.value,
       geminiFlashThinkingLevel: thinkingResult.value,
@@ -350,6 +358,49 @@ function normalizeVideoAssetIds(input: unknown): GuardResult<string[]> {
   }
 
   return { ok: true, value: videoAssetIds };
+}
+
+function normalizeAttachmentRefs(input: unknown): GuardResult<AttachmentRef[]> {
+  if (input === undefined || input === null) {
+    return { ok: true, value: [] };
+  }
+  if (!Array.isArray(input)) {
+    return reject(400, 'Bad Request: attachmentRefs must be an array');
+  }
+
+  const refs: AttachmentRef[] = [];
+  for (const item of input) {
+    if (!isRecord(item)) {
+      return reject(400, 'Bad Request: each attachmentRef must be an object');
+    }
+    if (item.kind !== 'image' && item.kind !== 'video') {
+      return reject(400, 'Bad Request: attachmentRef kind must be image or video');
+    }
+    if (
+      typeof item.ordinal !== 'number' ||
+      !Number.isInteger(item.ordinal) ||
+      item.ordinal < 0
+    ) {
+      return reject(400, 'Bad Request: attachmentRef ordinal must be a non-negative integer');
+    }
+    const storageRef = item.storageRef ?? null;
+    if (storageRef !== null && typeof storageRef !== 'string') {
+      return reject(400, 'Bad Request: attachmentRef storageRef must be a string or null');
+    }
+    const videoAssetId = item.videoAssetId ?? null;
+    if (videoAssetId !== null && !isUuid(videoAssetId)) {
+      return reject(400, 'Bad Request: attachmentRef videoAssetId must be a UUID or null');
+    }
+    refs.push({
+      ordinal: item.ordinal,
+      kind: item.kind,
+      storageRef,
+      videoAssetId,
+      available: item.available === true,
+    });
+  }
+
+  return { ok: true, value: refs };
 }
 
 function normalizePlatform(input: unknown): GuardResult<RouterPlatform> {

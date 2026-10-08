@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   persistCostLog,
-  persistMessageAsync,
+  persistExecutionMessage,
   validateConversation,
   type CostLogRecord,
 } from '../../supabase/functions/router/db_helpers.ts';
@@ -262,65 +262,102 @@ describe('persistCostLog error handling', () => {
 });
 
 // ============================================================================
-// persistMessageAsync — sequential persistence
+// persistExecutionMessage — awaited, idempotent PX07 persistence via the
+// service-role-only px07_persist_message RPC
 // ============================================================================
 
-describe('persistMessageAsync', () => {
-  it('inserts message then increments token count (sequential)', async () => {
-    const { client, fromCalls, rpcCalls } = createMockClient({
-      messageInsertResult: { data: { id: 'msg-1' }, error: null },
-      rpcResult: { data: null, error: null },
+describe('persistExecutionMessage', () => {
+  const EXECUTION_ID = '33333333-3333-4333-8333-333333333333';
+
+  function baseInput() {
+    return {
+      subjectId: VALID_USER,
+      conversationId: VALID_CONVERSATION,
+      executionId: EXECUTION_ID,
+      role: 'user' as const,
+      content: 'Hello',
+      tokenCount: 5,
+      modelUsed: 'opencode:deepseek-v4-pro',
+      attachments: [],
+    };
+  }
+
+  it('calls the px07_persist_message RPC with the full identity and returns the row', async () => {
+    const { client, rpcCalls } = createMockClient({
+      rpcResult: { data: { message_id: 'msg-1', inserted: true }, error: null },
     });
 
-    const promise = new Promise<void>((resolve) => {
-      persistMessageAsync(
-        client as never,
-        VALID_CONVERSATION,
-        VALID_USER,
-        'user',
-        'Hello',
-        5,
-        'openai:gpt-5.6-sol',
-      );
-      // persistMessageAsync is fire-and-forget; wait a microtask flush.
-      setTimeout(resolve, 10);
+    const result = await persistExecutionMessage(client as never, baseInput());
+
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0]!.fn).toBe('px07_persist_message');
+    expect(rpcCalls[0]!.args[0]).toMatchObject({
+      p_subject_id: VALID_USER,
+      p_conversation_id: VALID_CONVERSATION,
+      p_execution_id: EXECUTION_ID,
+      p_role: 'user',
+      p_content: 'Hello',
+      p_token_count: 5,
+      p_model_used: 'opencode:deepseek-v4-pro',
+      p_attachments: [],
     });
-
-    await promise;
-
-    // Message insert happened
-    const messageQb = fromCalls.find((qb) =>
-      qb.calls.some((c) => c.method === 'insert'),
-    );
-    expect(messageQb).toBeDefined();
-
-    // RPC happened
-    expect(rpcCalls.length).toBe(1);
-    expect(rpcCalls[0]!.fn).toBe('increment_token_count_for_user');
+    expect(result).toEqual({ messageId: 'msg-1', inserted: true, conflict: false });
   });
 
-  it('does not call RPC when message insert fails', async () => {
-    const { client, rpcCalls } = createMockClient({
-      messageInsertResult: {
+  it('maps SQLSTATE PT409 / message_conflict to a conflict result (never throws)', async () => {
+    const { client } = createMockClient({
+      rpcResult: {
         data: null,
-        error: { code: '23503', message: 'foreign key violation' },
+        error: { code: 'PT409', message: 'message_conflict' },
       },
-      rpcResult: { data: null, error: null },
     });
 
-    await new Promise<void>((resolve) => {
-      persistMessageAsync(
-        client as never,
-        VALID_CONVERSATION,
-        VALID_USER,
-        'user',
-        'Hello',
-        5,
-      );
-      setTimeout(resolve, 10);
+    const result = await persistExecutionMessage(client as never, baseInput());
+
+    expect(result).toEqual({ messageId: null, inserted: false, conflict: true });
+  });
+
+  it('throws on any other database error so the router can fail closed', async () => {
+    const { client } = createMockClient({
+      rpcResult: { data: null, error: { code: '08006', message: 'connection lost' } },
     });
 
-    expect(rpcCalls.length).toBe(0);
+    await expect(
+      persistExecutionMessage(client as never, baseInput()),
+    ).rejects.toThrow('persist_message_failed');
+  });
+
+  it('forwards attachments and the legacy first-image projection', async () => {
+    const { client, rpcCalls } = createMockClient({
+      rpcResult: { data: { message_id: 'msg-2', inserted: true }, error: null },
+    });
+
+    await persistExecutionMessage(client as never, {
+      ...baseInput(),
+      legacyImageUrl: 'supabase://chat-uploads/u/a.png',
+      attachments: [
+        {
+          ordinal: 0,
+          kind: 'image',
+          storageRef: 'supabase://chat-uploads/u/a.png',
+          videoAssetId: null,
+          available: true,
+        },
+      ],
+    });
+
+    expect(rpcCalls[0]!.args[0]).toMatchObject({
+      p_legacy_image_url: 'supabase://chat-uploads/u/a.png',
+      p_attachments: [
+        {
+          ordinal: 0,
+          kind: 'image',
+          storageRef: 'supabase://chat-uploads/u/a.png',
+          videoAssetId: null,
+          available: true,
+        },
+      ],
+    });
   });
 });
 

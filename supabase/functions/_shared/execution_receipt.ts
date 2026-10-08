@@ -44,6 +44,12 @@ export interface TerminalReceipt {
   finalizedAt: string | null;
   settlement: ReceiptSettlement;
   calls: ReceiptCall[];
+  /**
+   * PX07: whether the assistant transcript was durably persisted. Optional and
+   * omitted when unknown; a post-inference persistence failure reports
+   * `{ saved: false }` (never a false durable claim).
+   */
+  transcript?: { saved: boolean };
 }
 
 // Mirrors prismatix_internal.executions (snake_case: to_jsonb(row) preserves
@@ -80,6 +86,11 @@ export interface RawReceiptPayload {
   execution: RawReceiptExecution;
   calls?: RawReceiptCall[] | null;
   reservation?: RawReceiptReservation | null;
+  /**
+   * PX07: optional transcript durability marker supplied by the caller (the
+   * ledger does not persist it). Passed through unchanged when present.
+   */
+  transcript?: { saved: boolean } | null;
 }
 
 export const TERMINAL_EXECUTION_STATUSES: ReadonlySet<ExecutionReceiptStatus> = new Set([
@@ -161,5 +172,6 @@ export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
       costStatus: call.cost_status,
       totalCost: roundUsd(toUsd(call.total_cost)),
     })),
+    ...(payload.transcript ? { transcript: payload.transcript } : {}),
   };
 }
