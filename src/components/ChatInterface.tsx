@@ -548,11 +548,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setContextExcludedCount(0);
     try {
       const loaded = await loadConversation(supabase, conversationId, { limit: 200 });
-      // Ignore a stale load: a newer selection superseded this one.
-      if (loadSeq !== conversationLoadSeqRef.current) return;
+      // Ignore a stale load: a newer selection (or a New Chat / account-change
+      // clear) superseded this one.
+      if (
+        loadSeq !== conversationLoadSeqRef.current ||
+        selectedConversationIdRef.current !== conversationId
+      ) {
+        return;
+      }
       setMessages(await mapLoadedMessages(loaded));
     } catch (error) {
-      if (loadSeq !== conversationLoadSeqRef.current) return;
+      if (
+        loadSeq !== conversationLoadSeqRef.current ||
+        selectedConversationIdRef.current !== conversationId
+      ) {
+        return;
+      }
       console.warn('[ChatInterface] Failed to load conversation:', error);
       setMessages([]);
     }
@@ -566,6 +577,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const handleNewChat = () => {
     if (isStreaming) return;
+    // Invalidate any in-flight conversation load: a pending load must not
+    // overwrite the fresh New Chat state when it resolves.
+    conversationLoadSeqRef.current += 1;
     selectedConversationIdRef.current = null;
     setSelectedConversationId(null);
     writeSelectedConversation(user?.id ?? null, NEW_CHAT_SELECTION);
@@ -604,6 +618,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (plan.conversationId) {
       void openConversation(plan.conversationId);
     } else {
+      // Account-change isolation also invalidates any in-flight load from the
+      // prior account so its messages can never be applied to the new account.
+      conversationLoadSeqRef.current += 1;
       selectedConversationIdRef.current = null;
       setSelectedConversationId(null);
       setMessages([]);
