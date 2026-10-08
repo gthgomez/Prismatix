@@ -21,8 +21,32 @@ import { ThinkingProcess } from './ThinkingProcess';
 import { DebateView } from './DebateView';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
 import { AttachmentPreview } from './AttachmentPreview';
+import { ConversationSidebar } from './ConversationSidebar';
 import '../styles/ChatInterface.css';
-import { askPrismatix, getConversationId, resetConversation } from '../smartFetch';
+import {
+  askPrismatix,
+  DuplicateRequestError,
+  getConversationId,
+  resetConversation,
+  setConversationId,
+} from '../smartFetch';
+import { supabase } from '../lib/supabase';
+import {
+  deleteConversation,
+  listConversations,
+  loadConversation,
+  selectContextHistory,
+  signAttachment,
+  type ConversationSummary,
+  type LoadedMessage,
+} from '../services/conversationService';
+import {
+  NEW_CHAT_SELECTION,
+  readSelectedConversation,
+  streamUpdateAppliesToActive,
+  writeSelectedConversation,
+} from '../services/conversationState';
+import type { AttachmentRef } from '../../supabase/functions/_shared/conversation_attachments';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import { readRouterStream } from '../hooks/useStreamHandler';
 import {
@@ -153,6 +177,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     (file) => file.kind === 'video' && file.status !== 'ready',
   );
   const hasReadyVideo = hasReadyVideoAttachment(draftAttachments);
+
+  // PX07 conversation continuity state.
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [contextExcludedCount, setContextExcludedCount] = useState(0);
+  const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
+  const selectedConversationIdRef = useRef<string | null>(null);
+  const activeStreamRef = useRef<{
+    conversationId: string;
+    clientRequestId: string | null;
+  } | null>(null);
 
   // Context Manager
   const {
@@ -444,6 +480,125 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     };
   }, []);
 
+  // ── PX07 conversation continuity ─────────────────────────────────────────
+  const mapLoadedMessages = async (loaded: LoadedMessage[]): Promise<Message[]> => {
+    const mapped: Message[] = [];
+    for (const item of loaded) {
+      const attachments: FileUploadPayload[] = [];
+      for (const ref of item.attachments) {
+        if (ref.kind === 'image') {
+          const signed = ref.storageRef ? await signAttachment(supabase, ref) : null;
+          attachments.push({
+            name: 'image',
+            kind: 'image',
+            isImage: true,
+            storageUrl: signed ?? ref.storageRef ?? undefined,
+          });
+        } else {
+          attachments.push({
+            name: 'video',
+            kind: 'video',
+            isImage: false,
+            status: 'ready',
+            ...(ref.videoAssetId ? { videoAssetId: ref.videoAssetId } : {}),
+          });
+        }
+      }
+      mapped.push({
+        role: item.role,
+        content: item.content,
+        timestamp: Date.parse(item.createdAt) || Date.now(),
+        ...(attachments.length > 0 ? { attachments } : {}),
+      });
+    }
+    return mapped;
+  };
+
+  const refreshConversations = async () => {
+    setConversationsLoading(true);
+    try {
+      const list = await listConversations(supabase, { limit: 50 });
+      setConversations(list);
+    } catch (error) {
+      console.warn('[ChatInterface] Failed to list conversations:', error);
+    } finally {
+      setConversationsLoading(false);
+    }
+  };
+
+  const openConversation = async (conversationId: string) => {
+    selectedConversationIdRef.current = conversationId;
+    setSelectedConversationId(conversationId);
+    setConversationId(conversationId);
+    setDuplicateNotice(null);
+    setContextExcludedCount(0);
+    try {
+      const loaded = await loadConversation(supabase, conversationId, { limit: 200 });
+      setMessages(await mapLoadedMessages(loaded));
+    } catch (error) {
+      console.warn('[ChatInterface] Failed to load conversation:', error);
+      setMessages([]);
+    }
+  };
+
+  const handleSelectConversation = (conversationId: string) => {
+    if (isStreaming || conversationId === selectedConversationIdRef.current) return;
+    writeSelectedConversation(user?.id ?? null, conversationId);
+    void openConversation(conversationId);
+  };
+
+  const handleNewChat = () => {
+    if (isStreaming) return;
+    selectedConversationIdRef.current = null;
+    setSelectedConversationId(null);
+    writeSelectedConversation(user?.id ?? null, NEW_CHAT_SELECTION);
+    resetConversation();
+    setMessages([]);
+    setDraftAttachments([]);
+    setDuplicateNotice(null);
+    setContextExcludedCount(0);
+  };
+
+  const handleDeleteConversation = async (conversationId: string) => {
+    if (isStreaming) return;
+    if (!confirm('Delete this chat? Its messages and any images used only here will be removed.')) {
+      return;
+    }
+    try {
+      await deleteConversation(supabase, conversationId);
+    } catch (error) {
+      console.error('[ChatInterface] Failed to delete conversation:', error);
+    }
+    await refreshConversations();
+    if (selectedConversationIdRef.current === conversationId) {
+      handleNewChat();
+    }
+  };
+
+  // Per-account selection: restore on sign-in/account change, isolated by user.
+  useEffect(() => {
+    const stored = readSelectedConversation(user?.id ?? null);
+    void refreshConversations();
+    if (stored && stored !== NEW_CHAT_SELECTION) {
+      void openConversation(stored);
+    } else {
+      selectedConversationIdRef.current = null;
+      setSelectedConversationId(null);
+      setMessages([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  const streamUpdateApplies = (): boolean => {
+    const active = activeStreamRef.current;
+    return streamUpdateAppliesToActive({
+      activeConversationId: selectedConversationIdRef.current,
+      activeClientRequestId: active?.clientRequestId ?? null,
+      updateConversationId: active?.conversationId ?? null,
+      updateClientRequestId: active?.clientRequestId ?? null,
+    });
+  };
+
   const handleSend = async (skipBudgetCheck = false) => {
     // Allow send if there's text OR attachments
     const hasContent = input.trim() || draftAttachments.length > 0;
@@ -550,6 +705,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setDraftAttachments([]);
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
+    // PX07: pin the active conversation for this logical send (the selected
+    // conversation, or the deterministic New Chat id).
+    const sendConversationId = selectedConversationIdRef.current ?? getConversationId();
+    if (selectedConversationIdRef.current) {
+      setConversationId(selectedConversationIdRef.current);
+    }
+    activeStreamRef.current = null;
+
+    // PX07 bounded context (group 3): send only the sanctioned recent window,
+    // and surface how many older messages fall outside it.
+    const contextSelection = selectContextHistory(messages);
+    setContextExcludedCount(contextSelection.excludedCount);
+    const historyForRequest = contextSelection.history.map((item) => ({
+      role: item.role,
+      content: item.content,
+      timestamp: 0,
+    })) as Message[];
+
     setIsStreaming(true);
     setIsWaitingFirstToken(true);
     waitingFirstTokenRef.current = true;
@@ -571,31 +744,52 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setStreamOutcome(null);
 
     try {
-      const storageReferences: string[] = [];
-      if (user) {
-        const imageAttachments = attachmentsToProcess.filter(a => a.isImage && a.imageData);
-        const uploadResults = await Promise.allSettled(
-          imageAttachments.map(a => uploadAttachment(a, user.id))
-        );
-        for (const result of uploadResults) {
-          if (result.status === 'fulfilled' && result.value) {
-            storageReferences.push(result.value);
-          } else if (result.status === 'rejected') {
-            console.warn('[ChatInterface] Storage upload failed (non-blocking):', result.reason);
-          }
+      // PX07: upload every draft image, preserving its ORIGINAL ordinal. A
+      // failed upload stays an unavailable entry so later ordinals do not shift.
+      const uploadResults = await Promise.allSettled(
+        attachmentsToProcess.map((file) =>
+          file.isImage && file.imageData && user
+            ? uploadAttachment(file, user.id)
+            : Promise.resolve(null),
+        ),
+      );
+      const attachmentRefs: AttachmentRef[] = [];
+      let firstImageStorageRef: string | undefined;
+      attachmentsToProcess.forEach((file, ordinal) => {
+        const upload = uploadResults[ordinal];
+        if (file.isImage && file.imageData) {
+          const storageRef =
+            upload && upload.status === 'fulfilled' ? upload.value : null;
+          if (storageRef && !firstImageStorageRef) firstImageStorageRef = storageRef;
+          attachmentRefs.push({
+            ordinal,
+            kind: 'image',
+            storageRef,
+            videoAssetId: null,
+            available: !!storageRef,
+          });
+        } else if (file.kind === 'video' && file.videoAssetId && file.status === 'ready') {
+          attachmentRefs.push({
+            ordinal,
+            kind: 'video',
+            storageRef: null,
+            videoAssetId: file.videoAssetId,
+            available: true,
+          });
         }
-      }
+      });
 
       // Pass array of attachments to the Prismatix router fetch utility.
       const result = await askPrismatix(
         queryText,
-        messages,
+        historyForRequest,
         attachmentsToProcess,
         manualModelOverride,
         geminiFlashThinkingLevel,
         getDebatePayload(debateSelection),
-        storageReferences[0],
+        firstImageStorageRef,
         abortController.signal,
+        attachmentRefs,
       );
 
       if (!result) throw new Error('Failed to get response from router');
@@ -617,9 +811,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateModel,
         debateCostNote,
         executionId,
+        clientRequestId,
       } = result;
 
       executionIdRef.current = executionId;
+
+      // PX07: stream/delta updates are guarded by (conversationId, requestId).
+      activeStreamRef.current = {
+        conversationId: sendConversationId,
+        clientRequestId: clientRequestId ?? null,
+      };
+      // A New Chat becomes a real, selected conversation once its first send
+      // creates the durable execution, so reload reopens it.
+      if (selectedConversationIdRef.current === null) {
+        selectedConversationIdRef.current = sendConversationId;
+        setSelectedConversationId(sendConversationId);
+        writeSelectedConversation(user?.id ?? null, sendConversationId);
+      }
 
       if (!manualModelOverride) {
         setCurrentModel(model);
@@ -666,6 +874,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             setCurrentUsage(usage);
           },
           onContentUpdate: (content, log) => {
+            if (!streamUpdateApplies()) return;
             setMessages((prev) => {
               const updated = [...prev];
               const lastMessage = updated[updated.length - 1];
@@ -726,29 +935,45 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
       setSpendRefreshKey((prev) => prev + 1);
 
-      setMessages((prev) => {
-        const updated = [...prev];
-        const lastMessage = updated[updated.length - 1];
-        if (lastMessage?.role === 'assistant') {
-          updated[updated.length - 1] = {
-            ...lastMessage,
-            cost: {
-              estimatedUsd: costEstimateUsd,
-              finalUsd,
-              pricingVersion: costPricingVersion || computedCost.pricingVersion,
-            },
-            thinkingLog: [...thinkingLog],
-            thinkingDurationMs: Date.now() - streamStartMs,
-            ...(debateParticipants && debateParticipants.length > 0
-              ? { debateParticipants }
-              : {}),
-          };
-        }
-        return updated;
-      });
+      if (streamUpdateApplies()) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastMessage = updated[updated.length - 1];
+          if (lastMessage?.role === 'assistant') {
+            updated[updated.length - 1] = {
+              ...lastMessage,
+              cost: {
+                estimatedUsd: costEstimateUsd,
+                finalUsd,
+                pricingVersion: costPricingVersion || computedCost.pricingVersion,
+              },
+              thinkingLog: [...thinkingLog],
+              thinkingDurationMs: Date.now() - streamStartMs,
+              ...(debateParticipants && debateParticipants.length > 0
+                ? { debateParticipants }
+                : {}),
+            };
+          }
+          return updated;
+        });
+      }
       scheduleCostEstimatorHide(3000);
+      // PX07: the list/title changed server-side; refresh in the background.
+      void refreshConversations();
     } catch (error) {
-      if (abortController.signal.aborted) {
+      if (error instanceof DuplicateRequestError) {
+        // PX07: the same logical send already created an execution. Load/show
+        // the existing turn; never auto-dispatch a new paid request.
+        setDuplicateNotice(
+          error.executionId
+            ? `This request was already recorded (execution ${error.executionId.slice(0, 8)}).`
+            : 'This request was already recorded.',
+        );
+        if (selectedConversationIdRef.current) {
+          await openConversation(selectedConversationIdRef.current);
+        }
+        scheduleCostEstimatorHide(1500);
+      } else if (abortController.signal.aborted) {
         // PX06: a user Stop is a cancellation, not an error. Surface it and the
         // execution identity (the server finalizes the execution `cancelled`).
         setStreamOutcome({ status: 'cancelled', executionId: executionIdRef.current });
@@ -764,6 +989,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
     } finally {
       abortControllerRef.current = null;
+      activeStreamRef.current = null;
       setIsStreaming(false);
       setIsWaitingFirstToken(false);
       waitingFirstTokenRef.current = false;
@@ -792,8 +1018,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const handleReset = () => {
     if (confirm('Reset conversation? This will clear all messages.')) {
-      setMessages([]);
-      resetConversation();
+      // Start a fresh deterministic conversation (New Chat) and clear selection.
+      handleNewChat();
       setCurrentModel('gemini-2.5-flash');
       setCurrentComplexity(50);
       setDraftAttachments([]);
@@ -834,7 +1060,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   return (
-    <div className='chat-container'>
+    <div className='app-with-sidebar'>
+      <ConversationSidebar
+        conversations={conversations}
+        selectedId={selectedConversationId}
+        isLoading={conversationsLoading}
+        disabled={isStreaming}
+        onSelect={handleSelectConversation}
+        onNewChat={handleNewChat}
+        onDelete={(id) => void handleDeleteConversation(id)}
+      />
+      <div className='chat-container'>
       {/* Header */}
       <header className='chat-header' ref={chatHeaderRef}>
         <div className='header-content'>
@@ -985,8 +1221,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           contextStatus={contextStatus}
           onNewChat={() => {
             createNewChatWithContext();
-            setMessages([]);
-            resetConversation();
+            handleNewChat();
           }}
         />
       )}
@@ -1171,6 +1406,34 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                         />
                       </div>
                     )}
+                    {/* PX07: render restored image attachments from signed URLs
+                        (never persisted) and video attachments as a safe
+                        placeholder. Live base64 images keep the imageData path. */}
+                    {!msg.imageData && msg.attachments && (
+                      <div className='message-attachments-row'>
+                        {msg.attachments.map((attachment, attachmentIndex) => {
+                          if (attachment.isImage && attachment.storageUrl) {
+                            return (
+                              <div className='message-image-container' key={attachmentIndex}>
+                                <img
+                                  src={attachment.storageUrl}
+                                  alt={attachment.name || 'Uploaded content'}
+                                  className='message-image'
+                                />
+                              </div>
+                            );
+                          }
+                          if (attachment.kind === 'video') {
+                            return (
+                              <div className='message-video-placeholder' key={attachmentIndex}>
+                                🎞 video attachment
+                              </div>
+                            );
+                          }
+                          return null;
+                        })}
+                      </div>
+                    )}
                     {/* Show attachment count if multiple */}
                     {msg.attachments && msg.attachments.length > 1 && (
                       <div className='message-attachments-badge'>
@@ -1292,6 +1555,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 : `Receipt · ${streamOutcome.settlementState ?? 'pending'}${streamOutcome.executionId ? ` · execution ${streamOutcome.executionId.slice(0, 8)}` : ''}`}
             </div>
           )}
+          {/* PX07: bounded-context indicator — older messages are excluded. */}
+          {contextExcludedCount > 0 && (
+            <div className='context-out-of-window-indicator' role='status'>
+              {contextExcludedCount} older message
+              {contextExcludedCount === 1 ? ' is' : 's are'} outside the current context.
+            </div>
+          )}
+          {/* PX07: duplicate_request — the turn already exists; no re-dispatch. */}
+          {duplicateNotice && (
+            <div className='duplicate-request-notice' role='status' aria-live='polite'>
+              {duplicateNotice}
+            </div>
+          )}
           {composerValidationView && (
             <div className='send-validation-error' role='alert' aria-live='polite'>
               <p className='send-validation-summary'>{composerValidationView.summary}</p>
@@ -1330,6 +1606,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         finalCostUsd={finalMessageCost}
         routerPricingVersion={routerPricingVersion}
       />
+      </div>
     </div>
   );
 };

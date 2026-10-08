@@ -5,6 +5,7 @@ import { supabase } from './lib/supabase';
 import { CONFIG } from './config';
 import { devLog, devWarn, devError } from './utils';
 import { noteServerTariffVersion } from './catalogSkew';
+import type { AttachmentRef } from '../supabase/functions/_shared/conversation_attachments';
 import type {
   DebateParticipant,
   DebateProfile,
@@ -45,6 +46,7 @@ interface RouterRequestPayload {
   mediaType?: string;
   imageStorageUrl?: string;
   videoAssetIds?: string[];
+  attachmentRefs?: AttachmentRef[];
   modelOverride?: RouterModel;
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
   mode?: 'debate';
@@ -71,6 +73,24 @@ export interface RouterResponseBase {
   debateParticipants?: DebateParticipant[];
   /** PX06: server-issued execution identity (correlates the terminal receipt). */
   executionId?: string;
+  /** PX07: stable per-logical-send request id (reused on the 401 retry). */
+  clientRequestId?: string;
+}
+
+/**
+ * PX07: thrown when the router returns 409 `duplicate_request` — the same
+ * logical send already created an execution. The caller must load/show the
+ * existing turn and NEVER auto-dispatch a new paid request.
+ */
+export class DuplicateRequestError extends Error {
+  readonly code = 'duplicate_request';
+  readonly executionId?: string;
+
+  constructor(executionId?: string) {
+    super('duplicate_request');
+    this.name = 'DuplicateRequestError';
+    this.executionId = executionId;
+  }
 }
 
 /**
@@ -176,6 +196,19 @@ export function getConversationId(): string {
 }
 
 /**
+ * PX07: pins the active conversation id when the user switches conversations.
+ * Only a well-formed UUID is accepted; anything else is ignored so a malformed
+ * client value can never become the router's conversation id.
+ */
+export function setConversationId(conversationId: string | null | undefined): void {
+  if (typeof conversationId !== 'string') return;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(conversationId)) return;
+  localStorage.setItem(STORAGE_KEY, conversationId);
+  devLog('[smartFetch] Active conversation set:', conversationId.slice(0, 8));
+}
+
+/**
  * Resets the conversation by clearing the stored ID
  */
 export function resetConversation(): void {
@@ -264,6 +297,7 @@ export async function askPrismatix(
   debateOptions?: DebateRequestOptions,
   imageStorageUrl?: string,
   signal?: AbortSignal,
+  attachmentRefs?: AttachmentRef[],
 ): Promise<(RouterResponseBase & { stream: ReadableStream<Uint8Array> }) | null> {
   try {
     const routerEndpoint = CONFIG.ROUTER_ENDPOINT || getEnvVar('VITE_ROUTER_ENDPOINT');
@@ -272,6 +306,9 @@ export async function askPrismatix(
     }
     let accessToken = await getAccessToken();
     const conversationId = getConversationId();
+    // PX07: ONE stable id per logical send. It is reused on the 401 retry so a
+    // retried request cannot create a second execution.
+    const clientRequestId = generateUUID();
     
     // ✅ FIX: Build arrays for multiple images and text file content
     const imageAttachments = attachments.filter((f) => f.isImage && f.imageData);
@@ -318,6 +355,10 @@ export async function askPrismatix(
       payload.imageStorageUrl = imageStorageUrl;
     }
 
+    if (attachmentRefs && attachmentRefs.length > 0) {
+      payload.attachmentRefs = attachmentRefs;
+    }
+
     if (videoAttachments.length > 0) {
       payload.videoAssetIds = videoAttachments
         .map((video) => video.videoAssetId)
@@ -356,11 +397,34 @@ export async function askPrismatix(
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
+        'x-client-request-id': clientRequestId,
         ...(CONFIG.SUPABASE_ANON_KEY ? { 'apikey': CONFIG.SUPABASE_ANON_KEY } : {})
       },
       body: JSON.stringify(payload),
       ...(signal ? { signal } : {}),
     });
+
+    // PX07: 409 disambiguation. `duplicate_request` is surfaced as a typed error
+    // so the client can load the existing turn; `request_key_conflict` and every
+    // other error are ordinary failures (never a silent reload).
+    const throwRouterError = (status: number, text: string): never => {
+      let parsed: Record<string, unknown> | undefined;
+      try {
+        parsed = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        throw new Error(`Router returned ${status}: ${text}`);
+      }
+      const code = String(parsed?.code ?? parsed?.error ?? '');
+      if (status === 409 && code === 'duplicate_request') {
+        throw new DuplicateRequestError(
+          typeof parsed?.executionId === 'string' ? parsed.executionId : undefined,
+        );
+      }
+      if (parsed?.error === 'video_not_ready') {
+        throw new Error('One or more videos are still processing. Please wait and try again.');
+      }
+      throw new Error(typeof parsed?.error === 'string' ? parsed.error : `Router returned ${status}`);
+    };
 
     let response = await doFetch(accessToken);
 
@@ -380,32 +444,10 @@ export async function askPrismatix(
             await signOutLocal('router-401-after-retry');
             throw new Error('Session expired. Please sign in again.');
           }
-          try {
-            const errorJson = JSON.parse(retryText);
-            if (errorJson.error === 'video_not_ready') {
-              throw new Error('One or more videos are still processing. Please wait and try again.');
-            }
-            throw new Error(errorJson.error || `Router returned ${response.status}`);
-          } catch (e) {
-            if (e instanceof SyntaxError) {
-              throw new Error(`Router returned ${response.status}: ${retryText}`);
-            }
-            throw e;
-          }
+          throwRouterError(response.status, retryText);
         }
       } else {
-        try {
-          const errorJson = JSON.parse(errorText);
-          if (errorJson.error === 'video_not_ready') {
-            throw new Error('One or more videos are still processing. Please wait and try again.');
-          }
-          throw new Error(errorJson.error || `Router returned ${response.status}`);
-        } catch (e) {
-          if (e instanceof SyntaxError) {
-            throw new Error(`Router returned ${response.status}: ${errorText}`);
-          }
-          throw e;
-        }
+        throwRouterError(response.status, errorText);
       }
     }
 
@@ -493,6 +535,7 @@ export async function askPrismatix(
       debateModel: debateMetadata.debateModel,
       debateCostNote: debateMetadata.debateCostNote,
       executionId,
+      clientRequestId,
     };
   } catch (error) {
     devError('[smartFetch] Error:', error);
