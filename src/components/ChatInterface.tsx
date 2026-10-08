@@ -186,6 +186,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [contextExcludedCount, setContextExcludedCount] = useState(0);
   const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
   const selectedConversationIdRef = useRef<string | null>(null);
+  // Monotonic token so a stale conversation load can never overwrite the
+  // messages of a newer selection (rapid A→B switching).
+  const conversationLoadSeqRef = useRef(0);
   const activeStreamRef = useRef<{
     conversationId: string;
     clientRequestId: string | null;
@@ -493,7 +496,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             name: 'image',
             kind: 'image',
             isImage: true,
-            storageUrl: signed ?? ref.storageRef ?? undefined,
+            // Never fall back to the raw `supabase://…` reference as an <img>
+            // src; a failed signature renders a placeholder instead.
+            ...(signed ? { storageUrl: signed } : { errorCode: 'image_unavailable' }),
           });
         } else if (ref.kind === 'file') {
           attachments.push({
@@ -535,6 +540,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const openConversation = async (conversationId: string) => {
+    const loadSeq = ++conversationLoadSeqRef.current;
     selectedConversationIdRef.current = conversationId;
     setSelectedConversationId(conversationId);
     setConversationId(conversationId);
@@ -542,8 +548,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setContextExcludedCount(0);
     try {
       const loaded = await loadConversation(supabase, conversationId, { limit: 200 });
+      // Ignore a stale load: a newer selection superseded this one.
+      if (loadSeq !== conversationLoadSeqRef.current) return;
       setMessages(await mapLoadedMessages(loaded));
     } catch (error) {
+      if (loadSeq !== conversationLoadSeqRef.current) return;
       console.warn('[ChatInterface] Failed to load conversation:', error);
       setMessages([]);
     }
@@ -1445,6 +1454,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                                   alt={attachment.name || 'Uploaded content'}
                                   className='message-image'
                                 />
+                              </div>
+                            );
+                          }
+                          if (attachment.isImage) {
+                            // Signed-URL failure: never render the raw storage
+                            // reference; show an unavailable placeholder.
+                            return (
+                              <div className='message-image-placeholder' key={attachmentIndex}>
+                                🖼 image unavailable
                               </div>
                             );
                           }

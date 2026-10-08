@@ -143,6 +143,17 @@
   font-size: 0.8rem;
 }
 
+.message-image-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
 /* Sidebar + chat layout */
 .app-with-sidebar {
   display: flex;

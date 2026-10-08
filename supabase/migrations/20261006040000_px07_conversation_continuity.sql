@@ -165,7 +165,8 @@ begin
     -- `file` entries are text/code metadata only (name/size); their content is
     -- never persisted and there is no object to validate.
     if v_kind = 'file' then
-      if coalesce(v_att->>'name', '') = '' then
+      if coalesce(v_att->>'name', '') = ''
+         or length(v_att->>'name') > 512 then
         raise exception 'invalid_attachment' using errcode = '22023';
       end if;
       continue;

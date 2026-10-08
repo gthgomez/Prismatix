@@ -11,9 +11,11 @@ import {
   parseStorageReference,
   type AttachmentRef,
 } from '../../supabase/functions/_shared/conversation_attachments.ts';
+import { normalizeRouterRequestBody } from '../../supabase/functions/router/security_guards.ts';
 
 const SUBJECT = '11111111-1111-4111-8111-111111111111';
 const OTHER = '99999999-9999-4999-8999-999999999999';
+const CONVERSATION_ID = '33333333-3333-4333-8333-333333333333';
 
 function imageRef(overrides: Partial<AttachmentRef> = {}): AttachmentRef {
   return {
@@ -202,8 +204,80 @@ describe('normalizeAttachments', () => {
     expect(oversized[0]!.storageRef).toBeNull();
   });
 
+  it('bounds a file name to 512 chars (shared coercer)', () => {
+    const [entry] = normalizeAttachments([{ kind: 'file', name: 'x'.repeat(600), size: 1 }]);
+    expect(entry!.name).toHaveLength(512);
+  });
+
   it('returns an empty array for non-array input', () => {
     expect(normalizeAttachments(null)).toEqual([]);
     expect(normalizeAttachments('nope')).toEqual([]);
+  });
+});
+
+// The wire guard mirrors the SQL `file` branch: a non-empty, length-bounded
+// name is required and a file entry carries no storage/video reference.
+describe('attachmentRefs file validation (wire guard)', () => {
+  function bodyWith(refs: unknown[]) {
+    return { conversationId: CONVERSATION_ID, query: 'hello', attachmentRefs: refs };
+  }
+
+  it('rejects an over-long file name', () => {
+    const result = normalizeRouterRequestBody(
+      bodyWith([
+        {
+          ordinal: 0,
+          kind: 'file',
+          name: 'x'.repeat(513),
+          storageRef: null,
+          videoAssetId: null,
+          available: true,
+        },
+      ]),
+    );
+    expect(result).toMatchObject({ ok: false, status: 413 });
+  });
+
+  it('rejects a nameless file entry', () => {
+    const result = normalizeRouterRequestBody(
+      bodyWith([
+        {
+          ordinal: 0,
+          kind: 'file',
+          name: null,
+          storageRef: null,
+          videoAssetId: null,
+          available: true,
+        },
+      ]),
+    );
+    expect(result).toMatchObject({ ok: false, status: 400 });
+  });
+
+  it('drops any storageRef/videoAssetId on a file entry', () => {
+    const result = normalizeRouterRequestBody(
+      bodyWith([
+        {
+          ordinal: 0,
+          kind: 'file',
+          name: 'notes.md',
+          storageRef: 'supabase://chat-uploads/u/a.png',
+          videoAssetId: null,
+          available: true,
+        },
+      ]),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.attachmentRefs).toEqual([
+      {
+        ordinal: 0,
+        kind: 'file',
+        storageRef: null,
+        videoAssetId: null,
+        available: true,
+        name: 'notes.md',
+      },
+    ]);
   });
 });

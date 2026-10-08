@@ -417,6 +417,9 @@ function normalizeAttachmentRefs(input: unknown): GuardResult<AttachmentRef[]> {
     if (name !== null && typeof name !== 'string') {
       return reject(400, 'Bad Request: attachmentRef name must be a string or null');
     }
+    if (name !== null && name.length > REQUEST_LIMITS.maxOptionalStringChars) {
+      return reject(413, 'Payload Too Large: attachmentRef name exceeds maximum length');
+    }
     const size = item.size ?? null;
     if (
       size !== null &&
@@ -424,6 +427,26 @@ function normalizeAttachmentRefs(input: unknown): GuardResult<AttachmentRef[]> {
     ) {
       return reject(400, 'Bad Request: attachmentRef size must be a non-negative number or null');
     }
+
+    // `file` (text/code) entries carry only name/size metadata: require a
+    // non-empty name and drop any storageRef/videoAssetId, mirroring the SQL
+    // validation branch.
+    if (item.kind === 'file') {
+      if (name === null || name.length === 0) {
+        return reject(400, 'Bad Request: file attachmentRef requires a non-empty name');
+      }
+      refs.push({
+        ordinal: item.ordinal,
+        kind: 'file',
+        storageRef: null,
+        videoAssetId: null,
+        available: true,
+        name,
+        ...(size === null ? {} : { size }),
+      });
+      continue;
+    }
+
     refs.push({
       ordinal: item.ordinal,
       kind: item.kind,

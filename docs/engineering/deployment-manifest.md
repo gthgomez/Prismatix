@@ -523,9 +523,16 @@ The router persists the user turn with the ORIGINAL `query` (never the
 memory/video-expanded `effectiveQuery`) BEFORE any provider dispatch. A
 pre-inference persistence failure is fail-closed: `503 transcript_unavailable`,
 the PX05 reservation is released, and zero provider calls happen. The assistant
-turn is persisted at completion; on failure the stream still completes and the
-terminal receipt reports `transcript.saved = false` (never a false durable
-claim). `TerminalReceipt` gains an optional `transcript?: { saved: boolean }`.
+turn is persisted at completion; on failure (or a `PT409` conflict) the stream
+still completes and the terminal receipt reports `transcript.saved = false`
+(never a false durable claim). `TerminalReceipt` gains an optional
+`transcript?: { saved: boolean }`.
+
+A failed/conflicting assistant persist also enqueues
+`assistant_transcript_failed` / `assistant_transcript_conflict` via the existing
+PX03 `reconciliation_jobs` table. This is an **audit record only** — there is no
+transcript-recovery/reconciliation path, and `reconciliation_jobs` remains
+accounting/audit-only (it is not extended for conversation recovery).
 
 ### 18.3 Read path and client continuity
 

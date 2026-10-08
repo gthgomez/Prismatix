@@ -37,6 +37,7 @@ begin
   perform set_config('px07.user_b', gen_random_uuid()::text, true);
   perform set_config('px07.conv_a', gen_random_uuid()::text, true);
   perform set_config('px07.conv_new', gen_random_uuid()::text, true);
+  perform set_config('px07.conv_b', gen_random_uuid()::text, true);
 end $$;
 
 insert into auth.users (id, aud, role, email, encrypted_password, created_at, updated_at)
@@ -462,6 +463,106 @@ begin
     raise exception 'PX07 FAIL: over-long attachment array was accepted';
   exception
     when sqlstate '22023' then null; -- expected invalid_attachment
+  end;
+end $$;
+
+reset role;
+
+-- ---------------------------------------------------------------------------
+-- 7) Cross-account read isolation (RLS). A sees its own rows; B sees none of
+--    A's conversations/messages (and no existence leak).
+-- ---------------------------------------------------------------------------
+set local role authenticated;
+
+select set_config(
+  'request.jwt.claims',
+  json_build_object('sub', current_setting('px07.user_a'), 'role', 'authenticated')::text,
+  true
+);
+select set_config('request.jwt.claim.sub', current_setting('px07.user_a'), true);
+do $$
+declare
+  v_convs integer;
+  v_msgs integer;
+begin
+  select count(*) into v_convs from public.conversations;
+  if v_convs = 0 then
+    raise exception 'PX07 FAIL: subject A cannot read its own conversations';
+  end if;
+  select count(*) into v_msgs
+    from public.messages
+   where conversation_id = current_setting('px07.conv_a')::uuid;
+  if v_msgs = 0 then
+    raise exception 'PX07 FAIL: subject A cannot read its own messages';
+  end if;
+end $$;
+
+select set_config(
+  'request.jwt.claims',
+  json_build_object('sub', current_setting('px07.user_b'), 'role', 'authenticated')::text,
+  true
+);
+select set_config('request.jwt.claim.sub', current_setting('px07.user_b'), true);
+do $$
+declare
+  v_convs integer;
+  v_conv_a integer;
+  v_msgs integer;
+begin
+  select count(*) into v_convs from public.conversations;
+  if v_convs <> 0 then
+    raise exception 'PX07 FAIL: subject B can read conversations (count=%)', v_convs;
+  end if;
+  select count(*) into v_conv_a
+    from public.conversations
+   where id = current_setting('px07.conv_a')::uuid;
+  if v_conv_a <> 0 then
+    raise exception 'PX07 FAIL: subject B can read A''s conversation (existence leak)';
+  end if;
+  select count(*) into v_msgs
+    from public.messages
+   where conversation_id = current_setting('px07.conv_a')::uuid;
+  if v_msgs <> 0 then
+    raise exception 'PX07 FAIL: subject B can read A''s messages';
+  end if;
+end $$;
+
+reset role;
+
+-- ---------------------------------------------------------------------------
+-- 8) Cross-account write rejection. B owns conv_b and an execution bound to it;
+--    a write by B into A's conversation must raise (invalid_conversation /
+--    invalid_execution, SQLSTATE 22023).
+-- ---------------------------------------------------------------------------
+set local role service_role;
+
+do $$
+declare
+  v_exec_b uuid;
+begin
+  insert into public.conversations (id, user_id)
+  values (
+    current_setting('px07.conv_b')::uuid,
+    current_setting('px07.user_b')::uuid
+  );
+
+  v_exec_b := (
+    public.px03_create_execution(
+      current_setting('px07.user_b')::uuid,
+      current_setting('px07.conv_b')::uuid,
+      'px07-req-b-cross', 'px07-hash-b-cross'
+    )->'execution'->>'id'
+  )::uuid;
+
+  begin
+    perform public.px07_persist_message(
+      current_setting('px07.user_b')::uuid,
+      current_setting('px07.conv_a')::uuid,
+      v_exec_b, 'user', 'cross-account write', 0, null, '[]'::jsonb, null
+    );
+    raise exception 'PX07 FAIL: subject B wrote into A''s conversation';
+  exception
+    when sqlstate '22023' then null; -- expected invalid_conversation / invalid_execution
   end;
 end $$;
 
