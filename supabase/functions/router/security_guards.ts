@@ -29,6 +29,8 @@ export type RouterPlatform = 'web' | 'mobile';
 export interface NormalizedRouterRequest {
   conversationId: string;
   query: string;
+  /** PX07: the user's original query (display/persist), before text-file merge. */
+  originalQuery?: string;
   platform: RouterPlatform;
   history: Message[];
   images: ImageAttachment[];
@@ -92,6 +94,15 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
     return reject(413, 'Payload Too Large: query exceeds maximum length');
   }
 
+  const originalQueryResult = optionalString(
+    input.originalQuery,
+    'originalQuery',
+    REQUEST_LIMITS.maxQueryChars,
+  );
+  if (!originalQueryResult.ok) {
+    return originalQueryResult;
+  }
+
   const historyResult = normalizeHistory(input.history);
   if (!historyResult.ok) {
     return historyResult;
@@ -147,6 +158,7 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
     value: {
       conversationId: rawConversationId,
       query,
+      originalQuery: originalQueryResult.value,
       platform: platformResult.value,
       history: historyResult.value,
       images: imagesResult.value,

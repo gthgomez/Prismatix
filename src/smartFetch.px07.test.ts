@@ -76,6 +76,19 @@ describe('PX07 smartFetch continuity', () => {
     expect(result?.clientRequestId).toBe(firstId);
   });
 
+  it('sends the original query separately when text-file content is merged', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    await askPrismatix('User question', [], [
+      { name: 'notes.md', isImage: false, kind: 'text', content: 'file body' },
+    ]);
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    expect(body.query).toContain('file body');
+    expect(body.originalQuery).toBe('User question');
+  });
+
   it('throws a DuplicateRequestError carrying the execution id for 409 duplicate_request', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

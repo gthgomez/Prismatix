@@ -38,6 +38,7 @@ export interface DebateResponseMetadata {
 
 interface RouterRequestPayload {
   query: string;
+  originalQuery?: string;
   conversationId: string;
   platform: string;
   history: ReturnType<typeof messagesToHistory>;
@@ -340,6 +341,13 @@ export async function askPrismatix(
       history: messagesToHistory(history),
       geminiFlashThinkingLevel,
     };
+
+    // PX07: keep the user's ORIGINAL query for display/persistence. The model
+    // still receives `finalQuery` (with text-file content); the persisted
+    // message content is the original so a reload never shows a merged prompt.
+    if (finalQuery !== query) {
+      payload.originalQuery = query;
+    }
 
     if (imageAttachments.length > 0) {
       payload.images = imageAttachments.map(img => ({

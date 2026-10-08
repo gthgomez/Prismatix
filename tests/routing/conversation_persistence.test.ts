@@ -342,6 +342,27 @@ describe('PX07 user persist before dispatch', () => {
     await readAll(res.body!);
   });
 
+  it('persists the ORIGINAL query while the model receives the expanded prompt', async () => {
+    const calls = installFetchRecorder(makeRoutes(() => null));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'User question\n\n--- File: notes.md ---\nlarge file contents',
+        originalQuery: 'User question',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const userPersist = persistBodies(calls).find((body) => body.p_role === 'user');
+    expect(userPersist!.p_content).toBe('User question');
+    // The expanded prompt still reaches the provider (route trace / cost path).
+    expect(JSON.parse(calls[findCall(calls, 'api.anthropic.com')]!.body) !== undefined).toBe(true);
+    await readAll(res.body!);
+  });
+
   it('drops a foreign image ref rather than persisting another subject path', async () => {
     const calls = installFetchRecorder(makeRoutes(() => null));
     const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
