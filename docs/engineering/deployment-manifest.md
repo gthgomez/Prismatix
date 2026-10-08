@@ -474,3 +474,86 @@ only read path.
 Verification: `tests/routing/sse_parser.test.ts`, `tests/routing/stream_lifecycle.test.ts`
 and `tests/routing/execution_receipt.test.ts` (vitest). The migration's SQL
 behaviour requires a psql/staging run (not available in the CI unit environment).
+
+## 18. Conversation continuity, attachments and bounded context (PX07-Lite)
+
+PX07 makes conversations durable and reloadable without a relational attachments
+subsystem, extra read RPCs, a transcript-reconciliation path, or server-minted
+signed URLs.
+
+### 18.1 Columns
+
+| Table | Column | Notes |
+| --- | --- | --- |
+| `public.conversations` | `title text` | set from the first `user` message (`left(content, 120)`) by the write RPC |
+| `public.conversations` | `last_activity_at timestamptz not null default now()` | backfilled from `greatest(created_at, max(message.created_at))` |
+| `public.messages` | `execution_id uuid` | durable execution identity (PX03) |
+| `public.messages` | `attachments jsonb not null default '[]'` | `check (jsonb_typeof(attachments) = 'array')` |
+
+A partial unique index, `messages_execution_role_uidx` on
+`(execution_id, role) where execution_id is not null`, makes a replay of the same
+`(execution_id, role)` idempotent. A replay with different content/attachments is
+rejected with SQLSTATE `PT409` (`message_conflict`).
+
+The attachment element shape is
+`{ ordinal, kind: "image"|"video", storageRef, videoAssetId, available }`. Base64,
+signed URLs, and another subject's storage path are never stored. Image refs are
+private `supabase://chat-uploads/<subject>/<path>` references; video refs carry a
+`video_assets` id whose ownership is checked by the RPC.
+
+### 18.2 Write RPC
+
+`public.px07_persist_message(p_subject_id, p_conversation_id, p_execution_id,
+p_role, p_content, p_token_count, p_model_used, p_attachments, p_legacy_image_url)
+returns jsonb` — `SECURITY DEFINER`, fixed `search_path = public,
+prismatix_internal`, `EXECUTE` revoked from `public`/`anon`/`authenticated` and
+granted only to `service-role`. One transaction: validates the execution belongs
+to the subject and conversation, honours the `(execution_id, role)` idempotency
+contract, validates every attachment, inserts, and only then advances
+`last_activity_at`/`title` and calls `increment_token_count_for_user`. Messages
+are server-authored; the client `messages_insert_own` policy is dropped (owner
+`select` is retained). `conversations_insert_own` is intentionally left unchanged
+to bound the diff (follow-up).
+
+The router persists the user turn with the ORIGINAL `query` (never the
+memory/video-expanded `effectiveQuery`) BEFORE any provider dispatch. A
+pre-inference persistence failure is fail-closed: `503 transcript_unavailable`,
+the PX05 reservation is released, and zero provider calls happen. The assistant
+turn is persisted at completion; on failure the stream still completes and the
+terminal receipt reports `transcript.saved = false` (never a false durable
+claim). `TerminalReceipt` gains an optional `transcript?: { saved: boolean }`.
+
+### 18.3 Read path and client continuity
+
+Reads are plain RLS owner selects on `conversations` / `messages` (no new read
+RPC). `src/services/conversationService.ts` provides list/load/sign/delete and
+the bounded selector; the selected conversation is stored per authenticated user
+and stream updates are guarded by `(conversationId, clientRequestId)`. A stable
+`x-client-request-id` is reused on the 401 retry; a `409 duplicate_request` loads
+the existing turn and never auto-dispatches, while `request_key_conflict` is an
+error. Image attachments render from short-lived signed URLs (60s, never
+persisted); video attachments render as a safe placeholder. Delete Chat removes
+the conversation rows (messages cascade) and removes any image object referenced
+solely by that conversation via the Storage API.
+
+### 18.4 Bounded context
+
+The client sends at most the router window (`maxHistoryMessages = 24`,
+`maxHistoryMessageChars = 12000`, `maxHistoryTotalChars = 80000`) from
+`selectContextHistory`; excluded older messages are surfaced with an "older
+messages are outside the current context" indicator.
+
+### 18.5 Migration
+
+| File | Class | Notes |
+| --- | --- | --- |
+| `supabase/migrations/20261006040000_px07_conversation_continuity.sql` | additive | Columns, backfill, partial unique index, JSONB array check, `messages_insert_own` drop, and `public.px07_persist_message`. Dropping the new columns/policies is safe. |
+
+**Unapplied:** the migration is committed but not yet applied to any
+environment; until it is applied the RPC is unavailable and the router fails
+closed on persistence. Verification: `tests/routing/conversation_attachments.test.ts`,
+`tests/routing/conversation_persistence.test.ts`, `tests/routing/conversation_context.test.ts`,
+`src/services/conversationService.test.ts`, `src/services/conversationState.test.ts`
+(vitest) and `tests/integration/px07_conversation_continuity.sql` (psql/staging;
+not available in the CI unit environment).
+
