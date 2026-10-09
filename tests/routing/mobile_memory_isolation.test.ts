@@ -57,6 +57,8 @@ describe('mobile memory isolation & stream cancellation', () => {
 
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onCancel).toHaveBeenCalledWith('User aborted request in Prism');
-    expect(onComplete).toHaveBeenCalledTimes(1);
+    // PX06 invariant 7: a downstream disconnect is a DISTINCT terminal path and
+    // must never be finalized as a completion.
+    expect(onComplete).toHaveBeenCalledTimes(0);
   });
 });

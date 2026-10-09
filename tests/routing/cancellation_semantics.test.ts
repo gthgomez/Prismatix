@@ -40,9 +40,11 @@ describe('end-to-end cancellation semantics & abort propagation', () => {
       },
       onCancel: () => {
         abortController.abort();
+        // PX06: a downstream cancellation is a distinct terminal path; the
+        // router releases the stream slot from onCancel, never onComplete.
+        releaseStreamSlot();
       },
       onComplete: async () => {
-        releaseStreamSlot();
         if (!abortController.signal.aborted) {
           persistedMessageCount++;
         }

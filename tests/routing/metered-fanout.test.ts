@@ -662,6 +662,33 @@ describe('provider usage extraction (real SSE seams)', () => {
     expect(usage).toBeNull();
   });
 
+  it('parses CR-delimited frames via the shared SSE parser (usage preserved)', async () => {
+    const tracker = createUsageTracker('anthropic');
+    const usage = await consumeStreamUsage(
+      sseStream([
+        'data: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":12,"output_tokens":0}}}\r\r',
+        'data: {"type":"message_delta","usage":{"output_tokens":7}}\r\r',
+      ]),
+      tracker,
+    );
+    expect(usage).toEqual({ inputTokens: 12, outputTokens: 7, thinkingTokens: 0 });
+  });
+
+  it('ignores heartbeat comments and keeps observing later frames', async () => {
+    const tracker = createUsageTracker('anthropic');
+    const usage = await consumeStreamUsage(
+      sseStream([
+        ': keepalive\n\n',
+        'data: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":3,"output_tokens":0}}}\n\n',
+        ': keepalive\n\n',
+        'data: {"type":"message_delta","usage":{"output_tokens":4}}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+      tracker,
+    );
+    expect(usage).toEqual({ inputTokens: 3, outputTokens: 4, thinkingTokens: 0 });
+  });
+
   it('extracts Google structured (non-streaming) usageMetadata', () => {
     const usage = extractGoogleStructuredUsage(
       JSON.stringify({

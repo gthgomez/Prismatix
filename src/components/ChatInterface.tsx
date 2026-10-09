@@ -176,6 +176,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const modelSelectorRef = useRef<HTMLDivElement>(null);
   const chatHeaderRef = useRef<HTMLElement>(null);
   const costEstimatorHideTimeoutRef = useRef<number | null>(null);
+  // PX06: the in-flight request's abort controller (Stop control) and the
+  // terminal outcome surfaced to the user (cancelled, or the receipt state).
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const executionIdRef = useRef<string | undefined>(undefined);
+  const [streamOutcome, setStreamOutcome] = useState<{
+    status: 'cancelled' | 'receipt';
+    executionId?: string;
+    settlementState?: string;
+  } | null>(null);
 
   // Scroll only when a new message bubble is created, and only if user is near bottom.
   useEffect(() => {
@@ -555,6 +564,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       thinkingTokens: 0,
     });
 
+    // PX06: one AbortController per send; the Stop control aborts it.
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    executionIdRef.current = undefined;
+    setStreamOutcome(null);
+
     try {
       const storageReferences: string[] = [];
       if (user) {
@@ -580,6 +595,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         geminiFlashThinkingLevel,
         getDebatePayload(debateSelection),
         storageReferences[0],
+        abortController.signal,
       );
 
       if (!result) throw new Error('Failed to get response from router');
@@ -600,7 +616,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateTrigger,
         debateModel,
         debateCostNote,
+        executionId,
       } = result;
+
+      executionIdRef.current = executionId;
 
       if (!manualModelOverride) {
         setCurrentModel(model);
@@ -635,7 +654,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         timestamp: Date.now(),
       }]);
 
-      const { assistantContent, thinkingLog, streamedFinalUsd, debateParticipants } = await readRouterStream(
+      const { assistantContent, thinkingLog, streamedFinalUsd, debateParticipants, receipt } = await readRouterStream(
         stream,
         promptTokenEstimate,
         {
@@ -671,7 +690,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             }
           },
         },
+        abortController.signal,
       );
+
+      // PX06: an abort mid-stream makes readRouterStream resolve with the
+      // partial content; surface the cancellation instead of a completion.
+      if (abortController.signal.aborted) {
+        setStreamOutcome({ status: 'cancelled', executionId });
+        scheduleCostEstimatorHide(1500);
+        return;
+      }
+
+      // PX06: surface the terminal receipt (execution id + settlement state).
+      setStreamOutcome({
+        status: 'receipt',
+        executionId: receipt?.executionId ?? executionId,
+        settlementState: receipt?.settlement.state,
+      });
 
       const promptTokens = calculateHistoryTokens(messages) +
         estimateTokenCount(queryText) +
@@ -713,18 +748,30 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       });
       scheduleCostEstimatorHide(3000);
     } catch (error) {
-      console.error('Stream error:', error);
-      setMessages((prev) => [...prev, {
-        role: 'assistant',
-        content: `⚠️ Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
-        timestamp: Date.now(),
-      }]);
-      scheduleCostEstimatorHide(1500);
+      if (abortController.signal.aborted) {
+        // PX06: a user Stop is a cancellation, not an error. Surface it and the
+        // execution identity (the server finalizes the execution `cancelled`).
+        setStreamOutcome({ status: 'cancelled', executionId: executionIdRef.current });
+        scheduleCostEstimatorHide(1500);
+      } else {
+        console.error('Stream error:', error);
+        setMessages((prev) => [...prev, {
+          role: 'assistant',
+          content: `⚠️ Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+          timestamp: Date.now(),
+        }]);
+        scheduleCostEstimatorHide(1500);
+      }
     } finally {
+      abortControllerRef.current = null;
       setIsStreaming(false);
       setIsWaitingFirstToken(false);
       waitingFirstTokenRef.current = false;
     }
+  };
+
+  const handleStop = () => {
+    abortControllerRef.current?.abort();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1217,7 +1264,34 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 </svg>
               )}
             </button>
+            {isStreaming && (
+              <button
+                type='button'
+                onClick={handleStop}
+                className='stop-button'
+                title='Stop generating'
+                aria-label='Stop generating'
+              >
+                <svg
+                  width='18'
+                  height='18'
+                  viewBox='0 0 24 24'
+                  fill='currentColor'
+                  stroke='currentColor'
+                  strokeWidth='2'
+                >
+                  <rect x='6' y='6' width='12' height='12' rx='2' />
+                </svg>
+              </button>
+            )}
           </div>
+          {streamOutcome && (
+            <div className='stream-outcome' role='status' aria-live='polite'>
+              {streamOutcome.status === 'cancelled'
+                ? `Cancelled${streamOutcome.executionId ? ` · execution ${streamOutcome.executionId.slice(0, 8)}` : ''}`
+                : `Receipt · ${streamOutcome.settlementState ?? 'pending'}${streamOutcome.executionId ? ` · execution ${streamOutcome.executionId.slice(0, 8)}` : ''}`}
+            </div>
+          )}
           {composerValidationView && (
             <div className='send-validation-error' role='alert' aria-live='polite'>
               <p className='send-validation-summary'>{composerValidationView.summary}</p>

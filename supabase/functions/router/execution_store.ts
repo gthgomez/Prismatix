@@ -19,6 +19,12 @@
 // Dependency-injected and free of Deno APIs / `npm:` specifiers so it can be
 // imported by both Supabase Edge Functions and vitest.
 
+import {
+  projectReceipt,
+  type RawReceiptPayload,
+  type TerminalReceipt,
+} from '../_shared/execution_receipt.ts';
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -353,4 +359,35 @@ export async function enqueueReconciliation(
   }
 
   return (response.data as Record<string, unknown> | null) ?? {};
+}
+
+/**
+ * Reads the terminal receipt projection owned by `subjectId`.
+ *
+ * The `prismatix_internal` authority tables are not exposed via PostgREST, so
+ * the read goes through the service-role-only `px03_get_execution_receipt` RPC
+ * (same posture as every other `px03_*` RPC). Returns null when the RPC returns
+ * null — the execution is unknown OR not owned by `subjectId`; existence is
+ * never leaked.
+ */
+export async function loadExecutionReceipt(
+  client: ExecutionStoreClient,
+  subjectId: string,
+  executionId: string,
+): Promise<TerminalReceipt | null> {
+  const response = await client.rpc('px03_get_execution_receipt', {
+    p_subject_id: subjectId,
+    p_execution_id: executionId,
+  });
+
+  if (response.error) {
+    throw new ExecutionStoreError(
+      'get_execution_receipt_failed',
+      response.error.message ?? 'get_execution_receipt_failed',
+    );
+  }
+
+  const payload = response.data as RawReceiptPayload | null | undefined;
+  if (!payload?.execution) return null;
+  return projectReceipt(payload);
 }

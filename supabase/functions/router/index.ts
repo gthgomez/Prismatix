@@ -83,10 +83,12 @@ import {
   computePayloadHash,
   enqueueReconciliation,
   finalizeExecution,
+  loadExecutionReceipt,
   type ExecutionRecord,
   type ExecutionStatus,
   type ExecutionStoreClient,
 } from './execution_store.ts';
+import type { TerminalReceipt } from '../_shared/execution_receipt.ts';
 import { openExecutionForRequest } from './execution_gate.ts';
 import {
   admitExecution,
@@ -188,7 +190,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-client-info, apikey',
   'Access-Control-Expose-Headers':
-    'X-Prismatix-Protocol, X-Prismatix-Schema, X-Prismatix-Catalog, X-Prismatix-Tariff, X-Prismatix-Release, X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Cost-Note, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path',
+    'X-Prismatix-Protocol, X-Prismatix-Schema, X-Prismatix-Catalog, X-Prismatix-Tariff, X-Prismatix-Release, X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Cost-Note, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path, X-Prismatix-Execution-Id',
 };
 
 const FUNCTION_TIMEOUT_MS = 55000;
@@ -1800,6 +1802,22 @@ function isCapabilitiesAction(parsedBody: unknown): boolean {
   );
 }
 
+// PX06: detects { action: 'execution_receipt' } from the canonical parsed body.
+// Like capabilities, this is an authenticated read of the caller's own
+// accounting record and requires NO chat entitlement.
+function isExecutionReceiptAction(parsedBody: unknown): boolean {
+  return (
+    typeof parsedBody === 'object' &&
+    parsedBody !== null &&
+    (parsedBody as { action?: unknown }).action === 'execution_receipt'
+  );
+}
+
+// Reject a malformed execution id BEFORE the RPC so a bad uuid does not surface
+// as a Postgres cast error (503 accounting_unavailable).
+const EXECUTION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 
 // ============================================================================
 // MAIN HANDLER
@@ -1817,14 +1835,28 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  // PX06: records that a downstream client disconnect is the terminal cause, so
+  // a disconnect is never relabeled as an indeterminate crash. Declared before
+  // the request-abort listener so `onReqAbort` can set it safely.
+  let clientCancelled = false;
   const controller = new AbortController();
-  const onReqAbort = () => controller.abort();
+  const onReqAbort = () => {
+    // A disconnect is a cancellation cause, not a timeout/crash.
+    clientCancelled = true;
+    controller.abort();
+  };
   req.signal.addEventListener('abort', onReqAbort, { once: true });
   const timeoutId = setTimeout(() => controller.abort(), FUNCTION_TIMEOUT_MS);
   let streamReturned = false;
   // PX05: set once admission succeeds; every post-admission exit (including the
   // outer catch/timeout) invokes it so a hold can never linger as 'held'.
   let settleAdmissionOnExit: (() => Promise<void>) | null = null;
+  // PX06: single-run terminal guard. `executionFinalized` is set by the one
+  // finalizeLedger call that wins; `finalizeOnExit` finalizes the outer
+  // crash/timeout path exactly once, honoring `clientCancelled` (a disconnect →
+  // `cancelled` / `client_cancelled`, otherwise `indeterminate` / `aborted`).
+  let executionFinalized = false;
+  let finalizeOnExit: (() => Promise<void>) | null = null;
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -1945,6 +1977,55 @@ Deno.serve(async (req: Request) => {
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       });
+    }
+
+    // PX06: authenticated terminal-receipt lookup for the caller's OWN
+    // execution. Entitlement is NOT required (it is an accounting read) and it
+    // dispatches ZERO provider calls. Ownership is enforced in the RPC
+    // (subject_id must match); unknown/foreign maps to 404 without leaking
+    // existence. A ledger failure fails closed with 503.
+    if (!deferredBodyError && isExecutionReceiptAction(body)) {
+      const executionId = (body as { executionId?: unknown }).executionId;
+      if (typeof executionId !== 'string' || executionId.trim() === '') {
+        return new Response(JSON.stringify({ error: 'Bad Request: executionId required' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!EXECUTION_ID_PATTERN.test(executionId.trim())) {
+        return new Response(JSON.stringify({ error: 'invalid_execution_id' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
+      try {
+        const receipt = await loadExecutionReceipt(
+          supabaseClient as unknown as ExecutionStoreClient,
+          userId,
+          executionId,
+        );
+        if (!receipt) {
+          return new Response(JSON.stringify({ error: 'execution_not_found' }), {
+            status: 404,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify(receipt), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      } catch (receiptError) {
+        console.error('[PX06] execution_receipt lookup failed:', {
+          error: receiptError instanceof Error ? receiptError.message : String(receiptError),
+        });
+        return new Response(
+          JSON.stringify({ error: 'accounting_unavailable', code: 'accounting_unavailable' }),
+          {
+            status: 503,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
     }
 
     // PX01: server-managed entitlement gate. Fail closed BEFORE the rate
@@ -2472,6 +2553,9 @@ Deno.serve(async (req: Request) => {
       servedModel?: string,
     ): Promise<void> => {
       if (!activeExecution) return;
+      // PX06: the first terminal finalize wins; a later exit path is a no-op.
+      if (executionFinalized) return;
+      executionFinalized = true;
       try {
         await finalizeExecution(storeClient, activeExecution.id, {
           status,
@@ -2544,6 +2628,15 @@ Deno.serve(async (req: Request) => {
     // Any post-admission exit (including the outer catch/timeout) settles from
     // the ledger, so a hold never lingers as 'held' when the outcome is known.
     settleAdmissionOnExit = () => settleAdmission('ledger');
+    // PX06: an outer crash/timeout finalizes the execution indeterminate (or
+    // cancelled if a disconnect already established that cause) exactly once.
+    finalizeOnExit = async () => {
+      if (executionFinalized) return;
+      await finalizeLedger(
+        clientCancelled ? 'cancelled' : 'indeterminate',
+        clientCancelled ? 'client_cancelled' : 'aborted',
+      );
+    };
 
     // Debate state — declared before try so both the catch and response-building can see them.
     let debateActive = false;
@@ -2826,8 +2919,37 @@ Deno.serve(async (req: Request) => {
       onDelta: (delta) => {
         assistantText += delta;
       },
-      onCancel: () => {
+      onCancel: async () => {
+        // PX06 invariant 7: a downstream disconnect is a terminal cancellation,
+        // never a completion. Abort upstream, release the slot exactly once,
+        // settle from the ledger and finalize `cancelled`. No assistant message
+        // is persisted.
+        clientCancelled = true;
         controller.abort();
+        clearTimeout(timeoutId);
+        releaseStreamSlot();
+        await settleAdmission('ledger');
+        await finalizeLedger('cancelled', 'client_cancelled');
+      },
+      onError: async (err) => {
+        // A mid-stream upstream read error after the response has been returned
+        // is not reachable by the outer catch. If it was caused by a client
+        // disconnect (the request signal aborted, or onCancel already flagged
+        // it), finalize `cancelled` — a disconnect is never an indeterminate
+        // crash. Any other read error/timeout finalizes indeterminate and
+        // settles so the execution is never left `started` with a lingering hold.
+        // AWAITED by the normalizer so a reclaimed isolate cannot drop the
+        // terminal settlement.
+        const disconnected = clientCancelled || req.signal.aborted;
+        console.error('[PX06] upstream stream error:', err);
+        clearTimeout(timeoutId);
+        releaseStreamSlot();
+        await settleAdmission('ledger');
+        if (disconnected) {
+          await finalizeLedger('cancelled', 'client_cancelled');
+        } else {
+          await finalizeLedger('indeterminate', 'upstream_stream_error');
+        }
       },
       onComplete: async () => {
         try {
@@ -2929,6 +3051,28 @@ Deno.serve(async (req: Request) => {
             receiptOk ? 'ok' : 'receipt_write_failed',
             effectiveModelId,
           );
+
+          // PX06: project the terminal receipt for the in-stream event. This is
+          // a read of the authority ledger; a failure is recorded durably and
+          // the stream still terminates normally ([DONE] is always emitted).
+          let receipt: TerminalReceipt | undefined;
+          if (activeExecution) {
+            try {
+              receipt =
+                (await loadExecutionReceipt(storeClient, userId, activeExecution.id)) ?? undefined;
+            } catch (receiptError) {
+              console.error('[PX06] receipt projection failed:', {
+                error: receiptError instanceof Error ? receiptError.message : String(receiptError),
+              });
+              await safeEnqueueReconciliation(
+                storeClient,
+                activeExecution.id,
+                'receipt_projection_failed',
+                {},
+              );
+            }
+          }
+          return receipt ? { receipt } : {};
         } finally {
           clearTimeout(timeoutId);
           releaseStreamSlot();
@@ -2961,6 +3105,9 @@ Deno.serve(async (req: Request) => {
         'X-Memory-Tokens': String(memoryRetrieval.tokenCount),
         'X-Cost-Estimate-USD': effectiveCostEstimateUsd.toFixed(6),
         'X-Cost-Pricing-Version': preFlightCost.pricingVersion,
+        // PX06: the execution identity for the client to correlate the terminal
+        // receipt (and the authenticated lookup after a disconnect).
+        'X-Prismatix-Execution-Id': activeExecution?.id ?? '',
         // Debate headers are emitted ONLY when debate ran (absent = debate did not run).
         ...buildDebateHeaders({
           debateActive,
@@ -2991,6 +3138,15 @@ Deno.serve(async (req: Request) => {
         await settleAdmissionOnExit();
       } catch {
         // settleAdmission already logs + enqueues durable reconciliation.
+      }
+    }
+    // PX06: finalize the execution indeterminate/aborted (or cancelled for a
+    // disconnect) when it is not already terminal, then answer.
+    if (finalizeOnExit) {
+      try {
+        await finalizeOnExit();
+      } catch {
+        // finalizeLedger already logs + enqueues durable reconciliation.
       }
     }
     if (error instanceof Error && error.name === 'AbortError') {
