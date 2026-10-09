@@ -3,6 +3,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { countTokens } from './router_logic.ts';
 import { MODEL_REGISTRY } from './router_logic.ts';
+import { runMeteredCall, type MeteredCallFactory } from './metered_call.ts';
 
 // ============================================================================
 // CONSTANTS
@@ -212,6 +213,7 @@ async function summarizeConversationWindow(
   transcript: string,
   signal: AbortSignal,
   apiKeys: { openai: string; anthropic: string; google: string },
+  meter?: MeteredCallFactory,
 ): Promise<string | undefined> {
   const prompt = [
     'Summarize key persistent facts about the user from this transcript.',
@@ -222,23 +224,50 @@ async function summarizeConversationWindow(
     transcript,
   ].join('\n');
 
-  if (apiKeys.openai) {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKeys.openai}`,
-        'Content-Type': 'application/json',
+  // PX03: each provider dispatch is counted through the metered boundary. The
+  // summarizer streams no authoritative provider usage, so these calls are
+  // recorded pending with a durable reconciliation job (never settled/$0).
+  const meteredFetch = async (
+    participant: string,
+    requestedModel: string,
+    run: () => Promise<Response>,
+  ): Promise<Response> => {
+    const context = meter?.('memory-summarize', participant, requestedModel, null);
+    if (!context) return await run();
+    return await runMeteredCall(
+      {
+        store: context.store,
+        execution: context.execution,
+        stage: context.stage,
+        participant: context.participant,
+        attemptNumber: context.attemptNumber,
+        requestedModel: context.requestedModel,
+        resolvedModel: requestedModel,
+        priceSnapshot: context.priceSnapshot,
       },
-      body: JSON.stringify({
-        model: 'gpt-6-luna',
-        messages: [
-          { role: 'system', content: 'You extract durable user memory for future chat context.' },
-          { role: 'user', content: prompt },
-        ],
-        max_tokens: 220,
+      async () => ({ result: await run(), servedModel: requestedModel, status: 'completed' }),
+    );
+  };
+
+  if (apiKeys.openai) {
+    const response = await meteredFetch('openai', 'gpt-6-luna', () =>
+      fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKeys.openai}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-6-luna',
+          messages: [
+            { role: 'system', content: 'You extract durable user memory for future chat context.' },
+            { role: 'user', content: prompt },
+          ],
+          max_tokens: 220,
+        }),
+        signal,
       }),
-      signal,
-    });
+    );
     if (response.ok) {
       const payload = await response.json();
       const summary = extractSummaryFromOpenAI(payload);
@@ -247,20 +276,23 @@ async function summarizeConversationWindow(
   }
 
   if (apiKeys.anthropic) {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKeys.anthropic,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: MODEL_REGISTRY['haiku-4.5'].modelId,
-        max_tokens: 220,
-        messages: [{ role: 'user', content: prompt }],
+    const anthropicModel = MODEL_REGISTRY['haiku-4.5'].modelId;
+    const response = await meteredFetch('anthropic', anthropicModel, () =>
+      fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKeys.anthropic,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: anthropicModel,
+          max_tokens: 220,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        signal,
       }),
-      signal,
-    });
+    );
     if (response.ok) {
       const payload = await response.json();
       const summary = extractSummaryFromAnthropic(payload);
@@ -270,21 +302,23 @@ async function summarizeConversationWindow(
 
   if (apiKeys.google) {
     const resolvedModel = MODEL_REGISTRY['gemini-2.5-flash'].modelId;
-    const endpoint =
-      `https://generativelanguage.googleapis.com/v1beta/models/${
-        encodeURIComponent(resolvedModel)
-      }:generateContent`;
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKeys.google,
-      },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 220 },
-      }),
-      signal,
+    const response = await meteredFetch('google', resolvedModel, () => {
+      const endpoint =
+        `https://generativelanguage.googleapis.com/v1beta/models/${
+          encodeURIComponent(resolvedModel)
+        }:generateContent`;
+      return fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKeys.google,
+        },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 220 },
+        }),
+        signal,
+      });
     });
     if (response.ok) {
       const payload = await response.json();
@@ -302,6 +336,7 @@ export async function maybeSummarizeConversationAsync(
   conversationId: string,
   totalTokens: number,
   apiKeys: { openai: string; anthropic: string; google: string },
+  meter?: MeteredCallFactory,
 ): Promise<void> {
   try {
     const { data: stateRaw } = await supabase
@@ -349,7 +384,7 @@ export async function maybeSummarizeConversationAsync(
     const timer = setTimeout(() => abortController.abort(), 15000);
     let summary: string | undefined;
     try {
-      summary = await summarizeConversationWindow(transcript, abortController.signal, apiKeys);
+      summary = await summarizeConversationWindow(transcript, abortController.signal, apiKeys, meter);
     } finally {
       clearTimeout(timer);
     }
