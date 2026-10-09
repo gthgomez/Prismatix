@@ -7,6 +7,8 @@ import {
   type ImageAttachment,
   type Message,
   MODEL_REGISTRY,
+  ModalityMismatchError,
+  assertRouteSupportsModalities,
   normalizeModelOverride,
   type Provider,
   type RouteDecision,
@@ -2099,6 +2101,25 @@ Deno.serve(async (req: Request) => {
       });
     }
     decision = availabilityCheck.decision;
+
+    // PX04 image-modality guard: never send image attachments to a model whose
+    // routing registry marks supportsImages === false (or an unknown route),
+    // and never silently downgrade/substitute a family to make the request fit.
+    // Runs before any provider call, so a mismatch costs zero upstream calls.
+    try {
+      assertRouteSupportsModalities(decision.modelTier, { images: hasImages });
+    } catch (modalityError) {
+      if (modalityError instanceof ModalityMismatchError) {
+        return new Response(
+          JSON.stringify({ error: 'modality_mismatch', code: 'modality_mismatch' }),
+          {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+      throw modalityError;
+    }
 
     const historyContext = history
       .map((msg) => `${msg.role}: ${msg.content}`)

@@ -12,6 +12,14 @@ export interface TariffEntry {
   asOfDate?: number | string | boolean;
   cachedReadRatePer1M?: number | string | boolean;
   cachedWriteRatePer1M?: number | string | boolean;
+  /** ISO `YYYY-MM-DD` from which this rate is authoritative (optional). */
+  effectiveFrom?: string;
+  /**
+   * ISO `YYYY-MM-DD`, INCLUSIVE: the last UTC day on which this rate may be
+   * billed. Billing is allowed for the whole of that UTC day; the rate expires
+   * at 00:00:00Z of the following day (optional).
+   */
+  effectiveTo?: string;
   inputRatePer1M?: number | string | boolean;
   isEligibleForAutoRouting?: number | string | boolean;
   isEstimated?: number | string | boolean;
@@ -212,12 +220,16 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     isEligibleForAutoRouting: true,
   },
   // Gemini 3.8 Flash: intro rates effective through 2026-12-31; scheduled to
-  // double on 2027-01-01 — re-verify before that date.
+  // double on 2027-01-01 — re-verify before that date. The effectiveTo bound
+  // makes the expiry fail closed: after it, pricing is unknown and Auto will
+  // not send this model until a verified human refresh.
   'gemini-3.8-flash': {
     inputRatePer1M: 0.75,
     outputRatePer1M: 3.75,
     cachedReadRatePer1M: 0.075,
     asOfDate: '2026-10-06',
+    effectiveFrom: '2026-10-06',
+    effectiveTo: '2026-12-31',
     sourceRef: 'google-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -358,3 +370,85 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     isEligibleForAutoRouting: true,
   },
 };
+
+// ---------------------------------------------------------------------------
+// Effective-interval expiry (PX04)
+//
+// A rate is only billable while its effective interval is open. Anything that
+// cannot be proven current must fail CLOSED: an expired or malformed
+// `effectiveTo` is treated as expired, and callers must never see a live rate
+// for it. This is the server authority; the client mirror re-exports it.
+// ---------------------------------------------------------------------------
+
+/** Typed failure raised when a model's price is unknown or expired. */
+export class StalePriceError extends Error {
+  readonly code = 'stale_price';
+  readonly model: string;
+  readonly reason: 'unknown' | 'expired';
+
+  constructor(model: string, reason: 'unknown' | 'expired') {
+    super(
+      reason === 'expired'
+        ? `Pricing for model '${model}' has expired (effectiveTo is in the past).`
+        : `Pricing for model '${model}' is unknown.`,
+    );
+    this.name = 'StalePriceError';
+    this.model = model;
+    this.reason = reason;
+  }
+}
+
+/**
+ * Strictly parses an ISO `YYYY-MM-DD` date into a UTC Date. Returns undefined
+ * for anything that is not a real calendar date (wrong shape, month 13,
+ * Feb 30, non-zero-padded fields, ...).
+ */
+function parseIsoDateUtc(value: unknown): Date | undefined {
+  if (typeof value !== 'string') return undefined;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+  return date;
+}
+
+/**
+ * True when `entry.effectiveTo` has passed. `effectiveTo` is INCLUSIVE: it is
+ * the last UTC day the rate may be billed, so this returns false for any time
+ * during the `effectiveTo` UTC day and true from 00:00:00Z of the following
+ * UTC day onward.
+ * A MALFORMED `effectiveTo` fails CLOSED (returns true), never false.
+ * A missing `effectiveTo` means the rate has no expiry bound.
+ */
+export function isPriceExpired(
+  entry: Pick<TariffEntry, 'effectiveTo'> | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  const raw = entry?.effectiveTo;
+  if (raw === undefined || raw === null || raw === '') return false;
+  const lastBillableDay = parseIsoDateUtc(raw);
+  if (!lastBillableDay) return true; // malformed -> fail closed
+  // Exclusive end boundary: the start of the UTC day after `effectiveTo`.
+  const expiresAt = lastBillableDay.getTime() + 86_400_000;
+  return now.getTime() >= expiresAt;
+}
+
+/**
+ * Throws a typed `StalePriceError` when `model` is unknown or its price has
+ * expired. Use before any admission/settlement decision that must not act on a
+ * stale rate.
+ */
+export function assertPricingCurrent(model: string, now: Date = new Date()): void {
+  const entry = MODEL_TARIFF[model];
+  if (!entry) throw new StalePriceError(model, 'unknown');
+  if (isPriceExpired(entry, now)) throw new StalePriceError(model, 'expired');
+}
