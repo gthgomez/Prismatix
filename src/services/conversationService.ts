@@ -130,8 +130,9 @@ export async function listConversations(
 }
 
 /**
- * Loads a conversation's messages (RLS-scoped) in chronological order, with a
- * `(created_at, id)` keyset cursor. Persisted attachments are normalized and a
+ * Loads a conversation's most recent messages (RLS-scoped) up to `limit`, returned
+ * in chronological order (oldest to newest for display/context). Uses a `(created_at, id)`
+ * keyset cursor for paging backwards. Persisted attachments are normalized and a
  * legacy `image_url` is adapted into a single attachment entry.
  */
 export async function loadConversation(
@@ -144,8 +145,8 @@ export async function loadConversation(
     .from('messages')
     .select('id, role, content, created_at, attachments, image_url')
     .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: true })
-    .order('id', { ascending: true })
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
     .limit(limit);
 
   if (options.before) {
@@ -156,16 +157,19 @@ export async function loadConversation(
   const { data, error } = await query;
   if (error) throw new Error(`load_conversation_failed: ${error.message ?? 'unknown'}`);
 
-  return ((data ?? []) as RawMessageRow[]).map((row) => {
+  const rows: LoadedMessage[] = ((data ?? []) as RawMessageRow[]).map((row) => {
     const attachments = adaptLegacyImageUrl(row, normalizeAttachments(row.attachments));
+    const role: 'user' | 'assistant' = row.role === 'assistant' ? 'assistant' : 'user';
     return {
       id: String(row.id),
-      role: row.role === 'assistant' ? 'assistant' : 'user',
+      role,
       content: toContentString(row.content),
       createdAt: String(row.created_at),
       attachments,
     };
   });
+
+  return rows.reverse();
 }
 
 /**

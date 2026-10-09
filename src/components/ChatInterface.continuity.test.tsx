@@ -30,7 +30,7 @@ vi.mock('../services/conversationService', async (importOriginal) => {
 
 import { ChatInterface } from './ChatInterface';
 import { writeSelectedConversation } from '../services/conversationState';
-import { loadConversation, type LoadedMessage } from '../services/conversationService';
+import { loadConversation, signAttachment, type LoadedMessage } from '../services/conversationService';
 
 const USER_A = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email: 'a@example.test', user_metadata: {} } as User;
 const USER_B = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', email: 'b@example.test', user_metadata: {} } as User;
@@ -77,6 +77,7 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   vi.mocked(loadConversation).mockReset();
+  vi.mocked(signAttachment).mockReset();
 });
 
 afterEach(() => {
@@ -127,5 +128,42 @@ describe('ChatInterface in-flight conversation load invalidation', () => {
     });
 
     expect(container.textContent ?? '').not.toContain('A message from conversation A');
+  });
+
+  it('does not apply an in-flight load when New Chat is clicked while signAttachment is pending', async () => {
+    writeSelectedConversation(USER_A.id, CONV_A);
+    const sign = deferred<string | null>();
+    vi.mocked(signAttachment).mockReturnValue(sign.promise);
+    vi.mocked(loadConversation).mockResolvedValue([
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        role: 'user',
+        content: 'Image attachment message',
+        createdAt: '2026-10-01T00:00:00Z',
+        attachments: [
+          {
+            ordinal: 0,
+            kind: 'image',
+            storageRef: 'supabase://chat-uploads/u/img.png',
+            videoAssetId: null,
+            available: true,
+          },
+        ],
+      },
+    ]);
+
+    root = renderInto(container, <ChatInterface user={USER_A} onSignOut={onSignOut} />);
+    await flush();
+
+    // User clicks New Chat while signAttachment is still pending
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-new-button')!.click());
+
+    // signAttachment now resolves
+    await act(async () => {
+      sign.resolve('https://signed.example/img.png');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.textContent ?? '').not.toContain('Image attachment message');
   });
 });

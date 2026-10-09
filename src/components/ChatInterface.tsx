@@ -22,6 +22,7 @@ import { DebateView } from './DebateView';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
 import { AttachmentPreview } from './AttachmentPreview';
 import { ConversationSidebar } from './ConversationSidebar';
+import { FormattedMessage } from './FormattedMessage';
 import '../styles/ChatInterface.css';
 import {
   askPrismatix,
@@ -183,6 +184,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [contextExcludedCount, setContextExcludedCount] = useState(0);
   const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
   const selectedConversationIdRef = useRef<string | null>(null);
@@ -556,7 +558,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       ) {
         return;
       }
-      setMessages(await mapLoadedMessages(loaded));
+      const mapped = await mapLoadedMessages(loaded);
+      // PX08: Re-check after asynchronous attachment signing. A user action
+      // (New Chat, switching conversations, or logging out) during storage signing
+      // must not be overwritten by the late-resolving load.
+      if (
+        loadSeq !== conversationLoadSeqRef.current ||
+        selectedConversationIdRef.current !== conversationId
+      ) {
+        return;
+      }
+      setMessages(mapped);
     } catch (error) {
       if (
         loadSeq !== conversationLoadSeqRef.current ||
@@ -1117,6 +1129,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         selectedId={selectedConversationId}
         isLoading={conversationsLoading}
         disabled={isStreaming}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
         onSelect={handleSelectConversation}
         onNewChat={handleNewChat}
         onDelete={(id) => void handleDeleteConversation(id)}
@@ -1125,9 +1139,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       {/* Header */}
       <header className='chat-header' ref={chatHeaderRef}>
         <div className='header-content'>
-          <div className='header-title'>
-            <h1>Prismatix</h1>
-            <span className='header-subtitle'>Adaptive Model Orchestration</span>
+          <div className='header-left'>
+            <button
+              type='button'
+              className='sidebar-toggle-button'
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              aria-label='Toggle conversations sidebar'
+              aria-expanded={sidebarOpen}
+            >
+              ☰
+            </button>
+            <div className='header-title'>
+              <h1>Prismatix</h1>
+              <span className='header-subtitle'>Adaptive Model Orchestration</span>
+            </div>
           </div>
           <div className='header-actions'>
             {catalogSkewed && (
@@ -1518,10 +1543,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                       />
                     )}
                     <div className='message-text'>
-                      {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
-                      {isStreaming && idx === messages.length - 1 && msg.role === 'assistant' && (
-                        <span className='cursor-blink'>▊</span>
-                      )}
+                      <FormattedMessage
+                        content={typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
+                        isStreaming={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
+                        showCursor={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
+                      />
                     </div>
                     {msg.role === 'assistant' && msg.debateParticipants && msg.debateParticipants.length > 0 && (
                       <DebateView participants={msg.debateParticipants} />
