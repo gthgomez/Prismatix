@@ -89,11 +89,33 @@ import {
 } from './execution_store.ts';
 import { openExecutionForRequest } from './execution_gate.ts';
 import {
+  admitExecution,
+  admissionDenialStatus,
+  commitEstimated,
+  commitFromLedger,
+  createExecutionOutputBudget,
+  isAdmissionAllowed,
+  loadAdmissionConfig,
+  releaseReservation,
+  resolveEffectiveLimits,
+  type AdmissionResult,
+} from './admission.ts';
+import { getModelPricing, PRICING_VERSION } from './pricing_registry.ts';
+import {
   MeteredCallAccountingError,
   runMeteredCall,
+  settleMeteredCallFromUsage,
   type MeteredCallContext,
   type MeteredCallFactory,
+  type PriceSnapshot,
+  type RunMeteredCallInput,
 } from './metered_call.ts';
+import {
+  consumeStreamUsage,
+  createUsageTracker,
+  extractGoogleStructuredUsage,
+  type NormalizedUsage,
+} from './usage.ts';
 import {
   fetchRelevantMemories,
   maybeSummarizeConversationAsync,
@@ -113,6 +135,7 @@ import {
   assertEntitled,
   EntitlementError,
   loadAccessGrant,
+  type AccessGrant,
 } from '../_shared/access_policy.ts';
 import {
   releaseHeaders,
@@ -129,6 +152,9 @@ interface UpstreamCallResult {
   extractDeltas: (payload: unknown) => string[];
   effectiveModelId: string;
   effectiveGeminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
+  // PX05: for streaming calls, resolves with the provider-reported usage once
+  // the (teed) response body has been consumed. Undefined for non-streaming.
+  usagePromise?: Promise<NormalizedUsage | null>;
 }
 
 // PX03: per-dispatch metering context is defined in metered_call.ts and shared
@@ -234,6 +260,13 @@ const USER_RATE_LIMIT_WINDOW_MS = Number(Deno.env.get('USER_RATE_LIMIT_WINDOW_MS
 const USER_RATE_LIMIT_MAX_REQUESTS = Number(Deno.env.get('USER_RATE_LIMIT_MAX_REQUESTS') || '') || 20;
 const MAX_ACTIVE_STREAMS_PER_USER = Number(Deno.env.get('MAX_ACTIVE_STREAMS_PER_USER') || '') || 2;
 
+// PX05: the DB is the SINGLE authority for budgets/rate/concurrency. This
+// config is validated once at module load; a malformed/negative/nonfinite
+// numeric throws AdmissionConfigError so the function fails closed at startup
+// rather than running with a permissive default. The in-memory Maps above
+// remain only as a non-authoritative fast pre-check.
+const ADMISSION_CONFIG = loadAdmissionConfig((key) => Deno.env.get(key) ?? undefined);
+
 const GOOGLE_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
 let googleModelsCache: { fetchedAt: number; models: GoogleModelRecord[] } | null = null;
 const requestTimestampsByUser = new Map<string, number[]>();
@@ -320,6 +353,20 @@ async function fetchDailySpendUsd(
     const value = Number((row as { total_cost?: unknown }).total_cost);
     return Number.isFinite(value) ? sum + value : sum;
   }, 0);
+}
+
+// PX05: server-side price snapshot captured at dispatch time from the pricing
+// authority. This is server authority, never client input. Unknown/expired
+// pricing returns null so the call can never settle at a fabricated rate.
+function priceSnapshotForTier(modelTier: string): PriceSnapshot | null {
+  const pricing = getModelPricing(modelTier);
+  if (pricing.isUnknown) return null;
+  return {
+    pricingVersion: PRICING_VERSION,
+    inputRatePer1M: pricing.inputRatePer1M,
+    outputRatePer1M: pricing.outputRatePer1M,
+    thinkingRatePer1M: pricing.reasoningRatePer1M ?? pricing.outputRatePer1M,
+  };
 }
 
 function checkUserRateLimit(userId: string): { allowed: boolean; retryAfterMs?: number } {
@@ -994,14 +1041,14 @@ async function callOpenAI(
     });
 
   let openaiResponse = await doCall(
-    buildOpenAIStreamPayload(decision, allMessages, images),
+    buildOpenAIStreamPayload(decision, allMessages, images, true),
   );
 
   if (openaiResponse.status === 400) {
     const bodyText = await openaiResponse.text();
     if (bodyText.toLowerCase().includes('max_completion_tokens')) {
       openaiResponse = await doCall({
-        ...buildOpenAILegacyStreamPayload(decision, allMessages, images),
+        ...buildOpenAILegacyStreamPayload(decision, allMessages, images, true),
       });
     } else {
       openaiResponse = new Response(bodyText, {
@@ -1157,8 +1204,15 @@ async function callOpenCode(
     },
   };
 
+  // PX05 (a): the opencode adapter reads its cap from the curated config, so
+  // apply the (already budget-clamped) decision cap as a ceiling here too.
+  const effectiveModelConfig = {
+    ...modelConfig,
+    budgetCap: Math.min(modelConfig.budgetCap, decision.budgetCap),
+  };
+
   const streamResult = await dispatchOpenCodeStream({
-    config: modelConfig,
+    config: effectiveModelConfig,
     messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
     images: images.map((img) => ({ data: img.data, mediaType: img.mediaType })),
     openCodeApiKey: OPENCODE_API_KEY,
@@ -1180,6 +1234,18 @@ async function callProviderStream(
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel,
   meter?: MeteredCallContext,
 ): Promise<UpstreamCallResult> {
+  // PX05 (a): clamp this stage's output cap through the shared execution budget
+  // so the SUM of all stage maxima cannot exceed the admitted reservation.
+  if (meter?.outputBudget) {
+    const clampedCap = meter.outputBudget.clampTokenCap(
+      decision.budgetCap,
+      getModelPricing(decision.modelTier).outputRatePer1M,
+    );
+    if (clampedCap < decision.budgetCap) {
+      decision = { ...decision, budgetCap: Math.max(1, clampedCap) };
+    }
+  }
+
   const dispatch = async (): Promise<UpstreamCallResult> => {
     switch (decision.provider) {
       case 'opencode':
@@ -1199,24 +1265,43 @@ async function callProviderStream(
 
   if (!meter) return await dispatch();
 
+  const meteredInput: RunMeteredCallInput = {
+    store: meter.store,
+    execution: meter.execution,
+    stage: meter.stage,
+    participant: meter.participant,
+    attemptNumber: meter.attemptNumber,
+    requestedModel: meter.requestedModel,
+    resolvedModel: decision.model,
+    priceSnapshot: meter.priceSnapshot,
+    // Streaming: the pre-dispatch row is written now, and the teed usage stream
+    // settles it after the body is consumed.
+    deferSettlement: true,
+  };
+
   return await runMeteredCall(
-    {
-      store: meter.store,
-      execution: meter.execution,
-      stage: meter.stage,
-      participant: meter.participant,
-      attemptNumber: meter.attemptNumber,
-      requestedModel: meter.requestedModel,
-      resolvedModel: decision.model,
-      priceSnapshot: meter.priceSnapshot,
-    },
+    meteredInput,
     async () => {
       const result = await dispatch();
-      return {
-        result,
-        servedModel: result.effectiveModelId || decision.model,
-        status: 'completed',
-      };
+      const servedModel = result.effectiveModelId || decision.model;
+      // PX05: tee the SSE body. The client branch streams through unchanged; a
+      // background parser accumulates provider-reported usage and settles the
+      // pre-dispatch row once the stream ends. No usage => the row stays pending
+      // (the execution-level bounded estimate handles it); never fabricated.
+      if (result.response.body) {
+        const [clientBody, usageBody] = result.response.body.tee();
+        result.response = new Response(clientBody, {
+          status: result.response.status,
+          statusText: result.response.statusText,
+          headers: result.response.headers,
+        });
+        const tracker = createUsageTracker(decision.provider);
+        result.usagePromise = consumeStreamUsage(usageBody, tracker).then(async (usage) => {
+          await settleMeteredCallFromUsage(meteredInput, usage, servedModel);
+          return usage;
+        });
+      }
+      return { result, servedModel, status: 'completed' };
     },
   );
 }
@@ -1256,6 +1341,17 @@ async function callGoogleStructured(
   signal: AbortSignal,
   meter?: MeteredCallContext,
 ): Promise<{ responseText: string; ok: boolean; status: number }> {
+  // PX05 (a): clamp through the shared execution budget (same as streaming).
+  if (meter?.outputBudget) {
+    const clampedCap = meter.outputBudget.clampTokenCap(
+      decision.budgetCap,
+      getModelPricing(decision.modelTier).outputRatePer1M,
+    );
+    if (clampedCap < decision.budgetCap) {
+      decision = { ...decision, budgetCap: Math.max(1, clampedCap) };
+    }
+  }
+
   const dispatch = async (): Promise<{ responseText: string; ok: boolean; status: number }> => {
     const resolvedModel = await resolveGoogleModelAlias(decision.model, signal);
     const endpoint =
@@ -1293,10 +1389,14 @@ async function callGoogleStructured(
     },
     async () => {
       const result = await dispatch();
+      // PX05: non-streaming responses carry usageMetadata; extract it so priced
+      // SMD stages settle from what the provider actually reported.
+      const usage = result.ok ? extractGoogleStructuredUsage(result.responseText) : null;
       return {
         result,
         servedModel: decision.model,
         status: result.ok ? 'completed' : 'failed',
+        usage,
       };
     },
   );
@@ -1722,6 +1822,9 @@ Deno.serve(async (req: Request) => {
   req.signal.addEventListener('abort', onReqAbort, { once: true });
   const timeoutId = setTimeout(() => controller.abort(), FUNCTION_TIMEOUT_MS);
   let streamReturned = false;
+  // PX05: set once admission succeeds; every post-admission exit (including the
+  // outer catch/timeout) invokes it so a hold can never linger as 'held'.
+  let settleAdmissionOnExit: (() => Promise<void>) | null = null;
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -1847,9 +1950,10 @@ Deno.serve(async (req: Request) => {
     // PX01: server-managed entitlement gate. Fail closed BEFORE the rate
     // limiter, spend gate, or any provider dispatch: no active chat grant, no
     // paid execution. Lookup failures deny with a stable error code.
+    let activeGrant: AccessGrant | null = null;
     try {
-      const accessGrant = await loadAccessGrant(supabaseClient, userId);
-      assertEntitled(accessGrant, 'chat');
+      activeGrant = await loadAccessGrant(supabaseClient, userId);
+      assertEntitled(activeGrant, 'chat');
     } catch (entitlementError) {
       const entitlementCode = entitlementError instanceof EntitlementError
         ? entitlementError.code
@@ -2285,6 +2389,59 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // PX05: DB-authoritative admission. After entitlement and the PX03
+    // execution identity, and BEFORE any provider dispatch or stream slot,
+    // reserve the configured MAXIMUM billable work and acquire the concurrency
+    // lease in ONE transaction. A denial returns 402 (budget) or 429
+    // (rate/active) with a stable code and ZERO provider calls. Any authority
+    // failure fails closed (503) — this gate never admits on uncertainty.
+    const effectiveLimits = resolveEffectiveLimits(ADMISSION_CONFIG, activeGrant);
+    if (!isAdmissionAllowed(effectiveLimits)) {
+      // An explicit $0 grant (or $0 daily ceiling) means no paid execution.
+      return new Response(
+        JSON.stringify({ error: 'budget_exhausted', code: 'budget_exhausted' }),
+        {
+          status: 402,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+    const admissionResult: AdmissionResult = await admitExecution(storeClient, {
+      subjectId: userId,
+      executionId: activeExecution.id,
+      estimateUsd: preFlightCost.estimatedUsd,
+      maxUsd: effectiveLimits.maxPerExecutionUsd,
+      leaseSeconds: ADMISSION_CONFIG.leaseSeconds,
+      requestLimit: ADMISSION_CONFIG.requestLimitPerMinute,
+      userDailyUsd: effectiveLimits.userDailyUsd,
+      projectDailyUsd: ADMISSION_CONFIG.projectDailyUsd,
+      activeLimit: ADMISSION_CONFIG.activeLimit,
+    });
+    if (!admissionResult.admitted) {
+      const status = admissionDenialStatus(admissionResult.reason);
+      if (status === 503) {
+        console.error('[PX05] admission unavailable; refusing request (503)');
+      }
+      return new Response(
+        JSON.stringify({ error: admissionResult.reason, code: admissionResult.reason }),
+        {
+          status,
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'application/json',
+            ...(admissionResult.retryAfterSeconds > 0
+              ? { 'Retry-After': String(admissionResult.retryAfterSeconds) }
+              : {}),
+          },
+        },
+      );
+    }
+
+    // PX05 (a): one shared output budget bounds the SUM of every stage's output
+    // maximum by the admitted per-execution ceiling, so debate/SMD stages cannot
+    // collectively exceed the single up-front reservation.
+    const executionOutputBudget = createExecutionOutputBudget(effectiveLimits.maxPerExecutionUsd);
+
     // Per-dispatch attempt allocation: distinct dispatches get distinct ledger
     // identities even when their token counts are identical.
     const attemptCounters = new Map<string, number>();
@@ -2305,7 +2462,8 @@ Deno.serve(async (req: Request) => {
         participant,
         attemptNumber,
         requestedModel,
-        priceSnapshot,
+        priceSnapshot: priceSnapshot ?? priceSnapshotForTier(requestedModel),
+        outputBudget: executionOutputBudget,
       };
     };
     const finalizeLedger = async (
@@ -2332,6 +2490,60 @@ Deno.serve(async (req: Request) => {
         );
       }
     };
+    // PX05: settle the reservation from the AUTHORITATIVE ledger. `commitFromLedger`
+    // sums the execution's settled model_calls and commits that amount; if any
+    // call is still unsettled it keeps the hold as `pending_reconcile` (never a
+    // partial/understated commit, never $0.00). Only a pre-dispatch failure with
+    // zero provider calls is released. Settlement is idempotent.
+    let admissionSettled = false;
+    const settleAdmission = async (
+      mode: 'completion' | 'ledger' | 'release',
+      options?: { reason?: string; estimateUsd?: number },
+    ): Promise<void> => {
+      if (admissionSettled || !admissionResult.admitted || !activeExecution) return;
+      admissionSettled = true;
+      try {
+        if (mode === 'release') {
+          const result = await releaseReservation(
+            storeClient,
+            activeExecution.id,
+            options?.reason ?? 'no_provider_call',
+          );
+          if (!result.ok) throw new Error(result.error ?? 'admission settlement failed');
+          return;
+        }
+
+        const ledger = await commitFromLedger(storeClient, activeExecution.id);
+        if (!ledger.ok) throw new Error(ledger.error ?? 'admission settlement failed');
+
+        // Normal completion with no settled calls: commit a conservative,
+        // reservation-capped ESTIMATE so committed_usd advances and the hold does
+        // not persist. Unknown price stays pending_reconcile inside the RPC.
+        if (mode === 'completion' && ledger.state === 'pending_reconcile') {
+          const estimated = await commitEstimated(
+            storeClient,
+            activeExecution.id,
+            options?.estimateUsd ?? 0,
+          );
+          if (!estimated.ok) throw new Error(estimated.error ?? 'admission estimate settlement failed');
+        }
+      } catch (settleError) {
+        console.error('[PX05] admission settlement failed:', {
+          executionId: activeExecution.id,
+          mode,
+          error: settleError instanceof Error ? settleError.message : String(settleError),
+        });
+        await safeEnqueueReconciliation(
+          storeClient,
+          activeExecution.id,
+          'admission_settlement_failed',
+          { mode },
+        );
+      }
+    };
+    // Any post-admission exit (including the outer catch/timeout) settles from
+    // the ledger, so a hold never lingers as 'held' when the outcome is known.
+    settleAdmissionOnExit = () => settleAdmission('ledger');
 
     // Debate state — declared before try so both the catch and response-building can see them.
     let debateActive = false;
@@ -2349,6 +2561,8 @@ Deno.serve(async (req: Request) => {
 
     const releaseStreamSlot = acquireUserStreamSlot(userId);
     if (!releaseStreamSlot) {
+      // No provider call was made: confirmed-zero work, so release the hold.
+      await settleAdmission('release', { reason: 'no_stream_slot' });
       return new Response(JSON.stringify({ error: 'Too many active streams' }), {
         status: 429,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -2504,6 +2718,8 @@ Deno.serve(async (req: Request) => {
       if (upstreamError instanceof MeteredCallAccountingError) {
         // FAIL CLOSED: the provider call was not dispatched because it could not
         // be accounted for. Surface a retryable 503 with zero provider calls.
+        // The reservation is confirmed-zero work, so it may be released.
+        await settleAdmission('release', { reason: 'pre_dispatch_accounting_failure' });
         await finalizeLedger('failed', 'accounting_unavailable');
         return new Response(
           JSON.stringify({ error: 'accounting_unavailable', code: 'accounting_unavailable' }),
@@ -2513,6 +2729,9 @@ Deno.serve(async (req: Request) => {
           },
         );
       }
+      // A provider error may still have been billed; settle from the ledger,
+      // which keeps the hold pending_reconcile when calls are unsettled.
+      await settleAdmission('ledger');
       await finalizeLedger('failed', 'upstream_error');
       const message = upstreamError instanceof Error
         ? upstreamError.message
@@ -2537,6 +2756,8 @@ Deno.serve(async (req: Request) => {
 
     if (!upstream.response.ok) {
       releaseStreamSlot();
+      // The provider responded with an error; it may have been billed.
+      await settleAdmission('ledger');
       await finalizeLedger('failed', 'upstream_status');
       if (DEV_MODE) {
         console.error(
@@ -2573,6 +2794,8 @@ Deno.serve(async (req: Request) => {
 
     if (!upstream.response.body) {
       releaseStreamSlot();
+      // The provider was called but returned no stream; settle from the ledger.
+      await settleAdmission('ledger');
       await finalizeLedger('failed', 'empty_stream');
       return new Response(JSON.stringify({ error: 'Upstream provider returned empty stream' }), {
         status: 502,
@@ -2687,6 +2910,20 @@ Deno.serve(async (req: Request) => {
             }
           }
 
+          // PX05: wait for the final streaming call's teed usage parser to settle
+          // its ledger row before computing the authoritative sum.
+          try {
+            await upstream.usagePromise;
+          } catch {
+            // best-effort; the row stays pending and the estimate path applies.
+          }
+
+          // PX05: settle from the ledger. All settled stages are summed
+          // authoritatively; if only priced calls remain pending (provider
+          // reported no usage) a conservative reservation-capped estimate is
+          // committed so the hold does not persist. Unknown price stays pending.
+          await settleAdmission('completion', { estimateUsd: costBreakdown.totalUsd });
+
           await finalizeLedger(
             receiptOk ? 'completed' : 'indeterminate',
             receiptOk ? 'ok' : 'receipt_write_failed',
@@ -2748,6 +2985,14 @@ Deno.serve(async (req: Request) => {
       },
     });
   } catch (error) {
+    // PX05: a post-admission crash/timeout must still reach a terminal state.
+    if (settleAdmissionOnExit) {
+      try {
+        await settleAdmissionOnExit();
+      } catch {
+        // settleAdmission already logs + enqueues durable reconciliation.
+      }
+    }
     if (error instanceof Error && error.name === 'AbortError') {
       return new Response(JSON.stringify({ error: 'Request timeout' }), {
         status: 504,

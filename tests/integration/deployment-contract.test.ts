@@ -168,6 +168,50 @@ function px03Routes(call: FetchCall): Response | null {
       status: 'pending',
     });
   }
+  // PX05: DB-authoritative admission. The happy path reserves the max billable
+  // work and then commits the actual cost on completion.
+  if (call.url.includes('/rest/v1/rpc/px05_admit_execution')) {
+    return jsonResponse({
+      admitted: true,
+      reason: 'admitted',
+      reservation_id: 'r0000000-0000-4000-8000-000000000001',
+      lease_id: 'l0000000-0000-4000-8000-000000000001',
+      retry_after_seconds: 0,
+      remaining_usd: '1.5',
+    });
+  }
+  if (call.url.includes('/rest/v1/rpc/px05_commit_from_ledger')) {
+    return jsonResponse({
+      state: 'committed',
+      updated: true,
+      reservation_id: 'r0000000-0000-4000-8000-000000000001',
+      committed_usd: '0.01',
+      calls: 1,
+    });
+  }
+  if (call.url.includes('/rest/v1/rpc/px05_commit_estimated')) {
+    return jsonResponse({
+      state: 'committed',
+      updated: true,
+      reservation_id: 'r0000000-0000-4000-8000-000000000001',
+      committed_usd: '0.01',
+      basis: 'estimated',
+    });
+  }
+  if (call.url.includes('/rest/v1/rpc/px05_commit_reservation')) {
+    return jsonResponse({
+      state: 'committed',
+      updated: true,
+      reservation_id: 'r0000000-0000-4000-8000-000000000001',
+    });
+  }
+  if (call.url.includes('/rest/v1/rpc/px05_release_reservation')) {
+    return jsonResponse({
+      state: 'released',
+      updated: true,
+      reservation_id: 'r0000000-0000-4000-8000-000000000001',
+    });
+  }
   return null;
 }
 
@@ -857,6 +901,132 @@ describe('PX03 execution ledger fail-closed (real handler)', () => {
     expect(
       calls.some((call) => call.url.includes('/rest/v1/rpc/px03_enqueue_reconciliation')),
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5c. PX05 DB-authoritative admission gate (real handler)
+// ---------------------------------------------------------------------------
+
+describe('PX05 admission gate (real handler)', () => {
+  function denyRoutes(reason: string, retryAfterSeconds = 0): (call: FetchCall) => Response | null {
+    const happy = supabaseRoutes();
+    return (call: FetchCall): Response | null => {
+      if (call.url.includes('/rest/v1/rpc/px05_admit_execution')) {
+        return jsonResponse({
+          admitted: false,
+          reason,
+          reservation_id: null,
+          lease_id: null,
+          retry_after_seconds: retryAfterSeconds,
+          remaining_usd: '0',
+        });
+      }
+      return happy(call);
+    };
+  }
+
+  it('returns 402 budget_exhausted with ZERO provider calls when the budget is exhausted', async () => {
+    const calls = installFetchRecorder(denyRoutes('budget_exhausted'));
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest(
+        chatBody({ platform: 'mobile', modelOverride: 'anthropic:haiku' }),
+        'px02-user-token',
+      ),
+    );
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: 'budget_exhausted', code: 'budget_exhausted' });
+    await flushAsync();
+    expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it('returns 429 rate_limited with a Retry-After header and ZERO provider calls', async () => {
+    const calls = installFetchRecorder(denyRoutes('rate_limited', 17));
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest(
+        chatBody({ platform: 'mobile', modelOverride: 'anthropic:haiku' }),
+        'px02-user-token',
+      ),
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('17');
+    expect(await res.json()).toEqual({ error: 'rate_limited', code: 'rate_limited' });
+    await flushAsync();
+    expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it('commits a bounded estimate when the ledger has priced-but-unsettled calls (real handler)', async () => {
+    const happy = supabaseRoutes();
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/rest/v1/rpc/px05_commit_from_ledger')) {
+        return jsonResponse({
+          state: 'pending_reconcile',
+          updated: true,
+          committed_usd: '0',
+          pending_calls: 1,
+        });
+      }
+      if (call.url.includes('/rest/v1/rpc/px05_commit_estimated')) {
+        return jsonResponse({
+          state: 'committed',
+          updated: true,
+          committed_usd: '0.01',
+          basis: 'estimated',
+        });
+      }
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest(
+        chatBody({ platform: 'mobile', modelOverride: 'anthropic:haiku' }),
+        'px02-user-token',
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    await res.text();
+    await flushAsync();
+
+    const estimateCall = calls.find((call) =>
+      call.url.includes('/rest/v1/rpc/px05_commit_estimated'),
+    );
+    expect(estimateCall).toBeTruthy();
+    const params = JSON.parse(estimateCall!.body) as { p_estimated_usd?: number };
+    expect(params.p_estimated_usd).toBeGreaterThan(0);
+  });
+
+  it('fails CLOSED with 503 admission_unavailable when the admission RPC errors', async () => {
+    const happy = supabaseRoutes();
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/rest/v1/rpc/px05_admit_execution')) {
+        return jsonResponse({ code: '08006', message: 'budget authority down' }, 500);
+      }
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest(
+        chatBody({ platform: 'mobile', modelOverride: 'anthropic:haiku' }),
+        'px02-user-token',
+      ),
+    );
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      error: 'admission_unavailable',
+      code: 'admission_unavailable',
+    });
+    await flushAsync();
+    expect(providerCalls(calls)).toEqual([]);
   });
 });
 

@@ -26,18 +26,16 @@ import {
   type ExecutionStoreClient,
   type RecordModelCallInput,
 } from './execution_store.ts';
+import type { ExecutionOutputBudget } from './admission.ts';
+import type { NormalizedUsage } from './usage.ts';
+
+export type { NormalizedUsage } from './usage.ts';
 
 const TOKENS_PER_MILLION = 1_000_000;
 
 // ============================================================================
 // TYPES
 // ============================================================================
-
-export interface NormalizedUsage {
-  inputTokens: number;
-  outputTokens: number;
-  thinkingTokens: number;
-}
 
 // Thrown when a provider call cannot be accounted for. Callers MUST treat this
 // as a request failure and MUST NOT have dispatched the provider call.
@@ -80,6 +78,10 @@ export interface RunMeteredCallInput {
   requestedModel?: string | null;
   resolvedModel?: string | null;
   priceSnapshot?: PriceSnapshot | null;
+  // When true, skip the post-dispatch record: a streaming caller settles this
+  // call itself (from a teed usage stream) after the response body is consumed.
+  // The pre-dispatch row is still written first, so the call is never unmetered.
+  deferSettlement?: boolean;
 }
 
 // Per-dispatch metering context threaded from a request handler into every
@@ -93,6 +95,9 @@ export interface MeteredCallContext {
   attemptNumber: number;
   requestedModel: string;
   priceSnapshot: PriceSnapshot | null;
+  // PX05: shared per-execution output budget. Every dispatch clamps its output
+  // cap through this so the SUM of stage maxima cannot exceed the reservation.
+  outputBudget?: ExecutionOutputBudget;
 }
 
 export type MeteredCallFactory = (
@@ -265,6 +270,12 @@ export async function runMeteredCall<T>(
     throw error;
   }
 
+  // Streaming callers settle from the teed usage stream after the body is
+  // consumed; leave the pre-dispatch row pending until then.
+  if (input.deferSettlement) {
+    return outcome.result;
+  }
+
   // 3) Normalize usage and settle only when both usage and a server price are
   //    known. Anything else stays pending with a durable reconciliation job.
   const usage = normalizeUsage(outcome.usage);
@@ -313,4 +324,48 @@ export async function runMeteredCall<T>(
   }
 
   return outcome.result;
+}
+
+/**
+ * Settles a previously pre-recorded metered call from provider-reported usage
+ * (used by the streaming path after the response body has been consumed). Only
+ * a provider-reported usage AND a server price snapshot produce a `settled`
+ * receipt; anything else leaves the existing row `pending` (never $0.00).
+ * Best-effort: a write failure leaves the row pending for reconciliation.
+ */
+export async function settleMeteredCallFromUsage(
+  input: RunMeteredCallInput,
+  usage: NormalizedUsage | null | undefined,
+  resolvedModel?: string | null,
+): Promise<void> {
+  const normalized = normalizeUsage(usage);
+  if (!normalized) return;
+  const costs = computeCosts(input.priceSnapshot, normalized);
+  if (!costs) return;
+
+  const attemptNumber = input.attemptNumber ?? 1;
+  try {
+    await recordModelCall(input.store, {
+      execution_id: input.execution.id,
+      stage: input.stage,
+      participant: input.participant,
+      attempt_number: attemptNumber,
+      requested_model: input.requestedModel ?? null,
+      resolved_model: resolvedModel ?? input.resolvedModel ?? null,
+      served_model: resolvedModel ?? input.resolvedModel ?? null,
+      status: 'completed',
+      input_tokens: normalized.inputTokens,
+      output_tokens: normalized.outputTokens,
+      thinking_tokens: normalized.thinkingTokens,
+      input_cost: costs.inputCost,
+      output_cost: costs.outputCost,
+      thinking_cost: costs.thinkingCost,
+      total_cost: costs.totalCost,
+      price_snapshot: input.priceSnapshot ?? null,
+      cost_status: 'settled',
+    });
+  } catch {
+    // Leave the pre-dispatch row pending; the execution-level bounded estimate
+    // (or reconciliation) handles it. Never fabricate a settled receipt.
+  }
 }

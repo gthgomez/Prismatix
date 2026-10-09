@@ -7,6 +7,10 @@ import {
   EntitlementError,
   loadAccessGrant,
 } from '../_shared/access_policy.ts';
+import {
+  reconcileReservation,
+  type AdmissionClient,
+} from '../router/admission.ts';
 
 // SECURITY: Lock CORS to the configured frontend origin.
 // Set ALLOWED_ORIGIN in Supabase project secrets (e.g. https://your-app.vercel.app).
@@ -106,6 +110,32 @@ function timingSafeEqual(a: string, b: string): boolean {
   }
 
   return diff === 0;
+}
+
+// PX05: resolve the enqueue-time budget reservation at a terminal job state.
+// Video processing cost is not metered by the ledger, so the worker attests the
+// outcome explicitly: actual 0 releases the hold with a recorded reason (and
+// px05_reconcile_reservation is the ONLY path allowed to resolve a
+// pending_reconcile hold). A failure here must never block the job transition;
+// the lease expiry + reconciliation path keeps the hold safe.
+async function reconcileVideoBudget(
+  supabase: { rpc: unknown },
+  assetId: string,
+  reason: string,
+): Promise<void> {
+  try {
+    const result = await reconcileReservation(
+      supabase as unknown as AdmissionClient,
+      assetId,
+      0,
+      reason,
+    );
+    if (!result.ok) {
+      devError('[video-worker] budget reconcile failed:', assetId, result.error);
+    }
+  } catch (error) {
+    devError('[video-worker] budget reconcile threw:', assetId, error);
+  }
 }
 
 async function markJobFailed(
@@ -218,6 +248,7 @@ Deno.serve(async (req: Request) => {
     if (entitlementError instanceof EntitlementError && entitlementError.code === 'not_entitled') {
       devError('[video-worker] asset owner has no active video entitlement; failing job closed:', queuedJob.id);
       await markJobFailed(supabase, queuedJob.id, queuedJob.asset_id, 'not_entitled', 'Asset owner has no active video entitlement');
+      await reconcileVideoBudget(supabase, queuedJob.asset_id, 'not_entitled');
       return new Response(JSON.stringify({ ok: false, error: 'not_entitled' }), { status: 403, headers: CORS_HEADERS });
     }
     devError('[video-worker] entitlement lookup failed; leaving job queued:', entitlementError);
@@ -249,6 +280,7 @@ Deno.serve(async (req: Request) => {
 
     if (assetError || !asset) {
       await markJobFailed(supabase, job.id, job.asset_id, 'asset_not_found', 'Asset not found');
+      await reconcileVideoBudget(supabase, job.asset_id, 'asset_not_found');
       return new Response(JSON.stringify({ ok: false, error: 'asset_not_found' }), { status: 404 });
     }
 
@@ -269,7 +301,9 @@ Deno.serve(async (req: Request) => {
           supabase.from('video_assets').update({ status: 'ready', metadata: updatedMetadata, updated_at: doneAt } as never).eq('id', job.asset_id),
           supabase.from('video_jobs').update({ status: 'succeeded', finished_at: doneAt } as never).eq('id', job.id),
         ]);
-        
+
+        // Terminal success: resolve the enqueue-time budget hold.
+        await reconcileVideoBudget(supabase, job.asset_id, 'video_processing_complete');
         return new Response(JSON.stringify({ ok: true, state: 'ACTIVE' }), { status: 200, headers: CORS_HEADERS });
         
       } else if (geminiFile.state === FileState.FAILED) {
@@ -322,6 +356,7 @@ Deno.serve(async (req: Request) => {
     const message = error instanceof Error ? error.message : String(error);
     devError('[video-worker] failed processing job:', job.id, message);
     await markJobFailed(supabase, job.id, job.asset_id, 'video_processing_failed', message.slice(0, 500));
+    await reconcileVideoBudget(supabase, job.asset_id, 'video_processing_failed');
     return new Response(JSON.stringify({ ok: false, error: 'video_processing_failed' }), { status: 500, headers: CORS_HEADERS });
   }
 });
