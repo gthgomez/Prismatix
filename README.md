@@ -13,9 +13,9 @@ Prismatix routes each chat request through an OpenCode model-hub gateway by defa
 
 ## What it does
 
-- **Auto routing, explained** — Each request is classified into a routing role (`economy`, `fast`, `balanced`, `strong`, `max`, `vision_fast`, `vision_strong`, `code_review`) by a heuristic complexity scorer. Each role maps to a curated, priced OpenCode model with deterministic in-role fallbacks. After every Auto-routed answer, the message's info popover shows the chosen role, model, gateway, the reason, whether a fallback was used, and the estimated cost basis
+- **Auto routing, explained** — Each request is classified into a calibrated routing role (`economy` ≤ 45, `fast` 46–65, `balanced` 66–80, `strong` ≥ 81, `max` reasoning ≥ 90 or ctx > 120k, `vision_fast`, `vision_strong`, `code_review`) by a heuristic complexity scorer. Each role maps to a curated, priced OpenCode model (`gpt-6-luna`, `deepseek-v4-1-flash`, `claude-sonnet-5-5`, `gpt-6-sol`, `gemini-3.8-flash`) with deterministic in-role fallbacks. After every Auto-routed answer, the message's info popover shows the chosen role, model, gateway, the reason, whether a fallback was used, and the estimated cost basis
 - **Fail-closed cost safety** — Auto never sends when a model's price is unknown. If discovery finds no priced, available model for the resolved role, the request fails with a readable error instead of silently re-routing to a more expensive provider. Provider-unavailable fallbacks may only re-route to a *cheaper* priced model
-- **OpenCode model hub** — Curated model registry (DeepSeek V4, GPT-5.6, Claude 5, Gemini 3.7, Grok 4.6) behind the OpenCode Zen gateway with live model discovery (5-minute scoped cache). Free/data-training endpoints are quarantined and never chosen automatically
+- **OpenCode model hub** — Curated model registry (GPT-6 Sol/Luna, Claude Sonnet 5.5, Gemini 3.8 Flash, DeepSeek V4.1 Flash, Grok 4.6) behind the OpenCode Zen gateway with live model discovery (5-minute scoped cache). Free/data-training endpoints are quarantined and never chosen automatically
 - **Legacy direct providers (fallback posture)** — Direct Anthropic, OpenAI, Google Gemini, NVIDIA NIM, and DeepInfra routes remain available when the OpenCode gateway is not configured; each role keeps a deterministic, priced legacy mapping
 - **Multi-provider streaming** — Normalised SSE stream across all gateways and protocols (OpenAI Responses/Chat, Anthropic Messages, Gemini). One client, every model
 - **Debate mode** — Optional multi-model deliberation: parallel challenger models critique the prompt, a synthesis model produces the final answer
@@ -36,7 +36,7 @@ Prismatix routes each chat request through an OpenCode model-hub gateway by defa
 | Routed provider not configured | Re-route only to a cheaper priced fallback; otherwise fail closed |
 | Curated model unavailable in discovery | Deterministic in-role fallback (primary → fallback list), recorded in the explanation |
 
-Pricing freshness is audited in CI (`npm test`): auto-routable OpenCode rates older than 60 days fail the build; stale legacy-provider rates are surfaced as a visible warning. `npm run audit:models` inventories stale model coupling. The backend pricing registry (`supabase/functions/router/pricing_registry.ts`) is the authoritative source; the frontend registry is a display-only mirror kept in sync by a divergence test.
+Pricing freshness is audited in CI (`npm test`). `supabase/functions/_shared/model_tariff.ts` is the single authoritative source of truth for model pricing across all backend modules and frontend mirrors. `npm run audit:models` enforces committed stale-model budgets.
 
 ### What Prismatix is NOT
 
@@ -188,6 +188,40 @@ Deploy edge functions after changes:
 ```bash
 supabase functions deploy router
 supabase functions deploy spend_stats
+```
+
+---
+
+## Operational Runbook & Verification
+
+Prismatix provides dedicated operational tooling for verifying production integrity, database ledger health, and routing calibration:
+
+### 1. Verify Deployment Parity
+Audit whether production edge functions match the repository commit and check for configuration drift:
+```bash
+node scripts/check-deployment-parity.mjs
+```
+
+### 2. Audit Stale Model Budgets
+Enforce the retiring generation coupling ratchet to prevent legacy models from spreading across active code paths:
+```bash
+node scripts/audit-stale-models.mjs --check
+```
+
+### 3. Run Durable Ledger Reconciliation
+Process deferred accounting jobs in `prismatix_internal.reconciliation_jobs` (unsettled execution receipts, lease refunds, and terminal job retention):
+```bash
+# Dry run verification
+node scripts/reconcile-jobs.mjs --dry-run
+
+# Live maintenance batch (requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+node scripts/reconcile-jobs.mjs --limit 50 --purge-days 30
+```
+
+### 4. Synthetic Router Calibration Benchmark
+Verify that heuristic routing satisfies quality-to-cost monotonicity and sub-millisecond execution constraints across synthetic prompt categories:
+```bash
+npx vitest run tests/routing/router_benchmark.test.ts
 ```
 
 ---
