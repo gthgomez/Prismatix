@@ -16,14 +16,14 @@ describe('complexityScoreRoutingHint', () => {
     expect(complexityScoreRoutingHint(0)).toContain('ECONOMY');
   });
 
-  it('uses BALANCED tier between economy and fast', () => {
-    expect(complexityScoreRoutingHint(50)).toContain('BALANCED');
-    expect(complexityScoreRoutingHint(60)).toContain('BALANCED');
+  it('uses FAST tier between economy and balanced', () => {
+    expect(complexityScoreRoutingHint(50)).toContain('FAST');
+    expect(complexityScoreRoutingHint(60)).toContain('FAST');
   });
 
-  it('uses FAST tier between balanced and strong', () => {
-    expect(complexityScoreRoutingHint(72)).toContain('FAST');
-    expect(complexityScoreRoutingHint(79)).toContain('FAST');
+  it('uses BALANCED tier between fast and strong', () => {
+    expect(complexityScoreRoutingHint(72)).toContain('BALANCED');
+    expect(complexityScoreRoutingHint(79)).toContain('BALANCED');
   });
 });
 

@@ -1,6 +1,6 @@
 // router_logic.ts - Pure routing + message transform logic (no Deno.serve side effects)
 
-import { CURATED_ROUTE_POLICY, Gateway, RouteRole, resolveRoleCandidates } from './models_hub.ts';
+import { CURATED_ROUTE_POLICY, type Gateway, type RouteRole, resolveRoleCandidates } from './models_hub.ts';
 import { getPricingForModel } from './pricing_registry.ts';
 
 export type Provider = 'opencode' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
@@ -647,8 +647,8 @@ export function determineRouteRole(params: RouterParams): RouteRole {
   if (rd >= 90 || (contextTokens > 120000 && rd >= 70)) return 'max';
   if (isCodeHeavy && c >= 50) return 'code_review';
   if (c >= 81) return 'strong';
-  if (c >= 66) return 'fast';
-  if (c >= 46) return 'balanced';
+  if (c >= 66) return 'balanced';
+  if (c >= 46) return 'fast';
   return 'economy';
 }
 
