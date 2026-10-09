@@ -1,6 +1,8 @@
 // models_hub.ts
 // Multi-plane model hub abstractions: Gateway, Protocol, Family, Role, and Curated Policy.
 
+import { MODEL_TARIFF } from '../_shared/model_tariff.ts';
+
 export type Gateway = 'opencode' | 'direct_fallback';
 
 export type ModelProtocol =
@@ -58,6 +60,31 @@ export interface RolePolicy {
   fallback: string[];
 }
 
+function getCuratedPricing(
+  modelKey: string,
+  fallbackVerifiedAt = '2026-08-16',
+  fallbackSource = 'opencode-zen-official',
+): ModelPricing {
+  const entry = MODEL_TARIFF[modelKey];
+  if (!entry) {
+    return {
+      inputPer1M: 0,
+      outputPer1M: 0,
+      source: fallbackSource,
+      verifiedAt: fallbackVerifiedAt,
+      isUnknown: true,
+    };
+  }
+  return {
+    inputPer1M: Number(entry.inputRatePer1M ?? 0),
+    outputPer1M: Number(entry.outputRatePer1M ?? 0),
+    ...(entry.cachedReadRatePer1M !== undefined ? { cachedReadPer1M: Number(entry.cachedReadRatePer1M) } : {}),
+    source: String(entry.sourceRef ?? fallbackSource),
+    verifiedAt: String(entry.asOfDate ?? fallbackVerifiedAt),
+    ...(entry.isEstimated ? { isUnknown: true } : {}),
+  };
+}
+
 /**
  * Curated OpenCode Registry.
  * Pinned physical model descriptors validated against official OpenCode Zen documentation & live discovery.
@@ -69,253 +96,157 @@ export interface RolePolicy {
  * - Gemini 3.8 Flash / 3.7 Flash -> /zen/v1/models/gemini-3.8-flash (gemini)
  * - DeepSeek V4.1 Flash / V4 Flash / Pro -> /zen/v1/chat/completions (openai-chat)
  */
-export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
+type CuratedSpec = Omit<ModelConfig, 'modelId' | 'pricing'> & {
+  modelId?: string;
+  pricingVersion?: string;
+  sourceRef?: string;
+};
+
+const OPENCODE_SPECS: Record<string, CuratedSpec> = {
   'deepseek-v4-flash': {
-    modelId: 'deepseek-v4-flash',
     displayName: 'DeepSeek V4 Flash',
     gateway: 'opencode',
     protocol: 'openai-chat',
     family: 'deepseek',
     supportsImages: false,
     budgetCap: 8192,
-    pricing: {
-      inputPer1M: 0.14,
-      outputPer1M: 0.28,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
   'deepseek-v4-pro': {
-    modelId: 'deepseek-v4-pro',
     displayName: 'DeepSeek V4 Pro',
     gateway: 'opencode',
     protocol: 'openai-chat',
     family: 'deepseek',
     supportsImages: false,
     budgetCap: 16384,
-    pricing: {
-      inputPer1M: 1.74,
-      outputPer1M: 3.48,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
   'gpt-5.6-luna': {
-    modelId: 'gpt-5.6-luna',
     displayName: 'GPT-5.6 Luna',
     gateway: 'opencode',
     protocol: 'openai-responses',
     family: 'openai',
     supportsImages: true,
     budgetCap: 8192,
-    pricing: {
-      inputPer1M: 0.20,
-      outputPer1M: 1.20,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
   'gpt-5.6-terra': {
-    modelId: 'gpt-5.6-terra',
     displayName: 'GPT-5.6 Terra',
     gateway: 'opencode',
     protocol: 'openai-responses',
     family: 'openai',
     supportsImages: true,
     budgetCap: 16384,
-    pricing: {
-      inputPer1M: 2.00,
-      outputPer1M: 12.00,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
   'gpt-5.6-sol': {
-    modelId: 'gpt-5.6-sol',
     displayName: 'GPT-5.6 Sol',
     gateway: 'opencode',
     protocol: 'openai-responses',
     family: 'openai',
     supportsImages: true,
     budgetCap: 32768,
-    pricing: {
-      inputPer1M: 5.00,
-      outputPer1M: 30.00,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
   'grok-4.6': {
-    modelId: 'grok-4.6',
     displayName: 'Grok 4.6',
     gateway: 'opencode',
     protocol: 'openai-responses',
     family: 'xai',
     supportsImages: true,
     budgetCap: 16384,
-    pricing: {
-      inputPer1M: 2.00,
-      outputPer1M: 6.00,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
   'claude-sonnet-5': {
-    modelId: 'claude-sonnet-5',
     displayName: 'Claude Sonnet 5',
     gateway: 'opencode',
     protocol: 'anthropic-messages',
     family: 'anthropic',
     supportsImages: true,
     budgetCap: 16384,
-    pricing: {
-      inputPer1M: 2.00,
-      outputPer1M: 10.00,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
   'claude-opus-5': {
-    modelId: 'claude-opus-5',
     displayName: 'Claude Opus 5',
     gateway: 'opencode',
     protocol: 'anthropic-messages',
     family: 'anthropic',
     supportsImages: true,
     budgetCap: 16384,
-    pricing: {
-      inputPer1M: 5.00,
-      outputPer1M: 25.00,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
   'claude-haiku-4-5': {
-    modelId: 'claude-haiku-4-5',
     displayName: 'Claude Haiku 4.5',
     gateway: 'opencode',
     protocol: 'anthropic-messages',
     family: 'anthropic',
     supportsImages: true,
     budgetCap: 8192,
-    pricing: {
-      inputPer1M: 1.00,
-      outputPer1M: 5.00,
-      cachedReadPer1M: 0.10,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
   'gemini-3.7-flash': {
-    modelId: 'gemini-3.7-flash',
     displayName: 'Gemini 3.7 Flash',
     gateway: 'opencode',
     protocol: 'gemini',
     family: 'google',
     supportsImages: true,
     budgetCap: 8192,
-    pricing: {
-      inputPer1M: 1.50,
-      outputPer1M: 7.50,
-      source: 'opencode-zen-official',
-      verifiedAt: '2026-08-16',
-    },
   },
 
   'gpt-6-sol': {
-    modelId: 'gpt-6-sol',
     displayName: 'GPT-6 Sol',
     gateway: 'opencode',
     protocol: 'openai-responses',
     family: 'openai',
     supportsImages: true,
     budgetCap: 32768,
-    pricing: {
-      inputPer1M: 2.00,
-      outputPer1M: 10.00,
-      source: 'openai-official',
-      verifiedAt: '2026-10-06',
-    },
+    pricingVersion: '2026-10-06',
+    sourceRef: 'openai-official',
   },
   'gpt-6-luna': {
-    modelId: 'gpt-6-luna',
     displayName: 'GPT-6 Luna',
     gateway: 'opencode',
     protocol: 'openai-responses',
     family: 'openai',
     supportsImages: true,
     budgetCap: 8192,
-    pricing: {
-      inputPer1M: 0.10,
-      outputPer1M: 0.50,
-      source: 'openai-official',
-      verifiedAt: '2026-10-06',
-    },
+    pricingVersion: '2026-10-06',
+    sourceRef: 'openai-official',
   },
   'claude-opus-5-5': {
-    modelId: 'claude-opus-5-5',
     displayName: 'Claude Opus 5.5',
     gateway: 'opencode',
     protocol: 'anthropic-messages',
     family: 'anthropic',
     supportsImages: true,
     budgetCap: 32768,
-    pricing: {
-      inputPer1M: 4.00,
-      outputPer1M: 20.00,
-      source: 'anthropic-official',
-      verifiedAt: '2026-10-06',
-    },
+    pricingVersion: '2026-10-06',
+    sourceRef: 'anthropic-official',
   },
   'claude-sonnet-5-5': {
-    modelId: 'claude-sonnet-5-5',
     displayName: 'Claude Sonnet 5.5',
     gateway: 'opencode',
     protocol: 'anthropic-messages',
     family: 'anthropic',
     supportsImages: true,
     budgetCap: 16384,
-    pricing: {
-      inputPer1M: 2.00,
-      outputPer1M: 10.00,
-      source: 'anthropic-official',
-      verifiedAt: '2026-10-06',
-    },
+    pricingVersion: '2026-10-06',
+    sourceRef: 'anthropic-official',
   },
   'gemini-3.8-flash': {
-    modelId: 'gemini-3.8-flash',
     displayName: 'Gemini 3.8 Flash',
     gateway: 'opencode',
     protocol: 'gemini',
     family: 'google',
     supportsImages: true,
     budgetCap: 8192,
-    pricing: {
-      inputPer1M: 0.75,
-      outputPer1M: 3.75,
-      source: 'google-official',
-      verifiedAt: '2026-10-06',
-    },
+    pricingVersion: '2026-10-06',
+    sourceRef: 'google-official',
   },
   'deepseek-v4-1-flash': {
-    modelId: 'deepseek-v4-1-flash',
     displayName: 'DeepSeek V4.1 Flash',
     gateway: 'opencode',
     protocol: 'openai-chat',
     family: 'deepseek',
     supportsImages: true,
     budgetCap: 8192,
-    pricing: {
-      inputPer1M: 0.30,
-      outputPer1M: 1.20,
-      source: 'deepseek-official',
-      verifiedAt: '2026-10-07',
-    },
+    pricingVersion: '2026-10-07',
+    sourceRef: 'deepseek-official',
   },
 
   // Quarantined Free/Experimental Models (NEVER in automatic production fallbacks)
   'deepseek-v4-flash-free': {
-    modelId: 'deepseek-v4-flash-free',
     displayName: 'DeepSeek V4 Flash (Free Tier — Data Retention Permissive)',
     gateway: 'opencode',
     protocol: 'openai-chat',
@@ -323,15 +254,10 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
     supportsImages: false,
     budgetCap: 8192,
     isExperimentalFree: true,
-    pricing: {
-      inputPer1M: 0.0,
-      outputPer1M: 0.0,
-      source: 'opencode-zen-free-tier',
-      verifiedAt: '2026-08-16',
-    },
+    pricingVersion: '2026-08-16',
+    sourceRef: 'opencode-zen-free-tier',
   },
   'mimo-v2.5-free': {
-    modelId: 'mimo-v2.5-free',
     displayName: 'Mimo V2.5 (Free Tier — Data Retention Permissive)',
     gateway: 'opencode',
     protocol: 'openai-chat',
@@ -339,14 +265,21 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = {
     supportsImages: false,
     budgetCap: 4096,
     isExperimentalFree: true,
-    pricing: {
-      inputPer1M: 0.0,
-      outputPer1M: 0.0,
-      source: 'opencode-zen-free-tier',
-      verifiedAt: '2026-08-16',
-    },
+    pricingVersion: '2026-08-16',
+    sourceRef: 'opencode-zen-free-tier',
   },
 };
+
+export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = Object.fromEntries(
+  Object.entries(OPENCODE_SPECS).map(([key, spec]) => [
+    key,
+    {
+      ...spec,
+      modelId: spec.modelId ?? key,
+      pricing: getCuratedPricing(spec.modelId ?? key, spec.pricingVersion, spec.sourceRef),
+    },
+  ])
+);
 
 /**
  * Standard Production Route Policy (Initial Hypotheses).

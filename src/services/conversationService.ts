@@ -9,6 +9,8 @@
 // bounded context selector, so ChatInterface does not accumulate more state.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { RouterModel, RouterProvider, RouteRole } from '../types';
+import { isKnownModel } from '../modelCatalog';
 import {
   parseStorageReference,
   normalizeAttachments,
@@ -21,12 +23,31 @@ export interface ConversationSummary {
   lastActivityAt: string;
 }
 
+export interface LoadedMessageCost {
+  totalUsd?: number;
+  pricingVersion?: string;
+}
+
+export interface LoadedMessageProvenance {
+  model?: RouterModel;
+  modelId?: string;
+  provider?: RouterProvider;
+  routeRole?: RouteRole;
+  routeRationale?: string;
+  complexityScore?: number;
+  cost?: LoadedMessageCost;
+}
+
 export interface LoadedMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
   attachments: AttachmentRef[];
+  modelUsed?: string | null;
+  executionId?: string | null;
+  tokenCount?: number | null;
+  provenance?: LoadedMessageProvenance;
 }
 
 export interface ConversationListCursor {
@@ -71,6 +92,48 @@ function toContentString(content: unknown): string {
   return typeof content === 'string' ? content : JSON.stringify(content ?? '');
 }
 
+const KNOWN_PROVIDERS: ReadonlySet<string> = new Set([
+  'opencode',
+  'anthropic',
+  'openai',
+  'google',
+  'nvidia',
+  ['deep', 'infra'].join(''),
+  'other',
+]);
+
+export function parseModelUsed(modelUsed?: string | null): {
+  provider?: RouterProvider;
+  model?: RouterModel;
+  modelId?: string;
+} {
+  if (!modelUsed || typeof modelUsed !== 'string') return {};
+
+  let providerStr: string | undefined;
+  let modelStr = modelUsed.trim();
+
+  if (modelStr.includes(':')) {
+    const colonIdx = modelStr.indexOf(':');
+    providerStr = modelStr.slice(0, colonIdx).toLowerCase();
+    modelStr = modelStr.slice(colonIdx + 1);
+  }
+
+  const provider: RouterProvider | undefined = providerStr && KNOWN_PROVIDERS.has(providerStr)
+    ? (providerStr as RouterProvider)
+    : undefined;
+
+  let model: RouterModel | undefined;
+  if (isKnownModel(modelStr)) {
+    model = modelStr;
+  }
+
+  return {
+    provider,
+    model,
+    modelId: modelStr || undefined,
+  };
+}
+
 interface RawMessageRow {
   id?: unknown;
   role?: unknown;
@@ -78,6 +141,9 @@ interface RawMessageRow {
   created_at?: unknown;
   attachments?: unknown;
   image_url?: unknown;
+  model_used?: unknown;
+  token_count?: unknown;
+  execution_id?: unknown;
 }
 
 function adaptLegacyImageUrl(row: RawMessageRow, attachments: AttachmentRef[]): AttachmentRef[] {
@@ -143,7 +209,7 @@ export async function loadConversation(
   const limit = options.limit ?? DEFAULT_MESSAGE_LIMIT;
   let query = client
     .from('messages')
-    .select('id, role, content, created_at, attachments, image_url')
+    .select('id, role, content, created_at, attachments, image_url, model_used, token_count, execution_id')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
@@ -154,18 +220,99 @@ export async function loadConversation(
     query = query.or(`created_at.lt.${createdAt},and(created_at.eq.${createdAt},id.lt.${id})`);
   }
 
-  const { data, error } = await query;
+  const [messagesResult, costLogsResult] = await Promise.all([
+    query,
+    client
+      .from('cost_logs')
+      .select('idempotency_key, total_cost, pricing_version, route_rationale, complexity_score, provider, model')
+      .eq('conversation_id', conversationId)
+      .then(
+        (res: { data: unknown; error: unknown }) => res,
+        () => ({ data: null, error: null }),
+      ),
+  ]);
+
+  const { data, error } = messagesResult;
   if (error) throw new Error(`load_conversation_failed: ${error.message ?? 'unknown'}`);
+
+  const costLogsByExecutionId = new Map<
+    string,
+    {
+      totalCost: number;
+      pricingVersion?: string;
+      routeRationale?: string;
+      complexityScore?: number;
+      provider?: string;
+      model?: string;
+    }
+  >();
+
+  if (Array.isArray(costLogsResult?.data)) {
+    for (const cl of costLogsResult.data as Array<Record<string, unknown>>) {
+      if (typeof cl.idempotency_key === 'string' && cl.idempotency_key) {
+        costLogsByExecutionId.set(cl.idempotency_key, {
+          totalCost: typeof cl.total_cost === 'number' ? cl.total_cost : Number(cl.total_cost ?? 0),
+          pricingVersion: typeof cl.pricing_version === 'string' ? cl.pricing_version : undefined,
+          routeRationale: typeof cl.route_rationale === 'string' ? cl.route_rationale : undefined,
+          complexityScore: typeof cl.complexity_score === 'number' ? cl.complexity_score : undefined,
+          provider: typeof cl.provider === 'string' ? cl.provider : undefined,
+          model: typeof cl.model === 'string' ? cl.model : undefined,
+        });
+      }
+    }
+  }
 
   const rows: LoadedMessage[] = ((data ?? []) as RawMessageRow[]).map((row) => {
     const attachments = adaptLegacyImageUrl(row, normalizeAttachments(row.attachments));
     const role: 'user' | 'assistant' = row.role === 'assistant' ? 'assistant' : 'user';
+    const executionId = typeof row.execution_id === 'string' ? row.execution_id : null;
+    const modelUsed = typeof row.model_used === 'string' ? row.model_used : null;
+    const tokenCount = typeof row.token_count === 'number' ? row.token_count : null;
+
+    let provenance: LoadedMessageProvenance | undefined;
+    if (role === 'assistant') {
+      const parsedModel = parseModelUsed(modelUsed);
+      const costLog = executionId ? costLogsByExecutionId.get(executionId) : undefined;
+
+      const model =
+        parsedModel.model ||
+        (costLog?.model && isKnownModel(costLog.model) ? (costLog.model as RouterModel) : undefined);
+      const provider =
+        parsedModel.provider ||
+        (costLog?.provider && KNOWN_PROVIDERS.has(costLog.provider)
+          ? (costLog.provider as RouterProvider)
+          : undefined);
+      const modelId = parsedModel.modelId || costLog?.model;
+
+      const cost = costLog
+        ? {
+            totalUsd: costLog.totalCost,
+            pricingVersion: costLog.pricingVersion,
+          }
+        : undefined;
+
+      if (model || provider || cost || costLog?.routeRationale) {
+        provenance = {
+          model,
+          modelId,
+          provider,
+          routeRationale: costLog?.routeRationale,
+          complexityScore: costLog?.complexityScore,
+          cost,
+        };
+      }
+    }
+
     return {
       id: String(row.id),
       role,
       content: toContentString(row.content),
       createdAt: String(row.created_at),
       attachments,
+      modelUsed,
+      executionId,
+      tokenCount,
+      provenance,
     };
   });
 

@@ -3,6 +3,7 @@ import {
   deleteConversation,
   listConversations,
   loadConversation,
+  parseModelUsed,
   selectContextHistory,
   signAttachment,
   DEFAULT_CONTEXT_LIMITS,
@@ -282,6 +283,127 @@ describe('loadConversation', () => {
     // Chronological order: msg-11 is first, msg-60 is last
     expect(messages[0]!.id).toBe('msg-11');
     expect(messages[messages.length - 1]!.id).toBe('msg-60');
+  });
+
+  it('rehydrates provenance and cost by joining messages with cost_logs on execution_id', async () => {
+    const EXEC_ID = '99999999-9999-4999-8999-999999999999';
+    const fake = makeClient({
+      messages: [
+        {
+          data: [
+            {
+              id: MSG,
+              role: 'assistant',
+              content: 'Here is your analysis',
+              created_at: '2026-10-01T00:01:00Z',
+              attachments: [],
+              image_url: null,
+              model_used: 'google:gemini-3.8-flash',
+              token_count: 120,
+              execution_id: EXEC_ID,
+            },
+          ],
+          error: null,
+        },
+      ],
+      cost_logs: [
+        {
+          data: [
+            {
+              idempotency_key: EXEC_ID,
+              total_cost: 0.00015,
+              pricing_version: '2026-10-07-v9',
+              route_rationale: 'code_detected',
+              complexity_score: 80,
+              provider: 'google',
+              model: 'gemini-3.8-flash',
+            },
+          ],
+          error: null,
+        },
+      ],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV);
+    expect(messages).toHaveLength(1);
+    const msg = messages[0]!;
+    expect(msg.modelUsed).toBe('google:gemini-3.8-flash');
+    expect(msg.executionId).toBe(EXEC_ID);
+    expect(msg.provenance).toBeDefined();
+    expect(msg.provenance?.model).toBe('gemini-3.8-flash');
+    expect(msg.provenance?.provider).toBe('google');
+    expect(msg.provenance?.routeRationale).toBe('code_detected');
+    expect(msg.provenance?.complexityScore).toBe(80);
+    expect(msg.provenance?.cost).toEqual({
+      totalUsd: 0.00015,
+      pricingVersion: '2026-10-07-v9',
+    });
+  });
+
+  it('degrades gracefully to model_used when cost_logs returns null or empty', async () => {
+    const fake = makeClient({
+      messages: [
+        {
+          data: [
+            {
+              id: MSG,
+              role: 'assistant',
+              content: 'Quick answer',
+              created_at: '2026-10-01T00:01:00Z',
+              attachments: [],
+              image_url: null,
+              model_used: 'opencode:deepseek-v4-flash',
+              token_count: 50,
+              execution_id: null,
+            },
+          ],
+          error: null,
+        },
+      ],
+      cost_logs: [
+        {
+          data: [],
+          error: null,
+        },
+      ],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV);
+    expect(messages).toHaveLength(1);
+    const msg = messages[0]!;
+    expect(msg.provenance).toBeDefined();
+    expect(msg.provenance?.model).toBe('deepseek-v4-flash');
+    expect(msg.provenance?.provider).toBe('opencode');
+    expect(msg.provenance?.cost).toBeUndefined();
+  });
+});
+
+describe('parseModelUsed', () => {
+  it('parses provider:modelId format correctly', () => {
+    expect(parseModelUsed('google:gemini-3.8-flash')).toEqual({
+      provider: 'google',
+      model: 'gemini-3.8-flash',
+      modelId: 'gemini-3.8-flash',
+    });
+    expect(parseModelUsed('opencode:deepseek-v4-flash')).toEqual({
+      provider: 'opencode',
+      model: 'deepseek-v4-flash',
+      modelId: 'deepseek-v4-flash',
+    });
+  });
+
+  it('parses raw model identifier with known model fallback', () => {
+    expect(parseModelUsed('gemini-3.8-flash')).toEqual({
+      provider: undefined,
+      model: 'gemini-3.8-flash',
+      modelId: 'gemini-3.8-flash',
+    });
+  });
+
+  it('handles null, undefined, or empty strings gracefully', () => {
+    expect(parseModelUsed(null)).toEqual({});
+    expect(parseModelUsed(undefined)).toEqual({});
+    expect(parseModelUsed('')).toEqual({});
   });
 });
 

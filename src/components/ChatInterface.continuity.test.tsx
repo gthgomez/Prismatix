@@ -166,4 +166,37 @@ describe('ChatInterface in-flight conversation load invalidation', () => {
 
     expect(container.textContent ?? '').not.toContain('Image attachment message');
   });
+
+  it('renders rehydrated model pill and cost badge on loaded assistant messages', async () => {
+    writeSelectedConversation(USER_A.id, CONV_A);
+    vi.mocked(loadConversation).mockResolvedValue([
+      {
+        id: '55555555-5555-4555-8555-555555555555',
+        role: 'assistant',
+        content: 'Historical response with provenance',
+        createdAt: '2026-10-01T00:00:00Z',
+        attachments: [],
+        provenance: {
+          model: 'deepseek-v4-flash',
+          provider: 'opencode',
+          cost: {
+            totalUsd: 0.00012,
+            pricingVersion: '2026-10-07-v9',
+          },
+          routeRationale: 'fast_path',
+        },
+      },
+    ]);
+
+    root = renderInto(container, <ChatInterface user={USER_A} onSignOut={onSignOut} />);
+    await flush();
+
+    const pill = container.querySelector('.message-model-pill');
+    expect(pill).not.toBeNull();
+    expect(pill?.textContent).toContain('V4 Flash');
+
+    const costBadge = container.querySelector('.message-model-override');
+    expect(costBadge).not.toBeNull();
+    expect(costBadge?.textContent).toContain('$0.0001 final');
+  });
 });

@@ -234,10 +234,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (!shouldStickToBottomRef.current) return;
     const lastMessage = messageRefs.current[messages.length - 1];
     if (lastMessage) {
-      lastMessage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (typeof lastMessage.scrollIntoView === 'function') {
+        lastMessage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
       return;
     }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' });
   }, [messages.length]);
 
   // Keep attachment preview visible when user is already at bottom.
@@ -519,11 +521,37 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           });
         }
       }
+      const provenance = item.provenance;
       mapped.push({
         role: item.role,
         content: item.content,
         timestamp: Date.parse(item.createdAt) || Date.now(),
         ...(attachments.length > 0 ? { attachments } : {}),
+        ...(provenance?.model ? { model: provenance.model } : {}),
+        ...(provenance?.modelId ? { modelId: provenance.modelId } : {}),
+        ...(provenance?.provider ? { provider: provenance.provider } : {}),
+        ...(provenance?.routeRole ? { routeRole: provenance.routeRole } : {}),
+        ...(provenance?.cost
+          ? {
+              cost: {
+                finalUsd: provenance.cost.totalUsd,
+                pricingVersion: provenance.cost.pricingVersion,
+              },
+            }
+          : {}),
+        ...(provenance?.routeRationale
+          ? {
+              routeInfo: {
+                selection: provenance.routeRationale === 'manual_override' ? 'override' : 'auto',
+                modelTier: provenance.model || currentModel,
+                gateway: provenance.provider === 'opencode' ? 'opencode' : 'direct_fallback',
+                reason: provenance.routeRationale,
+                fallbackUsed: false,
+                priceKnown: true,
+                role: provenance.routeRole,
+              },
+            }
+          : {}),
       });
     }
     return mapped;
