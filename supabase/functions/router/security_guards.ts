@@ -1,4 +1,9 @@
 import type { ImageAttachment, Message } from './router_logic.ts';
+import {
+  MAX_ATTACHMENT_REFS,
+  MAX_STORAGE_REF_CHARS,
+  type AttachmentRef,
+} from '../_shared/conversation_attachments.ts';
 
 export const REQUEST_LIMITS = {
   maxQueryChars: 50_000,
@@ -28,10 +33,13 @@ export type RouterPlatform = 'web' | 'mobile';
 export interface NormalizedRouterRequest {
   conversationId: string;
   query: string;
+  /** PX07: the user's original query (display/persist), before text-file merge. */
+  originalQuery?: string;
   platform: RouterPlatform;
   history: Message[];
   images: ImageAttachment[];
   videoAssetIds: string[];
+  attachmentRefs: AttachmentRef[];
   imageStorageUrl?: string;
   modelOverride?: string;
   geminiFlashThinkingLevel?: string;
@@ -90,6 +98,15 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
     return reject(413, 'Payload Too Large: query exceeds maximum length');
   }
 
+  const originalQueryResult = optionalString(
+    input.originalQuery,
+    'originalQuery',
+    REQUEST_LIMITS.maxQueryChars,
+  );
+  if (!originalQueryResult.ok) {
+    return originalQueryResult;
+  }
+
   const historyResult = normalizeHistory(input.history);
   if (!historyResult.ok) {
     return historyResult;
@@ -103,6 +120,11 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
   const videoAssetIdsResult = normalizeVideoAssetIds(input.videoAssetIds);
   if (!videoAssetIdsResult.ok) {
     return videoAssetIdsResult;
+  }
+
+  const attachmentRefsResult = normalizeAttachmentRefs(input.attachmentRefs);
+  if (!attachmentRefsResult.ok) {
+    return attachmentRefsResult;
   }
 
   const platformResult = normalizePlatform(input.platform);
@@ -140,10 +162,12 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
     value: {
       conversationId: rawConversationId,
       query,
+      originalQuery: originalQueryResult.value,
       platform: platformResult.value,
       history: historyResult.value,
       images: imagesResult.value,
       videoAssetIds: videoAssetIdsResult.value,
+      attachmentRefs: attachmentRefsResult.value,
       imageStorageUrl: imageStorageUrlResult.value,
       modelOverride: modelOverrideResult.value,
       geminiFlashThinkingLevel: thinkingResult.value,
@@ -350,6 +374,91 @@ function normalizeVideoAssetIds(input: unknown): GuardResult<string[]> {
   }
 
   return { ok: true, value: videoAssetIds };
+}
+
+function normalizeAttachmentRefs(input: unknown): GuardResult<AttachmentRef[]> {
+  if (input === undefined || input === null) {
+    return { ok: true, value: [] };
+  }
+  if (!Array.isArray(input)) {
+    return reject(400, 'Bad Request: attachmentRefs must be an array');
+  }
+  if (input.length > MAX_ATTACHMENT_REFS) {
+    return reject(413, 'Payload Too Large: too many attachmentRefs');
+  }
+
+  const refs: AttachmentRef[] = [];
+  for (const item of input) {
+    if (!isRecord(item)) {
+      return reject(400, 'Bad Request: each attachmentRef must be an object');
+    }
+    if (item.kind !== 'image' && item.kind !== 'video' && item.kind !== 'file') {
+      return reject(400, 'Bad Request: attachmentRef kind must be image, video, or file');
+    }
+    if (
+      typeof item.ordinal !== 'number' ||
+      !Number.isInteger(item.ordinal) ||
+      item.ordinal < 0
+    ) {
+      return reject(400, 'Bad Request: attachmentRef ordinal must be a non-negative integer');
+    }
+    const storageRef = item.storageRef ?? null;
+    if (storageRef !== null && typeof storageRef !== 'string') {
+      return reject(400, 'Bad Request: attachmentRef storageRef must be a string or null');
+    }
+    if (storageRef !== null && storageRef.length > MAX_STORAGE_REF_CHARS) {
+      return reject(413, 'Payload Too Large: attachmentRef storageRef exceeds maximum length');
+    }
+    const videoAssetId = item.videoAssetId ?? null;
+    if (videoAssetId !== null && !isUuid(videoAssetId)) {
+      return reject(400, 'Bad Request: attachmentRef videoAssetId must be a UUID or null');
+    }
+    const name = item.name ?? null;
+    if (name !== null && typeof name !== 'string') {
+      return reject(400, 'Bad Request: attachmentRef name must be a string or null');
+    }
+    if (name !== null && name.length > REQUEST_LIMITS.maxOptionalStringChars) {
+      return reject(413, 'Payload Too Large: attachmentRef name exceeds maximum length');
+    }
+    const size = item.size ?? null;
+    if (
+      size !== null &&
+      (typeof size !== 'number' || !Number.isFinite(size) || size < 0)
+    ) {
+      return reject(400, 'Bad Request: attachmentRef size must be a non-negative number or null');
+    }
+
+    // `file` (text/code) entries carry only name/size metadata: require a
+    // non-empty name and drop any storageRef/videoAssetId, mirroring the SQL
+    // validation branch.
+    if (item.kind === 'file') {
+      if (name === null || name.length === 0) {
+        return reject(400, 'Bad Request: file attachmentRef requires a non-empty name');
+      }
+      refs.push({
+        ordinal: item.ordinal,
+        kind: 'file',
+        storageRef: null,
+        videoAssetId: null,
+        available: true,
+        name,
+        ...(size === null ? {} : { size }),
+      });
+      continue;
+    }
+
+    refs.push({
+      ordinal: item.ordinal,
+      kind: item.kind,
+      storageRef,
+      videoAssetId,
+      available: item.available === true,
+      ...(name === null ? {} : { name }),
+      ...(size === null ? {} : { size }),
+    });
+  }
+
+  return { ok: true, value: refs };
 }
 
 function normalizePlatform(input: unknown): GuardResult<RouterPlatform> {

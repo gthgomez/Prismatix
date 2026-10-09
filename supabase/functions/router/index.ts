@@ -76,7 +76,7 @@ import {
   computeUserTokenCount,
   estimateVideoPromptTokens,
   persistCostLog,
-  persistMessageAsync,
+  persistExecutionMessage,
   validateConversation,
 } from './db_helpers.ts';
 import {
@@ -89,6 +89,10 @@ import {
   type ExecutionStoreClient,
 } from './execution_store.ts';
 import type { TerminalReceipt } from '../_shared/execution_receipt.ts';
+import {
+  attachmentRefIsOwned,
+  type AttachmentRef,
+} from '../_shared/conversation_attachments.ts';
 import { openExecutionForRequest } from './execution_gate.ts';
 import {
   admitExecution,
@@ -2096,7 +2100,9 @@ Deno.serve(async (req: Request) => {
       history,
       images: imageAttachments,
       videoAssetIds = [],
+      attachmentRefs = [],
       imageStorageUrl,
+      originalQuery,
       modelOverride,
       geminiFlashThinkingLevel,
       mode,
@@ -2175,6 +2181,39 @@ Deno.serve(async (req: Request) => {
         status: videoValidation.error === 'video_not_ready' ? 409 : 400,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       });
+    }
+
+    // PX07: build the persisted attachment projection from the client's
+    // descriptors, preserving each original ordinal. Only owned image refs and
+    // READY, owned video assets are persisted; a failed/foreign ref is dropped
+    // (never another subject's path, never a signed URL). A dropped earlier
+    // attachment does not renumber the survivors.
+    const readyVideoIds = new Set(videoValidation.ids);
+    const persistedAttachments: AttachmentRef[] = [];
+    for (const ref of attachmentRefs) {
+      if (ref.kind === 'file') {
+        // Text/code metadata only: name/size, never content, never an object.
+        persistedAttachments.push(ref);
+      } else if (ref.kind === 'image') {
+        if (attachmentRefIsOwned(ref, userId)) persistedAttachments.push(ref);
+      } else if (ref.videoAssetId && readyVideoIds.has(ref.videoAssetId)) {
+        persistedAttachments.push(ref);
+      }
+    }
+    // Back-compat projection of the first persisted image (or an
+    // OWNERSHIP-VALIDATED legacy single-image storage ref). A foreign path is
+    // never persisted, even via the legacy field.
+    let legacyImageUrl =
+      persistedAttachments.find((ref) => ref.kind === 'image')?.storageRef ?? null;
+    if (!legacyImageUrl && imageStorageUrl) {
+      const legacyCandidate: AttachmentRef = {
+        ordinal: 0,
+        kind: 'image',
+        storageRef: imageStorageUrl,
+        videoAssetId: null,
+        available: true,
+      };
+      if (attachmentRefIsOwned(legacyCandidate, userId)) legacyImageUrl = imageStorageUrl;
     }
 
     let memoryRetrieval: MemoryRetrievalResult = {
@@ -2652,6 +2691,50 @@ Deno.serve(async (req: Request) => {
     let smdFastPathHit = false;
     let smdRunLog: SmdStageLog | null = null;
 
+    // PX07: durably persist the user turn BEFORE any provider dispatch. The
+    // persisted content is the user's original `query` (NOT the memory/video-
+    // expanded `effectiveQuery`). A failure fails CLOSED: the reservation is
+    // released, the execution is finalized failed, and the client gets 503 with
+    // ZERO provider calls.
+    const userTokenCount = computeUserTokenCount(
+      query,
+      imageAttachments,
+      estimatedVideoPromptTokens,
+    );
+    try {
+      const userPersist = await persistExecutionMessage(storeClient, {
+        subjectId: userId,
+        conversationId,
+        executionId: activeExecution.id,
+        role: 'user',
+        content: originalQuery ?? query,
+        tokenCount: userTokenCount,
+        modelUsed: `${decision.provider}:${decision.model}`,
+        attachments: persistedAttachments,
+        legacyImageUrl: legacyImageUrl ?? undefined,
+      });
+      // A genuine (execution_id, role) conflict means the same execution already
+      // recorded a DIFFERENT turn: persist truthfully or fail closed.
+      if (userPersist.conflict) {
+        throw new Error('message_conflict');
+      }
+    } catch (persistError) {
+      console.error('[PX07] pre-inference user persist failed; refusing request (503)', {
+        conversationId,
+        executionId: activeExecution.id,
+        error: persistError instanceof Error ? persistError.message : String(persistError),
+      });
+      await settleAdmission('release', { reason: 'transcript_unavailable' });
+      await finalizeLedger('failed', 'transcript_unavailable');
+      return new Response(
+        JSON.stringify({ error: 'transcript_unavailable', code: 'transcript_unavailable' }),
+        {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
     const releaseStreamSlot = acquireUserStreamSlot(userId);
     if (!releaseStreamSlot) {
       // No provider call was made: confirmed-zero work, so release the hold.
@@ -2873,18 +2956,6 @@ Deno.serve(async (req: Request) => {
 
     const effectiveModelId = upstream.effectiveModelId || responseDecision.model;
 
-    const userTokenCount = computeUserTokenCount(query, imageAttachments, estimatedVideoPromptTokens);
-    persistMessageAsync(
-      supabaseClient as unknown as ReturnType<typeof createClient>,
-      conversationId,
-      userId,
-      'user',
-      query,
-      userTokenCount,
-      `${responseDecision.provider}:${effectiveModelId}`,
-      imageStorageUrl,
-    );
-
     if (!upstream.response.body) {
       releaseStreamSlot();
       // The provider was called but returned no stream; settle from the ledger.
@@ -3008,16 +3079,57 @@ Deno.serve(async (req: Request) => {
             }
           }
 
+          // PX07: persist the assistant turn durably. A failure here does NOT
+          // abort the (already completed) response; it marks the terminal
+          // receipt `transcript.saved=false` and records a durable
+          // reconciliation job. Billing/execution truth is unchanged.
+          let transcript: { saved: boolean } | undefined;
           if (assistantText.trim()) {
-            persistMessageAsync(
-              supabaseClient as unknown as ReturnType<typeof createClient>,
-              conversationId,
-              userId,
-              'assistant',
-              assistantText,
-              assistantTokenCount,
-              `${responseDecision.provider}:${effectiveModelId}`,
-            );
+            try {
+              const assistantPersist = await persistExecutionMessage(storeClient, {
+                subjectId: userId,
+                conversationId,
+                executionId: activeExecution.id,
+                role: 'assistant',
+                content: assistantText,
+                tokenCount: assistantTokenCount,
+                modelUsed: `${responseDecision.provider}:${effectiveModelId}`,
+                attachments: [],
+              });
+              if (assistantPersist.conflict) {
+                // A (execution_id, role) conflict means the durable row already
+                // exists with DIFFERENT content: never claim it was saved.
+                transcript = { saved: false };
+                console.error('[PX07] assistant persist conflict; transcript.saved=false', {
+                  conversationId,
+                  executionId: activeExecution.id,
+                });
+                await safeEnqueueReconciliation(
+                  storeClient,
+                  activeExecution.id,
+                  'assistant_transcript_conflict',
+                  { conversationId, userId },
+                );
+              } else {
+                transcript = { saved: true };
+              }
+            } catch (assistantPersistError) {
+              transcript = { saved: false };
+              console.error('[PX07] post-inference assistant persist failed:', {
+                conversationId,
+                executionId: activeExecution.id,
+                error:
+                  assistantPersistError instanceof Error
+                    ? assistantPersistError.message
+                    : String(assistantPersistError),
+              });
+              await safeEnqueueReconciliation(
+                storeClient,
+                activeExecution.id,
+                'assistant_transcript_failed',
+                { conversationId, userId },
+              );
+            }
             // INVARIANT: Mobile clients (Prism) own their own conversation history.
             // Server-side long-term memory extraction/summarization is bypassed for platform === 'mobile'.
             if (platform !== 'mobile') {
@@ -3071,6 +3183,11 @@ Deno.serve(async (req: Request) => {
                 {},
               );
             }
+          }
+          // PX07: attach the transcript durability marker (omit when the
+          // assistant turn was not persisted). Never a false durable claim.
+          if (transcript && receipt) {
+            receipt = { ...receipt, transcript };
           }
           return receipt ? { receipt } : {};
         } finally {

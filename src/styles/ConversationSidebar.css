@@ -1,0 +1,168 @@
+/* PX07 conversation sidebar */
+.conversation-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 240px;
+  min-width: 200px;
+  padding: 0.75rem;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.conversation-new-button {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.conversation-new-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.conversation-sidebar-status {
+  font-size: 0.8rem;
+  opacity: 0.6;
+  padding: 0.25rem 0.25rem;
+}
+
+.conversation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.conversation-item {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
+.conversation-item.selected .conversation-item-button {
+  background: rgba(120, 160, 255, 0.18);
+  border-color: rgba(120, 160, 255, 0.45);
+}
+
+.conversation-item-button {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.conversation-item-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.conversation-item-title {
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conversation-item-activity {
+  font-size: 0.7rem;
+  opacity: 0.55;
+}
+
+.conversation-item-delete {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.55;
+  padding: 0 0.35rem;
+}
+
+.conversation-item-delete:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.conversation-item-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+/* Bounded-context indicator */
+.context-out-of-window-indicator {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  padding: 0.25rem 0.5rem;
+}
+
+.duplicate-request-notice {
+  font-size: 0.75rem;
+  opacity: 0.8;
+  padding: 0.25rem 0.5rem;
+}
+
+.message-attachments-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.message-video-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.message-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+}
+
+.message-image-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+/* Sidebar + chat layout */
+.app-with-sidebar {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+.app-with-sidebar .chat-container {
+  flex: 1;
+  min-width: 0;
+}

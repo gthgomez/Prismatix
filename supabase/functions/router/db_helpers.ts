@@ -6,6 +6,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { countTokens, countImageTokens, type ImageAttachment } from './router_logic.ts';
 import { isUuid } from './security_guards.ts';
 import type { CostStatus } from './execution_store.ts';
+import type { AttachmentRef } from '../_shared/conversation_attachments.ts';
 
 // ============================================================================
 // TYPES
@@ -120,63 +121,95 @@ export async function validateConversation(
 }
 
 // ============================================================================
-// MESSAGE PERSISTENCE
+// MESSAGE PERSISTENCE (PX07)
 // ============================================================================
 
-export function persistMessageAsync(
-  supabase: ReturnType<typeof createClient>,
-  conversationId: string,
-  userId: string,
-  role: 'user' | 'assistant',
-  content: string,
-  tokenCount: number,
-  modelUsed?: string,
-  imageUrl?: string,
-): void {
-  (async () => {
-    try {
-      const messageRecord: MessageRecord = {
-        conversation_id: conversationId,
-        role,
-        content,
-        token_count: tokenCount,
-        model_used: modelUsed || undefined,
-        image_url: imageUrl || undefined,
-      };
+export interface PersistExecutionMessageInput {
+  subjectId: string;
+  conversationId: string;
+  executionId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  tokenCount: number;
+  modelUsed?: string | undefined;
+  attachments?: AttachmentRef[] | undefined;
+  legacyImageUrl?: string | undefined;
+}
 
-      // Sequential awaits: insert the message first, then bump the token
-      // counter. Running these concurrently (Promise.all) risks a partial
-      // failure where the message row exists but the counter was not
-      // incremented (or vice-versa), causing silent token-count drift.
-      const { error: insertError } = await supabase.from('messages').insert(messageRecord as never);
-      if (insertError) {
-        console.error('[DB] Message insert failed:', {
-          code: insertError.code,
-          message: insertError.message,
-        });
-        return;
-      }
+export interface PersistExecutionMessageResult {
+  messageId: string | null;
+  inserted: boolean;
+  conflict: boolean;
+}
 
-      const { error: rpcError } = await supabase.rpc('increment_token_count_for_user', {
-        p_conversation_id: conversationId,
-        p_user_id: userId,
-        p_tokens: tokenCount,
-      } as never);
-      if (rpcError) {
-        // The message row is already persisted; the counter was not bumped.
-        // Log loudly so the drift is visible and can be reconciled.
-        console.error('[DB] Token count increment failed after message insert:', {
-          code: rpcError.code,
-          message: rpcError.message,
-          conversationId,
-          userId,
-          tokenCount,
-        });
-      }
-    } catch (err) {
-      console.error('[DB] Persist failed:', err);
+/**
+ * Minimal structural client so this module stays free of `npm:` specifiers and
+ * is injectable by vitest.
+ */
+export interface MessagePersistenceClient {
+  rpc(
+    functionName: string,
+    params?: Record<string, unknown>,
+  ): PromiseLike<{
+    data?: unknown;
+    error?: { code?: string; message?: string } | null;
+  }>;
+}
+
+export class PersistMessageError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message?: string) {
+    super(message ?? `persist_message_failed: ${code}`);
+    this.name = 'PersistMessageError';
+    this.code = code;
+  }
+}
+
+/**
+ * PX07: durably persist a user or assistant message through the
+ * service-role-only `public.px07_persist_message` RPC. This is awaited by the
+ * router:
+ *   * a pre-inference user-persist failure must fail the request closed
+ *     (503 `transcript_unavailable`, zero provider calls);
+ *   * an idempotent replay returns the existing row (`inserted: false`);
+ *   * a genuine (execution_id, role) replay with different content/attachments
+ *     is a conflict (SQLSTATE `PT409`), surfaced as `conflict: true`.
+ */
+export async function persistExecutionMessage(
+  client: MessagePersistenceClient,
+  input: PersistExecutionMessageInput,
+): Promise<PersistExecutionMessageResult> {
+  const response = await client.rpc('px07_persist_message', {
+    p_subject_id: input.subjectId,
+    p_conversation_id: input.conversationId,
+    p_execution_id: input.executionId,
+    p_role: input.role,
+    p_content: input.content,
+    p_token_count: input.tokenCount,
+    p_model_used: input.modelUsed ?? null,
+    p_attachments: input.attachments ?? [],
+    p_legacy_image_url: input.legacyImageUrl ?? null,
+  });
+
+  if (response.error) {
+    const code = response.error.code;
+    const message = response.error.message ?? '';
+    if (code === 'PT409' || message.includes('message_conflict')) {
+      return { messageId: null, inserted: false, conflict: true };
     }
-  })();
+    throw new PersistMessageError(
+      'persist_message_failed',
+      `persist_message_failed: ${message || 'unknown database error'}`,
+    );
+  }
+
+  const payload = response.data as { message_id?: unknown; inserted?: unknown } | null | undefined;
+  return {
+    messageId: typeof payload?.message_id === 'string' ? payload.message_id : null,
+    inserted: payload?.inserted === true,
+    conflict: false,
+  };
 }
 
 // ============================================================================
