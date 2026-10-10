@@ -81,8 +81,33 @@ describe('ChatInterface End-to-End Integration Flow', () => {
   let root: Root | null = null;
 
   beforeEach(() => {
+    localStorage.clear();
     host = document.createElement('div');
     document.body.appendChild(host);
+  });
+
+  it('names the message input and reflects automatic versus manual routing in the selector', async () => {
+    root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);
+    await act(async () => { await flushPromises(); });
+
+    const input = host.querySelector('textarea');
+    expect(input?.getAttribute('aria-label')).toBe('Message Prismatix');
+    const selector = host.querySelector<HTMLButtonElement>('.model-indicator-button')!;
+    expect(selector.textContent).toContain('Auto routing');
+    expect(selector.getAttribute('aria-expanded')).toBe('false');
+
+    act(() => selector.click());
+    expect(selector.getAttribute('aria-expanded')).toBe('true');
+    act(() => host.querySelector<HTMLButtonElement>('[role="tab"]:nth-child(2)')!.click());
+    act(() => host.querySelector<HTMLButtonElement>('.model-option')!.click());
+    expect(selector.textContent).toContain('Manual');
+    expect(selector.textContent).not.toContain('Auto routing');
+    expect(selector.getAttribute('aria-expanded')).toBe('false');
+
+    act(() => selector.click());
+    act(() => host.querySelector<HTMLButtonElement>('.auto-mode-btn')!.click());
+    expect(selector.textContent).toContain('Auto routing');
+    expect(selector.textContent).not.toContain('Manual');
   });
 
   afterEach(() => {
@@ -94,6 +119,27 @@ describe('ChatInterface End-to-End Integration Flow', () => {
     }
     host.remove();
     vi.clearAllMocks();
+  });
+
+  it('resizes suggested prompts, caps long drafts, and restores the empty composer height', async () => {
+    root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);
+    await act(async () => { await flushPromises(); });
+    const input = host.querySelector<HTMLTextAreaElement>('textarea')!;
+    let contentHeight = 120;
+    // JSDOM does not perform text layout; supply only the browser's measurement.
+    Object.defineProperty(input, 'scrollHeight', {
+      configurable: true, get: () => input.value ? contentHeight : 44,
+    });
+    act(() => host.querySelector<HTMLButtonElement>('.prompt-starter-chip')!.click());
+    expect(input.style.height).toBe('120px');
+    contentHeight = 360;
+    act(() => host.querySelectorAll<HTMLButtonElement>('.prompt-starter-chip')[1]!.click());
+    expect(input.style.height).toBe('200px');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(input.style.height).toBe('44px');
   });
 
   it('renders chat layout, model selector, suggestions, and toggles mobile drawer', async () => {
@@ -163,6 +209,12 @@ describe('ChatInterface End-to-End Integration Flow', () => {
     act(() => {
       starterChip.click();
     });
+    const originalInput = host.querySelector<HTMLTextAreaElement>('textarea')!;
+    expect(document.activeElement).toBe(originalInput);
+    expect(originalInput.value.length).toBeGreaterThan(0);
+    act(() => host.querySelector<HTMLButtonElement>('.chats-toggle-button')!.click());
+    expect(host.querySelector('textarea')).toBe(originalInput);
+    expect(originalInput.value.length).toBeGreaterThan(0);
 
     // Send Button should now be enabled
     const sendButton = host.querySelector('.send-button') as HTMLButtonElement;
@@ -184,6 +236,8 @@ describe('ChatInterface End-to-End Integration Flow', () => {
     expect(assistantMessages.length).toBeGreaterThan(0);
     const firstAssistantMsg = assistantMessages[0]!;
     expect(firstAssistantMsg.textContent).toContain('Here is the solution:');
+    expect(host.querySelector('textarea')).toBe(originalInput);
+    expect(host.querySelector('.prompt-starters-section')).toBeNull();
 
     // Code block with copy button (.code-block-wrapper and .code-copy-btn)
     const codeBlock = firstAssistantMsg.querySelector('.code-block-wrapper');
@@ -196,6 +250,11 @@ describe('ChatInterface End-to-End Integration Flow', () => {
     const modelPill = firstAssistantMsg.querySelector('.message-model-pill');
     expect(modelPill).not.toBeNull();
     expect(modelPill?.textContent).toContain('DeepSeek V4 Flash');
+
+    act(() => host.querySelector<HTMLButtonElement>('.chats-toggle-button')!.click());
+    act(() => host.querySelector<HTMLButtonElement>('.conversation-new-button')!.click());
+    expect(host.querySelector('textarea')).toBe(originalInput);
+    expect(host.querySelector('.prompt-starters-section')).not.toBeNull();
   });
 
   it('resets conversation state cleanly when clicking New Chat', async () => {
