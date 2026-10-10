@@ -20,6 +20,17 @@ export interface ConversationSidebarProps {
 function formatActivity(value: string): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return '';
+  const diffMs = Date.now() - timestamp;
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'Yesterday';
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
   return new Date(timestamp).toLocaleDateString();
 }
 
@@ -104,7 +115,10 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
                   <span className='conversation-item-title'>
                     {conversation.title ?? 'Untitled conversation'}
                   </span>
-                  <span className='conversation-item-activity'>
+                  <span
+                    className='conversation-item-activity'
+                    title={new Date(Date.parse(conversation.lastActivityAt)).toLocaleString()}
+                  >
                     {formatActivity(conversation.lastActivityAt)}
                   </span>
                 </button>

@@ -21,16 +21,18 @@ export const ContextStatus: React.FC<ContextStatusProps> = ({ contextStatus }) =
   if (utilizationPercent > 80) statusColor = '#FF6B6B'; // Red
 
   return (
-    <div className="context-status" style={{ 
-      display: 'flex', 
-      alignItems: 'center', 
+    <div className="context-status" style={{
+      display: 'flex',
+      alignItems: 'center',
       gap: '8px',
       fontSize: '0.8rem',
       color: 'rgba(255,255,255,0.7)',
       padding: '4px 8px',
       background: 'rgba(255,255,255,0.05)',
       borderRadius: '4px',
-      border: `1px solid ${statusColor}40`
+      border: `1px solid ${statusColor}40`,
+      whiteSpace: 'nowrap',
+      minWidth: 0
     }}>
       <div className="status-indicator">
         <div 
@@ -44,7 +46,11 @@ export const ContextStatus: React.FC<ContextStatusProps> = ({ contextStatus }) =
           }} 
         />
       </div>
-      <span>{Math.round(utilizationPercent)}% Context ({tokenEstimate.toLocaleString()} tokens)</span>
+      <span
+        title={`${Math.round(utilizationPercent)}% context used (${tokenEstimate.toLocaleString()} tokens)`}
+      >
+        {Math.round(utilizationPercent)}% · {tokenEstimate.toLocaleString()} tok
+      </span>
     </div>
   );
 };
