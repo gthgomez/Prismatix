@@ -71,6 +71,9 @@ import type {
   RouterModel,
 } from '../types';
 import { MODEL_CATALOG, MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog';
+import { filterVisibleModels, isModelVisible } from '../providerRegistry';
+import { useProviderPlugins } from '../hooks/useProviderPlugins';
+import { ProviderSettings } from './ProviderSettings';
 import { assistantModelPillDisplay, buildRouteExplanationRows } from '../modelDisplay';
 import { RouteExplanationList } from './RouteExplanationList';
 import {
@@ -173,6 +176,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [debateSelection, setDebateSelection] = useState<DebateSelection>('off');
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
+  const [showProviderSettings, setShowProviderSettings] = useState(false);
+
+  // Provider plug-ins (PX12): which providers are on for this user.
+  const providerPlugins = useProviderPlugins();
+  const enabledProviders = providerPlugins.enabledProviders;
+
+  // If the active model's provider is turned off, fall back to Auto with a
+  // visible default so we never send to a hidden/disabled provider.
+  useEffect(() => {
+    if (providerPlugins.loading) return;
+    if (isModelVisible(currentModel, { enabledProviders })) return;
+    const fallback =
+      filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders })[0] ??
+      filterVisibleModels(MODEL_ORDER, { enabledProviders })[0];
+    setManualModelOverride(null);
+    if (fallback) setCurrentModel(fallback);
+  }, [providerPlugins.loading, enabledProviders, currentModel]);
 
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
   const hasPendingVideoUploads = draftAttachments.some(
@@ -1232,6 +1252,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   geminiFlashThinkingLevel={geminiFlashThinkingLevel}
                   debateSelection={debateSelection}
                   sendValidationError={sendValidationError}
+                  enabledProviders={enabledProviders}
                   onModelSelect={handleModelSelect}
                   onClearOverride={clearModelOverride}
                   onGeminiThinkingChange={setGeminiFlashThinkingLevel}
@@ -1240,6 +1261,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     if (sendValidationError) setSendValidationError(null);
                   }}
                   onClearValidationError={() => setSendValidationError(null)}
+                  onOpenProviderSettings={() => {
+                    setShowProviderSettings(true);
+                    setShowModelSelector(false);
+                  }}
                   onClose={() => setShowModelSelector(false)}
                 />
               )}
@@ -1286,6 +1311,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     <span className='user-email'>{user?.email}</span>
                   </div>
                   <div className='dropdown-divider' />
+                  <button
+                    type='button'
+                    className='dropdown-item'
+                    onClick={() => {
+                      setShowProviderSettings(true);
+                      setShowUserMenu(false);
+                    }}
+                  >
+                    <svg
+                      width='16'
+                      height='16'
+                      viewBox='0 0 24 24'
+                      fill='none'
+                      stroke='currentColor'
+                      strokeWidth='2'
+                    >
+                      <path d='M12 2v6' />
+                      <path d='M5 12a7 7 0 0 0 14 0' />
+                      <circle cx='12' cy='12' r='2' />
+                    </svg>
+                    Provider plug-ins
+                  </button>
                   <button type='button' onClick={handleSignOut} className='dropdown-item'>
                     <svg
                       width='16'
@@ -1304,6 +1351,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 </div>
               )}
             </div>
+
+            {showProviderSettings && (
+              <ProviderSettings
+                plugins={providerPlugins}
+                onClose={() => setShowProviderSettings(false)}
+              />
+            )}
           </div>
         </div>
       </header>
@@ -1347,10 +1401,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <h2>Welcome, {getUserDisplay()}!</h2>
               <p>
                 Prismatix will automatically select the best model based on your query complexity.
-                The router can use {MODEL_ORDER.length} models; highlights below are representative.
+                {filterVisibleModels(MODEL_ORDER, { enabledProviders }).length} models are enabled;
+                highlights below are representative.
               </p>
               <div className='model-grid model-grid--highlights' role='list' aria-label='Representative models'>
-                {MODEL_HIGHLIGHTS.map((key) => {
+                {filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders }).map((key) => {
                   const config = MODEL_CATALOG[key];
                   return (
                     <div

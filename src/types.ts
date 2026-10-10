@@ -20,7 +20,10 @@ export type OpenCodeModel =
   | 'gemini-3.8-flash'
   | 'gemini-3.7-flash'
   | 'grok-4.6'
-  | 'mimo-v2.5-free';
+  | 'mimo-v2.5-free'
+  | 'glm-5.3-flash'
+  | 'qwen-3.8-flash'
+  | 'mimo-2.6-flash';
 
 export type RouterModel =
   | OpenCodeModel
@@ -31,12 +34,29 @@ export type RouterModel =
 
 export type RouterProvider =
   | 'opencode'
+  | 'openrouter'
   | 'anthropic'
   | 'openai'
   | 'google'
   | 'nvidia'
   | 'deepinfra'
   | 'other';
+
+/** Per-provider plug-in state resolved for the signed-in user. */
+export interface ProviderState {
+  id: import('../supabase/functions/_shared/provider_registry').ProviderId;
+  label: string;
+  enabled: boolean;
+  hasKey: boolean;
+  keyLast4: string | null;
+  offeredByDefault: boolean;
+  defaultProvider: boolean;
+}
+
+export interface ProviderSettingsPayload {
+  providers: ProviderState[];
+  defaultProvider: import('../supabase/functions/_shared/provider_registry').ProviderId;
+}
 
 export type RouteRole =
   | 'economy'

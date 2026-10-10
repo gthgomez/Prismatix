@@ -244,6 +244,36 @@ const OPENCODE_SPECS: Record<string, CuratedSpec> = {
     pricingVersion: '2026-10-07',
     sourceRef: 'deepseek-official',
   },
+  'glm-5.3-flash': {
+    displayName: 'GLM 5.3 Flash',
+    gateway: 'opencode',
+    protocol: 'openai-chat',
+    family: 'glm',
+    supportsImages: false,
+    budgetCap: 8192,
+    pricingVersion: '2026-10-10',
+    sourceRef: 'opencode-zen-official',
+  },
+  'qwen-3.8-flash': {
+    displayName: 'Qwen 3.8 Flash',
+    gateway: 'opencode',
+    protocol: 'openai-chat',
+    family: 'qwen',
+    supportsImages: false,
+    budgetCap: 8192,
+    pricingVersion: '2026-10-10',
+    sourceRef: 'opencode-zen-official',
+  },
+  'mimo-2.6-flash': {
+    displayName: 'Mimo 2.6 Flash',
+    gateway: 'opencode',
+    protocol: 'openai-chat',
+    family: 'other',
+    supportsImages: false,
+    budgetCap: 4096,
+    pricingVersion: '2026-10-10',
+    sourceRef: 'opencode-zen-official',
+  },
 
   // Quarantined Free/Experimental Models (NEVER in automatic production fallbacks)
   'deepseek-v4-flash-free': {

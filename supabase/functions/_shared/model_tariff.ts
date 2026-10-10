@@ -6,7 +6,7 @@
 // asOfDate policy: first-party rates carry the audit date; anything else is
 // isEstimated: true until verified.
 
-export const MODEL_TARIFF_VERSION = '2026-10-07-v9' as const;
+export const MODEL_TARIFF_VERSION = '2026-10-10-v10' as const;
 
 export interface TariffEntry {
   asOfDate?: number | string | boolean;
@@ -133,6 +133,30 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     offPeakCachedReadRatePer1M: 0.003,
     asOfDate: '2026-10-07',
     sourceRef: 'deepseek-official',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'glm-5.3-flash': {
+    inputRatePer1M: 0.28,
+    outputRatePer1M: 1.10,
+    asOfDate: '2026-10-10',
+    sourceRef: 'opencode-zen-official',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'qwen-3.8-flash': {
+    inputRatePer1M: 0.30,
+    outputRatePer1M: 1.20,
+    asOfDate: '2026-10-10',
+    sourceRef: 'opencode-zen-official',
+    isEstimated: false,
+    isEligibleForAutoRouting: true,
+  },
+  'mimo-2.6-flash': {
+    inputRatePer1M: 0.15,
+    outputRatePer1M: 0.60,
+    asOfDate: '2026-10-10',
+    sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
   },

@@ -164,6 +164,30 @@ export const MODEL_CATALOG: Record<RouterModel, ModelCatalogEntry> = {
     color: '#0066FF',
     icon: '⚡',
   },
+  'glm-5.3-flash': {
+    provider: 'opencode',
+    name: 'GLM 5.3 Flash',
+    shortName: 'GLM 5.3 Flash',
+    description: 'Fast bilingual chat & tool-use tier',
+    color: '#2E7D6F',
+    icon: '🪁',
+  },
+  'qwen-3.8-flash': {
+    provider: 'opencode',
+    name: 'Qwen 3.8 Flash',
+    shortName: 'Qwen 3.8 Flash',
+    description: 'Low-latency multilingual flash tier',
+    color: '#6A4C93',
+    icon: '🌊',
+  },
+  'mimo-2.6-flash': {
+    provider: 'opencode',
+    name: 'Mimo 2.6 Flash',
+    shortName: 'Mimo 2.6 Flash',
+    description: 'Lightweight fast conversational tier',
+    color: '#8B5CF6',
+    icon: '🟣',
+  },
 
   // Legacy fallback models
   'opus-4.6': {
@@ -244,13 +268,10 @@ export function isKnownModel(modelId: string): modelId is RouterModel {
 
 /** Curated subset for empty state and compact override UI. */
 export const MODEL_HIGHLIGHTS: RouterModel[] = [
-  'deepseek-v4-flash-free',
-  'gpt-6-luna',
-  'gemini-3.8-flash',
   'deepseek-v4-1-flash',
-  'claude-sonnet-5-5',
-  'gpt-6-sol',
-  'claude-opus-5-5',
+  'mimo-2.6-flash',
+  'glm-5.3-flash',
+  'qwen-3.8-flash',
 ];
 
 export const MODEL_EXTENDED_ORDER: RouterModel[] = MODEL_ORDER.filter(

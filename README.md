@@ -108,11 +108,15 @@ NVIDIA_API_KEY
 DEEPINFRA_API_KEY
 OPENCODE_API_KEY
 OPENCODE_BASE_URL (optional; defaults to https://opencode.ai/zen/v1)
+OPENROUTER_API_KEY (optional; users may instead connect their own OpenRouter key)
+OPENROUTER_BASE_URL (optional; defaults to https://openrouter.ai/api/v1)
+BYOK_ENCRYPTION_KEY (required for user-connected provider keys; base64, 32 bytes)
 ALLOWED_ORIGIN=https://your-frontend.vercel.app
 ENABLE_DEBATE_MODE=false
 ENABLE_SMD_LIGHT=false
 ENABLE_VIDEO_PIPELINE=false
-ENABLE_DEEPINFRA=true
+ENABLE_DEEPINFRA=false
+ENABLE_OPENROUTER=true
 ENABLE_SERVER_SPEND_LIMIT=true
 DAILY_SPEND_LIMIT_USD=2
 PER_REQUEST_COST_LIMIT_USD=0.5
@@ -120,6 +124,20 @@ USER_RATE_LIMIT_WINDOW_MS=60000
 USER_RATE_LIMIT_MAX_REQUESTS=20
 MAX_ACTIVE_STREAMS_PER_USER=2
 ```
+
+### Provider plug-ins (opt-in providers + BYOK)
+
+OpenCode is the only provider enabled by default. Every other provider is an
+opt-in plug-in: a user connects their own key and turns it on. A model whose
+native provider is off still becomes available (and routable) when OpenRouter is
+enabled and the model has an OpenRouter route.
+
+- User keys are stored as AES-256-GCM ciphertext (`prismatix_internal.user_provider_keys`)
+  and are never returned to the browser; the UI shows only the last 4 characters.
+- Set `BYOK_ENCRYPTION_KEY` (base64, 32 bytes) before enabling key entry:
+  `openssl rand -base64 32 | supabase secrets set BYOK_ENCRYPTION_KEY --stdin` (or set it directly).
+- Provider state is managed by the `provider-settings` edge function
+  (`supabase functions deploy provider-settings`).
 
 ---
 
@@ -152,7 +170,11 @@ MAX_ACTIVE_STREAMS_PER_USER=2
    supabase secrets set ENABLE_DEBATE_MODE=false
    supabase secrets set ENABLE_SMD_LIGHT=false
    supabase secrets set ENABLE_VIDEO_PIPELINE=false
-   supabase secrets set ENABLE_DEEPINFRA=true
+   supabase secrets set ENABLE_DEEPINFRA=false
+   supabase secrets set ENABLE_OPENROUTER=true
+   supabase secrets set OPENROUTER_API_KEY=sk-or-...
+   # BYOK: base64 32-byte key for encrypting user-connected provider keys
+   supabase secrets set BYOK_ENCRYPTION_KEY="$(openssl rand -base64 32)"
    supabase secrets set ENABLE_SERVER_SPEND_LIMIT=true
    supabase secrets set DAILY_SPEND_LIMIT_USD=2
    supabase secrets set PER_REQUEST_COST_LIMIT_USD=0.5
@@ -165,6 +187,7 @@ MAX_ACTIVE_STREAMS_PER_USER=2
    ```bash
    supabase functions deploy router
    supabase functions deploy spend_stats
+   supabase functions deploy provider-settings
    ```
 
 6. **Install frontend dependencies and start dev server:**
@@ -188,6 +211,7 @@ Deploy edge functions after changes:
 ```bash
 supabase functions deploy router
 supabase functions deploy spend_stats
+supabase functions deploy provider-settings
 ```
 
 ---

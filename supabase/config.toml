@@ -393,6 +393,9 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 [functions.router]
 verify_jwt = true
 
+[functions.provider-settings]
+verify_jwt = true
+
 [functions.spend_stats]
 verify_jwt = true
 

@@ -1833,3 +1833,132 @@
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.08); }
 }
+
+/* PX12 provider plug-ins panel */
+.provider-settings {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: 360px;
+  max-height: 70vh;
+  overflow-y: auto;
+  z-index: 40;
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border-color, #30363d);
+  background: var(--panel-bg, #161b22);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+.provider-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.provider-settings-close,
+.provider-key-save,
+.provider-key-remove,
+.provider-set-default {
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #30363d);
+  background: transparent;
+  color: inherit;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.provider-settings-intro,
+.provider-card-note,
+.provider-settings-note,
+.provider-settings-footnote {
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.provider-settings-error {
+  font-size: 0.8rem;
+  color: #f85149;
+  margin: 0.25rem 0;
+}
+
+.provider-settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+
+.provider-card {
+  border: 1px solid var(--border-color, #30363d);
+  border-radius: 8px;
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.provider-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.provider-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.provider-card-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.provider-badge {
+  font-size: 0.65rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color, #30363d);
+  opacity: 0.8;
+}
+
+.provider-badge--default {
+  border-color: #1f6feb;
+  color: #58a6ff;
+  opacity: 1;
+}
+
+.provider-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.provider-key-row {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.provider-key-input {
+  flex: 1;
+  min-width: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #30363d);
+  background: var(--input-bg, #0d1117);
+  color: inherit;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.provider-set-default {
+  align-self: flex-start;
+}
+
+.provider-settings-open {
+  margin-top: 0.4rem;
+}
