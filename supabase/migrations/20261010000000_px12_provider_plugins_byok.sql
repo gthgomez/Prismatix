@@ -3,12 +3,18 @@
 -- Every non-OpenCode provider becomes an opt-in plug-in: a user connects their
 -- own API key and toggles the provider on. Keys are stored as AES-256-GCM
 -- ciphertext (encrypted/decrypted in the edge function; see
--- supabase/functions/_shared/byok_crypto.ts) and are NEVER returned to a
--- client. Plaintext exists only in edge-function memory.
+-- supabase/functions/_shared/byok_crypto.ts) plus an HMAC-keyed fingerprint, and
+-- are NEVER returned to a client. Plaintext exists only in edge-function memory.
 --
--- SECURITY: fail closed. The internal schema is not PostgREST-exposed and all
--- RPCs are service_role-only; ownership is enforced by the calling edge
--- function which passes the authenticated subject id explicitly.
+-- SECURITY: fail closed. The internal schema is not PostgREST-exposed and every
+-- RPC here is service_role-only; ownership is enforced by the calling edge
+-- function, which passes the authenticated subject id explicitly. No
+-- anon/authenticated grant is issued for these tables, so even if the schema
+-- were ever exposed there is no client read path.
+--
+-- ROLLBACK: dropping these tables destroys all user-stored provider keys; users
+-- must reconnect after a rollback. The provider-settings edge function must be
+-- undeployed in the same change.
 --
 -- Idempotent: safe to re-run.
 
@@ -26,7 +32,8 @@ create table if not exists prismatix_internal.user_provider_keys (
   key_ciphertext text,
   -- Display-only tail ("ab12"); never sufficient to reconstruct the key.
   key_last4 text,
-  -- sha256 hex of the plaintext; for dedupe/audit only.
+  -- HMAC-SHA256(BYOK_ENCRYPTION_KEY, plaintext). Not a bare hash: cannot be used
+  -- as an offline verifier of the secret.
   key_fingerprint text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -34,15 +41,6 @@ create table if not exists prismatix_internal.user_provider_keys (
 );
 
 alter table prismatix_internal.user_provider_keys enable row level security;
-
--- Select-own only (defense in depth; the schema is not exposed anyway).
--- No INSERT/UPDATE/DELETE policy exists, so with RLS on every client write is
--- denied; writes are service_role only.
-drop policy if exists user_provider_keys_select_self on prismatix_internal.user_provider_keys;
-create policy user_provider_keys_select_self on prismatix_internal.user_provider_keys
-  for select
-  to authenticated
-  using (subject_id = auth.uid());
 
 -- ---------------------------------------------------------------------------
 -- 2) Per-user default provider preference (which first-class gateway to use).
@@ -56,30 +54,50 @@ create table if not exists prismatix_internal.user_provider_prefs (
 
 alter table prismatix_internal.user_provider_prefs enable row level security;
 
-drop policy if exists user_provider_prefs_select_self on prismatix_internal.user_provider_prefs;
-create policy user_provider_prefs_select_self on prismatix_internal.user_provider_prefs
-  for select
-  to authenticated
-  using (subject_id = auth.uid());
+-- ---------------------------------------------------------------------------
+-- 3) updated_at maintenance (the RPCs set it explicitly; this covers direct
+--    service-role writes too).
+-- ---------------------------------------------------------------------------
+create or replace function prismatix_internal.touch_user_provider_updated_at()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, prismatix_internal
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists user_provider_keys_touch on prismatix_internal.user_provider_keys;
+create trigger user_provider_keys_touch
+before update on prismatix_internal.user_provider_keys
+for each row execute function prismatix_internal.touch_user_provider_updated_at();
+
+drop trigger if exists user_provider_prefs_touch on prismatix_internal.user_provider_prefs;
+create trigger user_provider_prefs_touch
+before update on prismatix_internal.user_provider_prefs
+for each row execute function prismatix_internal.touch_user_provider_updated_at();
 
 -- ---------------------------------------------------------------------------
--- 3) Grants.
+-- 4) Grants. service_role only; no anon/authenticated access of any kind (the
+--    schema is not exposed and the client reads metadata via the edge function).
 -- ---------------------------------------------------------------------------
 revoke all on schema prismatix_internal from public;
 revoke all on schema prismatix_internal from anon;
+revoke all on schema prismatix_internal from authenticated;
 revoke all on prismatix_internal.user_provider_keys from public;
 revoke all on prismatix_internal.user_provider_keys from anon;
+revoke all on prismatix_internal.user_provider_keys from authenticated;
 revoke all on prismatix_internal.user_provider_prefs from public;
 revoke all on prismatix_internal.user_provider_prefs from anon;
-grant usage on schema prismatix_internal to authenticated;
+revoke all on prismatix_internal.user_provider_prefs from authenticated;
 grant usage on schema prismatix_internal to service_role;
-grant select on prismatix_internal.user_provider_keys to authenticated;
-grant select on prismatix_internal.user_provider_prefs to authenticated;
 grant select, insert, update, delete on prismatix_internal.user_provider_keys to service_role;
 grant select, insert, update, delete on prismatix_internal.user_provider_prefs to service_role;
 
 -- ---------------------------------------------------------------------------
--- 4) RPCs (service_role only). Metadata never includes the ciphertext except
+-- 5) RPCs (service_role only). Metadata never includes the ciphertext except
 --    through get_user_provider_key_material, which the router alone calls.
 -- ---------------------------------------------------------------------------
 
@@ -95,7 +113,7 @@ create or replace function public.set_user_provider_key(
 returns void
 language sql
 security definer
-set search_path = public, prismatix_internal
+set search_path = pg_catalog, prismatix_internal
 as $$
   insert into prismatix_internal.user_provider_keys
     (subject_id, provider, key_ciphertext, key_last4, key_fingerprint, enabled, updated_at)
@@ -118,7 +136,7 @@ create or replace function public.set_user_provider_enabled(
 returns void
 language sql
 security definer
-set search_path = public, prismatix_internal
+set search_path = pg_catalog, prismatix_internal
 as $$
   insert into prismatix_internal.user_provider_keys
     (subject_id, provider, enabled, updated_at)
@@ -137,7 +155,7 @@ create or replace function public.delete_user_provider_key(
 returns void
 language sql
 security definer
-set search_path = public, prismatix_internal
+set search_path = pg_catalog, prismatix_internal
 as $$
   delete from prismatix_internal.user_provider_keys
   where subject_id = p_subject_id and provider = p_provider;
@@ -151,7 +169,7 @@ create or replace function public.set_user_default_provider(
 returns void
 language plpgsql
 security definer
-set search_path = public, prismatix_internal
+set search_path = pg_catalog, prismatix_internal
 as $$
 begin
   if p_provider not in ('opencode','openrouter') then
@@ -178,7 +196,7 @@ returns jsonb
 language sql
 stable
 security definer
-set search_path = public, prismatix_internal
+set search_path = pg_catalog, prismatix_internal
 as $$
   select jsonb_build_object(
     'default_provider',
@@ -215,7 +233,7 @@ returns text
 language sql
 stable
 security definer
-set search_path = public, prismatix_internal
+set search_path = pg_catalog, prismatix_internal
 as $$
   select key_ciphertext
   from prismatix_internal.user_provider_keys

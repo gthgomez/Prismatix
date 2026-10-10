@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ByokConfigError,
+  ByokDecryptError,
   decryptKey,
   encryptKey,
   isByokConfigured,
@@ -41,7 +42,7 @@ describe('byok_crypto', () => {
   it('rejects a tampered ciphertext', async () => {
     const encrypted = await encryptKey('tamper-me');
     const tampered = `${encrypted.ciphertext.slice(0, -4)}AAAA`;
-    await expect(decryptKey(tampered)).rejects.toThrow();
+    await expect(decryptKey(tampered)).rejects.toBeInstanceOf(ByokDecryptError);
   });
 
   it('fails closed when no encryption key is configured', async () => {

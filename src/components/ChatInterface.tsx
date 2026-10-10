@@ -1,7 +1,7 @@
 // src/components/ChatInterface.tsx
 // Main chat interface with multi-file upload support and model selector
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useContextManager } from '../hooks/useContextManager';
 import {
   isCatalogSkewed,
@@ -179,8 +179,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [showProviderSettings, setShowProviderSettings] = useState(false);
 
   // Provider plug-ins (PX12): which providers are on for this user.
-  const providerPlugins = useProviderPlugins();
+  const providerPlugins = useProviderPlugins(user?.id);
   const enabledProviders = providerPlugins.enabledProviders;
+
+  const visibleHighlights = useMemo(
+    () => filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders }),
+    [enabledProviders],
+  );
+  const visibleModelCount = useMemo(
+    () => filterVisibleModels(MODEL_ORDER, { enabledProviders }).length,
+    [enabledProviders],
+  );
 
   // If the active model's provider is turned off, fall back to Auto with a
   // visible default so we never send to a hidden/disabled provider.
@@ -1400,12 +1409,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <div className='empty-icon'>🤖</div>
               <h2>Welcome, {getUserDisplay()}!</h2>
               <p>
-                Prismatix will automatically select the best model based on your query complexity.
-                {filterVisibleModels(MODEL_ORDER, { enabledProviders }).length} models are enabled;
-                highlights below are representative.
+                Prismatix will automatically select the best model based on your query complexity.{' '}
+                {visibleModelCount} models are enabled; highlights below are representative.
               </p>
               <div className='model-grid model-grid--highlights' role='list' aria-label='Representative models'>
-                {filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders }).map((key) => {
+                {visibleHighlights.map((key) => {
                   const config = MODEL_CATALOG[key];
                   return (
                     <div

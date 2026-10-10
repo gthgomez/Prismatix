@@ -27,6 +27,10 @@ const CORS_HEADERS = {
 };
 
 const MAX_KEY_LENGTH = 512;
+const MIN_KEY_LENGTH = 8;
+// Visible ASCII only: rejects whitespace/control characters that would produce
+// opaque upstream failures.
+const KEY_CHARSET = /^[\x21-\x7E]+$/;
 
 export interface ProviderSettingsUser {
   id: string;
@@ -207,7 +211,11 @@ export async function handleProviderSettings(
           return jsonResponse({ error: 'invalid_provider' }, 400);
         }
         const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
-        if (apiKey === '' || apiKey.length > MAX_KEY_LENGTH) {
+        if (
+          apiKey.length < MIN_KEY_LENGTH ||
+          apiKey.length > MAX_KEY_LENGTH ||
+          !KEY_CHARSET.test(apiKey)
+        ) {
           return jsonResponse({ error: 'invalid_api_key' }, 400);
         }
 

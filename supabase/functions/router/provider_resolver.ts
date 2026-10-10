@@ -52,13 +52,10 @@ export function createProviderResolver(
   config: RawUserProviderConfig | null | undefined,
   deps: ProviderResolverConfig,
 ): ProviderResolver {
-  // `null`/`undefined` means no provider state could be observed for the
-  // subject (a lookup failure, or a caller that does not track plug-ins). In
-  // that case we fall back to the deployment posture: a provider is on when the
-  // operator both enabled it and supplied a server key. When the subject DOES
-  // have state, strict per-user opt-in applies.
-  const hasUserState = config !== null && config !== undefined;
-  const userEnabled = hasUserState ? resolveEnabledProviderIds(config) : null;
+  // Missing/empty state resolves to the default first-class gateway only
+  // (opencode), so a lookup failure can never enable server-keyed providers the
+  // account has not opted into. Strict per-user enablement applies always.
+  const userEnabled = resolveEnabledProviderIds(config);
 
   const userKeyed = new Set<Provider>();
   if (Array.isArray(config?.providers)) {
@@ -72,11 +69,8 @@ export function createProviderResolver(
   const hasCredentials = (provider: Provider): boolean =>
     userKeyed.has(provider) || !!deps.serverKey(provider);
 
-  const isEnabled = (provider: Provider): boolean => {
-    if (!deps.globalEnabled(provider)) return false;
-    if (userEnabled) return userEnabled.has(provider as ProviderId);
-    return hasCredentials(provider);
-  };
+  const isEnabled = (provider: Provider): boolean =>
+    deps.globalEnabled(provider) && userEnabled.has(provider as ProviderId);
 
   const isReady = (provider: Provider): boolean =>
     isEnabled(provider) && hasCredentials(provider);
@@ -89,6 +83,9 @@ export function createProviderResolver(
   const anyReady = (): boolean => ALL_PROVIDERS.some((provider) => isReady(provider));
 
   const resolveKey = async (provider: Provider): Promise<string> => {
+    // Enforce enablement/kill-switch at the credential boundary so no call path
+    // can spend a key for a provider this account has not enabled.
+    if (!isEnabled(provider)) throw new ProviderCredentialError(provider);
     if (userKeyed.has(provider)) {
       const userKey = await deps.fetchUserKey(provider);
       if (userKey && userKey.trim() !== '') return userKey;

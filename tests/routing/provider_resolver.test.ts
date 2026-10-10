@@ -70,4 +70,43 @@ describe('createProviderResolver', () => {
     const serverReady = createProviderResolver(null, makeDeps({ serverKey: () => 'k' }));
     expect(serverReady.anyReady()).toBe(true);
   });
+
+  it('flips the same provider between strict and empty state (differential)', () => {
+    const deps = makeDeps({ serverKey: (p) => (p === 'openai' ? 'server-key' : undefined) });
+
+    // Same server key, but the user config omits openai → suppressed.
+    const configured = createProviderResolver(
+      { default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] },
+      deps,
+    );
+    expect(configured.isEnabled('openai')).toBe(false);
+    expect(configured.isReady('openai')).toBe(false);
+  });
+
+  it('treats an enabled-but-keyless provider as enabled but not ready', () => {
+    const resolver = createProviderResolver(
+      { default_provider: 'opencode', providers: [{ provider: 'openrouter', enabled: true, has_key: false }] },
+      makeDeps(),
+    );
+    expect(resolver.isEnabled('openrouter')).toBe(true);
+    expect(resolver.isReady('openrouter')).toBe(false);
+  });
+
+  it('readyForModelTier is true for a ready native provider', () => {
+    const resolver = createProviderResolver(
+      { default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] },
+      makeDeps({ serverKey: (p) => (p === 'anthropic' ? 'key' : undefined) }),
+    );
+    expect(resolver.readyForModelTier('sonnet-4.6')).toBe(true);
+    // Unknown tier fails closed.
+    expect(resolver.readyForModelTier('not-a-tier')).toBe(false);
+  });
+
+  it('refuses to resolve a key for a provider that is not enabled', async () => {
+    const resolver = createProviderResolver(
+      { default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: false, has_key: true }] },
+      makeDeps({ serverKey: () => 'server-key', fetchUserKey: async () => 'user-key' }),
+    );
+    await expect(resolver.resolveKey('anthropic')).rejects.toBeInstanceOf(ProviderCredentialError);
+  });
 });

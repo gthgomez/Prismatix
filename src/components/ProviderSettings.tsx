@@ -3,9 +3,9 @@
 // the default first-class gateway. OpenCode is deployment-provided and always
 // available; every other provider is opt-in.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { ProviderPlugins } from '../hooks/useProviderPlugins';
-import { getProviderPlugin, type ProviderId } from '../providerRegistry';
+import { getProviderPlugin, isProviderId, type ProviderId } from '../providerRegistry';
 
 interface ProviderSettingsProps {
   plugins: ProviderPlugins;
@@ -13,14 +13,25 @@ interface ProviderSettingsProps {
 }
 
 export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onClose }) => {
-  const { providers, defaultProvider, loading, error } = plugins;
+  const { providers, defaultProvider, loading, error, refresh } = plugins;
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  const run = async (key: string, fn: () => Promise<void>) => {
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  const run = async (key: string, fn: () => Promise<boolean>): Promise<boolean> => {
     setBusy(key);
     try {
-      await fn();
+      const ok = await fn();
+      if (!ok) setNotice('That action failed. Check your key and try again.');
+      return ok;
     } finally {
       setBusy(null);
     }
@@ -29,13 +40,15 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
   const connect = (id: ProviderId) =>
     run(`connect:${id}`, async () => {
       const value = (drafts[id] ?? '').trim();
-      if (!value) return;
-      await plugins.setKey(id, value);
-      setDrafts((prev) => ({ ...prev, [id]: '' }));
+      if (!value) return false;
+      const ok = await plugins.setKey(id, value);
+      // Only clear the field on success so a failed save never discards the key.
+      if (ok) setDrafts((prev) => ({ ...prev, [id]: '' }));
+      return ok;
     });
 
   return (
-    <div className='provider-settings' role='dialog' aria-label='Provider plug-ins'>
+    <div className='provider-settings' role='dialog' aria-modal='true' aria-label='Provider plug-ins'>
       <div className='provider-settings-header'>
         <span>Provider plug-ins</span>
         <button type='button' className='provider-settings-close' onClick={onClose}>
@@ -49,10 +62,19 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
       </p>
 
       {loading && <div className='provider-settings-note'>Loading providers…</div>}
-      {error && <div className='provider-settings-error'>{error}</div>}
+      {error && (
+        <div className='provider-settings-error' role='alert'>
+          {error}
+          <button type='button' className='provider-settings-close' onClick={() => void refresh()}>
+            Retry
+          </button>
+        </div>
+      )}
+      {notice && <div className='provider-settings-error' role='status'>{notice}</div>}
 
       <div className='provider-settings-list'>
         {providers.map((provider) => {
+          if (!isProviderId(provider.id)) return null;
           const plugin = getProviderPlugin(provider.id);
           const isOpencode = provider.id === 'opencode';
           const canToggle = !isOpencode && provider.hasKey;
@@ -75,6 +97,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
                       type='checkbox'
                       checked={provider.enabled}
                       disabled={!canToggle || busy !== null}
+                      aria-label={`Enable ${provider.label}`}
                       onChange={(e) =>
                         void run(`toggle:${provider.id}`, () =>
                           plugins.setEnabled(provider.id, e.target.checked),
@@ -97,7 +120,12 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
                     <input
                       type='password'
                       className='provider-key-input'
-                      placeholder={provider.hasKey ? `Saved ••••${provider.keyLast4 ?? ''}` : plugin.keyPlaceholder}
+                      aria-label={plugin.keyLabel}
+                      placeholder={
+                        provider.hasKey
+                          ? `Saved ••••${provider.keyLast4 ?? ''}`
+                          : plugin.keyPlaceholder
+                      }
                       value={draft}
                       onChange={(e) =>
                         setDrafts((prev) => ({ ...prev, [provider.id]: e.target.value }))
@@ -126,23 +154,23 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
                     )}
                   </div>
 
-                  {plugin.offeredByDefault && (
-                    <button
-                      type='button'
-                      className='provider-set-default'
-                      disabled={busy !== null || !provider.hasKey || provider.defaultProvider}
-                      onClick={() =>
-                        void run(`default:${provider.id}`, () => plugins.setDefault(provider.id))
-                      }
-                    >
-                      {provider.defaultProvider ? 'Default gateway' : 'Set as default'}
-                    </button>
-                  )}
-
                   {!provider.hasKey && (
                     <div className='provider-card-note'>Add a key to turn this provider on.</div>
                   )}
                 </>
+              )}
+
+              {plugin.offeredByDefault && (
+                <button
+                  type='button'
+                  className='provider-set-default'
+                  disabled={busy !== null || provider.defaultProvider || (!isOpencode && !provider.hasKey)}
+                  onClick={() =>
+                    void run(`default:${provider.id}`, () => plugins.setDefault(provider.id))
+                  }
+                >
+                  {provider.defaultProvider ? 'Default gateway' : 'Set as default'}
+                </button>
               )}
             </div>
           );

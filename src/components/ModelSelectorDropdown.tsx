@@ -133,9 +133,11 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   );
 
   const extendedIncludesSelection = useMemo(
-    () => visibleOrder.includes(currentModel),
-    [visibleOrder, currentModel],
+    () => filterVisibleModels(MODEL_EXTENDED_ORDER, { enabledProviders }).includes(currentModel),
+    [enabledProviders, currentModel],
   );
+
+  const hasMoreThanHighlights = visibleOrder.length > visibleHighlights.length;
 
   const visibleOverrideKeys = useMemo(() => {
     if (showAllOverrides || extendedIncludesSelection) {
@@ -344,7 +346,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
             )}
           </div>
 
-          {!showAllOverrides && !extendedIncludesSelection && MODEL_EXTENDED_ORDER.length > 0 && (
+          {!showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
             <button
               type='button'
               className='model-override-expand'
@@ -353,7 +355,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
               Show all models ({visibleOrder.length})
             </button>
           )}
-          {showAllOverrides && !extendedIncludesSelection && MODEL_EXTENDED_ORDER.length > 0 && (
+          {showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
             <button
               type='button'
               className='model-override-expand'

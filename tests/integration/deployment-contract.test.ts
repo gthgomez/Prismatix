@@ -365,6 +365,9 @@ function supabaseRoutes(options?: { authOk?: boolean }): (call: FetchCall) => Re
     if (call.url.includes('/rest/v1/rpc/get_access_grant')) {
       return jsonResponse(grantRow());
     }
+    if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+      return jsonResponse({ default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] });
+    }
     if (call.url.includes('/rest/v1/conversations')) {
       return jsonResponse({ user_id: SUBJECT_A, total_tokens: 0 });
     }
@@ -673,6 +676,9 @@ describe('capabilities size guards & body-error precedence (PX02 fix round 1)', 
       }
       if (call.url.includes('/rest/v1/rpc/get_access_grant')) {
         return jsonResponse(null); // no grant row -> not entitled
+      }
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+        return jsonResponse({ default_provider: 'opencode', providers: [] });
       }
       return null;
     });

@@ -35,6 +35,7 @@ async function request(
       Authorization: `Bearer ${token}`,
       ...(CONFIG.SUPABASE_ANON_KEY ? { apikey: CONFIG.SUPABASE_ANON_KEY } : {}),
     },
+    signal: AbortSignal.timeout(15_000),
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
 

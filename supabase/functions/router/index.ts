@@ -1127,6 +1127,7 @@ async function callDeepInfra(
 async function callOpenRouter(
   decision: RouteDecision,
   allMessages: Message[],
+  images: ImageAttachment[],
   signal: AbortSignal,
   apiKey: string,
 ): Promise<UpstreamCallResult> {
@@ -1139,7 +1140,7 @@ async function callOpenRouter(
       'Content-Type': 'application/json',
       'X-Title': 'Prismatix',
     },
-    body: JSON.stringify(buildOpenAIStreamPayload(decision, allMessages, [])),
+    body: JSON.stringify(buildOpenAIStreamPayload(decision, allMessages, images)),
     signal,
   });
 
@@ -1286,8 +1287,18 @@ async function callProviderStream(
     }
   }
 
+  // OpenRouter unlock safety net: some sub-decisions (debate/SMD) are built from
+  // the native model tier. Re-point any decision whose native provider is not
+  // ready at its OpenRouter route before resolving credentials.
+  decision = applyOpenRouterFallback(
+    decision,
+    (provider) => resolver.isReady(provider),
+    resolver.isReady('openrouter'),
+  );
+
   // Resolve credentials per request: a connected user key (BYOK) wins over the
-  // deployment-wide server key. Fails closed when the provider has none.
+  // deployment-wide server key. Fails closed when the provider has none or is
+  // not enabled for this account.
   const apiKey = await resolver.resolveKey(decision.provider);
 
   const dispatch = async (): Promise<UpstreamCallResult> => {
@@ -1295,7 +1306,7 @@ async function callProviderStream(
       case 'opencode':
         return await callOpenCode(decision, allMessages, images, signal, apiKey);
       case 'openrouter':
-        return await callOpenRouter(decision, allMessages, signal, apiKey);
+        return await callOpenRouter(decision, allMessages, images, signal, apiKey);
       case 'anthropic':
         return await callAnthropic(decision, allMessages, images, signal, apiKey);
       case 'openai':
@@ -1549,7 +1560,6 @@ async function maybeRunSmdMode(params: {
   meter?: MeteredCallFactory;
 }): Promise<SmdRunResult | null> {
   const runId = crypto.randomUUID().slice(0, 8);
-  const googleKey = await params.resolver.resolveKey('google');
   const smdDecisionBase = decisionFromModel(SMD_MODEL_TIER, 50, 'smd-light');
   const modelId = MODEL_REGISTRY[SMD_MODEL_TIER].modelId;
 
@@ -1578,6 +1588,9 @@ async function maybeRunSmdMode(params: {
   };
 
   try {
+    // Resolve the Google key lazily inside the guarded block so a missing key
+    // falls back to the baseline path instead of escaping as a 502.
+    const googleKey = await params.resolver.resolveKey('google');
     // ── STAGE 1: DRAFT ──────────────────────────────────────────────────────
     const draftStart = Date.now();
     const draftDecision: RouteDecision = { ...smdDecisionBase, budgetCap: SMD_DRAFT_BUDGET };
@@ -2111,13 +2124,17 @@ Deno.serve(async (req: Request) => {
     }
 
     // PX12 provider plug-ins: build the per-request resolver from the user's
-    // stored provider state. A lookup failure fails closed to opencode-only.
+    // stored provider state. Strict per-user enablement; a lookup failure leaves
+    // the config empty, which resolves to opencode-only (fail closed).
     let userProviderConfig: { default_provider?: unknown; providers?: unknown } | null = null;
     try {
-      const { data: providerConfigData } = await supabaseClient.rpc('get_user_provider_config', {
-        p_subject_id: userId,
-      });
-      if (
+      const { data: providerConfigData, error: providerConfigError } = await supabaseClient.rpc(
+        'get_user_provider_config',
+        { p_subject_id: userId },
+      );
+      if (providerConfigError) {
+        console.warn('[PX12] provider config lookup error; failing closed to opencode-only');
+      } else if (
         providerConfigData &&
         typeof providerConfigData === 'object' &&
         !Array.isArray(providerConfigData)
@@ -2128,7 +2145,7 @@ Deno.serve(async (req: Request) => {
         };
       }
     } catch {
-      console.warn('[PX12] provider config lookup failed; defaulting to opencode-only');
+      console.warn('[PX12] provider config lookup failed; failing closed to opencode-only');
     }
 
     const providerResolver: ProviderResolver = createProviderResolver(userProviderConfig, {
@@ -2852,7 +2869,11 @@ Deno.serve(async (req: Request) => {
       //   - Restricted to text-only, no images, no video
       //   - Locked to Gemini Flash regardless of normal routing decision
       const smdRequested = String(mode || '').trim().toLowerCase() === 'smd_light';
-      const smdEligible = ENABLE_SMD_LIGHT && smdRequested && !hasImages && !hasVideoAssets;
+      // SMD is locked to Gemini Flash; require Google to be ready for this
+      // account (this also honours the ENABLE_GOOGLE kill-switch).
+      const smdEligible =
+        ENABLE_SMD_LIGHT && smdRequested && !hasImages && !hasVideoAssets &&
+        providerResolver.isReady('google');
 
       if (smdEligible) {
         const queryTokens = countTokens(query);

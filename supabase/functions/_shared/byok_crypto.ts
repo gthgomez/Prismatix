@@ -2,9 +2,9 @@
 //
 // Plaintext keys must never be persisted or logged. The edge function encrypts
 // on write and the router decrypts on use; the database only ever holds
-// `base64(iv || ciphertext)`. The symmetric key comes from the edge-function
-// secret BYOK_ENCRYPTION_KEY (base64, 32 bytes); a missing/malformed key makes
-// every operation throw so callers fail closed.
+// `base64(iv || ciphertext)` plus an HMAC-keyed fingerprint. The symmetric key
+// comes from the edge-function secret BYOK_ENCRYPTION_KEY (base64, 32 bytes); a
+// missing/malformed key makes every operation throw so callers fail closed.
 //
 // No Deno-specific APIs: works under Deno and Node (globalThis.crypto.subtle)
 // so the same module is unit-testable in vitest.
@@ -62,7 +62,7 @@ export function isByokConfigured(): boolean {
   return typeof raw === 'string' && raw.trim().length > 0;
 }
 
-async function importEncryptionKey(): Promise<CryptoKey> {
+async function loadKeyBytes(): Promise<Uint8Array> {
   const raw = readEnvKey();
   if (!raw || raw.trim() === '') {
     throw new ByokConfigError('BYOK encryption key is not configured');
@@ -76,17 +76,31 @@ async function importEncryptionKey(): Promise<CryptoKey> {
   if (keyBytes.length !== KEY_BYTES) {
     throw new ByokConfigError(`BYOK encryption key must decode to ${KEY_BYTES} bytes`);
   }
+  return keyBytes;
+}
+
+async function importEncryptionKey(): Promise<CryptoKey> {
+  const keyBytes = await loadKeyBytes();
   // Copy into a fresh ArrayBuffer so the JSDOM/Node BufferSource typing is exact.
-  const keyMaterial = keyBytes.slice().buffer;
-  return crypto.subtle.importKey('raw', keyMaterial, { name: ALGORITHM }, false, [
+  return crypto.subtle.importKey('raw', keyBytes.slice().buffer, { name: ALGORITHM }, false, [
     'encrypt',
     'decrypt',
   ]);
 }
 
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest))
+async function fingerprint(plaintext: string): Promise<string> {
+  // HMAC-SHA256 keyed by the deployment secret: unlike a bare hash, the stored
+  // digest is not an offline verifier of a low-entropy user key.
+  const keyBytes = await loadKeyBytes();
+  const hmacKey = await crypto.subtle.importKey(
+    'raw',
+    keyBytes.slice().buffer,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const mac = await crypto.subtle.sign('HMAC', hmacKey, new TextEncoder().encode(plaintext));
+  return Array.from(new Uint8Array(mac))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
@@ -115,7 +129,7 @@ export async function encryptKey(plaintext: string): Promise<EncryptedKey> {
   return {
     ciphertext: bytesToBase64(combined),
     last4: trimmed.slice(-4),
-    fingerprint: await sha256Hex(trimmed),
+    fingerprint: await fingerprint(trimmed),
   };
 }
 

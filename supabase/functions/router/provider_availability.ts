@@ -7,6 +7,14 @@
 // the originally decided model. Availability failures can therefore never
 // escalate spend, and when no safe fallback exists the request fails with a
 // deterministic, user-readable error.
+//
+// EXCEPTION — the OpenRouter unlock (applyOpenRouterFallback): when the native
+// provider is not enabled but OpenRouter is, the SAME model is served through
+// the aggregator. This preserves the model's price basis but (a) bypasses the
+// cheaper-native-fallback path and (b) is priced at the underlying model's
+// tariff, so any OpenRouter markup is not reflected in the recorded cost. Both
+// are deliberate: the user explicitly enabled OpenRouter. Per-provider markup
+// pricing would need a tariff-schema change and is tracked as follow-up.
 
 import {
   createStubRoutingDebug,

@@ -94,6 +94,7 @@ function toContentString(content: unknown): string {
 
 const KNOWN_PROVIDERS: ReadonlySet<string> = new Set([
   'opencode',
+  'openrouter',
   'anthropic',
   'openai',
   'google',
