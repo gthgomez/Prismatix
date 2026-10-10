@@ -1,7 +1,7 @@
 import '../styles/ResumeDemo.css';
 
 const featureBullets = [
-  'Routes chat requests across Anthropic, OpenAI, Google Gemini, NVIDIA, and DeepInfra providers.',
+  'Routes every request through the OpenCode model hub by default, with OpenRouter and opt-in provider plug-ins (BYOK) as fallbacks.',
   'Normalizes provider streaming into one SSE client path with model and provider metadata.',
   'Keeps provider API keys in Supabase Edge Function secrets instead of the browser bundle.',
   'Persists conversations, messages, spend logs, and user memory behind Supabase Auth and RLS-backed tables.',
