@@ -201,6 +201,9 @@ function makeRoutes(
       return jsonResponse({ id: SUBJECT, aud: 'authenticated', role: 'authenticated' });
     }
     if (call.url.includes('/rest/v1/rpc/get_access_grant')) return jsonResponse(grantRow());
+    if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+      return jsonResponse({ default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] });
+    }
     if (call.url.includes('/rest/v1/conversations')) {
       return jsonResponse({ user_id: SUBJECT, total_tokens: 0 });
     }

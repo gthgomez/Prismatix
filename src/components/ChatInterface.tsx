@@ -1,7 +1,7 @@
 // src/components/ChatInterface.tsx
 // Main chat interface with multi-file upload support and model selector
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useContextManager } from '../hooks/useContextManager';
 import {
   isCatalogSkewed,
@@ -22,6 +22,7 @@ import { DebateView } from './DebateView';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
 import { AttachmentPreview } from './AttachmentPreview';
 import { ConversationSidebar } from './ConversationSidebar';
+import { FormattedMessage } from './FormattedMessage';
 import '../styles/ChatInterface.css';
 import {
   askPrismatix,
@@ -70,6 +71,9 @@ import type {
   RouterModel,
 } from '../types';
 import { MODEL_CATALOG, MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog';
+import { filterVisibleModels, isModelVisible } from '../providerRegistry';
+import { useProviderPlugins } from '../hooks/useProviderPlugins';
+import { ProviderSettings } from './ProviderSettings';
 import { assistantModelPillDisplay, buildRouteExplanationRows } from '../modelDisplay';
 import { RouteExplanationList } from './RouteExplanationList';
 import {
@@ -172,6 +176,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [debateSelection, setDebateSelection] = useState<DebateSelection>('off');
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
+  const [showProviderSettings, setShowProviderSettings] = useState(false);
+
+  // Provider plug-ins (PX12): which providers are on for this user.
+  const providerPlugins = useProviderPlugins(user?.id);
+  const enabledProviders = providerPlugins.enabledProviders;
+
+  const visibleHighlights = useMemo(
+    () => filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders }),
+    [enabledProviders],
+  );
+  const visibleModelCount = useMemo(
+    () => filterVisibleModels(MODEL_ORDER, { enabledProviders }).length,
+    [enabledProviders],
+  );
+
+  // If the active model's provider is turned off, fall back to Auto with a
+  // visible default so we never send to a hidden/disabled provider.
+  useEffect(() => {
+    if (providerPlugins.loading) return;
+    if (isModelVisible(currentModel, { enabledProviders })) return;
+    const fallback =
+      filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders })[0] ??
+      filterVisibleModels(MODEL_ORDER, { enabledProviders })[0];
+    setManualModelOverride(null);
+    if (fallback) setCurrentModel(fallback);
+  }, [providerPlugins.loading, enabledProviders, currentModel]);
 
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
   const hasPendingVideoUploads = draftAttachments.some(
@@ -183,6 +213,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [contextExcludedCount, setContextExcludedCount] = useState(0);
   const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
   const selectedConversationIdRef = useRef<string | null>(null);
@@ -232,10 +263,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (!shouldStickToBottomRef.current) return;
     const lastMessage = messageRefs.current[messages.length - 1];
     if (lastMessage) {
-      lastMessage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (typeof lastMessage.scrollIntoView === 'function') {
+        lastMessage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
       return;
     }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' });
   }, [messages.length]);
 
   // Keep attachment preview visible when user is already at bottom.
@@ -517,11 +550,37 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           });
         }
       }
+      const provenance = item.provenance;
       mapped.push({
         role: item.role,
         content: item.content,
         timestamp: Date.parse(item.createdAt) || Date.now(),
         ...(attachments.length > 0 ? { attachments } : {}),
+        ...(provenance?.model ? { model: provenance.model } : {}),
+        ...(provenance?.modelId ? { modelId: provenance.modelId } : {}),
+        ...(provenance?.provider ? { provider: provenance.provider } : {}),
+        ...(provenance?.routeRole ? { routeRole: provenance.routeRole } : {}),
+        ...(provenance?.cost
+          ? {
+              cost: {
+                finalUsd: provenance.cost.totalUsd,
+                pricingVersion: provenance.cost.pricingVersion,
+              },
+            }
+          : {}),
+        ...(provenance?.routeRationale
+          ? {
+              routeInfo: {
+                selection: provenance.routeRationale === 'manual_override' ? 'override' : 'auto',
+                modelTier: provenance.model || currentModel,
+                gateway: provenance.provider === 'opencode' ? 'opencode' : 'direct_fallback',
+                reason: provenance.routeRationale,
+                fallbackUsed: false,
+                priceKnown: true,
+                role: provenance.routeRole,
+              },
+            }
+          : {}),
       });
     }
     return mapped;
@@ -556,7 +615,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       ) {
         return;
       }
-      setMessages(await mapLoadedMessages(loaded));
+      const mapped = await mapLoadedMessages(loaded);
+      // PX08: Re-check after asynchronous attachment signing. A user action
+      // (New Chat, switching conversations, or logging out) during storage signing
+      // must not be overwritten by the late-resolving load.
+      if (
+        loadSeq !== conversationLoadSeqRef.current ||
+        selectedConversationIdRef.current !== conversationId
+      ) {
+        return;
+      }
+      setMessages(mapped);
     } catch (error) {
       if (
         loadSeq !== conversationLoadSeqRef.current ||
@@ -1117,6 +1186,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         selectedId={selectedConversationId}
         isLoading={conversationsLoading}
         disabled={isStreaming}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
         onSelect={handleSelectConversation}
         onNewChat={handleNewChat}
         onDelete={(id) => void handleDeleteConversation(id)}
@@ -1125,9 +1196,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       {/* Header */}
       <header className='chat-header' ref={chatHeaderRef}>
         <div className='header-content'>
-          <div className='header-title'>
-            <h1>Prismatix</h1>
-            <span className='header-subtitle'>Adaptive Model Orchestration</span>
+          <div className='header-left'>
+            <button
+              type='button'
+              className='sidebar-toggle-button'
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              aria-label='Toggle conversations sidebar'
+              aria-expanded={sidebarOpen}
+            >
+              ☰
+            </button>
+            <div className='header-title'>
+              <h1>Prismatix</h1>
+              <span className='header-subtitle'>Adaptive Model Orchestration</span>
+            </div>
           </div>
           <div className='header-actions'>
             {catalogSkewed && (
@@ -1179,6 +1261,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   geminiFlashThinkingLevel={geminiFlashThinkingLevel}
                   debateSelection={debateSelection}
                   sendValidationError={sendValidationError}
+                  enabledProviders={enabledProviders}
                   onModelSelect={handleModelSelect}
                   onClearOverride={clearModelOverride}
                   onGeminiThinkingChange={setGeminiFlashThinkingLevel}
@@ -1187,6 +1270,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     if (sendValidationError) setSendValidationError(null);
                   }}
                   onClearValidationError={() => setSendValidationError(null)}
+                  onOpenProviderSettings={() => {
+                    setShowProviderSettings(true);
+                    setShowModelSelector(false);
+                  }}
                   onClose={() => setShowModelSelector(false)}
                 />
               )}
@@ -1233,6 +1320,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     <span className='user-email'>{user?.email}</span>
                   </div>
                   <div className='dropdown-divider' />
+                  <button
+                    type='button'
+                    className='dropdown-item'
+                    onClick={() => {
+                      setShowProviderSettings(true);
+                      setShowUserMenu(false);
+                    }}
+                  >
+                    <svg
+                      width='16'
+                      height='16'
+                      viewBox='0 0 24 24'
+                      fill='none'
+                      stroke='currentColor'
+                      strokeWidth='2'
+                    >
+                      <path d='M12 2v6' />
+                      <path d='M5 12a7 7 0 0 0 14 0' />
+                      <circle cx='12' cy='12' r='2' />
+                    </svg>
+                    Provider plug-ins
+                  </button>
                   <button type='button' onClick={handleSignOut} className='dropdown-item'>
                     <svg
                       width='16'
@@ -1251,6 +1360,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 </div>
               )}
             </div>
+
+            {showProviderSettings && (
+              <ProviderSettings
+                plugins={providerPlugins}
+                onClose={() => setShowProviderSettings(false)}
+              />
+            )}
           </div>
         </div>
       </header>
@@ -1293,11 +1409,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <div className='empty-icon'>🤖</div>
               <h2>Welcome, {getUserDisplay()}!</h2>
               <p>
-                Prismatix will automatically select the best model based on your query complexity.
-                The router can use {MODEL_ORDER.length} models; highlights below are representative.
+                Prismatix will automatically select the best model based on your query complexity.{' '}
+                {visibleModelCount} models are enabled; highlights below are representative.
               </p>
               <div className='model-grid model-grid--highlights' role='list' aria-label='Representative models'>
-                {MODEL_HIGHLIGHTS.map((key) => {
+                {visibleHighlights.map((key) => {
                   const config = MODEL_CATALOG[key];
                   return (
                     <div
@@ -1518,10 +1634,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                       />
                     )}
                     <div className='message-text'>
-                      {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
-                      {isStreaming && idx === messages.length - 1 && msg.role === 'assistant' && (
-                        <span className='cursor-blink'>▊</span>
-                      )}
+                      <FormattedMessage
+                        content={typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
+                        isStreaming={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
+                        showCursor={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
+                      />
                     </div>
                     {msg.role === 'assistant' && msg.debateParticipants && msg.debateParticipants.length > 0 && (
                       <DebateView participants={msg.debateParticipants} />

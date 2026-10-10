@@ -53,6 +53,7 @@ export const CONFIG = {
   ROUTER_ENDPOINT,
   VIDEO_INTAKE_ENDPOINT: functionEndpoint('video-intake'),
   VIDEO_STATUS_ENDPOINT: functionEndpoint('video-status'),
+  PROVIDER_SETTINGS_ENDPOINT: functionEndpoint('provider-settings'),
   
   // Platform Detection
   PLATFORM: (() => {

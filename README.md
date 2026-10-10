@@ -13,9 +13,9 @@ Prismatix routes each chat request through an OpenCode model-hub gateway by defa
 
 ## What it does
 
-- **Auto routing, explained** — Each request is classified into a routing role (`economy`, `fast`, `balanced`, `strong`, `max`, `vision_fast`, `vision_strong`, `code_review`) by a heuristic complexity scorer. Each role maps to a curated, priced OpenCode model with deterministic in-role fallbacks. After every Auto-routed answer, the message's info popover shows the chosen role, model, gateway, the reason, whether a fallback was used, and the estimated cost basis
+- **Auto routing, explained** — Each request is classified into a calibrated routing role (`economy` ≤ 45, `fast` 46–65, `balanced` 66–80, `strong` ≥ 81, `max` reasoning ≥ 90 or ctx > 120k, `vision_fast`, `vision_strong`, `code_review`) by a heuristic complexity scorer. Each role maps to a curated, priced OpenCode model (`gpt-6-luna`, `deepseek-v4-1-flash`, `claude-sonnet-5-5`, `gpt-6-sol`, `gemini-3.8-flash`) with deterministic in-role fallbacks. After every Auto-routed answer, the message's info popover shows the chosen role, model, gateway, the reason, whether a fallback was used, and the estimated cost basis
 - **Fail-closed cost safety** — Auto never sends when a model's price is unknown. If discovery finds no priced, available model for the resolved role, the request fails with a readable error instead of silently re-routing to a more expensive provider. Provider-unavailable fallbacks may only re-route to a *cheaper* priced model
-- **OpenCode model hub** — Curated model registry (DeepSeek V4, GPT-5.6, Claude 5, Gemini 3.7, Grok 4.6) behind the OpenCode Zen gateway with live model discovery (5-minute scoped cache). Free/data-training endpoints are quarantined and never chosen automatically
+- **OpenCode model hub** — Curated model registry (GPT-6 Sol/Luna, Claude Sonnet 5.5, Gemini 3.8 Flash, DeepSeek V4.1 Flash, Grok 4.6) behind the OpenCode Zen gateway with live model discovery (5-minute scoped cache). Free/data-training endpoints are quarantined and never chosen automatically
 - **Legacy direct providers (fallback posture)** — Direct Anthropic, OpenAI, Google Gemini, NVIDIA NIM, and DeepInfra routes remain available when the OpenCode gateway is not configured; each role keeps a deterministic, priced legacy mapping
 - **Multi-provider streaming** — Normalised SSE stream across all gateways and protocols (OpenAI Responses/Chat, Anthropic Messages, Gemini). One client, every model
 - **Debate mode** — Optional multi-model deliberation: parallel challenger models critique the prompt, a synthesis model produces the final answer
@@ -36,7 +36,7 @@ Prismatix routes each chat request through an OpenCode model-hub gateway by defa
 | Routed provider not configured | Re-route only to a cheaper priced fallback; otherwise fail closed |
 | Curated model unavailable in discovery | Deterministic in-role fallback (primary → fallback list), recorded in the explanation |
 
-Pricing freshness is audited in CI (`npm test`): auto-routable OpenCode rates older than 60 days fail the build; stale legacy-provider rates are surfaced as a visible warning. `npm run audit:models` inventories stale model coupling. The backend pricing registry (`supabase/functions/router/pricing_registry.ts`) is the authoritative source; the frontend registry is a display-only mirror kept in sync by a divergence test.
+Pricing freshness is audited in CI (`npm test`). `supabase/functions/_shared/model_tariff.ts` is the single authoritative source of truth for model pricing across all backend modules and frontend mirrors. `npm run audit:models` enforces committed stale-model budgets.
 
 ### What Prismatix is NOT
 
@@ -108,11 +108,15 @@ NVIDIA_API_KEY
 DEEPINFRA_API_KEY
 OPENCODE_API_KEY
 OPENCODE_BASE_URL (optional; defaults to https://opencode.ai/zen/v1)
+OPENROUTER_API_KEY (optional; users may instead connect their own OpenRouter key)
+OPENROUTER_BASE_URL (optional; defaults to https://openrouter.ai/api/v1)
+BYOK_ENCRYPTION_KEY (required for user-connected provider keys; base64, 32 bytes)
 ALLOWED_ORIGIN=https://your-frontend.vercel.app
 ENABLE_DEBATE_MODE=false
 ENABLE_SMD_LIGHT=false
 ENABLE_VIDEO_PIPELINE=false
-ENABLE_DEEPINFRA=true
+ENABLE_DEEPINFRA=false
+ENABLE_OPENROUTER=true
 ENABLE_SERVER_SPEND_LIMIT=true
 DAILY_SPEND_LIMIT_USD=2
 PER_REQUEST_COST_LIMIT_USD=0.5
@@ -120,6 +124,20 @@ USER_RATE_LIMIT_WINDOW_MS=60000
 USER_RATE_LIMIT_MAX_REQUESTS=20
 MAX_ACTIVE_STREAMS_PER_USER=2
 ```
+
+### Provider plug-ins (opt-in providers + BYOK)
+
+OpenCode is the only provider enabled by default. Every other provider is an
+opt-in plug-in: a user connects their own key and turns it on. A model whose
+native provider is off still becomes available (and routable) when OpenRouter is
+enabled and the model has an OpenRouter route.
+
+- User keys are stored as AES-256-GCM ciphertext (`prismatix_internal.user_provider_keys`)
+  and are never returned to the browser; the UI shows only the last 4 characters.
+- Set `BYOK_ENCRYPTION_KEY` (base64, 32 bytes) before enabling key entry:
+  `openssl rand -base64 32 | supabase secrets set BYOK_ENCRYPTION_KEY --stdin` (or set it directly).
+- Provider state is managed by the `provider-settings` edge function
+  (`supabase functions deploy provider-settings`).
 
 ---
 
@@ -152,7 +170,11 @@ MAX_ACTIVE_STREAMS_PER_USER=2
    supabase secrets set ENABLE_DEBATE_MODE=false
    supabase secrets set ENABLE_SMD_LIGHT=false
    supabase secrets set ENABLE_VIDEO_PIPELINE=false
-   supabase secrets set ENABLE_DEEPINFRA=true
+   supabase secrets set ENABLE_DEEPINFRA=false
+   supabase secrets set ENABLE_OPENROUTER=true
+   supabase secrets set OPENROUTER_API_KEY=sk-or-...
+   # BYOK: base64 32-byte key for encrypting user-connected provider keys
+   supabase secrets set BYOK_ENCRYPTION_KEY="$(openssl rand -base64 32)"
    supabase secrets set ENABLE_SERVER_SPEND_LIMIT=true
    supabase secrets set DAILY_SPEND_LIMIT_USD=2
    supabase secrets set PER_REQUEST_COST_LIMIT_USD=0.5
@@ -165,6 +187,7 @@ MAX_ACTIVE_STREAMS_PER_USER=2
    ```bash
    supabase functions deploy router
    supabase functions deploy spend_stats
+   supabase functions deploy provider-settings
    ```
 
 6. **Install frontend dependencies and start dev server:**
@@ -188,6 +211,41 @@ Deploy edge functions after changes:
 ```bash
 supabase functions deploy router
 supabase functions deploy spend_stats
+supabase functions deploy provider-settings
+```
+
+---
+
+## Operational Runbook & Verification
+
+Prismatix provides dedicated operational tooling for verifying production integrity, database ledger health, and routing calibration:
+
+### 1. Verify Deployment Parity
+Audit whether production edge functions match the repository commit and check for configuration drift:
+```bash
+node scripts/check-deployment-parity.mjs
+```
+
+### 2. Audit Stale Model Budgets
+Enforce the retiring generation coupling ratchet to prevent legacy models from spreading across active code paths:
+```bash
+node scripts/audit-stale-models.mjs --check
+```
+
+### 3. Run Durable Ledger Reconciliation
+Process deferred accounting jobs in `prismatix_internal.reconciliation_jobs` (unsettled execution receipts, lease refunds, and terminal job retention):
+```bash
+# Dry run verification
+node scripts/reconcile-jobs.mjs --dry-run
+
+# Live maintenance batch (requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+node scripts/reconcile-jobs.mjs --limit 50 --purge-days 30
+```
+
+### 4. Synthetic Router Calibration Benchmark
+Verify that heuristic routing satisfies quality-to-cost monotonicity and sub-millisecond execution constraints across synthetic prompt categories:
+```bash
+npx vitest run tests/routing/router_benchmark.test.ts
 ```
 
 ---

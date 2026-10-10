@@ -1,9 +1,9 @@
 // router_logic.ts - Pure routing + message transform logic (no Deno.serve side effects)
 
-import { CURATED_ROUTE_POLICY, Gateway, RouteRole, resolveRoleCandidates } from './models_hub.ts';
+import { CURATED_ROUTE_POLICY, type Gateway, type RouteRole, resolveRoleCandidates } from './models_hub.ts';
 import { getPricingForModel } from './pricing_registry.ts';
 
-export type Provider = 'opencode' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
+export type Provider = 'opencode' | 'openrouter' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -136,6 +136,24 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
     modelId: 'deepseek-v4-1-flash',
     budgetCap: 8192,
     supportsImages: true,
+  },
+  'glm-5.3-flash': {
+    provider: 'opencode',
+    modelId: 'glm-5.3-flash',
+    budgetCap: 8192,
+    supportsImages: false,
+  },
+  'qwen-3.8-flash': {
+    provider: 'opencode',
+    modelId: 'qwen-3.8-flash',
+    budgetCap: 8192,
+    supportsImages: false,
+  },
+  'mimo-2.6-flash': {
+    provider: 'opencode',
+    modelId: 'mimo-2.6-flash',
+    budgetCap: 4096,
+    supportsImages: false,
   },
   'mimo-v2.5-free': {
     provider: 'opencode',
@@ -647,8 +665,8 @@ export function determineRouteRole(params: RouterParams): RouteRole {
   if (rd >= 90 || (contextTokens > 120000 && rd >= 70)) return 'max';
   if (isCodeHeavy && c >= 50) return 'code_review';
   if (c >= 81) return 'strong';
-  if (c >= 66) return 'fast';
-  if (c >= 46) return 'balanced';
+  if (c >= 66) return 'balanced';
+  if (c >= 46) return 'fast';
   return 'economy';
 }
 

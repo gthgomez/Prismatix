@@ -1,7 +1,7 @@
 // ModelSelectorDropdown.tsx — Routing / debate vs model override (tabbed), layout prefs persisted
 
 import React, { useEffect, useMemo, useState } from 'react';
-import type { GeminiFlashThinkingLevel, RouterModel, RouterProvider } from '../types';
+import type { GeminiFlashThinkingLevel, RouterModel } from '../types';
 import {
   MODEL_EXTENDED_ORDER,
   MODEL_HIGHLIGHTS,
@@ -9,6 +9,13 @@ import {
   formatModelPriceLabel,
   getCatalogEntry,
 } from '../modelCatalog';
+import {
+  PROVIDER_PLUGIN_ORDER,
+  PROVIDER_PLUGINS,
+  filterVisibleModels,
+  providerForModel,
+  type ProviderId,
+} from '../providerRegistry';
 import { DEBATE_SELECTIONS, type DebateSelection } from '../debateMode';
 import {
   complexityScoreRoutingHint,
@@ -17,26 +24,6 @@ import {
 
 const LS_GROUP = 'prismatix.modelSelector.groupByProvider';
 const LS_TAB = 'prismatix.modelSelector.activeTab';
-
-const OVERRIDE_PROVIDER_ORDER: RouterProvider[] = [
-  'opencode',
-  'anthropic',
-  'openai',
-  'google',
-  'nvidia',
-  'deepinfra',
-  'other',
-];
-
-const PROVIDER_LABEL: Record<RouterProvider, string> = {
-  opencode: 'OpenCode',
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-  nvidia: 'NVIDIA',
-  deepinfra: 'DeepInfra',
-  other: 'Other',
-};
 
 type SelectorTab = 'routing' | 'models';
 
@@ -66,11 +53,13 @@ interface ModelSelectorDropdownProps {
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
   debateSelection: DebateSelection;
   sendValidationError: string | null;
+  enabledProviders: ReadonlySet<ProviderId>;
   onModelSelect: (model: RouterModel) => void;
   onClearOverride: () => void;
   onGeminiThinkingChange: (level: GeminiFlashThinkingLevel) => void;
   onDebateChange: (selection: DebateSelection) => void;
   onClearValidationError: () => void;
+  onOpenProviderSettings: () => void;
   onClose?: () => void;
 }
 
@@ -81,11 +70,13 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   geminiFlashThinkingLevel,
   debateSelection,
   sendValidationError,
+  enabledProviders,
   onModelSelect,
   onClearOverride,
   onGeminiThinkingChange,
   onDebateChange,
   onClearValidationError,
+  onOpenProviderSettings,
   onClose,
 }) => {
   const [activeTab, setActiveTab] = useState<SelectorTab>(() =>
@@ -131,28 +122,40 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
     }
   };
 
-  const extendedIncludesSelection = useMemo(
-    () => MODEL_EXTENDED_ORDER.includes(currentModel),
-    [currentModel],
+  // Only models whose provider is enabled for this user are selectable.
+  const visibleOrder = useMemo(
+    () => filterVisibleModels(MODEL_ORDER, { enabledProviders }),
+    [enabledProviders],
   );
+  const visibleHighlights = useMemo(
+    () => filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders }),
+    [enabledProviders],
+  );
+
+  const extendedIncludesSelection = useMemo(
+    () => filterVisibleModels(MODEL_EXTENDED_ORDER, { enabledProviders }).includes(currentModel),
+    [enabledProviders, currentModel],
+  );
+
+  const hasMoreThanHighlights = visibleOrder.length > visibleHighlights.length;
 
   const visibleOverrideKeys = useMemo(() => {
     if (showAllOverrides || extendedIncludesSelection) {
-      return MODEL_ORDER;
+      return visibleOrder;
     }
-    return MODEL_HIGHLIGHTS;
-  }, [showAllOverrides, extendedIncludesSelection]);
+    return visibleHighlights;
+  }, [showAllOverrides, extendedIncludesSelection, visibleOrder, visibleHighlights]);
 
   const modelsByProvider = useMemo(() => {
     const keySet = new Set(visibleOverrideKeys);
-    return OVERRIDE_PROVIDER_ORDER.map((provider) => ({
+    return PROVIDER_PLUGIN_ORDER.map((provider) => ({
       provider,
-      label: PROVIDER_LABEL[provider],
-      models: MODEL_ORDER.filter(
-        (id) => keySet.has(id) && getCatalogEntry(id).provider === provider,
+      label: PROVIDER_PLUGINS[provider].label,
+      models: visibleOrder.filter(
+        (id) => keySet.has(id) && providerForModel(id) === provider,
       ),
     })).filter((g) => g.models.length > 0);
-  }, [visibleOverrideKeys]);
+  }, [visibleOverrideKeys, visibleOrder]);
 
   const renderModelButton = (key: RouterModel) => {
     const config = getCatalogEntry(key);
@@ -343,16 +346,16 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
             )}
           </div>
 
-          {!showAllOverrides && !extendedIncludesSelection && MODEL_EXTENDED_ORDER.length > 0 && (
+          {!showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
             <button
               type='button'
               className='model-override-expand'
               onClick={() => setShowAllOverrides(true)}
             >
-              Show all models ({MODEL_ORDER.length})
+              Show all models ({visibleOrder.length})
             </button>
           )}
-          {showAllOverrides && !extendedIncludesSelection && MODEL_EXTENDED_ORDER.length > 0 && (
+          {showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
             <button
               type='button'
               className='model-override-expand'
@@ -361,6 +364,14 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
               Show fewer models
             </button>
           )}
+
+          <button
+            type='button'
+            className='model-override-expand provider-settings-open'
+            onClick={onOpenProviderSettings}
+          >
+            Enable more providers…
+          </button>
         </div>
       )}
     </div>

@@ -152,4 +152,36 @@ describe('ConversationSidebar', () => {
 
     act(() => root.unmount());
   });
+
+  it('renders open drawer class, close button, and backdrop when isOpen is true', () => {
+    const onClose = vi.fn();
+    const container = document.createElement('div');
+    const root = renderInto(
+      container,
+      <ConversationSidebar
+        conversations={CONVERSATIONS}
+        selectedId={null}
+        isLoading={false}
+        isOpen
+        onClose={onClose}
+        onSelect={noop}
+        onNewChat={noop}
+        onDelete={noop}
+      />,
+    );
+
+    expect(container.querySelector('.conversation-sidebar')?.className).toContain('open');
+    const backdrop = container.querySelector<HTMLDivElement>('.conversation-sidebar-backdrop');
+    expect(backdrop).not.toBeNull();
+    const closeBtn = container.querySelector<HTMLButtonElement>('.conversation-sidebar-close');
+    expect(closeBtn).not.toBeNull();
+
+    act(() => closeBtn!.click());
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    act(() => backdrop!.click());
+    expect(onClose).toHaveBeenCalledTimes(2);
+
+    act(() => root.unmount());
+  });
 });

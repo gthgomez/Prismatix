@@ -39,8 +39,13 @@ Do not improvise the Babel stack from memory.
 - `supabase/functions/router/index.ts`
 - `supabase/functions/router/router_logic.ts`
 - `supabase/functions/router/provider_payloads.ts`
+- `supabase/functions/router/provider_availability.ts`
+- `supabase/functions/router/provider_resolver.ts`
 - `supabase/functions/router/sse_normalizer.ts`
 - `supabase/functions/router/cost_engine.ts`
+- `supabase/functions/provider-settings/index.ts`
+- `supabase/functions/_shared/byok_crypto.ts`
+- `supabase/functions/_shared/provider_registry.ts`
 - `supabase/migrations/`
 - `src/lib/supabase.ts`
 
@@ -73,6 +78,7 @@ Do not improvise the Babel stack from memory.
 - Frontend-only changes: `npm run type-check` and `npm run build`
 - Frontend logic changes: run relevant Vitest tests when available
 - Router changes: `deno check .\supabase\functions\router\index.ts`
+- Provider plug-in / BYOK changes: `deno check .\supabase\functions\provider-settings\index.ts` and verify user keys are encrypted at rest (never plaintext, never returned to the client)
 - Router stream or payload changes: inspect adjacent router files for contract alignment
 - Migration changes: state impacted tables and rollback implications before editing
 

@@ -34,12 +34,18 @@ import {
 } from './debate_prompts.ts';
 import { createNormalizedProxyStream } from './sse_normalizer.ts';
 import {
+  applyOpenRouterFallback,
   decisionFromModel,
   normalizeDecisionAgainstProviderAvailability,
 } from './provider_availability.ts';
 import { CURATED_OPENCODE_REGISTRY, ModelUnavailableError } from './models_hub.ts';
 import { dispatchOpenCodeStream } from './opencode_adapters.ts';
 import { resolveProductionRoute } from './production_routing.ts';
+import {
+  createProviderResolver,
+  type ProviderResolver,
+} from './provider_resolver.ts';
+import { decryptKey } from '../_shared/byok_crypto.ts';
 import {
   type GeminiFlashThinkingLevel,
   buildAnthropicStreamPayload,
@@ -209,6 +215,8 @@ const NVIDIA_API_KEY = Deno.env.get('NVIDIA_API_KEY') || '';
 const DEEPINFRA_API_KEY = Deno.env.get('DEEPINFRA_API_KEY') || '';
 const OPENCODE_API_KEY = Deno.env.get('OPENCODE_API_KEY') || '';
 const OPENCODE_BASE_URL = Deno.env.get('OPENCODE_BASE_URL') || 'https://opencode.ai/zen/v1';
+const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') || '';
+const OPENROUTER_BASE_URL = Deno.env.get('OPENROUTER_BASE_URL') || 'https://openrouter.ai/api/v1';
 
 function envFlag(name: string, defaultValue: boolean): boolean {
   const raw = Deno.env.get(name);
@@ -228,7 +236,8 @@ const ENABLE_ANTHROPIC = envFlag('ENABLE_ANTHROPIC', true);
 const ENABLE_OPENAI = envFlag('ENABLE_OPENAI', true);
 const ENABLE_GOOGLE = envFlag('ENABLE_GOOGLE', true);
 const ENABLE_NVIDIA = envFlag('ENABLE_NVIDIA', true);
-const ENABLE_DEEPINFRA = envFlag('ENABLE_DEEPINFRA', true);
+const ENABLE_DEEPINFRA = envFlag('ENABLE_DEEPINFRA', false);
+const ENABLE_OPENROUTER = envFlag('ENABLE_OPENROUTER', true);
 const ENABLE_VIDEO_PIPELINE = envFlag('ENABLE_VIDEO_PIPELINE', false);
 
 // Debate Mode flags (router "tool" toggle)
@@ -283,10 +292,32 @@ const activeStreamsByUser = new Map<string, number>();
 // PROVIDER HELPERS
 // ============================================================================
 
-function isProviderEnabled(provider: Provider): boolean {
+function serverProviderKey(provider: Provider): string | undefined {
+  switch (provider) {
+    case 'opencode':
+      return OPENCODE_API_KEY || undefined;
+    case 'openrouter':
+      return OPENROUTER_API_KEY || undefined;
+    case 'anthropic':
+      return ANTHROPIC_API_KEY || undefined;
+    case 'openai':
+      return OPENAI_API_KEY || undefined;
+    case 'google':
+      return GOOGLE_API_KEY || undefined;
+    case 'nvidia':
+      return NVIDIA_API_KEY || undefined;
+    case 'deepinfra':
+      return DEEPINFRA_API_KEY || undefined;
+  }
+}
+
+/** Operator kill-switch for a provider (the ENABLE_* env flags). */
+function globalProviderEnabled(provider: Provider): boolean {
   switch (provider) {
     case 'opencode':
       return ENABLE_OPENCODE;
+    case 'openrouter':
+      return ENABLE_OPENROUTER;
     case 'anthropic':
       return ENABLE_ANTHROPIC;
     case 'openai':
@@ -298,38 +329,6 @@ function isProviderEnabled(provider: Provider): boolean {
     case 'deepinfra':
       return ENABLE_DEEPINFRA;
   }
-}
-
-function hasProviderCredentials(provider: Provider): boolean {
-  switch (provider) {
-    case 'opencode':
-      return !!OPENCODE_API_KEY;
-    case 'anthropic':
-      return !!ANTHROPIC_API_KEY;
-    case 'openai':
-      return !!OPENAI_API_KEY;
-    case 'google':
-      return !!GOOGLE_API_KEY;
-    case 'nvidia':
-      return !!NVIDIA_API_KEY;
-    case 'deepinfra':
-      return !!DEEPINFRA_API_KEY;
-  }
-}
-
-function isProviderReady(provider: Provider): boolean {
-  return isProviderEnabled(provider) && hasProviderCredentials(provider);
-}
-
-function hasAtLeastOneProviderConfigured(): boolean {
-  return (
-    isProviderReady('opencode') ||
-    isProviderReady('anthropic') ||
-    isProviderReady('openai') ||
-    isProviderReady('google') ||
-    isProviderReady('nvidia') ||
-    isProviderReady('deepinfra')
-  );
 }
 
 function normalizeGeminiFlashThinkingLevel(input?: string): GeminiFlashThinkingLevel {
@@ -512,9 +511,9 @@ const DEBATE_VIDEO_UI_MODEL_LADDER = parseVideoUiModelLadder(
   Deno.env.get('DEBATE_VIDEO_UI_MODEL_LADDER'),
 );
 
-function resolveVideoUiDebateModelTier(): RouterModel | null {
+function resolveVideoUiDebateModelTier(resolver: ProviderResolver): RouterModel | null {
   for (const tier of DEBATE_VIDEO_UI_MODEL_LADDER) {
-    if (isProviderReadyForModelTier(tier)) return tier;
+    if (isProviderReadyForModelTier(tier, resolver)) return tier;
   }
   return null;
 }
@@ -623,9 +622,8 @@ async function consumeUpstreamToText(
   return acc.trim();
 }
 
-function isProviderReadyForModelTier(modelTier: RouterModel): boolean {
-  const provider = MODEL_REGISTRY[modelTier].provider;
-  return isProviderReady(provider);
+function isProviderReadyForModelTier(modelTier: RouterModel, resolver: ProviderResolver): boolean {
+  return resolver.readyForModelTier(modelTier);
 }
 
 interface DebateRunResult {
@@ -668,6 +666,7 @@ async function maybeRunDebateMode(params: {
   synthesisMaxTokens?: number;
   videoNotesJson?: string;
   debateWasExplicit: boolean;
+  resolver: ProviderResolver;
   meter?: MeteredCallFactory;
 }): Promise<DebateRunResult | null> {
   const isVideoUi = params.debateProfile === 'video_ui';
@@ -702,11 +701,11 @@ async function maybeRunDebateMode(params: {
   const plan = getDebatePlan(params.debateProfile, primaryTier, challengerCount);
 
   // Readiness gating: primary must be ready; each challenger needs at least one cascade option ready.
-  if (!isProviderReadyForModelTier(primaryTier)) return null;
+  if (!isProviderReadyForModelTier(primaryTier, params.resolver)) return null;
   for (const c of plan.challengers) {
     const assignedTier = params.forcedModelTier || c.modelTier;
     const sequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role);
-    if (!sequence.some(isProviderReadyForModelTier)) return null;
+    if (!sequence.some((tier) => isProviderReadyForModelTier(tier, params.resolver))) return null;
   }
 
   // Run challengers in parallel (streaming, consumed to text, bounded timeout).
@@ -741,7 +740,7 @@ async function maybeRunDebateMode(params: {
       const fallbackSequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role);
       for (const workerTier of fallbackSequence) {
         if (workerController.signal.aborted) break;
-        if (!isProviderReadyForModelTier(workerTier)) continue;
+        if (!isProviderReadyForModelTier(workerTier, params.resolver)) continue;
         try {
           const workerDecision: RouteDecision = {
             ...decisionFromModel(workerTier, params.decision.complexityScore, `debate-worker-${c.role}`),
@@ -753,6 +752,7 @@ async function maybeRunDebateMode(params: {
             [],
             workerController.signal,
             params.geminiFlashThinkingLevel,
+            params.resolver,
             params.meter?.(
               'debate-challenger',
               `worker-${c.role}`,
@@ -819,6 +819,7 @@ async function maybeRunDebateMode(params: {
     [],
     params.signal,
     params.geminiFlashThinkingLevel,
+    params.resolver,
     params.meter?.(
       'debate-synthesis',
       'primary',
@@ -901,7 +902,7 @@ function hasGenerateContentSupport(model: GoogleModelRecord): boolean {
   return model.supportedGenerationMethods.includes('generateContent');
 }
 
-async function listGoogleModels(signal: AbortSignal): Promise<GoogleModelRecord[]> {
+async function listGoogleModels(signal: AbortSignal, apiKey: string): Promise<GoogleModelRecord[]> {
   const now = Date.now();
   if (googleModelsCache && now - googleModelsCache.fetchedAt < GOOGLE_MODELS_CACHE_TTL_MS) {
     return googleModelsCache.models;
@@ -910,7 +911,7 @@ async function listGoogleModels(signal: AbortSignal): Promise<GoogleModelRecord[
   const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models';
   const response = await fetch(endpoint, {
     method: 'GET',
-    headers: { 'x-goog-api-key': GOOGLE_API_KEY },
+    headers: { 'x-goog-api-key': apiKey },
     signal,
   });
   const responseText = await response.text();
@@ -975,8 +976,8 @@ function googleAliasScore(alias: string, modelName: string): number {
   return score;
 }
 
-async function resolveGoogleModelAlias(alias: string, signal: AbortSignal): Promise<string> {
-  const models = await listGoogleModels(signal);
+async function resolveGoogleModelAlias(alias: string, signal: AbortSignal, apiKey: string): Promise<string> {
+  const models = await listGoogleModels(signal, apiKey);
   if (models.length === 0) {
     throw new Error('Google ListModels returned no models with generateContent support');
   }
@@ -1008,11 +1009,12 @@ async function callAnthropic(
   allMessages: Message[],
   images: ImageAttachment[],
   signal: AbortSignal,
+  apiKey: string,
 ): Promise<UpstreamCallResult> {
   const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
-      'x-api-key': ANTHROPIC_API_KEY,
+      'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     },
@@ -1032,6 +1034,7 @@ async function callOpenAI(
   allMessages: Message[],
   images: ImageAttachment[],
   signal: AbortSignal,
+  apiKey: string,
 ): Promise<UpstreamCallResult> {
   const endpoint = 'https://api.openai.com/v1/chat/completions';
 
@@ -1039,7 +1042,7 @@ async function callOpenAI(
     fetch(endpoint, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
@@ -1075,13 +1078,14 @@ async function callNvidia(
   decision: RouteDecision,
   allMessages: Message[],
   signal: AbortSignal,
+  apiKey: string,
 ): Promise<UpstreamCallResult> {
   const endpoint = 'https://integrate.api.nvidia.com/v1/chat/completions';
 
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${NVIDIA_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(buildOpenAIStreamPayload(decision, allMessages, [])),
@@ -1099,16 +1103,44 @@ async function callDeepInfra(
   decision: RouteDecision,
   allMessages: Message[],
   signal: AbortSignal,
+  apiKey: string,
 ): Promise<UpstreamCallResult> {
   const endpoint = 'https://api.deepinfra.com/v1/openai/chat/completions';
 
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${DEEPINFRA_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(buildOpenAIStreamPayload(decision, allMessages, [])),
+    signal,
+  });
+
+  return {
+    response,
+    extractDeltas: extractOpenAIDeltas,
+    effectiveModelId: decision.model,
+  };
+}
+
+async function callOpenRouter(
+  decision: RouteDecision,
+  allMessages: Message[],
+  images: ImageAttachment[],
+  signal: AbortSignal,
+  apiKey: string,
+): Promise<UpstreamCallResult> {
+  const endpoint = `${OPENROUTER_BASE_URL.replace(/\/$/, '')}/chat/completions`;
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'X-Title': 'Prismatix',
+    },
+    body: JSON.stringify(buildOpenAIStreamPayload(decision, allMessages, images)),
     signal,
   });
 
@@ -1125,8 +1157,9 @@ async function callGoogle(
   images: ImageAttachment[],
   signal: AbortSignal,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel,
+  apiKey: string,
 ): Promise<UpstreamCallResult> {
-  const resolvedModel = await resolveGoogleModelAlias(decision.model, signal);
+  const resolvedModel = await resolveGoogleModelAlias(decision.model, signal, apiKey);
 
   const endpoint =
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(resolvedModel)}` +
@@ -1139,7 +1172,7 @@ async function callGoogle(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-goog-api-key': GOOGLE_API_KEY,
+        'x-goog-api-key': apiKey,
       },
       body: JSON.stringify(
         buildGoogleStreamPayload(
@@ -1193,6 +1226,7 @@ async function callOpenCode(
   allMessages: Message[],
   images: ImageAttachment[],
   signal: AbortSignal,
+  apiKey: string,
 ): Promise<UpstreamCallResult> {
   const modelConfig = CURATED_OPENCODE_REGISTRY[decision.model] || {
     modelId: decision.model,
@@ -1221,7 +1255,7 @@ async function callOpenCode(
     config: effectiveModelConfig,
     messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
     images: images.map((img) => ({ data: img.data, mediaType: img.mediaType })),
-    openCodeApiKey: OPENCODE_API_KEY,
+    openCodeApiKey: apiKey,
     signal,
   });
 
@@ -1238,6 +1272,7 @@ async function callProviderStream(
   images: ImageAttachment[],
   signal: AbortSignal,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel,
+  resolver: ProviderResolver,
   meter?: MeteredCallContext,
 ): Promise<UpstreamCallResult> {
   // PX05 (a): clamp this stage's output cap through the shared execution budget
@@ -1252,20 +1287,36 @@ async function callProviderStream(
     }
   }
 
+  // OpenRouter unlock safety net: some sub-decisions (debate/SMD) are built from
+  // the native model tier. Re-point any decision whose native provider is not
+  // ready at its OpenRouter route before resolving credentials.
+  decision = applyOpenRouterFallback(
+    decision,
+    (provider) => resolver.isReady(provider),
+    resolver.isReady('openrouter'),
+  );
+
+  // Resolve credentials per request: a connected user key (BYOK) wins over the
+  // deployment-wide server key. Fails closed when the provider has none or is
+  // not enabled for this account.
+  const apiKey = await resolver.resolveKey(decision.provider);
+
   const dispatch = async (): Promise<UpstreamCallResult> => {
     switch (decision.provider) {
       case 'opencode':
-        return await callOpenCode(decision, allMessages, images, signal);
+        return await callOpenCode(decision, allMessages, images, signal, apiKey);
+      case 'openrouter':
+        return await callOpenRouter(decision, allMessages, images, signal, apiKey);
       case 'anthropic':
-        return await callAnthropic(decision, allMessages, images, signal);
+        return await callAnthropic(decision, allMessages, images, signal, apiKey);
       case 'openai':
-        return await callOpenAI(decision, allMessages, images, signal);
+        return await callOpenAI(decision, allMessages, images, signal, apiKey);
       case 'google':
-        return await callGoogle(decision, allMessages, images, signal, geminiFlashThinkingLevel);
+        return await callGoogle(decision, allMessages, images, signal, geminiFlashThinkingLevel, apiKey);
       case 'nvidia':
-        return await callNvidia(decision, allMessages, signal);
+        return await callNvidia(decision, allMessages, signal, apiKey);
       case 'deepinfra':
-        return await callDeepInfra(decision, allMessages, signal);
+        return await callDeepInfra(decision, allMessages, signal, apiKey);
     }
   };
 
@@ -1345,6 +1396,7 @@ async function callGoogleStructured(
   allMessages: Message[],
   responseSchema: Record<string, unknown>,
   signal: AbortSignal,
+  apiKey: string,
   meter?: MeteredCallContext,
 ): Promise<{ responseText: string; ok: boolean; status: number }> {
   // PX05 (a): clamp through the shared execution budget (same as streaming).
@@ -1359,7 +1411,7 @@ async function callGoogleStructured(
   }
 
   const dispatch = async (): Promise<{ responseText: string; ok: boolean; status: number }> => {
-    const resolvedModel = await resolveGoogleModelAlias(decision.model, signal);
+    const resolvedModel = await resolveGoogleModelAlias(decision.model, signal, apiKey);
     const endpoint =
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(resolvedModel)}` +
       ':generateContent';
@@ -1370,7 +1422,7 @@ async function callGoogleStructured(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-goog-api-key': GOOGLE_API_KEY,
+        'x-goog-api-key': apiKey,
       },
       body: JSON.stringify(payload),
       signal,
@@ -1504,6 +1556,7 @@ async function maybeRunSmdMode(params: {
   allMessages: Message[];
   signal: AbortSignal;
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
+  resolver: ProviderResolver;
   meter?: MeteredCallFactory;
 }): Promise<SmdRunResult | null> {
   const runId = crypto.randomUUID().slice(0, 8);
@@ -1535,6 +1588,9 @@ async function maybeRunSmdMode(params: {
   };
 
   try {
+    // Resolve the Google key lazily inside the guarded block so a missing key
+    // falls back to the baseline path instead of escaping as a 502.
+    const googleKey = await params.resolver.resolveKey('google');
     // ── STAGE 1: DRAFT ──────────────────────────────────────────────────────
     const draftStart = Date.now();
     const draftDecision: RouteDecision = { ...smdDecisionBase, budgetCap: SMD_DRAFT_BUDGET };
@@ -1550,6 +1606,7 @@ async function maybeRunSmdMode(params: {
       [],
       params.signal,
       params.geminiFlashThinkingLevel,
+      params.resolver,
       params.meter?.('smd-draft', 'primary', draftDecision.modelTier, null) ?? undefined,
     );
     const draftText = await consumeUpstreamToText(draftUpstream, params.signal, SMD_DRAFT_MAX_CHARS);
@@ -1581,6 +1638,7 @@ async function maybeRunSmdMode(params: {
           skepticMessages,
           SKEPTIC_GEMINI_SCHEMA,
           params.signal,
+          googleKey,
           params.meter?.('smd-skeptic', 'primary', skepticDecision.modelTier, null) ?? undefined,
         );
       } catch (fetchErr) {
@@ -1639,6 +1697,7 @@ async function maybeRunSmdMode(params: {
           synthMessages,
           SYNTH_DECISION_GEMINI_SCHEMA,
           params.signal,
+          googleKey,
           params.meter?.('smd-synth', 'primary', synthDecisionModel.modelTier, null) ?? undefined,
         );
       } catch (fetchErr) {
@@ -1713,6 +1772,7 @@ async function maybeRunSmdMode(params: {
       [],
       params.signal,
       params.geminiFlashThinkingLevel,
+      params.resolver,
       params.meter?.('smd-formatter', 'primary', formatterDecision.modelTier, null) ?? undefined,
     );
     log.formatterLatencyMs = Date.now() - formatterStart;
@@ -2063,7 +2123,54 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    if (!hasAtLeastOneProviderConfigured()) {
+    // PX12 provider plug-ins: build the per-request resolver from the user's
+    // stored provider state. Strict per-user enablement; a lookup failure leaves
+    // the config empty, which resolves to opencode-only (fail closed).
+    let userProviderConfig: { default_provider?: unknown; providers?: unknown } | null = null;
+    try {
+      const { data: providerConfigData, error: providerConfigError } = await supabaseClient.rpc(
+        'get_user_provider_config',
+        { p_subject_id: userId },
+      );
+      if (providerConfigError) {
+        console.warn('[PX12] provider config lookup error; failing closed to opencode-only');
+      } else if (
+        providerConfigData &&
+        typeof providerConfigData === 'object' &&
+        !Array.isArray(providerConfigData)
+      ) {
+        userProviderConfig = providerConfigData as {
+          default_provider?: unknown;
+          providers?: unknown;
+        };
+      }
+    } catch {
+      console.warn('[PX12] provider config lookup failed; failing closed to opencode-only');
+    }
+
+    const providerResolver: ProviderResolver = createProviderResolver(userProviderConfig, {
+      serverKey: (provider) => serverProviderKey(provider),
+      globalEnabled: (provider) => globalProviderEnabled(provider),
+      fetchUserKey: async (provider) => {
+        const { data: ciphertext, error: keyError } = await supabaseClient.rpc(
+          'get_user_provider_key_material',
+          { p_subject_id: userId, p_provider: provider },
+        );
+        if (keyError) {
+          console.warn(`[PX12] key material lookup failed for provider '${provider}'`);
+          return null;
+        }
+        if (typeof ciphertext !== 'string' || ciphertext === '') return null;
+        try {
+          return await decryptKey(ciphertext);
+        } catch {
+          console.warn(`[PX12] stored key decrypt failed for provider '${provider}'`);
+          return null;
+        }
+      },
+    });
+
+    if (!providerResolver.anyReady()) {
       return new Response(
         JSON.stringify({
           error: 'Server misconfigured: no provider credentials available.',
@@ -2288,7 +2395,7 @@ Deno.serve(async (req: Request) => {
     let decision: RouteDecision;
     try {
       decision = await resolveProductionRoute(routerParams, normalizedOverride, {
-        openCodePrimary: isProviderReady('opencode'),
+        openCodePrimary: providerResolver.isReady('opencode'),
         openCodeApiKey: OPENCODE_API_KEY || undefined,
         openCodeBaseUrl: OPENCODE_BASE_URL,
       });
@@ -2313,10 +2420,18 @@ Deno.serve(async (req: Request) => {
       throw routeError;
     }
 
+    // OpenRouter unlock: a model whose native provider is not enabled still
+    // routes when OpenRouter is on and the model has an OpenRouter route.
+    decision = applyOpenRouterFallback(
+      decision,
+      (provider) => providerResolver.isReady(provider),
+      providerResolver.isReady('openrouter'),
+    );
+
     const availabilityCheck = normalizeDecisionAgainstProviderAvailability(
       decision,
       normalizedOverride,
-      isProviderReady,
+      (provider) => providerResolver.isReady(provider),
     );
     if (availabilityCheck.error) {
       return new Response(JSON.stringify({ error: availabilityCheck.error }), {
@@ -2754,7 +2869,11 @@ Deno.serve(async (req: Request) => {
       //   - Restricted to text-only, no images, no video
       //   - Locked to Gemini Flash regardless of normal routing decision
       const smdRequested = String(mode || '').trim().toLowerCase() === 'smd_light';
-      const smdEligible = ENABLE_SMD_LIGHT && smdRequested && !hasImages && !hasVideoAssets;
+      // SMD is locked to Gemini Flash; require Google to be ready for this
+      // account (this also honours the ENABLE_GOOGLE kill-switch).
+      const smdEligible =
+        ENABLE_SMD_LIGHT && smdRequested && !hasImages && !hasVideoAssets &&
+        providerResolver.isReady('google');
 
       if (smdEligible) {
         const queryTokens = countTokens(query);
@@ -2770,6 +2889,7 @@ Deno.serve(async (req: Request) => {
             imageAttachments,
             controller.signal,
             normalizedGeminiFlashThinkingLevel,
+            providerResolver,
             makeMeter('smd-fastpath', decision.provider, decision.modelTier) ?? undefined,
           );
         } else {
@@ -2778,6 +2898,7 @@ Deno.serve(async (req: Request) => {
             allMessages,
             signal: controller.signal,
             geminiFlashThinkingLevel: normalizedGeminiFlashThinkingLevel,
+            resolver: providerResolver,
             meter: makeMeter,
           });
 
@@ -2800,6 +2921,7 @@ Deno.serve(async (req: Request) => {
               imageAttachments,
               controller.signal,
               normalizedGeminiFlashThinkingLevel,
+              providerResolver,
               makeMeter('baseline', decision.provider, decision.modelTier) ?? undefined,
             );
           }
@@ -2827,7 +2949,7 @@ Deno.serve(async (req: Request) => {
 
       if (debateEligibility.doDebate) {
         const forcedVideoUiTier = debateReq.profile === 'video_ui'
-          ? resolveVideoUiDebateModelTier()
+          ? resolveVideoUiDebateModelTier(providerResolver)
           : undefined;
         const videoUiNotesJson = debateReq.profile === 'video_ui' && forcedVideoUiTier
           ? await buildVideoUiNotesJson(
@@ -2850,6 +2972,7 @@ Deno.serve(async (req: Request) => {
             debateProfile: debateReq.profile,
             workerMaxTokens,
             debateWasExplicit: debateReq.requested,
+            resolver: providerResolver,
             ...(forcedVideoUiTier ? { forcedModelTier: forcedVideoUiTier } : {}),
             ...(debateReq.profile === 'video_ui'
               ? { synthesisMaxTokens: DEBATE_VIDEO_UI_SYNTHESIS_MAX_TOKENS }
@@ -2875,6 +2998,7 @@ Deno.serve(async (req: Request) => {
             imageAttachments,
             controller.signal,
             normalizedGeminiFlashThinkingLevel,
+            providerResolver,
             makeMeter('baseline', decision.provider, decision.modelTier) ?? undefined,
           );
         }
@@ -2885,6 +3009,7 @@ Deno.serve(async (req: Request) => {
           imageAttachments,
           controller.signal,
           normalizedGeminiFlashThinkingLevel,
+          providerResolver,
           makeMeter('baseline', decision.provider, decision.modelTier) ?? undefined,
         );
       }

@@ -7,6 +7,14 @@
 // the originally decided model. Availability failures can therefore never
 // escalate spend, and when no safe fallback exists the request fails with a
 // deterministic, user-readable error.
+//
+// EXCEPTION — the OpenRouter unlock (applyOpenRouterFallback): when the native
+// provider is not enabled but OpenRouter is, the SAME model is served through
+// the aggregator. This preserves the model's price basis but (a) bypasses the
+// cheaper-native-fallback path and (b) is priced at the underlying model's
+// tariff, so any OpenRouter markup is not reflected in the recorded cost. Both
+// are deliberate: the user explicitly enabled OpenRouter. Per-provider markup
+// pricing would need a tariff-schema change and is tracked as follow-up.
 
 import {
   createStubRoutingDebug,
@@ -16,6 +24,7 @@ import {
   type RouterModel,
 } from './router_logic.ts';
 import { getPricingForModel } from './pricing_registry.ts';
+import { OPENROUTER_MODEL_MAP } from '../_shared/provider_registry.ts';
 
 /** Conservative cost basis (input+output rates per 1M) used to bound fallback escalation. */
 export function modelRateBasis(modelTier: RouterModel): number {
@@ -67,6 +76,44 @@ export function decisionFromModel(
 }
 
 export type ProviderReadyPredicate = (provider: Provider) => boolean;
+
+/**
+ * OpenRouter unlock: when the decided model's native provider is not ready but
+ * OpenRouter is enabled and the model has an OpenRouter route, re-point the
+ * decision at OpenRouter. The model tier (catalog id) is preserved for pricing
+ * and provenance; only the physical provider/model id change.
+ */
+export function applyOpenRouterFallback(
+  decision: RouteDecision,
+  isProviderReady: ProviderReadyPredicate,
+  openRouterReady: boolean,
+): RouteDecision {
+  if (decision.provider === 'openrouter') return decision;
+  if (isProviderReady(decision.provider)) return decision;
+  if (!openRouterReady) return decision;
+
+  const mapped = OPENROUTER_MODEL_MAP[decision.modelTier];
+  if (!mapped) return decision;
+
+  const explanation = decision.explanation;
+  return {
+    ...decision,
+    provider: 'openrouter',
+    model: mapped,
+    ...(explanation
+      ? {
+          explanation: {
+            ...explanation,
+            gateway: 'direct_fallback' as const,
+            fallbackUsed: true,
+            reason:
+              `${explanation.reason} Routed through OpenRouter because provider ` +
+              `'${decision.provider}' is not enabled for this account.`,
+          },
+        }
+      : {}),
+  };
+}
 
 export function normalizeDecisionAgainstProviderAvailability(
   decision: RouteDecision,

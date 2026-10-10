@@ -3,6 +3,7 @@ import {
   deleteConversation,
   listConversations,
   loadConversation,
+  parseModelUsed,
   selectContextHistory,
   signAttachment,
   DEFAULT_CONTEXT_LIMITS,
@@ -28,8 +29,8 @@ class FakeQuery {
     this.calls.push(`eq:${column}=${String(value)}`);
     return this;
   }
-  order(column: string): this {
-    this.calls.push(`order:${column}`);
+  order(column: string, options?: { ascending?: boolean }): this {
+    this.calls.push(`order:${column}${options?.ascending === false ? ':desc' : options?.ascending === true ? ':asc' : ''}`);
     return this;
   }
   limit(n: number): this {
@@ -129,8 +130,8 @@ describe('listConversations', () => {
       { id: MSG, title: null, lastActivityAt: '2026-09-01T00:00:00Z' },
     ]);
     const calls = fake.queries.conversations![0]!.calls;
-    expect(calls).toContain('order:last_activity_at');
-    expect(calls).toContain('order:id');
+    expect(calls).toContain('order:last_activity_at:desc');
+    expect(calls).toContain('order:id:desc');
     expect(calls).toContain('limit:20');
   });
 
@@ -156,19 +157,12 @@ describe('listConversations', () => {
 });
 
 describe('loadConversation', () => {
-  it('maps persisted attachments and adapts a legacy image_url', async () => {
+  it('queries newest-first, reverses to chronological order, maps persisted attachments and adapts a legacy image_url', async () => {
+    // Database returns the newest rows first (created_at descending)
     const fake = makeClient({
       messages: [
         {
           data: [
-            {
-              id: MSG,
-              role: 'user',
-              content: 'hello',
-              created_at: '2026-10-01T00:00:00Z',
-              attachments: [imageRef('supabase://chat-uploads/u/a.png', 2)],
-              image_url: 'supabase://chat-uploads/u/a.png',
-            },
             {
               id: '44444444-4444-4444-8444-444444444444',
               role: 'assistant',
@@ -176,6 +170,14 @@ describe('loadConversation', () => {
               created_at: '2026-10-01T00:00:01Z',
               attachments: [],
               image_url: 'supabase://chat-uploads/u/legacy.png',
+            },
+            {
+              id: MSG,
+              role: 'user',
+              content: 'hello',
+              created_at: '2026-10-01T00:00:00Z',
+              attachments: [imageRef('supabase://chat-uploads/u/a.png', 2)],
+              image_url: 'supabase://chat-uploads/u/a.png',
             },
           ],
           error: null,
@@ -186,9 +188,15 @@ describe('loadConversation', () => {
     const messages = await loadConversation(fake.client as never, CONV, { limit: 50 });
 
     expect(messages).toHaveLength(2);
-    // normalizeAttachments resets ordinals to the array position (order kept).
+    // Returned in chronological order (oldest user message first, then assistant response)
+    expect(messages[0]!.id).toBe(MSG);
+    expect(messages[0]!.role).toBe('user');
+    expect(messages[0]!.content).toBe('hello');
     expect(messages[0]!.attachments).toEqual([imageRef('supabase://chat-uploads/u/a.png', 0)]);
-    // A legacy image_url is adapted into an ordinal-0 attachment entry.
+
+    expect(messages[1]!.id).toBe('44444444-4444-4444-8444-444444444444');
+    expect(messages[1]!.role).toBe('assistant');
+    expect(messages[1]!.content).toBe('hi');
     expect(messages[1]!.attachments).toEqual([
       {
         ordinal: 0,
@@ -199,8 +207,8 @@ describe('loadConversation', () => {
       },
     ]);
     const calls = fake.queries.messages![0]!.calls;
-    expect(calls).toContain('order:created_at');
-    expect(calls).toContain('order:id');
+    expect(calls).toContain('order:created_at:desc');
+    expect(calls).toContain('order:id:desc');
   });
 
   it('maps file (text/code) attachments as metadata with no signed URL', async () => {
@@ -251,6 +259,151 @@ describe('loadConversation', () => {
     expect(calls).toContain('limit:25');
     const orCall = calls.find((c) => c.startsWith('or:'));
     expect(orCall).toContain(`and(created_at.eq.2026-10-01T00:00:00Z,id.lt.${MSG})`);
+  });
+
+  it('loads the newest messages chronologically when conversation has more messages than the limit', async () => {
+    // 60 messages: msg 1 (oldest) to msg 60 (newest).
+    // Database ordered DESC returns top 50 rows (msg 60 down to msg 11).
+    const top50Rows = Array.from({ length: 50 }, (_, i) => {
+      const num = 60 - i; // 60, 59, ..., 11
+      return {
+        id: `msg-${num}`,
+        role: num % 2 === 0 ? 'assistant' : 'user',
+        content: `content-${num}`,
+        created_at: `2026-10-01T${String(Math.floor(num / 60)).padStart(2, '0')}:${String(num % 60).padStart(2, '0')}:00Z`,
+        attachments: [],
+        image_url: null,
+      };
+    });
+
+    const fake = makeClient({ messages: [{ data: top50Rows, error: null }] });
+    const messages = await loadConversation(fake.client as never, CONV, { limit: 50 });
+
+    expect(messages).toHaveLength(50);
+    // Chronological order: msg-11 is first, msg-60 is last
+    expect(messages[0]!.id).toBe('msg-11');
+    expect(messages[messages.length - 1]!.id).toBe('msg-60');
+  });
+
+  it('rehydrates provenance and cost by joining messages with cost_logs on execution_id', async () => {
+    const EXEC_ID = '99999999-9999-4999-8999-999999999999';
+    const fake = makeClient({
+      messages: [
+        {
+          data: [
+            {
+              id: MSG,
+              role: 'assistant',
+              content: 'Here is your analysis',
+              created_at: '2026-10-01T00:01:00Z',
+              attachments: [],
+              image_url: null,
+              model_used: 'google:gemini-3.8-flash',
+              token_count: 120,
+              execution_id: EXEC_ID,
+            },
+          ],
+          error: null,
+        },
+      ],
+      cost_logs: [
+        {
+          data: [
+            {
+              idempotency_key: EXEC_ID,
+              total_cost: 0.00015,
+              pricing_version: '2026-10-07-v9',
+              route_rationale: 'code_detected',
+              complexity_score: 80,
+              provider: 'google',
+              model: 'gemini-3.8-flash',
+            },
+          ],
+          error: null,
+        },
+      ],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV);
+    expect(messages).toHaveLength(1);
+    const msg = messages[0]!;
+    expect(msg.modelUsed).toBe('google:gemini-3.8-flash');
+    expect(msg.executionId).toBe(EXEC_ID);
+    expect(msg.provenance).toBeDefined();
+    expect(msg.provenance?.model).toBe('gemini-3.8-flash');
+    expect(msg.provenance?.provider).toBe('google');
+    expect(msg.provenance?.routeRationale).toBe('code_detected');
+    expect(msg.provenance?.complexityScore).toBe(80);
+    expect(msg.provenance?.cost).toEqual({
+      totalUsd: 0.00015,
+      pricingVersion: '2026-10-07-v9',
+    });
+  });
+
+  it('degrades gracefully to model_used when cost_logs returns null or empty', async () => {
+    const fake = makeClient({
+      messages: [
+        {
+          data: [
+            {
+              id: MSG,
+              role: 'assistant',
+              content: 'Quick answer',
+              created_at: '2026-10-01T00:01:00Z',
+              attachments: [],
+              image_url: null,
+              model_used: 'opencode:deepseek-v4-flash',
+              token_count: 50,
+              execution_id: null,
+            },
+          ],
+          error: null,
+        },
+      ],
+      cost_logs: [
+        {
+          data: [],
+          error: null,
+        },
+      ],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV);
+    expect(messages).toHaveLength(1);
+    const msg = messages[0]!;
+    expect(msg.provenance).toBeDefined();
+    expect(msg.provenance?.model).toBe('deepseek-v4-flash');
+    expect(msg.provenance?.provider).toBe('opencode');
+    expect(msg.provenance?.cost).toBeUndefined();
+  });
+});
+
+describe('parseModelUsed', () => {
+  it('parses provider:modelId format correctly', () => {
+    expect(parseModelUsed('google:gemini-3.8-flash')).toEqual({
+      provider: 'google',
+      model: 'gemini-3.8-flash',
+      modelId: 'gemini-3.8-flash',
+    });
+    expect(parseModelUsed('opencode:deepseek-v4-flash')).toEqual({
+      provider: 'opencode',
+      model: 'deepseek-v4-flash',
+      modelId: 'deepseek-v4-flash',
+    });
+  });
+
+  it('parses raw model identifier with known model fallback', () => {
+    expect(parseModelUsed('gemini-3.8-flash')).toEqual({
+      provider: undefined,
+      model: 'gemini-3.8-flash',
+      modelId: 'gemini-3.8-flash',
+    });
+  });
+
+  it('handles null, undefined, or empty strings gracefully', () => {
+    expect(parseModelUsed(null)).toEqual({});
+    expect(parseModelUsed(undefined)).toEqual({});
+    expect(parseModelUsed('')).toEqual({});
   });
 });
 
