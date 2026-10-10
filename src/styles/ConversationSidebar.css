@@ -113,12 +113,25 @@
   background: transparent;
   color: inherit;
   cursor: pointer;
-  opacity: 0.55;
+  opacity: 0;
   padding: 0 0.35rem;
+  transition: opacity 0.12s ease;
+}
+
+.conversation-item:hover .conversation-item-delete,
+.conversation-item-delete:focus-visible {
+  opacity: 0.55;
 }
 
 .conversation-item-delete:hover:not(:disabled) {
   opacity: 1;
+}
+
+/* Touch devices have no hover: keep delete visible on small screens. */
+@media (hover: none), (max-width: 768px) {
+  .conversation-item-delete {
+    opacity: 0.55;
+  }
 }
 
 .conversation-item-delete:disabled {
