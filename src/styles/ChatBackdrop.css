@@ -1,0 +1,76 @@
+/* Decoration owns its clipping; content and popovers retain their own overflow. */
+.chat-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 46% 32% at 50% 6%, rgb(19 104 131 / 12%), transparent 85%),
+    var(--color-bg);
+}
+
+.chat-backdrop-horizon {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 40% 65% at 50% 42%, rgb(3 7 11 / 92%), transparent 100%),
+    radial-gradient(ellipse 100% 65% at 50% 118%, transparent 73%, rgb(101 232 255 / 9%) 76%, rgb(0 174 230 / 12%) 80%, transparent 91%),
+    radial-gradient(ellipse 70% 36% at 0% 72%, rgb(40 219 255 / 40%), transparent 80%),
+    radial-gradient(ellipse 68% 38% at 100% 66%, rgb(78 205 220 / 35%), transparent 80%),
+    radial-gradient(ellipse 85% 45% at 50% 110%, rgb(14 80 115 / 30%), transparent 90%);
+}
+
+.chat-backdrop-stars,
+.chat-backdrop-trails {
+  position: absolute;
+  inset: 0;
+  /* Keep the brightest detail outside the central reading area. */
+  mask-image: radial-gradient(ellipse at 50% 42%, transparent 4%, #000 65%);
+}
+
+.chat-backdrop-stars span {
+  position: absolute;
+  border-radius: 50%;
+  background: #ccfaff;
+  box-shadow: 0 0 4px rgb(101 232 255 / 30%);
+}
+
+.chat-backdrop-trails span {
+  position: absolute;
+  width: 30px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(101 232 255 / 65%));
+  transform-origin: left center;
+  transform: rotate(var(--trail-angle));
+  opacity: 0;
+  animation: space-travel 14s linear infinite;
+}
+
+@keyframes space-travel {
+  0%, 75%, 100% { opacity: 0; }
+  78% {
+    opacity: 0.35;
+    transform: translate(0, 0) rotate(var(--trail-angle)) scaleX(0.5);
+  }
+  92% {
+    opacity: 0;
+    transform: translate(var(--trail-x), var(--trail-y)) rotate(var(--trail-angle)) scaleX(1);
+  }
+}
+
+/* Conversation text gets a quieter version of the same atmosphere. */
+.chat-container:not(.is-empty) .chat-backdrop-horizon { opacity: 0.45; }
+.chat-container:not(.is-empty) .chat-backdrop-stars { opacity: 0.5; }
+.chat-container:not(.is-empty) .chat-backdrop-trails { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-backdrop-trails span {
+    animation: none;
+    opacity: 0.16;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .chat-backdrop { display: none; }
+}

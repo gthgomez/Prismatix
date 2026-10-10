@@ -1,7 +1,7 @@
 // src/components/ChatInterface.tsx
 // Main chat interface with multi-file upload support and model selector
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useContextManager } from '../hooks/useContextManager';
 import {
   isCatalogSkewed,
@@ -23,6 +23,7 @@ import { ModelSelectorDropdown } from './ModelSelectorDropdown';
 import { AttachmentPreview } from './AttachmentPreview';
 import { ConversationSidebar } from './ConversationSidebar';
 import { FormattedMessage } from './FormattedMessage';
+import { ChatBackdrop } from './ChatBackdrop';
 import '../styles/ChatInterface.css';
 import {
   askPrismatix,
@@ -71,7 +72,7 @@ import type {
   Message,
   RouterModel,
 } from '../types';
-import { MODEL_CATALOG, MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog';
+import { MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog';
 import { filterVisibleModels, isModelVisible } from '../providerRegistry';
 import { useProviderPlugins } from '../hooks/useProviderPlugins';
 import { ProviderSettings } from './ProviderSettings';
@@ -99,30 +100,22 @@ const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
 const CHATS_HIDDEN_KEY = 'prismatix.sidebar.chatsHidden';
 
 interface PromptStarter {
-  icon: string;
   title: string;
-  desc: string;
   prompt: string;
 }
 
 const PROMPT_STARTERS: PromptStarter[] = [
   {
-    icon: '⚡',
-    title: 'Code Architecture',
-    desc: 'Analyze clean design patterns & edge function streaming',
-    prompt: 'Analyze our TypeScript edge function streaming pipeline and recommend performance optimizations.',
+    title: 'Build something',
+    prompt: 'Help me turn an idea into a practical build plan. Start by asking what I want to create.',
   },
   {
-    icon: '⚖️',
-    title: 'Debate Mode Test',
-    desc: 'Compare multi-provider perspective on complex tradeoff',
-    prompt: 'Debate the architectural tradeoffs between serverless SSE streaming vs WebSocket subscriptions for multi-model AI routing.',
+    title: 'Compare ideas',
+    prompt: 'Help me compare two approaches to a problem. Ask about my options and what matters most before recommending one.',
   },
   {
-    icon: '📊',
-    title: 'Cost Math & Limits',
-    desc: 'Verify token estimates, prompt history, and daily spend',
-    prompt: 'Explain how token pricing and pre-flight budget calculations work across Anthropic, OpenAI, and Gemini models.',
+    title: 'Understand a topic',
+    prompt: 'Help me understand a topic step by step, using clear explanations and concrete examples. Ask what I want to learn.',
   },
 ];
 
@@ -183,15 +176,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // Provider plug-ins (PX12): which providers are on for this user.
   const providerPlugins = useProviderPlugins(user?.id);
   const enabledProviders = providerPlugins.enabledProviders;
-
-  const visibleHighlights = useMemo(
-    () => filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders }),
-    [enabledProviders],
-  );
-  const visibleModelCount = useMemo(
-    () => filterVisibleModels(MODEL_ORDER, { enabledProviders }).length,
-    [enabledProviders],
-  );
 
   // If the active model's provider is turned off, fall back to Auto with a
   // visible default so we never send to a hidden/disabled provider.
@@ -254,6 +238,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   } = useAutoScroll(32);
   const waitingFirstTokenRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.max(44, Math.min(textarea.scrollHeight, 200))}px`;
+  }, [input]);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const modelSelectorRef = useRef<HTMLDivElement>(null);
   const chatHeaderRef = useRef<HTMLElement>(null);
@@ -351,14 +341,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [expandedMetadataIdx]);
 
-  // Auto-resize textarea
+  // All draft changes (including suggestions and resets) resize in the layout effect.
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
     if (sendValidationError) {
       setSendValidationError(null);
     }
-    e.target.style.height = 'auto';
-    e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
   };
 
   const updateDraftAttachment = (
@@ -1241,7 +1229,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           onDelete={(id) => void handleDeleteConversation(id)}
         />
       )}
-      <div className='chat-container'>
+      <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>
+      <ChatBackdrop />
       {/* Header */}
       <header className='chat-header' ref={chatHeaderRef}>
         <div className='header-content'>
@@ -1287,10 +1276,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </svg>
             </button>
             <div className='header-title'>
+              <img className='header-brand-mark' src='/prismatix-icon-draft.svg' alt='' />
               <h1>Prismatix</h1>
-              <span className='header-subtitle'>Adaptive Model Orchestration</span>
             </div>
           </div>
+          {contextStatus && (
+            <details className='context-disclosure'>
+              <summary title='View conversation context usage' aria-label='Conversation context usage'>
+                <span className='context-trigger-dot' aria-hidden='true' />
+                <span>Context</span>
+              </summary>
+              <div className='context-popover'><ContextStatus contextStatus={contextStatus} /></div>
+            </details>
+          )}
           <div className='header-actions'>
             {catalogSkewed && (
               <span
@@ -1300,7 +1298,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 catalog may be outdated
               </span>
             )}
-            {contextStatus && <ContextStatus contextStatus={contextStatus} />}
             <SpendTracker refreshKey={spendRefreshKey} />
 
             {/* Model Selector - CLICKABLE */}
@@ -1308,15 +1305,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <button
                 type='button'
                 className='model-indicator-button'
+                aria-label={manualModelOverride ? `Choose model: ${modelConfig.name}` : 'Choose routing mode: automatic'}
+                aria-expanded={showModelSelector}
                 onClick={() => setShowModelSelector(!showModelSelector)}
-                style={{ '--model-color': modelConfig.color } as React.CSSProperties}
+                style={{ '--model-color': manualModelOverride ? modelConfig.color : 'var(--color-primary)' } as React.CSSProperties}
                 title={manualModelOverride
                   ? `Manual: ${modelConfig.name}`
-                  : `Auto: ${modelConfig.name}`}
+                  : 'Automatic model selection; choose a manual override'}
               >
-                <span className='model-icon'>{modelConfig.icon}</span>
-                <span className='model-name'>{modelConfig.name}</span>
-                {!manualModelOverride && <span className='route-mode-badge'>Auto →</span>}
+                {manualModelOverride && <span className='model-icon' aria-hidden='true'>{modelConfig.icon}</span>}
+                <span className='model-name'>
+                  {manualModelOverride ? modelConfig.name : (
+                    <><span className='routing-label-wide'>Auto routing</span><span className='routing-label-compact'>Auto</span></>
+                  )}
+                </span>
                 {manualModelOverride && <span className='manual-badge'>Manual</span>}
                 {debateSelection !== 'off' && <span className='debate-badge'>Debate</span>}
                 <svg
@@ -1364,6 +1366,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               onClick={() => setShowProviderSettings(true)}
               className='header-button'
               title='Provider plug-ins'
+              aria-label='Provider plug-ins'
               aria-haspopup='dialog'
               aria-expanded={showProviderSettings}
             >
@@ -1383,33 +1386,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </svg>
             </button>
 
-            <button
-              type='button'
-              onClick={handleReset}
-              className='header-button'
-              title='Reset conversation'
-            >
-              <svg
-                width='18'
-                height='18'
-                viewBox='0 0 24 24'
-                fill='none'
-                stroke='currentColor'
-                strokeWidth='2'
-              >
-                <path d='M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8' />
-                <path d='M21 3v5h-5' />
-                <path d='M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16' />
-                <path d='M3 21v-5h5' />
-              </svg>
-            </button>
-
             {/* User Menu */}
             <div className='user-menu-container' ref={userMenuRef}>
               <button
                 type='button'
                 onClick={() => setShowUserMenu(!showUserMenu)}
                 className='user-button'
+                aria-label='Account menu'
+                aria-expanded={showUserMenu}
                 title={user?.email || 'User menu'}
               >
                 <span className='user-avatar'>
@@ -1424,6 +1408,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     <span className='user-email'>{user?.email}</span>
                   </div>
                   <div className='dropdown-divider' />
+                  <button
+                    type='button'
+                    className='dropdown-item'
+                    onClick={() => { handleReset(); setShowUserMenu(false); }}
+                  >
+                    <svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'>
+                      <path d='M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5' />
+                    </svg>
+                    Reset conversation
+                  </button>
                   <button
                     type='button'
                     className='dropdown-item'
@@ -1510,64 +1504,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         {messages.length === 0
           ? (
             <div className='empty-state'>
-              <div className='empty-state-hero' aria-hidden='true' />
-              <div className='empty-state-badge'>Adaptive Model Orchestration</div>
-              <div className='empty-icon'>🤖</div>
-              <h2>Welcome, {getUserDisplay()}!</h2>
+              <div className='empty-state-badge'>A spectrum of possibilities</div>
+              <h2>What would you like<br />to <span>explore?</span></h2>
               <p>
-                Prismatix will automatically select the best model based on your query complexity.{' '}
-                {visibleModelCount} models are enabled; highlights below are representative.
-              </p>
-              <button
-                type='button'
-                className='empty-state-providers-cta'
-                onClick={() => setShowProviderSettings(true)}
-              >
-                Connect providers →
-              </button>
-              <div className='model-grid model-grid--highlights' role='list' aria-label='Representative models'>
-                {visibleHighlights.map((key) => {
-                  const config = MODEL_CATALOG[key];
-                  return (
-                    <div
-                      key={key}
-                      className='model-card model-card--info'
-                      style={{ '--card-color': config.color } as React.CSSProperties}
-                      role='listitem'
-                    >
-                      <span className='card-icon'>{config.icon}</span>
-                      <span className='card-name'>{config.shortName}</span>
-                      <span className='card-desc'>{config.description}</span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className='prompt-starters-section'>
-                <div className='prompt-starters-label'>Quick Start Prompts</div>
-                <div className='prompt-starters-grid'>
-                  {PROMPT_STARTERS.map((starter, i) => (
-                    <button
-                      key={i}
-                      type='button'
-                      className='prompt-starter-chip'
-                      onClick={() => {
-                        setInput(starter.prompt);
-                        inputRef.current?.focus();
-                      }}
-                    >
-                      <span className='starter-chip-title'>
-                        <span>{starter.icon}</span>
-                        <span>{starter.title}</span>
-                      </span>
-                      <span className='starter-chip-desc'>{starter.desc}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <p className='empty-state-model-hint'>
-                Override any time from the model menu in the header.
+                Bring your ideas. Prismatix finds the right model for every turn.
               </p>
             </div>
           )
@@ -1784,7 +1724,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           />
 
           {/* Input Row */}
-          <div className='input-row'>
+          <div className='input-row glass-surface' data-glass-variant='floating' data-glass-mode='glass'>
             <FileUpload
               onFileContent={handleFileSelect}
               onMultipleFiles={handleMultipleFiles}
@@ -1800,7 +1740,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 ? hasPendingVideoUploads
                   ? 'Video is processing... sending is disabled until ready.'
                   : 'Add a message (optional)...'
-                : 'Ask anything... (Shift+Enter for new line)'}
+                : 'Ask anything…'}
+              aria-label='Message Prismatix'
               className='chat-input'
               disabled={isStreaming}
               rows={1}
@@ -1812,6 +1753,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               }}
               disabled={(!input.trim() && draftAttachments.length === 0) || isStreaming || hasPendingVideoUploads}
               className='send-button'
+              aria-label='Send message'
               title={hasPendingVideoUploads ? 'Video processing in progress' : 'Send message'}
             >
               {isWaitingFirstToken ? <div className='loading-spinner' /> : (
@@ -1849,6 +1791,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </button>
             )}
           </div>
+
+          {messages.length === 0 && (
+            <div className='prompt-starters-section' aria-label='Suggested starting points'>
+              <div className='prompt-starters-grid'>
+                {PROMPT_STARTERS.map((starter) => (
+                  <button
+                    key={starter.title}
+                    type='button'
+                    className='prompt-starter-chip'
+                    onClick={() => {
+                      setInput(starter.prompt);
+                      inputRef.current?.focus();
+                    }}
+                  >
+                    <span className='starter-chip-title'>{starter.title}</span>
+                    <span aria-hidden='true'>↗</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {streamOutcome && (
             <div className='stream-outcome' role='status' aria-live='polite'>
               {streamOutcome.status === 'cancelled'

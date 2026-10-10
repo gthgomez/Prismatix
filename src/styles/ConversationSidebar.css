@@ -4,11 +4,14 @@
   flex-direction: column;
   gap: 0.5rem;
   width: 240px;
-  min-width: 200px;
+  min-width: 240px;
+  flex-shrink: 0;
   padding: 0.75rem;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.15);
+  background: var(--color-bg);
+  scrollbar-width: thin;
+  scrollbar-color: #30434f transparent;
 }
 
 .conversation-sidebar-header {
@@ -134,8 +137,9 @@
 }
 
 .conversation-item.selected .conversation-item-button {
-  background: rgba(120, 160, 255, 0.18);
-  border-color: rgba(120, 160, 255, 0.45);
+  background: var(--color-surface-selected);
+  border-color: rgba(78, 205, 196, 0.45);
+  color: var(--color-content-on-selected);
 }
 
 .conversation-item-button {
@@ -166,7 +170,7 @@
 
 .conversation-item-activity {
   font-size: 0.7rem;
-  opacity: 0.55;
+  color: var(--color-text-muted);
 }
 
 .conversation-item-delete {
@@ -256,7 +260,7 @@
 /* Sidebar + chat layout */
 .app-with-sidebar {
   display: flex;
-  height: 100vh;
+  height: calc(var(--app-vh, 1vh) * 100);
   width: 100%;
   overflow: hidden;
 }
@@ -276,7 +280,6 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.65);
-    backdrop-filter: blur(2px);
     z-index: 150;
   }
 
@@ -288,7 +291,7 @@
     z-index: 200;
     width: 280px;
     max-width: 85vw;
-    background: #0f1013;
+    background: var(--color-surface);
     box-shadow: 4px 0 24px rgba(0, 0, 0, 0.6);
     transform: translateX(-100%);
     transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);

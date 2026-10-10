@@ -2,21 +2,28 @@
   /* Layout & Viewport */
   --app-vh: 1vh;
   --kb-offset: 0px;
-  --max-content-width: 900px;
+  --max-content-width: 780px;
   --header-height: 72px;
   /* Fallback until ChatInterface measures the real sticky header */
   --prismatix-chat-header-h: 4.5rem;
   --prismatix-model-dropdown-top: 5.25rem;
 
   /* Colors - Core */
-  --color-bg: #0a0a0a;
-  --color-surface: #121212;
-  --color-surface-elevated: #1a1a1a;
+  color-scheme: dark;
+  --color-bg: #03070b;
+  --color-surface: #0d141b;
+  --color-surface-elevated: #14212b;
+  --color-surface-selected: #09292f;
+  --color-surface-error: #2d141a;
+  --color-surface-disabled: #111820;
+  --color-content-on-selected: #ccfaff;
+  --color-content-on-error: #ffb4b4;
+  --color-content-disabled: #91a3b0;
   --color-border: rgba(255, 255, 255, 0.1);
   --color-border-subtle: rgba(255, 255, 255, 0.06);
   --color-text: #ffffff;
-  --color-text-dim: rgba(255, 255, 255, 0.6);
-  --color-text-muted: rgba(255, 255, 255, 0.4);
+  --color-text-dim: #b2c3ce;
+  --color-text-muted: #91a3b0;
 
   /* Colors - Semantic */
   --color-primary: #4ECDC4;
@@ -46,8 +53,23 @@
   /* Elevation & Glows */
   --shadow-glow: 0 0 20px rgba(78, 205, 196, 0.15);
   --shadow-elevated: 0 16px 36px rgba(0, 0, 0, 0.5);
-  --glass-bg: rgba(18, 18, 18, 0.75);
-  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-bg: rgba(13, 20, 27, 0.92);
+  --glass-fallback: #0d141b;
+  --glass-border: #477586;
+  --glass-blur: 16px;
+  --glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  --color-focus: #65e8ff;
+}
+
+.chat-container *,
+.chat-container *::before,
+.chat-container *::after,
+.conversation-sidebar,
+.conversation-sidebar * { box-sizing: border-box; }
+
+:where(button, summary, input, textarea, select):focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
 }
 
 html,
