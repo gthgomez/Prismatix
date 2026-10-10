@@ -36,6 +36,7 @@ import {
   deleteConversation,
   listConversations,
   loadConversation,
+  renameConversation,
   selectContextHistory,
   signAttachment,
   type ConversationSummary,
@@ -95,6 +96,7 @@ interface ChatInterfaceProps {
 
 const DAILY_BUDGET_LIMIT_USD = 2.0;
 const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
+const CHATS_HIDDEN_KEY = 'prismatix.sidebar.chatsHidden';
 
 interface PromptStarter {
   icon: string;
@@ -214,6 +216,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Past-chats visibility, persisted per browser. Hidden means the list is
+  // collapsed; the header history button brings it back.
+  const [chatsHidden, setChatsHidden] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(CHATS_HIDDEN_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [contextExcludedCount, setContextExcludedCount] = useState(0);
   const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
   const selectedConversationIdRef = useRef<string | null>(null);
@@ -657,6 +668,41 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setDraftAttachments([]);
     setDuplicateNotice(null);
     setContextExcludedCount(0);
+  };
+
+  const toggleChatsHidden = () => {
+    setChatsHidden((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(CHATS_HIDDEN_KEY, next ? '1' : '0');
+      } catch {
+        // Storage unavailable (private mode etc.) — state still toggles for the session.
+      }
+      return next;
+    });
+    if (!chatsHidden) setSidebarOpen(false);
+  };
+
+  const handleSidebarToggle = () => {
+    // If past chats are collapsed, the ☰ button reveals them (and opens the drawer on mobile).
+    if (chatsHidden) {
+      setChatsHidden(false);
+      try {
+        window.localStorage.setItem(CHATS_HIDDEN_KEY, '0');
+      } catch {
+        // ignore
+      }
+    }
+    setSidebarOpen((prev) => !prev);
+  };
+
+  const handleRenameConversation = async (conversationId: string, title: string) => {
+    try {
+      await renameConversation(supabase, conversationId, title);
+    } catch (error) {
+      console.error('[ChatInterface] Failed to rename conversation:', error);
+    }
+    await refreshConversations();
   };
 
   const handleDeleteConversation = async (conversationId: string) => {
@@ -1181,17 +1227,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   return (
     <div className='app-with-sidebar'>
-      <ConversationSidebar
-        conversations={conversations}
-        selectedId={selectedConversationId}
-        isLoading={conversationsLoading}
-        disabled={isStreaming}
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        onSelect={handleSelectConversation}
-        onNewChat={handleNewChat}
-        onDelete={(id) => void handleDeleteConversation(id)}
-      />
+      {!chatsHidden && (
+        <ConversationSidebar
+          conversations={conversations}
+          selectedId={selectedConversationId}
+          isLoading={conversationsLoading}
+          disabled={isStreaming}
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          onRename={(id, title) => void handleRenameConversation(id, title)}
+          onSelect={handleSelectConversation}
+          onNewChat={handleNewChat}
+          onDelete={(id) => void handleDeleteConversation(id)}
+        />
+      )}
       <div className='chat-container'>
       {/* Header */}
       <header className='chat-header' ref={chatHeaderRef}>
@@ -1200,11 +1249,42 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <button
               type='button'
               className='sidebar-toggle-button'
-              onClick={() => setSidebarOpen((prev) => !prev)}
+              onClick={handleSidebarToggle}
               aria-label='Toggle conversations sidebar'
               aria-expanded={sidebarOpen}
             >
               ☰
+            </button>
+            <button
+              type='button'
+              className='header-button chats-toggle-button'
+              onClick={toggleChatsHidden}
+              aria-pressed={!chatsHidden}
+              title={chatsHidden ? 'Show past chats' : 'Hide past chats'}
+            >
+              <svg
+                width='18'
+                height='18'
+                viewBox='0 0 24 24'
+                fill='none'
+                stroke='currentColor'
+                strokeWidth='2'
+                aria-hidden='true'
+              >
+                {chatsHidden ? (
+                  <>
+                    <path d='M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8' />
+                    <path d='M3 3v5h5' />
+                    <polyline points='12 7 12 12 15 15' />
+                  </>
+                ) : (
+                  <>
+                    <path d='M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8' />
+                    <path d='M21 3v5h-5' />
+                    <polyline points='12 7 12 12 9 15' />
+                  </>
+                )}
+              </svg>
             </button>
             <div className='header-title'>
               <h1>Prismatix</h1>
@@ -1430,6 +1510,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         {messages.length === 0
           ? (
             <div className='empty-state'>
+              <div className='empty-state-hero' aria-hidden='true' />
+              <div className='empty-state-badge'>Adaptive Model Orchestration</div>
               <div className='empty-icon'>🤖</div>
               <h2>Welcome, {getUserDisplay()}!</h2>
               <p>

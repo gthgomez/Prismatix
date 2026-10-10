@@ -10,6 +10,12 @@ import type { ConversationSummary } from '../services/conversationService';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
+function setNativeValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+  setter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function renderInto(container: HTMLElement, ui: ReactNode): Root {
   const root = createRoot(container);
   act(() => {
@@ -181,6 +187,67 @@ describe('ConversationSidebar', () => {
 
     act(() => backdrop!.click());
     expect(onClose).toHaveBeenCalledTimes(2);
+
+    act(() => root.unmount());
+  });
+
+  it('filters conversations by search query and shows a no-match status', () => {
+    const container = document.createElement('div');
+    const root = renderInto(
+      container,
+      <ConversationSidebar
+        conversations={CONVERSATIONS}
+        selectedId={null}
+        isLoading={false}
+        onSelect={noop}
+        onNewChat={noop}
+        onDelete={noop}
+      />,
+    );
+
+    const search = container.querySelector<HTMLInputElement>('.conversation-search')!;
+    expect(search).not.toBeNull();
+
+    act(() => setNativeValue(search, 'first'));
+    const items = container.querySelectorAll('.conversation-item');
+    expect(items).toHaveLength(1);
+    expect(items[0]!.textContent).toContain('First chat');
+
+    act(() => setNativeValue(search, 'zzz-no-match'));
+    expect(container.textContent).toContain('No matching chats');
+
+    act(() => root.unmount());
+  });
+
+  it('renames a conversation inline via the rename affordance', () => {
+    const onRename = vi.fn();
+    const container = document.createElement('div');
+    const root = renderInto(
+      container,
+      <ConversationSidebar
+        conversations={CONVERSATIONS}
+        selectedId={null}
+        isLoading={false}
+        onRename={onRename}
+        onSelect={noop}
+        onNewChat={noop}
+        onDelete={noop}
+      />,
+    );
+
+    const renameBtn = container.querySelector<HTMLButtonElement>('.conversation-item-rename')!;
+    expect(renameBtn).not.toBeNull();
+    act(() => renameBtn.click());
+
+    const input = container.querySelector<HTMLInputElement>('.conversation-rename-input')!;
+    expect(input).not.toBeNull();
+    act(() => setNativeValue(input, 'Renamed chat'));
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+
+    expect(onRename).toHaveBeenCalledWith(CONVERSATIONS[0]!.id, 'Renamed chat');
+    expect(container.querySelector('.conversation-rename-input')).toBeNull();
 
     act(() => root.unmount());
   });

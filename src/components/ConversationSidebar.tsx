@@ -1,7 +1,8 @@
 // src/components/ConversationSidebar.tsx
-// PX07 conversation list: switch, New Chat, Delete Chat.
+// PX07 conversation list: switch, New Chat, Delete Chat. PX-polish: search
+// filter and inline rename.
 
-import React from 'react';
+import React, { useState } from 'react';
 import type { ConversationSummary } from '../services/conversationService';
 import '../styles/ConversationSidebar.css';
 
@@ -12,6 +13,7 @@ export interface ConversationSidebarProps {
   disabled?: boolean;
   isOpen?: boolean;
   onClose?: () => void;
+  onRename?: (conversationId: string, title: string) => void;
   onSelect: (conversationId: string) => void;
   onNewChat: () => void;
   onDelete: (conversationId: string) => void;
@@ -41,10 +43,22 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
   disabled = false,
   isOpen = false,
   onClose,
+  onRename,
   onSelect,
   onNewChat,
   onDelete,
 }) => {
+  const [query, setQuery] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+
+  const trimmedQuery = query.trim().toLowerCase();
+  const visibleConversations = trimmedQuery
+    ? conversations.filter((conversation) =>
+        (conversation.title ?? '').toLowerCase().includes(trimmedQuery),
+      )
+    : conversations;
+
   const handleSelect = (id: string) => {
     onSelect(id);
     onClose?.();
@@ -53,6 +67,24 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
   const handleNewChat = () => {
     onNewChat();
     onClose?.();
+  };
+
+  const startRename = (conversation: ConversationSummary) => {
+    setEditingId(conversation.id);
+    setEditDraft(conversation.title ?? '');
+  };
+
+  const commitRename = () => {
+    if (editingId) {
+      const draft = editDraft.trim();
+      if (draft) onRename?.(editingId, draft);
+    }
+    setEditingId(null);
+  };
+
+  const renameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') commitRename();
+    if (e.key === 'Escape') setEditingId(null);
   };
 
   return (
@@ -90,38 +122,80 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
           )}
         </div>
 
+        {conversations.length > 0 && (
+          <input
+            type='search'
+            className='conversation-search'
+            placeholder='Search chats…'
+            aria-label='Search chats'
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        )}
+
         {isLoading && <div className='conversation-sidebar-status'>Loading…</div>}
 
         {!isLoading && conversations.length === 0 && (
           <div className='conversation-sidebar-status'>No conversations yet</div>
         )}
 
+        {!isLoading &&
+          conversations.length > 0 &&
+          visibleConversations.length === 0 && (
+            <div className='conversation-sidebar-status'>No matching chats</div>
+          )}
+
         <ul className='conversation-list'>
-          {conversations.map((conversation) => {
+          {visibleConversations.map((conversation) => {
             const isSelected = selectedId === conversation.id;
             return (
               <li
                 key={conversation.id}
                 className={`conversation-item ${isSelected ? 'selected' : ''}`}
               >
-                <button
-                  type='button'
-                  className='conversation-item-button'
-                  onClick={() => handleSelect(conversation.id)}
-                  disabled={disabled}
-                  aria-current={isSelected ? 'true' : undefined}
-                  title={conversation.title ?? 'Untitled conversation'}
-                >
-                  <span className='conversation-item-title'>
-                    {conversation.title ?? 'Untitled conversation'}
-                  </span>
-                  <span
-                    className='conversation-item-activity'
-                    title={new Date(Date.parse(conversation.lastActivityAt)).toLocaleString()}
+                {editingId === conversation.id ? (
+                  <input
+                    type='text'
+                    className='conversation-rename-input'
+                    aria-label='Rename chat'
+                    value={editDraft}
+                    autoFocus
+                    onChange={(e) => setEditDraft(e.target.value)}
+                    onKeyDown={renameKeyDown}
+                    onBlur={commitRename}
+                  />
+                ) : (
+                  <button
+                    type='button'
+                    className='conversation-item-button'
+                    onClick={() => handleSelect(conversation.id)}
+                    disabled={disabled}
+                    aria-current={isSelected ? 'true' : undefined}
+                    title={conversation.title ?? 'Untitled conversation'}
                   >
-                    {formatActivity(conversation.lastActivityAt)}
-                  </span>
-                </button>
+                    <span className='conversation-item-title'>
+                      {conversation.title ?? 'Untitled conversation'}
+                    </span>
+                    <span
+                      className='conversation-item-activity'
+                      title={new Date(Date.parse(conversation.lastActivityAt)).toLocaleString()}
+                    >
+                      {formatActivity(conversation.lastActivityAt)}
+                    </span>
+                  </button>
+                )}
+                {onRename && editingId !== conversation.id && (
+                  <button
+                    type='button'
+                    className='conversation-item-rename'
+                    onClick={() => startRename(conversation)}
+                    disabled={disabled}
+                    aria-label={`Rename ${conversation.title ?? 'conversation'}`}
+                    title='Rename chat'
+                  >
+                    ✎
+                  </button>
+                )}
                 <button
                   type='button'
                   className='conversation-item-delete'

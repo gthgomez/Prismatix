@@ -421,9 +421,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           width: 44px;
           height: 44px;
           padding: 0;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 0.625rem;
+          background: transparent;
+          border: none;
+          border-radius: 999px;
           color: rgba(255, 255, 255, 0.6);
           cursor: pointer;
           transition: all 0.2s ease;

@@ -57,6 +57,67 @@
   padding: 0.25rem 0.25rem;
 }
 
+.conversation-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.78rem;
+}
+
+.conversation-search::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.conversation-search:focus {
+  outline: none;
+  border-color: var(--color-primary, #4ecdc4);
+}
+
+.conversation-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-primary, #4ecdc4);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.conversation-rename-input:focus {
+  outline: none;
+}
+
+.conversation-item-rename {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+  padding: 0 0.35rem;
+  transition: opacity 0.12s ease;
+}
+
+.conversation-item:hover .conversation-item-rename,
+.conversation-item-rename:focus-visible {
+  opacity: 0.55;
+}
+
+.conversation-item-rename:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.conversation-item-rename:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
 .conversation-list {
   list-style: none;
   margin: 0;
@@ -127,9 +188,10 @@
   opacity: 1;
 }
 
-/* Touch devices have no hover: keep delete visible on small screens. */
+/* Touch devices have no hover: keep item actions visible on small screens. */
 @media (hover: none), (max-width: 768px) {
-  .conversation-item-delete {
+  .conversation-item-delete,
+  .conversation-item-rename {
     opacity: 0.55;
   }
 }

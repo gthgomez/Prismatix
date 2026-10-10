@@ -813,6 +813,38 @@
   max-width: 800px;
   margin: 0 auto;
   padding: var(--spacing-md) 0;
+  position: relative;
+}
+
+/* Luminous hero dome: deep-blue spotlight in the site palette. */
+.empty-state-hero {
+  position: absolute;
+  left: -30%;
+  right: -30%;
+  top: -12%;
+  height: 460px;
+  background:
+    radial-gradient(58% 60% at 50% 0%, rgba(64, 118, 255, 0.30), transparent 72%),
+    radial-gradient(38% 42% at 50% 6%, rgba(78, 205, 196, 0.12), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.empty-state > *:not(.empty-state-hero) {
+  position: relative;
+  z-index: 1;
+}
+
+.empty-state-badge {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: #8ec2ff;
+  border: 1px solid rgba(88, 166, 255, 0.4);
+  background: rgba(88, 166, 255, 0.08);
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  margin-bottom: var(--spacing-sm);
 }
 
 .empty-state-providers-cta {
@@ -840,20 +872,21 @@
 }
 
 .empty-state h2 {
-  margin: 0 0 0.25rem;
-  font-size: 1.25rem;
+  margin: 0 0 0.4rem;
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
   font-weight: 700;
   letter-spacing: -0.02em;
-  background: linear-gradient(135deg, #fff, var(--color-primary));
+  background: linear-gradient(135deg, #fff 30%, #8ec2ff);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
 .empty-state p {
+  font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
   margin: 0 0 var(--spacing-sm);
   color: var(--color-text-dim);
   max-width: 450px;
-  line-height: 1.5;
+  line-height: 1.6;
   font-size: 0.85rem;
 }
 
@@ -1044,6 +1077,7 @@
 }
 
 .message-text {
+  font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.95);
   white-space: pre-wrap;
@@ -1172,31 +1206,47 @@
 
 .draft-remove-btn:hover { background: rgba(255, 107, 107, 0.1); color: var(--color-danger); }
 
-.input-row { display: flex; gap: var(--spacing-sm); align-items: flex-end; }
+/* Composer pill: one rounded shell holding attach + input + send. */
+.input-row {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: flex-end;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border);
+  border-radius: 28px;
+  padding: 0.35rem 0.4rem 0.35rem 0.5rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input-row:focus-within {
+  border-color: rgba(78, 205, 196, 0.55);
+  box-shadow: 0 0 0 3px var(--color-primary-dim), 0 8px 32px rgba(0, 0, 0, 0.35);
+}
 
 .chat-input {
   flex: 1;
-  background: var(--color-border-subtle);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 0.875rem var(--spacing-md);
+  background: transparent;
+  border: none;
+  border-radius: 22px;
+  padding: 0.75rem 0.25rem 0.75rem 0.25rem;
   color: var(--color-text);
   font-family: inherit; font-size: 0.95rem;
   resize: none;
   min-height: 48px; max-height: 200px;
   line-height: 1.5;
-  transition: all 0.2s;
+  transition: color 0.2s;
 }
 
-.chat-input:focus { outline: none; background: rgba(255, 255, 255, 0.06); border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-dim); }
+.chat-input:focus { outline: none; }
 .chat-input:disabled { opacity: 0.5; cursor: not-allowed; }
 .chat-input::placeholder { color: var(--color-text-muted); }
 
 .send-button {
-  width: 48px; height: 48px;
-  border-radius: var(--radius-lg);
+  width: 44px; height: 44px;
+  border-radius: 999px;
   background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
   border: none; color: #fff; cursor: pointer;
+  flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 4px 12px rgba(78, 205, 196, 0.2);
@@ -1208,11 +1258,12 @@
 
 /* PX06: Stop control shown while a response is streaming. */
 .stop-button {
-  width: 48px; height: 48px;
-  border-radius: var(--radius-lg);
+  width: 44px; height: 44px;
+  border-radius: 999px;
   background: rgba(255, 107, 107, 0.16);
   border: 1px solid rgba(255, 107, 107, 0.5);
   color: #ff8f8f; cursor: pointer;
+  flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -1935,21 +1986,47 @@
 .provider-card-note,
 .provider-settings-note,
 .provider-settings-footnote {
+  font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
   font-size: 0.78rem;
   opacity: 0.85;
   line-height: 1.5;
 }
 
 .provider-state-line {
+  font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
   font-size: 0.75rem;
   color: #58a6ff;
   letter-spacing: 0.02em;
 }
 
 .provider-settings-error {
+  font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
   font-size: 0.8rem;
   color: #f85149;
   margin: 0.25rem 0;
+}
+
+/* chats history toggle: lit while the past-chats list is visible */
+.chats-toggle-button[aria-pressed='true'] {
+  color: var(--color-primary, #4ecdc4);
+  border-color: rgba(78, 205, 196, 0.45);
+}
+
+/* Mid-width declutter: drop the two-line tagline and let the model pill shrink. */
+@media (min-width: 769px) and (max-width: 1100px) {
+  .header-subtitle {
+    display: none;
+  }
+}
+
+.model-indicator-button {
+  min-width: 0;
+}
+
+.model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .provider-settings-list {

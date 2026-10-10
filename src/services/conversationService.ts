@@ -394,6 +394,26 @@ export async function deleteConversation(
 }
 
 /**
+ * Renames a conversation (owner update via RLS). Titles are trimmed and capped
+ * at 120 chars to match the server's first-message title cap.
+ */
+export async function renameConversation(
+  client: SupabaseClient,
+  conversationId: string,
+  title: string,
+): Promise<void> {
+  const trimmed = title.trim().slice(0, 120);
+  if (!trimmed) throw new Error('rename_conversation_failed: empty title');
+  const { error } = await client
+    .from('conversations')
+    .update({ title: trimmed })
+    .eq('id', conversationId);
+  if (error) {
+    throw new Error(`rename_conversation_failed: ${error.message ?? 'unknown'}`);
+  }
+}
+
+/**
  * Bounded context selector. Walks messages newest-first, including the most
  * recent eligible messages until the message-count or total-character budget is
  * reached; an individually oversized message is skipped. Returns the window in
