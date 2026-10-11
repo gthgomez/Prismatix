@@ -84,6 +84,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   );
   const [showAllOverrides, setShowAllOverrides] = useState(false);
   const [groupByProvider, setGroupByProvider] = useState(readStoredGroupByProvider);
+  const [modelSearch, setModelSearch] = useState('');
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -146,8 +147,22 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
     return visibleHighlights;
   }, [showAllOverrides, extendedIncludesSelection, visibleOrder, visibleHighlights]);
 
+  const filteredOverrideKeys = useMemo(() => {
+    const available = modelSearch.trim() ? visibleOrder : visibleOverrideKeys;
+    const query = modelSearch.trim().toLocaleLowerCase();
+    if (!query) return available;
+    return available.filter((id) => {
+      const model = getCatalogEntry(id);
+      const providerId = providerForModel(id);
+      const providerLabel = providerId === 'other' ? '' : PROVIDER_PLUGINS[providerId].label;
+      return `${model.shortName} ${model.description} ${providerLabel} ${id}`
+        .toLocaleLowerCase()
+        .includes(query);
+    });
+  }, [modelSearch, visibleOrder, visibleOverrideKeys]);
+
   const modelsByProvider = useMemo(() => {
-    const keySet = new Set(visibleOverrideKeys);
+    const keySet = new Set(filteredOverrideKeys);
     return PROVIDER_PLUGIN_ORDER.map((provider) => ({
       provider,
       label: PROVIDER_PLUGINS[provider].label,
@@ -155,7 +170,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
         (id) => keySet.has(id) && providerForModel(id) === provider,
       ),
     })).filter((g) => g.models.length > 0);
-  }, [visibleOverrideKeys, visibleOrder]);
+  }, [filteredOverrideKeys, visibleOrder]);
 
   const renderModelButton = (key: RouterModel) => {
     const config = getCatalogEntry(key);
@@ -163,13 +178,13 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
       <button
         key={key}
         type='button'
-        className={`model-option ${currentModel === key ? 'active' : ''} ${
+        className={`model-option ${currentModel === key ? 'is-current' : ''} ${
           manualModelOverride === key ? 'manual' : ''
         }`}
+        aria-pressed={manualModelOverride === key}
         onClick={() => onModelSelect(key)}
-        style={{ '--option-color': config.color } as React.CSSProperties}
       >
-        <span className='option-icon'>{config.icon}</span>
+        <span className='option-icon' aria-hidden='true'>{config.icon}</span>
         <div className='option-info'>
           <span className='option-name'>{config.shortName}</span>
           <span className='option-desc'>{config.description}</span>
@@ -184,7 +199,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   return (
     <div className='model-dropdown'>
       <div className='dropdown-header'>
-        <span>Model & routing</span>
+        <span>Model &amp; routing</span>
         {manualModelOverride && (
           <button
             type='button'
@@ -302,7 +317,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
       {activeTab === 'models' && (
         <div className='model-dropdown-panel' role='tabpanel'>
           <div className='dropdown-section-title model-override-section-head'>
-            <span>Manual override</span>
+            <span>Choose a model</span>
             <div
               className='model-override-layout-toggle'
               role='group'
@@ -320,15 +335,34 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
                 type='button'
                 className={!groupByProvider ? 'active' : ''}
                 onClick={() => setGroupByProvider(false)}
-                title='Listed output $/M (low → high) from pricing registry'
+                title='Models are listed from lower to higher output price'
               >
-                List order
+                Model order
               </button>
             </div>
           </div>
 
+          <label className='model-search-label'>
+            <span>Search models</span>
+            <input
+              className='model-search-input'
+              type='search'
+              value={modelSearch}
+              onChange={(event) => setModelSearch(event.target.value)}
+              placeholder='Name, provider, or capability'
+              autoComplete='off'
+            />
+          </label>
+          <p className='model-selection-hint' aria-live='polite'>
+            {manualModelOverride
+              ? `Manual model: ${getCatalogEntry(manualModelOverride).shortName}`
+              : `Automatic routing · currently using ${getCatalogEntry(currentModel).shortName}`}
+          </p>
+
           <div className='model-options-scroll'>
-            {groupByProvider ? (
+            {filteredOverrideKeys.length === 0 ? (
+              <p className='model-search-empty' role='status'>No models match “{modelSearch}”.</p>
+            ) : groupByProvider ? (
               <div className='model-options model-options--grouped'>
                 {modelsByProvider.map(({ provider, label, models }) => (
                   <div key={provider} className='model-provider-group'>
@@ -341,12 +375,12 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
               </div>
             ) : (
               <div className='model-options'>
-                {visibleOverrideKeys.map((key) => renderModelButton(key))}
+                {filteredOverrideKeys.map((key) => renderModelButton(key))}
               </div>
             )}
           </div>
 
-          {!showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
+          {!modelSearch.trim() && !showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
             <button
               type='button'
               className='model-override-expand'
@@ -355,7 +389,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
               Show all models ({visibleOrder.length})
             </button>
           )}
-          {showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
+          {!modelSearch.trim() && showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
             <button
               type='button'
               className='model-override-expand'

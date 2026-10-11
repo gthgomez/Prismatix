@@ -66,13 +66,13 @@ export function AuthenticatedApp() {
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #0a0a0a;
-            font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', monospace;
+            background: var(--color-bg);
+            font-family: var(--font-sans);
           }
 
           .loading-content {
             text-align: center;
-            color: rgba(255, 255, 255, 0.7);
+            color: var(--color-text-dim);
           }
 
           .loading-logo {
@@ -86,14 +86,14 @@ export function AuthenticatedApp() {
             height: 40px;
             margin: 0 auto 1rem;
             border: 3px solid rgba(78, 205, 196, 0.2);
-            border-top-color: #4ECDC4;
+            border-top-color: var(--color-primary);
             border-radius: 50%;
             animation: spin 1s linear infinite;
           }
 
           .loading-content p {
             font-size: 0.9rem;
-            color: rgba(255, 255, 255, 0.5);
+            color: var(--color-text-muted);
           }
 
           @keyframes float {

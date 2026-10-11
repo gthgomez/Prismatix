@@ -171,9 +171,9 @@ export const ResetPassword: React.FC = () => {
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          background: #0a0a0a;
+          background: var(--color-bg);
           padding: 2rem;
-          font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', monospace;
+          font-family: var(--font-sans);
           overflow-y: auto;
         }
 
@@ -181,11 +181,11 @@ export const ResetPassword: React.FC = () => {
           margin: auto 0;
           width: 100%;
           max-width: 420px;
-          background: rgba(20, 20, 20, 0.95);
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: var(--color-surface);
+          border: 1px solid var(--color-border);
           border-radius: 1rem;
           padding: 2rem;
-          backdrop-filter: blur(20px);
+          backdrop-filter: none;
           animation: fadeIn 0.5s ease;
         }
 
@@ -202,12 +202,12 @@ export const ResetPassword: React.FC = () => {
         .reset-header h1 {
           font-size: 1.6rem;
           font-weight: 700;
-          color: #fff;
+          color: var(--color-text);
           margin: 0 0 0.25rem;
         }
 
         .reset-header p {
-          color: rgba(255, 255, 255, 0.6);
+          color: var(--color-text-dim);
           margin: 0;
           font-size: 0.9rem;
         }
@@ -223,21 +223,21 @@ export const ResetPassword: React.FC = () => {
         }
 
         .reset-message.error {
-          background: rgba(255, 107, 107, 0.1);
-          color: #ff9a9a;
-          border: 1px solid rgba(255, 107, 107, 0.3);
+          background: var(--color-surface-error);
+          color: var(--color-content-on-error);
+          border: 1px solid var(--color-danger);
         }
 
         .reset-message.success {
-          background: rgba(78, 205, 196, 0.1);
-          color: #9be7e1;
-          border: 1px solid rgba(78, 205, 196, 0.3);
+          background: var(--color-surface-success);
+          color: var(--color-content-on-success);
+          border: 1px solid var(--color-success);
         }
 
         .reset-message.info {
-          background: rgba(255, 255, 255, 0.06);
-          color: rgba(255, 255, 255, 0.7);
-          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: var(--color-surface-elevated);
+          color: var(--color-text-dim);
+          border: 1px solid var(--color-border);
         }
 
         .reset-form .form-group {
@@ -246,7 +246,7 @@ export const ResetPassword: React.FC = () => {
 
         .reset-form label {
           display: block;
-          color: rgba(255, 255, 255, 0.7);
+          color: var(--color-text-dim);
           margin-bottom: 0.4rem;
           font-size: 0.85rem;
         }
@@ -255,9 +255,9 @@ export const ResetPassword: React.FC = () => {
           width: 100%;
           padding: 0.75rem 0.9rem;
           border-radius: 0.6rem;
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          background: rgba(0, 0, 0, 0.4);
-          color: #fff;
+          border: 1px solid var(--color-border);
+          background: var(--color-bg);
+          color: var(--color-text);
           outline: none;
         }
 
@@ -267,8 +267,8 @@ export const ResetPassword: React.FC = () => {
           padding: 0.8rem;
           border: none;
           border-radius: 0.6rem;
-          background: linear-gradient(135deg, #4ECDC4, #FF6B6B);
-          color: #0a0a0a;
+          background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
+          color: var(--color-content-on-primary);
           font-weight: 700;
           cursor: pointer;
         }
@@ -281,7 +281,7 @@ export const ResetPassword: React.FC = () => {
         .reset-link {
           background: none;
           border: none;
-          color: rgba(255, 255, 255, 0.7);
+          color: var(--color-text-dim);
           cursor: pointer;
           text-decoration: underline;
         }

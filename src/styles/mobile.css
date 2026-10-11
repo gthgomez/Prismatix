@@ -16,11 +16,14 @@
   --color-surface-selected: #09292f;
   --color-surface-error: #2d141a;
   --color-surface-disabled: #111820;
+  --color-surface-hover: #17232c;
+  --color-surface-glass: rgba(13, 20, 27, 0.94);
   --color-content-on-selected: #ccfaff;
   --color-content-on-error: #ffb4b4;
   --color-content-disabled: #91a3b0;
   --color-border: rgba(255, 255, 255, 0.1);
   --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-strong: rgba(178, 195, 206, 0.3);
   --color-text: #ffffff;
   --color-text-dim: #b2c3ce;
   --color-text-muted: #91a3b0;
@@ -32,6 +35,11 @@
   --color-danger: #FF6B6B;
   --color-warning: #FFC446;
   --color-success: #7EF3DB;
+  --color-content-on-primary: #031012;
+  --color-surface-success: #10251f;
+  --color-surface-warning: #2a2110;
+  --color-content-on-warning: #ffe0a0;
+  --color-content-on-success: #baf9e8;
 
   /* Spacing */
   --spacing-xs: 0.25rem;
@@ -45,6 +53,7 @@
   --radius-md: 0.625rem;
   --radius-lg: 0.75rem;
   --radius-full: 9999px;
+  --control-height: 2.75rem;
 
   /* Typography */
   --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -53,7 +62,7 @@
   /* Elevation & Glows */
   --shadow-glow: 0 0 20px rgba(78, 205, 196, 0.15);
   --shadow-elevated: 0 16px 36px rgba(0, 0, 0, 0.5);
-  --glass-bg: rgba(13, 20, 27, 0.92);
+  --glass-bg: var(--color-surface-glass);
   --glass-fallback: #0d141b;
   --glass-border: #477586;
   --glass-blur: 16px;
@@ -70,6 +79,72 @@
 :where(button, summary, input, textarea, select):focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 3px;
+}
+
+:where(button, input, textarea, select) {
+  font: inherit;
+}
+
+::selection {
+  color: var(--color-content-on-selected);
+  background: rgba(68, 163, 179, 0.5);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-bg: var(--color-surface-elevated);
+    --glass-blur: 0px;
+  }
+  .auth-card,
+  .reset-card {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--color-surface);
+  }
+}
+
+@media (forced-colors: active) {
+  :where(button, summary, input, textarea, select):focus-visible {
+    outline: 2px solid Highlight;
+  }
+  .auth-container,
+  .reset-container,
+  .auth-card,
+  .reset-card {
+    background: Canvas !important;
+    color: CanvasText !important;
+    border-color: CanvasText !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+  .auth-card h1,
+  .reset-card h1 {
+    background: none !important;
+    color: CanvasText !important;
+    -webkit-text-fill-color: CanvasText !important;
+  }
+  .auth-card :focus-visible,
+  .reset-card :focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 2px;
+  }
+  .auth-card :where(button, input),
+  .reset-card :where(button, input) {
+    background: Canvas !important;
+    color: CanvasText !important;
+    border: 1px solid CanvasText !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 html,

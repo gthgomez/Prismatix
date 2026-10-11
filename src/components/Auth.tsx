@@ -268,9 +268,9 @@ export const Auth: React.FC<AuthProps> = ({
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          background: #0a0a0a;
+          background: var(--color-bg);
           padding: 2rem;
-          font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', monospace;
+          font-family: var(--font-sans);
           overflow-y: auto;
         }
 
@@ -278,11 +278,11 @@ export const Auth: React.FC<AuthProps> = ({
           margin: auto 0;
           width: 100%;
           max-width: 420px;
-          background: rgba(20, 20, 20, 0.95);
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: var(--color-surface);
+          border: 1px solid var(--color-border);
           border-radius: 1rem;
           padding: 2rem;
-          backdrop-filter: blur(20px);
+          backdrop-filter: none;
           animation: fadeIn 0.5s ease;
         }
 
@@ -300,7 +300,7 @@ export const Auth: React.FC<AuthProps> = ({
         .auth-header h1 {
           font-size: 1.75rem;
           font-weight: 700;
-          background: linear-gradient(135deg, #4ECDC4, #FF6B6B);
+          background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
           background-clip: text;
@@ -308,7 +308,7 @@ export const Auth: React.FC<AuthProps> = ({
         }
 
         .auth-header p {
-          color: rgba(255, 255, 255, 0.5);
+          color: var(--color-text-muted);
           font-size: 0.875rem;
           margin: 0;
           text-transform: uppercase;
@@ -319,7 +319,7 @@ export const Auth: React.FC<AuthProps> = ({
           display: flex;
           gap: 0.5rem;
           margin-bottom: 1.5rem;
-          background: rgba(255, 255, 255, 0.03);
+          background: var(--color-surface-elevated);
           border-radius: 0.5rem;
           padding: 0.25rem;
         }
@@ -330,7 +330,7 @@ export const Auth: React.FC<AuthProps> = ({
           background: transparent;
           border: none;
           border-radius: 0.375rem;
-          color: rgba(255, 255, 255, 0.5);
+          color: var(--color-text-muted);
           font-family: inherit;
           font-size: 0.875rem;
           font-weight: 500;
@@ -339,12 +339,12 @@ export const Auth: React.FC<AuthProps> = ({
         }
 
         .auth-tab:hover {
-          color: rgba(255, 255, 255, 0.8);
+          color: var(--color-text);
         }
 
         .auth-tab.active {
-          background: rgba(78, 205, 196, 0.2);
-          color: #4ECDC4;
+          background: var(--color-primary-dim);
+          color: var(--color-primary);
         }
 
         .auth-message {
@@ -358,15 +358,15 @@ export const Auth: React.FC<AuthProps> = ({
         }
 
         .auth-message.error {
-          background: rgba(255, 107, 107, 0.1);
-          border: 1px solid rgba(255, 107, 107, 0.3);
-          color: #FF6B6B;
+          background: var(--color-surface-error);
+          border: 1px solid var(--color-danger);
+          color: var(--color-content-on-error);
         }
 
         .auth-message.success {
-          background: rgba(78, 205, 196, 0.1);
-          border: 1px solid rgba(78, 205, 196, 0.3);
-          color: #4ECDC4;
+          background: var(--color-surface-success);
+          border: 1px solid var(--color-success);
+          color: var(--color-content-on-success);
         }
 
         .auth-form {
@@ -383,17 +383,17 @@ export const Auth: React.FC<AuthProps> = ({
 
         .form-group label {
           font-size: 0.8rem;
-          color: rgba(255, 255, 255, 0.7);
+          color: var(--color-text-dim);
           text-transform: uppercase;
           letter-spacing: 0.05em;
         }
 
         .form-group input {
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: var(--color-surface);
+          border: 1px solid var(--color-border);
           border-radius: 0.5rem;
           padding: 0.875rem 1rem;
-          color: #fff;
+          color: var(--color-text);
           font-family: inherit;
           font-size: 0.95rem;
           transition: all 0.2s;
@@ -401,8 +401,8 @@ export const Auth: React.FC<AuthProps> = ({
 
         .form-group input:focus {
           outline: none;
-          background: rgba(255, 255, 255, 0.08);
-          border-color: rgba(78, 205, 196, 0.5);
+          background: var(--color-surface-hover);
+          border-color: var(--color-primary);
           box-shadow: 0 0 0 3px rgba(78, 205, 196, 0.1);
         }
 
@@ -418,10 +418,10 @@ export const Auth: React.FC<AuthProps> = ({
         .auth-submit {
           margin-top: 0.5rem;
           padding: 1rem;
-          background: linear-gradient(135deg, #4ECDC4, #44A3B3);
+          background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
           border: none;
           border-radius: 0.5rem;
-          color: #fff;
+          color: var(--color-content-on-primary);
           font-family: inherit;
           font-size: 1rem;
           font-weight: 600;
@@ -457,7 +457,7 @@ export const Auth: React.FC<AuthProps> = ({
           content: '';
           flex: 1;
           height: 1px;
-          background: rgba(255, 255, 255, 0.1);
+          background: var(--color-border-subtle);
         }
 
         .auth-providers {
@@ -472,10 +472,10 @@ export const Auth: React.FC<AuthProps> = ({
           justify-content: center;
           gap: 0.5rem;
           padding: 0.875rem;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: var(--color-surface);
+          border: 1px solid var(--color-border);
           border-radius: 0.5rem;
-          color: #fff;
+          color: var(--color-text);
           font-family: inherit;
           font-size: 0.875rem;
           cursor: pointer;
@@ -483,8 +483,8 @@ export const Auth: React.FC<AuthProps> = ({
         }
 
         .provider-button:hover:not(:disabled) {
-          background: rgba(255, 255, 255, 0.1);
-          border-color: rgba(255, 255, 255, 0.2);
+          background: var(--color-border-subtle);
+          border-color: var(--color-border-strong);
         }
 
         .provider-button:disabled {
@@ -498,7 +498,7 @@ export const Auth: React.FC<AuthProps> = ({
         }
 
         .auth-footer p {
-          color: rgba(255, 255, 255, 0.5);
+          color: var(--color-text-muted);
           font-size: 0.875rem;
           margin: 0;
         }
@@ -506,7 +506,7 @@ export const Auth: React.FC<AuthProps> = ({
         .auth-link {
           background: none;
           border: none;
-          color: #4ECDC4;
+          color: var(--color-primary);
           font-family: inherit;
           font-size: inherit;
           cursor: pointer;
@@ -514,14 +514,14 @@ export const Auth: React.FC<AuthProps> = ({
         }
 
         .auth-link:hover {
-          color: #5FE0D7;
+          color: var(--color-primary);
         }
 
         .loading-spinner {
           width: 20px;
           height: 20px;
           border: 2px solid rgba(255, 255, 255, 0.3);
-          border-top-color: #fff;
+          border-top-color: var(--color-text);
           border-radius: 50%;
           animation: spin 0.8s linear infinite;
         }
