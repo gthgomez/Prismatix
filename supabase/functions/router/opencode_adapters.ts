@@ -149,8 +149,9 @@ export async function dispatchOpenCodeStream(params: {
         response,
         extractDeltas: (payload: any) => {
           if (!payload) return [];
-          // This terminal event repeats the complete text already sent as deltas.
-          if (payload.type === 'response.output_text.done') return [];
+          // Typed Responses events carry output, reasoning summaries, and terminal
+          // snapshots. Only output-text deltas belong in the assistant's answer.
+          if (typeof payload.type === 'string' && payload.type !== 'response.output_text.delta') return [];
           // Support official OpenAI Responses streaming event types & output items
           const text =
             payload?.delta?.text ||

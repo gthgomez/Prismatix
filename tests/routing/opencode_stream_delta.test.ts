@@ -58,6 +58,8 @@ describe('OpenCode Stream Delta Extraction & Multimodal Payload Preservation', (
       // Mock upstream responses stream emitting standard response.output_text.delta frames
       const frames = [
         { type: 'response.created', response: { id: 'resp-1', model: 'gpt-5.6-luna' } },
+        { type: 'response.reasoning_summary_text.delta', delta: 'Private reasoning summary' },
+        { type: 'response.reasoning_summary_text.done', text: 'Private reasoning summary' },
         { type: 'response.output_text.delta', delta: { text: 'Hello' } },
         { type: 'response.output_text.delta', delta: { text: ', ' } },
         { type: 'response.output_text.delta', delta: { text: 'world!' } },
