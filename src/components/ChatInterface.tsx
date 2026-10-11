@@ -77,6 +77,7 @@ import { MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog'
 import { filterVisibleModels, isModelVisible } from '../providerRegistry';
 import { useProviderPlugins } from '../hooks/useProviderPlugins';
 import { ProviderSettings } from './ProviderSettings';
+import { MemorySettings } from './MemorySettings';
 import { assistantModelPillDisplay, buildRouteExplanationRows } from '../modelDisplay';
 import { RouteExplanationList } from './RouteExplanationList';
 import {
@@ -173,6 +174,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
   const [showProviderSettings, setShowProviderSettings] = useState(false);
+  const [showMemorySettings, setShowMemorySettings] = useState(false);
+  const [lastRecall, setLastRecall] = useState<{ conversationId: string; hits: number } | null>(null);
 
   // Provider plug-ins (PX12): which providers are on for this user.
   const providerPlugins = useProviderPlugins(user?.id);
@@ -971,6 +974,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       } = result;
 
       executionIdRef.current = executionId;
+      if (result.memoryHits !== undefined) setLastRecall({ conversationId: sendConversationId, hits: result.memoryHits });
 
       // PX07: stream/delta updates are guarded by (conversationId, requestId).
       activeStreamRef.current = {
@@ -1363,6 +1367,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               )}
             </div>
 
+            <button type='button' className='header-button' aria-haspopup='dialog' aria-expanded={showMemorySettings} onClick={() => setShowMemorySettings(true)}>Memory{lastRecall?.conversationId === selectedConversationId ? ` · ${lastRecall.hits} recalled` : ''}</button>
             <button
               type='button'
               onClick={() => setShowProviderSettings(true)}
@@ -1461,6 +1466,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               )}
             </div>
 
+            {showMemorySettings && <MemorySettings onClose={() => setShowMemorySettings(false)} onOpenConversation={handleSelectConversation} />}
             {showProviderSettings && (
               <ProviderSettings
                 plugins={providerPlugins}

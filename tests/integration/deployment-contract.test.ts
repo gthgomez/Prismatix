@@ -379,6 +379,9 @@ function supabaseRoutes(options?: { authOk?: boolean; memoryEntitled?: boolean }
     if (call.url.includes('/rest/v1/user_memories')) {
       return jsonResponse([]);
     }
+    if (call.url.includes('/rest/v1/rpc/memory_search')) return jsonResponse([]);
+    if (call.url.includes('/rest/v1/rpc/memory_allowed')) return jsonResponse(true);
+    if (call.url.includes('/rest/v1/rpc/memory_enqueue') || call.url.includes('/rest/v1/rpc/memory_claim')) return jsonResponse(null);
     if (call.url.includes('/rest/v1/conversation_memory_state')) {
       return jsonResponse(null);
     }
@@ -904,6 +907,31 @@ describe('strict unknown manual model rejection (F17)', () => {
 // ---------------------------------------------------------------------------
 
 describe('mobile memory isolation (real handler)', () => {
+  it('web recall dispatches bounded OpenRouter memory tools through the real handler', async () => {
+    const { CURATED_OPENCODE_REGISTRY } = await import('../../supabase/functions/router/models_hub.ts');
+    const { isHistoricModel } = await import('../../supabase/functions/_shared/model_lifecycle.ts');
+    const tier = Object.keys(CURATED_OPENCODE_REGISTRY).find(t => CURATED_OPENCODE_REGISTRY[t]!.displayName.includes('Haiku') && !isHistoricModel(t))!;
+    const happy = supabaseRoutes({ memoryEntitled: true });
+    let rounds = 0;
+    const calls = installFetchRecorder(call => {
+      if (call.url.includes('get_user_provider_config')) return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'openrouter', enabled: true }] });
+      if (call.url === 'https://openrouter.ai/api/v1/chat/completions') {
+        rounds++;
+        const payload = rounds === 1 ? { choices: [{ delta: { tool_calls: [{ index: 0, id: 'recall-1', function: { name: 'search_memory', arguments: '{"query":"preferences"}' } }] } }], usage: { prompt_tokens: 100, completion_tokens: 20 } } : { choices: [{ delta: { content: 'A grounded memory answer.' } }], usage: { prompt_tokens: 120, completion_tokens: 30 } };
+        return new Response('data: ' + JSON.stringify(payload) + '\n\ndata: [DONE]\n\n');
+      }
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV, OPENROUTER_API_KEY: 'fixture-openrouter' });
+    const res = await handler(routerRequest(chatBody({ platform: 'web', modelOverride: tier, query: 'Recall my preferences from previous chats.' }), 'px02-user-token'));
+    expect(res.status).toBe(200);
+    const wire = await res.text();
+    expect(wire).toContain('A grounded memory answer.');
+    expect(wire).not.toContain('recall-1');
+    expect(rounds).toBe(2);
+    expect(calls.find(c => c.url === 'https://openrouter.ai/api/v1/chat/completions')?.body).toContain('persistent memory is enabled');
+    expect(calls.filter(c => c.url.includes('memory_search')).length).toBe(2);
+  });
   it('chat-only web access does not retrieve memory or launch memory model calls', async () => {
     const calls = installFetchRecorder(supabaseRoutes());
     const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
@@ -913,9 +941,9 @@ describe('mobile memory isolation (real handler)', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('Hello from Prism');
     await flushAsync();
-    expect(calls.some((call) => call.url.includes('user_memories'))).toBe(false);
+    expect(calls.some((call) => call.url.includes('user_memories') || call.url.includes('memory_search'))).toBe(false);
     expect(calls.some((call) => call.url.includes('conversation_memory_state'))).toBe(false);
-    expect(calls.some((call) => call.body.includes('memory-summarize'))).toBe(false);
+    expect(calls.some((call) => call.body.includes('memory-summarize') || call.url.includes('memory_enqueue') || call.url.includes('memory_claim'))).toBe(false);
   });
   it('platform=mobile streams with ZERO server memory retrieval/extraction calls', async () => {
     const calls = installFetchRecorder(supabaseRoutes());
@@ -960,7 +988,7 @@ describe('mobile memory isolation (real handler)', () => {
     await res.text();
     await flushAsync();
 
-    expect(calls.some((call) => call.url.includes('user_memories'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('memory_search'))).toBe(true);
   });
 });
 

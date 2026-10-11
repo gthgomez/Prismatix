@@ -54,6 +54,7 @@ export const CONFIG = {
   VIDEO_INTAKE_ENDPOINT: functionEndpoint('video-intake'),
   VIDEO_STATUS_ENDPOINT: functionEndpoint('video-status'),
   PROVIDER_SETTINGS_ENDPOINT: functionEndpoint('provider-settings'),
+  MEMORY_ENDPOINT: functionEndpoint('memory'),
   
   // Platform Detection
   PLATFORM: (() => {

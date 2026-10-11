@@ -78,7 +78,7 @@ export function configureOpenCodePricing(baseUrl: string): void {
  * If pricing is unknown or its effective interval has expired, automatic
  * routing is strictly forbidden and no live rate is ever returned.
  */
-export function getPricingForModel(model: string, now: Date = new Date()): ModelPricing {
+export function getPricingForModel(model: string, now: Date = new Date(), goPricing = useGoPricing): ModelPricing {
   const existing = PRICING_REGISTRY[model];
   if (existing) {
     if (isPriceExpired(existing, now)) {
@@ -95,7 +95,7 @@ export function getPricingForModel(model: string, now: Date = new Date()): Model
         isEligibleForAutoRouting: false,
       };
     }
-    const goRates = useGoPricing ? GO_RATES[model] : undefined;
+    const goRates = goPricing ? GO_RATES[model] : undefined;
     return goRates ? {
       ...existing,
       inputRatePer1M: goRates[0], outputRatePer1M: goRates[1],
