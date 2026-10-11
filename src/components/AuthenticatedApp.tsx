@@ -24,6 +24,7 @@ export function AuthenticatedApp() {
     signIn,
     signUp,
     signOut,
+    resetPassword,
     signInWithProvider,
   } = useAuth();
 
@@ -116,6 +117,7 @@ export function AuthenticatedApp() {
           onSignIn={signIn}
           onSignUp={signUp}
           onSignInWithProvider={signInWithProvider}
+          onResetPassword={resetPassword}
         />
 
         <style>{`

@@ -12,6 +12,7 @@ interface AuthProps {
   onSignIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   onSignUp: (email: string, password: string) => Promise<{ error: Error | null }>;
   onSignInWithProvider?: (provider: 'google' | 'github') => Promise<{ error: Error | null }>;
+  onResetPassword?: (email: string) => Promise<{ error: Error | null }>;
 }
 
 type AuthMode = 'signin' | 'signup';
@@ -19,7 +20,8 @@ type AuthMode = 'signin' | 'signup';
 export const Auth: React.FC<AuthProps> = ({ 
   onSignIn, 
   onSignUp, 
-  onSignInWithProvider 
+  onSignInWithProvider,
+  onResetPassword
 }) => {
   const [mode, setMode] = useState<AuthMode>('signin');
   const [email, setEmail] = useState('');
@@ -28,6 +30,7 @@ export const Auth: React.FC<AuthProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,6 +115,32 @@ export const Auth: React.FC<AuthProps> = ({
     setConfirmPassword('');
   };
 
+  const handleForgotPassword = async () => {
+    if (!onResetPassword) return;
+
+    setError(null);
+    setSuccessMessage(null);
+
+    if (!email.trim()) {
+      setError('Enter your email above first, then click "Forgot password?"');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const result = await onResetPassword(email);
+      if (result.error) {
+        setError(result.error.message);
+      } else {
+        setSuccessMessage('Password reset email sent — check your inbox.');
+      }
+    } catch (err) {
+      setError('An unexpected error occurred');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="auth-container">
       <div className="auth-card">
@@ -122,29 +151,34 @@ export const Auth: React.FC<AuthProps> = ({
           <p>Adaptive Model Selection</p>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="auth-tabs">
-          <button 
-            type="button"
-            className={`auth-tab ${mode === 'signin' ? 'active' : ''}`}
-            onClick={() => setMode('signin')}
-          >
-            Sign In
-          </button>
-          {ALLOW_SIGNUP && (
+        {/* Tab Switcher — hidden entirely when signup is disabled (PX01):
+            a single-tab pill is a dead control and reads as a rendering bug */}
+        {ALLOW_SIGNUP && (
+          <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
             <button 
               type="button"
+              role="tab"
+              aria-selected={mode === 'signin'}
+              className={`auth-tab ${mode === 'signin' ? 'active' : ''}`}
+              onClick={() => setMode('signin')}
+            >
+              Sign In
+            </button>
+            <button 
+              type="button"
+              role="tab"
+              aria-selected={mode === 'signup'}
               className={`auth-tab ${mode === 'signup' ? 'active' : ''}`}
               onClick={() => setMode('signup')}
             >
               Sign Up
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Messages */}
         {error && (
-          <div className="auth-message error">
+          <div className="auth-message error" role="alert">
             <span>⚠️</span> {error}
           </div>
         )}
@@ -171,15 +205,26 @@ export const Auth: React.FC<AuthProps> = ({
 
           <div className="form-group">
             <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              disabled={isLoading}
-              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
-            />
+            <div className="password-wrap">
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                disabled={isLoading}
+                autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
           </div>
 
           {mode === 'signup' && (
@@ -201,6 +246,7 @@ export const Auth: React.FC<AuthProps> = ({
             type="submit" 
             className="auth-submit"
             disabled={isLoading}
+            aria-label={mode === 'signin' ? 'Sign in to Prismatix' : 'Create Prismatix account'}
           >
             {isLoading ? (
               <div className="loading-spinner" />
@@ -208,6 +254,12 @@ export const Auth: React.FC<AuthProps> = ({
               mode === 'signin' ? 'Sign In' : 'Create Account'
             )}
           </button>
+
+          {mode === 'signin' && onResetPassword && (
+            <button type="button" className="auth-link forgot-link" onClick={handleForgotPassword}>
+              Forgot password?
+            </button>
+          )}
         </form>
 
         {/* OAuth Providers */}
@@ -413,6 +465,41 @@ export const Auth: React.FC<AuthProps> = ({
         .form-group input:disabled {
           opacity: 0.5;
           cursor: not-allowed;
+        }
+
+        .password-wrap {
+          position: relative;
+          display: flex;
+          align-items: center;
+        }
+
+        .password-wrap input {
+          width: 100%;
+          padding-right: 4.5rem;
+        }
+
+        .password-toggle {
+          position: absolute;
+          right: 0.75rem;
+          background: none;
+          border: none;
+          color: rgba(255, 255, 255, 0.5);
+          font-family: inherit;
+          font-size: 0.75rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          cursor: pointer;
+          padding: 0.25rem;
+        }
+
+        .password-toggle:hover {
+          color: #4ECDC4;
+        }
+
+        .forgot-link {
+          align-self: center;
+          margin-top: -0.25rem;
+          font-size: 0.8rem;
         }
 
         .auth-submit {
