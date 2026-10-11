@@ -1,8 +1,7 @@
 // src/components/ProviderSettings.tsx
 // Provider plug-ins modal: connect BYOK keys, toggle providers on/off, and pick
-// the default first-class gateway. OpenCode is deployment-provided and always
-// available; every other provider is opt-in. Rendered as a backdrop modal so it
-// never overlays the composer or floating widgets.
+// the default first-class gateway. OpenCode configuration is reported by the
+// deployment and must not be presented as ready when no server key is set.
 
 import React, { useEffect, useRef, useState } from 'react';
 import type { ProviderPlugins } from '../hooks/useProviderPlugins';
@@ -114,8 +113,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
         </div>
 
         <p className='provider-settings-intro'>
-          OpenCode is always available. Connect a key and turn a provider on to unlock its models, or
-          enable OpenRouter to reach many models with one key.
+          Connect a provider key and turn it on to make its models available. OpenCode availability
+          depends on this deployment’s server configuration.
         </p>
 
         {loading && <div className='provider-settings-note'>Loading providers…</div>}
@@ -145,7 +144,13 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
                     {provider.defaultProvider && (
                       <span className='provider-badge provider-badge--default'>Default</span>
                     )}
-                    {isOpencode && <span className='provider-badge'>Included</span>}
+                    {isOpencode && (
+                      <span
+                        className={`provider-badge ${provider.hasKey ? 'provider-badge--configured' : 'provider-badge--setup'}`}
+                      >
+                        {provider.hasKey ? 'Server key set' : 'No server key'}
+                      </span>
+                    )}
                   </div>
 
                   {!isOpencode && (
@@ -169,19 +174,26 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
                 </div>
 
                 {isOpencode ? (
-                  <div className='provider-card-note'>
+                  <div
+                    className={`provider-card-note ${provider.hasKey ? 'is-configured' : 'needs-setup'}`}
+                  >
                     {provider.hasKey
-                      ? plugin.docsHint ?? 'Provided by this deployment — no key needed from you.'
-                      : 'Provided by this deployment — no key needed from you. The operator has not configured a server key yet, so routed requests may fail until one is added.'}
+                      ? 'Server key configured. Credentials are supplied by this deployment; no key is needed from you.'
+                      : 'No server key is configured. Ask the deployment operator to configure one before using OpenCode.'}
                   </div>
                 ) : (
                   <>
-                    <div className='provider-state-line'>
+                    <div
+                      className={`provider-state-line ${
+                        provider.hasKey ? (provider.enabled ? 'is-on' : 'is-off') : 'needs-setup'
+                      }`}
+                      aria-live='polite'
+                    >
                       {!provider.hasKey
-                        ? 'Not connected'
+                        ? 'No key saved'
                         : provider.enabled
-                          ? 'Connected and on'
-                          : 'Key saved — turned off'}
+                          ? 'Key saved · On'
+                          : 'Key saved · Off'}
                     </div>
                     <div className='provider-key-row'>
                       <input

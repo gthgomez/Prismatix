@@ -14,8 +14,8 @@ export interface ModelCatalogEntry {
 export function formatModelPriceLabel(model: string): string {
   const pricing = getPricingForModel(model);
   if (pricing.isUnknown) return 'Custom rate';
-  if (pricing.outputRatePer1M === 0 && pricing.inputRatePer1M === 0) return 'Free';
-  return `$${pricing.inputRatePer1M.toFixed(2)}/M in · $${pricing.outputRatePer1M.toFixed(2)}/M out`;
+  if (pricing.outputRatePer1M === 0 && pricing.inputRatePer1M === 0) return 'Free · $0 per 1M input/output tokens';
+  return `USD $${pricing.inputRatePer1M.toFixed(2)} per 1M input · $${pricing.outputRatePer1M.toFixed(2)} per 1M output tokens`;
 }
 
 export const MODEL_CATALOG: Record<RouterModel, ModelCatalogEntry> = {
