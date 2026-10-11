@@ -51,7 +51,8 @@ export function createUsageTracker(provider: Provider): UsageTracker {
     const data = asRecord(payload);
     if (!data) return;
 
-    if (provider === 'anthropic') {
+    if (provider === 'anthropic' || (provider === 'opencode' &&
+      (data.type === 'message_start' || data.type === 'message_delta'))) {
       if (data.type === 'message_start') {
         const usage = asRecord(asRecord(data.message)?.usage);
         if (usage) {
@@ -68,12 +69,26 @@ export function createUsageTracker(provider: Provider): UsageTracker {
       return;
     }
 
-    if (provider === 'google') {
+    if (provider === 'google' || (provider === 'opencode' && data.usageMetadata)) {
       const usage = asRecord(data.usageMetadata);
       if (usage) {
         input = nonNegativeInt(usage.promptTokenCount) ?? input;
         output = nonNegativeInt(usage.candidatesTokenCount) ?? output;
         thinking = nonNegativeInt(usage.thoughtsTokenCount) ?? thinking;
+      }
+      return;
+    }
+
+    if (provider === 'opencode' && data.type === 'response.completed') {
+      const usage = asRecord(asRecord(data.response)?.usage);
+      if (usage) {
+        input = nonNegativeInt(usage.input_tokens) ?? input;
+        const completion = nonNegativeInt(usage.output_tokens);
+        if (completion !== null) {
+          const reasoning = nonNegativeInt(asRecord(usage.output_tokens_details)?.reasoning_tokens) ?? 0;
+          output = Math.max(0, completion - reasoning);
+          thinking = reasoning;
+        }
       }
       return;
     }

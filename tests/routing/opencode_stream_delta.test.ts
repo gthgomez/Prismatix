@@ -3,6 +3,26 @@ import { dispatchOpenCodeStream } from '../../supabase/functions/router/opencode
 import { CURATED_OPENCODE_REGISTRY } from '../../supabase/functions/router/models_hub';
 
 describe('OpenCode Stream Delta Extraction & Multimodal Payload Preservation', () => {
+  it.each(Object.entries(CURATED_OPENCODE_REGISTRY)
+    .filter(([, config]) => config.family === 'openai' || /^claude-.*-5-5$/.test(config.modelId))
+    .map(([tier]) => tier))(
+    'omits unsupported sampling parameters for %s', async (tier) => {
+      const originalFetch = globalThis.fetch;
+      let body: Record<string, unknown> = {};
+      globalThis.fetch = (async (_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return new Response('data: [DONE]\n\n');
+      }) as typeof fetch;
+      try {
+        await dispatchOpenCodeStream({
+          config: CURATED_OPENCODE_REGISTRY[tier]!,
+          messages: [{ role: 'user', content: 'Reply OK.' }],
+          openCodeApiKey: 'fixture-only-key', maxTokens: 16,
+        });
+        expect(body).not.toHaveProperty('temperature');
+      } finally { globalThis.fetch = originalFetch; }
+    },
+  );
   it.each([
     ['deepseek-v4-flash', '/chat/completions'],
     ['gpt-6-luna', '/responses'],

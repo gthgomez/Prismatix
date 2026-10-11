@@ -129,7 +129,8 @@ export async function dispatchOpenCodeStream(params: {
         input: inputPayload,
         stream: true,
         max_output_tokens: maxTokens,
-        temperature,
+        // GPT reasoning defaults reject sampling parameters. Grok supports them.
+        ...(config.family === 'openai' ? {} : { temperature }),
       };
 
       const response = await fetch(`${openCodeBaseUrl}/responses`, {
@@ -208,7 +209,8 @@ export async function dispatchOpenCodeStream(params: {
         messages: nonSystemMessages,
         max_tokens: maxTokens,
         stream: true,
-        temperature,
+        // Claude 5.5 removed sampling controls; compatible Messages models keep them.
+        ...(/^claude-.*-5-5$/.test(config.modelId) ? {} : { temperature }),
       };
       if (systemMsg) {
         body.system = systemMsg;
