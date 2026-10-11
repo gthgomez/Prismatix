@@ -929,6 +929,7 @@ describe('mobile memory isolation (real handler)', () => {
     expect(wire).toContain('A grounded memory answer.');
     expect(wire).not.toContain('recall-1');
     expect(rounds).toBe(2);
+    expect(calls.find(c => c.url === 'https://openrouter.ai/api/v1/chat/completions')?.body).toContain('persistent memory is enabled');
     expect(calls.filter(c => c.url.includes('memory_search')).length).toBe(2);
   });
   it('chat-only web access does not retrieve memory or launch memory model calls', async () => {

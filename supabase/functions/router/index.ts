@@ -132,6 +132,7 @@ import {
 import {
   fetchRelevantMemories,
   enqueueMemoryJob,
+  memoryAvailabilityContext,
   type MemoryRetrievalResult,
 } from './memory_helpers.ts';
 import { runMemoryJobs } from '../memory/worker.ts';
@@ -2375,7 +2376,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const effectiveQuery = [memoryRetrieval.contextBlock, videoContextBlock, `Current request:\n${query}`]
+    const effectiveQuery = [memoryAvailabilityContext(memoryEnabled), memoryRetrieval.contextBlock, videoContextBlock, `Current request:\n${query}`]
       .filter((part) => typeof part === 'string' && part.trim().length > 0)
       .join('\n\n');
 

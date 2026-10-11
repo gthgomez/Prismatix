@@ -10,6 +10,11 @@ export interface MemoryRetrievalResult {
   hits: number;
   tokenCount: number;
 }
+export function memoryAvailabilityContext(enabled: boolean): string {
+  return enabled
+    ? 'Prismatix persistent memory is enabled for this account. The application processes saved USER messages for durable facts after this reply, subject to budget and processing success. Retrieval tools are read-only; their lack of write access does not mean persistent memory is unavailable. Do not claim a save has completed during this reply. Explain that it can be saved asynchronously and that the Memory panel confirms saved records and processing status.'
+    : '';
+}
 export async function fetchRelevantMemories(
   client: MemoryRpcClient,
   subject: string,

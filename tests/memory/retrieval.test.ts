@@ -1,5 +1,11 @@
 import { expect, it, vi } from "vitest";
-import { fetchRelevantMemories } from "../../supabase/functions/router/memory_helpers";
+import { fetchRelevantMemories, memoryAvailabilityContext } from "../../supabase/functions/router/memory_helpers";
+it('explains asynchronous saving only when memory is enabled', () => {
+  expect(memoryAvailabilityContext(false)).toBe('');
+  expect(memoryAvailabilityContext(true)).toContain('persistent memory is enabled');
+  expect(memoryAvailabilityContext(true)).toContain('after this reply');
+  expect(memoryAvailabilityContext(true)).toContain('Do not claim a save has completed');
+});
 it("searches meaningful Unicode terms without requiring every prompt word", async () => {
   const rpc = vi.fn(async () => ({ data: [], error: null }));
   await fetchRelevantMemories(
