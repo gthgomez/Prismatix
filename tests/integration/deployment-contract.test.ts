@@ -464,6 +464,30 @@ describe('release identity resolution (pure module)', () => {
 // ---------------------------------------------------------------------------
 
 describe('router release identity headers', () => {
+  it('allows the browser chat request headers without authenticating or dispatching on preflight', async () => {
+    const calls = installFetchRecorder(supabaseRoutes());
+    const origin = 'https://prismatix-app.vercel.app';
+    const handler = await loadServeHandler(ROUTER_ENTRY, {
+      ...BASE_ROUTER_ENV,
+      ALLOWED_ORIGIN: origin,
+    });
+    const requested = ['authorization', 'apikey', 'content-type', 'x-client-request-id', 'x-request-id'];
+    const res = await handler(new Request(`${SUPABASE_URL}/functions/v1/router`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: origin,
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': requested.join(', '),
+      },
+    }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(origin);
+    const allowed = (res.headers.get('Access-Control-Allow-Headers') ?? '')
+      .toLowerCase().split(',').map((header) => header.trim());
+    for (const header of requested) expect(allowed).toContain(header);
+    expect(calls).toHaveLength(0);
+  });
+
   it('stamps release headers on responses and exposes them via CORS', async () => {
     const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
 
