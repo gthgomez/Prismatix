@@ -136,6 +136,8 @@ import {
 } from './memory_helpers.ts';
 import { runMemoryJobs } from '../memory/worker.ts';
 import { keepAlive } from '../memory/runtime.ts';
+import { memoryRpc } from '../_shared/memory_contract.ts';
+import { dispatchMemoryToolStream, supportsMemoryTools, wantsMemoryTools, memoryToolInputCeiling, type MemoryToolContext } from './memory_tools.ts';
 import {
   buildVideoContextBlock,
   buildVideoUiNotesJson,
@@ -1280,7 +1282,19 @@ async function callProviderStream(
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel,
   resolver: ProviderResolver,
   meter?: MeteredCallContext,
+  memoryTools?: MemoryToolContext,
 ): Promise<UpstreamCallResult> {
+  if (memoryTools && meter && supportsMemoryTools(decision)) {
+    const gateway = decision.provider as 'opencode' | 'openrouter';
+    return await dispatchMemoryToolStream({
+      gateway, model: decision.model,
+      baseUrl: gateway === 'opencode' ? OPENCODE_BASE_URL : OPENROUTER_BASE_URL,
+      apiKey: await resolver.resolveKey(gateway),
+      messages: buildOpenAIStreamPayload(decision, allMessages, images).messages as unknown[],
+      maxTokens: decision.budgetCap, signal, meter,
+      client: memoryTools.client, subject: memoryTools.subject, maxInputUsd: memoryTools.maxInputUsd,
+    });
+  }
   // PX05 (a): clamp this stage's output cap through the shared execution budget
   // so the SUM of all stage maxima cannot exceed the admitted reservation.
   if (meter?.outputBudget) {
@@ -2334,9 +2348,11 @@ Deno.serve(async (req: Request) => {
     };
     // INVARIANT: Mobile clients (Prism) are sole personal memory authorities.
     // Server-side memory retrieval is bypassed for platform === 'mobile'.
+    let memoryEnabled = false;
     if (platform !== 'mobile' && isEntitled(activeGrant, 'memory')) {
       try {
-        memoryRetrieval = await fetchRelevantMemories(
+        memoryEnabled = (await memoryRpc(supabaseClient, 'memory_allowed', { p_subject_id: userId })) === true;
+        if (memoryEnabled) memoryRetrieval = await fetchRelevantMemories(
           supabaseClient as unknown as ReturnType<typeof createClient>,
           userId,
           query,
@@ -2685,6 +2701,17 @@ Deno.serve(async (req: Request) => {
     // maximum by the admitted per-execution ceiling, so debate/SMD stages cannot
     // collectively exceed the single up-front reservation.
     const executionOutputBudget = createExecutionOutputBudget(effectiveLimits.maxPerExecutionUsd);
+    // Offer native read-only tools for explicit recall requests when the full
+    // bounded loop fits admission. Other queries/protocols use automatic recall.
+    const toolInputUsd = memoryToolInputCeiling(
+      buildOpenAIStreamPayload(decision, allMessages, imageAttachments).messages as unknown[],
+      getModelPricing(decision.modelTier).inputRatePer1M,
+    );
+    const memoryToolContext: MemoryToolContext | undefined = memoryEnabled &&
+      wantsMemoryTools(query) && supportsMemoryTools(decision) &&
+      toolInputUsd < effectiveLimits.maxPerExecutionUsd * 0.75
+      ? { client: storeClient, subject: userId, maxInputUsd: toolInputUsd }
+      : undefined;
 
     // Per-dispatch attempt allocation: distinct dispatches get distinct ledger
     // identities even when their token counts are identical.
@@ -2932,6 +2959,7 @@ Deno.serve(async (req: Request) => {
               normalizedGeminiFlashThinkingLevel,
               providerResolver,
               makeMeter('baseline', decision.provider, decision.modelTier) ?? undefined,
+              memoryToolContext,
             );
           }
         }
@@ -3009,6 +3037,7 @@ Deno.serve(async (req: Request) => {
             normalizedGeminiFlashThinkingLevel,
             providerResolver,
             makeMeter('baseline', decision.provider, decision.modelTier) ?? undefined,
+            memoryToolContext,
           );
         }
       } else {
@@ -3020,6 +3049,7 @@ Deno.serve(async (req: Request) => {
           normalizedGeminiFlashThinkingLevel,
           providerResolver,
           makeMeter('baseline', decision.provider, decision.modelTier) ?? undefined,
+          memoryToolContext,
         );
       }
       } // end: else (not smdEligible)

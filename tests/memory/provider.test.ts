@@ -51,9 +51,9 @@ describe('memory provider control and admission', () => {
       );
       expect(await extract(job)).toBe('{"facts":[]}');
       const records = rpc.mock.calls.filter((c) => c[0] === 'px03_record_model_call');
-      expect(records.at(-1)?.[1]?.p_cost_status).toBe(hasUsage ? 'settled' : 'pending');
+      expect(records[records.length - 1]?.[1]?.p_cost_status).toBe(hasUsage ? 'settled' : 'pending');
       if (hasUsage) {
-        expect(records.at(-1)?.[1]?.p_total_cost).toBeGreaterThan(0);
+        expect(records[records.length - 1]?.[1]?.p_total_cost).toBeGreaterThan(0);
       }
       expect(rpc).toHaveBeenCalledWith('px05_commit_from_ledger', { p_execution_id: 'execution' });
       fetcher.mockRestore();
