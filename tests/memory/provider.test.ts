@@ -14,6 +14,15 @@ const job = {
   }],
 };
 describe("memory provider control and admission", () => {
+  it('uses an enabled gateway when the preferred provider is native', async () => {
+    const rpc = vi.fn(async () => ({ data: { default_provider: 'anthropic', providers: [
+      { provider: 'anthropic', enabled: true }, { provider: 'openrouter', enabled: true },
+      { provider: 'opencode', enabled: false },
+    ] }, error: null }));
+    await expect(createMemoryExtractor({ rpc }, subject, k =>
+      ['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'].includes(k) ? 'fake-key' : undefined
+    )).resolves.toBeTypeOf('function');
+  });
   for (const hasUsage of [true, false]) {
     it(
       "preserves provider usage " + (hasUsage ? "as settled" : "as pending"),

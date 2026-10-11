@@ -18,3 +18,9 @@ it('keeps the Zen tariff when Go is not selected and preserves unknown-price den
     .toBe(PRICING_REGISTRY['deepseek-v4-flash']!.outputRatePer1M);
   expect(getModelPricing('unregistered-model').isUnknown).toBe(true);
 });
+it('allows extraction to select gateway rates without mutating router pricing', () => {
+  configureOpenCodePricing('https://opencode.ai/zen/go/v1');
+  expect(getModelPricing('deepseek-v4-flash', new Date(), false).outputRatePer1M)
+    .toBe(PRICING_REGISTRY['deepseek-v4-flash']!.outputRatePer1M);
+  expect(getModelPricing('deepseek-v4-flash').outputRatePer1M).toBe(1.2);
+});

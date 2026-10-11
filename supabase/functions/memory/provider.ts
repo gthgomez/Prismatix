@@ -15,7 +15,6 @@ import { fetchDiscoveredModelIds } from '../router/opencode_discovery.ts';
 import { createUsageTracker } from '../router/usage.ts';
 import { createSseParser, isDoneData } from '../_shared/sse_parser.ts';
 import {
-  configureOpenCodePricing,
   getModelPricing,
   PRICING_VERSION,
 } from '../router/pricing_registry.ts';
@@ -58,22 +57,22 @@ export async function createMemoryExtractor(
   });
   const preferred = resolveDefaultProvider(raw);
   const provider = ([preferred, 'opencode', 'openrouter'] as const).find((p) =>
-    resolver.isReady(p)
+    ['opencode', 'openrouter'].includes(p) && resolver.isReady(p)
   );
   if (!provider || !['opencode', 'openrouter'].includes(provider)) {
     throw new Error('memory_provider_unavailable');
   }
   const gateway = provider as 'opencode' | 'openrouter';
   const base = getEnv('OPENCODE_BASE_URL') ?? 'https://opencode.ai/zen/v1';
-  configureOpenCodePricing(base);
+  const getPrices = (tier: string) => getModelPricing(tier, new Date(), gateway === 'opencode' && base.replace(/\/$/, '') === 'https://opencode.ai/zen/go/v1');
   const tiers = Object.keys(CURATED_OPENCODE_REGISTRY).filter((t) =>
-    !isHistoricModel(t) && !getModelPricing(t).isUnknown
+    !isHistoricModel(t) && !getPrices(t).isUnknown
   );
   // Prefer a small current Haiku; other available current models remain a fallback.
   tiers.sort((a, b) =>
     Number(!CURATED_OPENCODE_REGISTRY[a]!.displayName.includes('Haiku')) -
       Number(!CURATED_OPENCODE_REGISTRY[b]!.displayName.includes('Haiku')) ||
-    getModelPricing(a).inputRatePer1M - getModelPricing(b).inputRatePer1M
+    getPrices(a).inputRatePer1M - getPrices(b).inputRatePer1M
   );
   const available = gateway === 'opencode'
     ? await fetchDiscoveredModelIds(await resolver.resolveKey(gateway), base)
@@ -87,7 +86,7 @@ export async function createMemoryExtractor(
   const model = gateway === 'opencode'
     ? CURATED_OPENCODE_REGISTRY[tier]!.modelId
     : openRouterModelId(tier)!;
-  const prices = getModelPricing(tier);
+  const prices = getPrices(tier);
   return async (job: MemoryJob): Promise<string> => {
     const grant = await loadAccessGrant(client, subject);
     if (
