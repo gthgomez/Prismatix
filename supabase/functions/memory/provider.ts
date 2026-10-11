@@ -44,8 +44,9 @@ export async function createMemoryExtractor(
   const resolver = createProviderResolver(raw, {
     serverKey: (p) => getEnv(PROVIDER_KEY_ENV[p]),
     globalEnabled: (p) => {
+      if (!['opencode', 'openrouter'].includes(p)) return false;
       const flag = getEnv('ENABLE_' + p.toUpperCase());
-      return flag ? !['0', 'false', 'no', 'off'].includes(flag.toLowerCase()) : p !== 'deepinfra';
+      return flag ? !['0', 'false', 'no', 'off'].includes(flag.toLowerCase()) : true;
     },
     fetchUserKey: async (p) => {
       const value = await memoryRpc(client, 'get_user_provider_key_material', {
