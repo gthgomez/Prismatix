@@ -1,10 +1,31 @@
-.memory-settings { max-height: 85vh; overflow-y: auto; padding: 24px; }
-.memory-settings header, .memory-settings li div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
-.memory-settings label { display: block; margin: 12px 0; }
-.memory-settings input:not([type=checkbox]), .memory-settings textarea { display: block; width: 100%; margin-top: 6px; padding: 8px; color: inherit; background: var(--bg-secondary, #20232b); border: 1px solid #687080; border-radius: 6px; }
-.memory-settings textarea { min-height: 80px; }
-.memory-settings button { padding: 6px 10px; margin: 4px; cursor: pointer; }
-.memory-settings button:disabled { opacity: .5; cursor: default; }
-.memory-settings ul { padding: 0; list-style: none; }
-.memory-settings li { border-top: 1px solid #687080; padding: 14px 0; overflow-wrap: anywhere; }
-.memory-settings small { opacity: .75; }
+.memory-settings { scroll-padding-top: 5rem; }
+.memory-settings h2 { margin: 0; font-size: 1rem; }
+.memory-settings > p { color: var(--color-text-dim); font-size: .85rem; line-height: 1.6; }
+.memory-settings > label { display: flex; align-items: flex-start; gap: .65rem; margin: .5rem 0; padding: .65rem 0; min-height: 44px; cursor: pointer; font-size: .85rem; line-height: 1.5; }
+.memory-settings input[type=checkbox] { flex: 0 0 auto; width: 18px; height: 18px; margin: .1rem 0 0; accent-color: var(--color-primary); }
+.memory-settings form { padding: 1rem 0; border-top: 1px solid var(--color-border); }
+.memory-settings form label { display: block; margin-bottom: .75rem; font-size: .85rem; font-weight: 600; }
+.memory-settings input:not([type=checkbox]), .memory-settings textarea {
+  display: block; width: 100%; margin-top: .5rem; padding: .75rem;
+  color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md);
+  font-weight: 400;
+}
+.memory-settings textarea { min-height: 100px; resize: vertical; line-height: 1.5; scroll-margin-top: 5rem; }
+.memory-settings button { min-height: 44px; padding: .5rem .75rem; cursor: pointer; border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text); background: var(--color-surface); font-size: .8rem; }
+.memory-settings button + button { margin-left: .5rem; }
+.memory-settings button:hover:not(:disabled) { border-color: var(--color-primary); background: var(--color-surface-hover); }
+.memory-settings button:disabled { opacity: .5; cursor: not-allowed; }
+.memory-settings button.memory-primary { color: var(--color-content-on-primary); background: var(--color-primary); border-color: var(--color-primary); font-weight: 600; }
+.memory-settings button.memory-primary:hover:not(:disabled) { background: var(--color-primary); filter: brightness(1.1); }
+.memory-settings ul { padding: 0; margin: 0; list-style: none; }
+.memory-settings li { border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); padding: 1rem; margin-top: .75rem; overflow-wrap: anywhere; }
+.memory-settings li p { margin: 0 0 .5rem; line-height: 1.6; font-size: .9rem; }
+.memory-settings li div { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+.memory-settings li div button { margin: 0; }
+.memory-settings small { color: var(--color-text-muted); }
+.memory-settings .memory-empty { border: 1px dashed var(--color-border-strong); border-radius: var(--radius-md); padding: 1rem; }
+.memory-settings [role=alert] { color: var(--color-content-on-error); background: var(--color-surface-error); border: 1px solid var(--color-danger); border-radius: var(--radius-md); padding: .75rem; }
+@media (forced-colors: active) {
+  .memory-settings :where(input, textarea, button, li) { background: Canvas; color: CanvasText; border-color: CanvasText; }
+  .memory-settings button.memory-primary, .memory-settings button.memory-primary:hover:not(:disabled) { background: ButtonFace; color: ButtonText; border-color: ButtonText; filter: none; }
+}

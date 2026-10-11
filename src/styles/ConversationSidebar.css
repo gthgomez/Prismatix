@@ -301,6 +301,8 @@
     transform: translateX(0);
   }
 
+  .conversation-sidebar:not(.open) { visibility: hidden; }
+
   .conversation-sidebar-close {
     display: block;
   }

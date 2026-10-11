@@ -18,7 +18,9 @@ export function MemorySettings({ onClose, onOpenConversation }: {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [more, setMore] = useState(false);
+  const [searched, setSearched] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
+  const editor = useRef<HTMLTextAreaElement>(null);
   const alive = useRef(true);
   const refresh = async () => {
     const nextStatus = await memoryRequest<MemoryStatus>("status");
@@ -27,6 +29,8 @@ export function MemorySettings({ onClose, onOpenConversation }: {
     setStatus(nextStatus);
     setItems(nextItems);
     setMore(nextItems.length === 50);
+    setQuery("");
+    setSearched(false);
   };
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -58,6 +62,9 @@ export function MemorySettings({ onClose, onOpenConversation }: {
     // Load once per dialog; actions explicitly refresh the server state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    if (editing) editor.current?.focus();
+  }, [editing]);
   const change = (action: string, args: Record<string, unknown> = {}) =>
     run(async () => {
       await memoryRequest(action, args);
@@ -97,9 +104,9 @@ export function MemorySettings({ onClose, onOpenConversation }: {
           }
         }}
       >
-        <header>
+        <header className="provider-settings-header">
           <h2 id="memory-heading">Memory</h2>
-          <button onClick={onClose} aria-label="Close memory">Close</button>
+          <button className="provider-settings-close" onClick={onClose} aria-label="Close memory">Close</button>
         </header>
         <p>
           Saved information can be recalled across your chats and models.
@@ -174,6 +181,7 @@ export function MemorySettings({ onClose, onOpenConversation }: {
               if (alive.current) {
                 setItems(found);
                 setMore(false);
+                setSearched(true);
               }
             });
           }}
@@ -186,7 +194,7 @@ export function MemorySettings({ onClose, onOpenConversation }: {
               onChange={(e) => setQuery(e.target.value)}
             />
           </label>
-          <button disabled={busy}>Search</button>
+          <button type="submit" className="memory-primary" disabled={busy}>Search</button>
           <button
             type="button"
             disabled={busy}
@@ -217,6 +225,7 @@ export function MemorySettings({ onClose, onOpenConversation }: {
           <label>
             {editing ? "Correct memory" : "Remember something"}
             <textarea
+              ref={editor}
               value={draft}
               maxLength={500}
               disabled={busy || !status?.enabled}
@@ -224,6 +233,8 @@ export function MemorySettings({ onClose, onOpenConversation }: {
             />
           </label>
           <button
+            type="submit"
+            className="memory-primary"
             disabled={busy || !status?.enabled || draft.trim().length < 3}
           >
             {editing ? "Save correction" : "Remember"}
@@ -288,7 +299,7 @@ export function MemorySettings({ onClose, onOpenConversation }: {
             </li>
           ))}
         </ul>
-        {!busy && items.length === 0 && <p>No matching memories.</p>}
+        {!busy && !error && items.length === 0 && <p role="status" className="memory-empty">{searched ? "No matching memories. Try another search or show all." : "No saved memories yet. Add something above or share a preference in chat."}</p>}
         {more && (
           <button
             disabled={busy}

@@ -32,6 +32,30 @@ const CONVERSATIONS: ConversationSummary[] = [
 function noop() {}
 
 describe('ConversationSidebar', () => {
+  it('moves focus into a mobile drawer and restores the trigger on close', () => {
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+    const container = document.createElement('div');
+    const trigger = document.createElement('button');
+    document.body.append(trigger, container);
+    trigger.focus();
+    const props = { conversations: CONVERSATIONS, selectedId: null, isLoading: false, onClose: noop, onSelect: noop, onNewChat: noop, onDelete: noop };
+    const root = renderInto(container, <ConversationSidebar {...props} isOpen />);
+    expect(container.querySelector('aside')?.contains(document.activeElement)).toBe(true);
+    act(() => root.render(<ConversationSidebar {...props} isOpen={false} />));
+    expect(document.activeElement).toBe(trigger);
+    act(() => root.unmount());
+    container.remove(); trigger.remove();
+    Object.defineProperty(window, 'innerWidth', { value: previousWidth, configurable: true });
+  });
+  it('closes the open drawer with Escape', () => {
+    const container = document.createElement('div');
+    const onClose = vi.fn();
+    const root = renderInto(container, <ConversationSidebar conversations={CONVERSATIONS} selectedId={null} isLoading={false} isOpen onClose={onClose} onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    act(() => container.querySelector('aside')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(onClose).toHaveBeenCalledOnce();
+    act(() => root.unmount());
+  });
   it('renders the conversation list with titles and activity, marking selection', () => {
     const container = document.createElement('div');
     const root = renderInto(

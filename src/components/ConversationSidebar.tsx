@@ -2,7 +2,7 @@
 // PX07 conversation list: switch, New Chat, Delete Chat. PX-polish: search
 // filter and inline rename.
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { ConversationSummary } from '../services/conversationService';
 import '../styles/ConversationSidebar.css';
 
@@ -51,6 +51,13 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
   const [query, setQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
+  const drawerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!isOpen || window.innerWidth > 768) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    drawerRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, [isOpen]);
 
   const trimmedQuery = query.trim().toLowerCase();
   const visibleConversations = trimmedQuery
@@ -84,7 +91,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
 
   const renameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') commitRename();
-    if (e.key === 'Escape') setEditingId(null);
+    if (e.key === 'Escape') { e.stopPropagation(); setEditingId(null); }
   };
 
   return (
@@ -97,8 +104,18 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
         />
       )}
       <aside
+        ref={drawerRef}
         className={`conversation-sidebar ${isOpen ? 'open' : ''}`}
         aria-label='Conversations'
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && isOpen) { e.stopPropagation(); onClose?.(); }
+          if (e.key === 'Tab' && isOpen && window.innerWidth <= 768) {
+            const nodes = Array.from(drawerRef.current!.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)'));
+            const first = nodes[0]; const last = nodes[nodes.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+          }
+        }}
       >
         <div className='conversation-sidebar-header'>
           <button

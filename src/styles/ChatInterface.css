@@ -205,6 +205,18 @@
   border-color: var(--color-text-muted);
 }
 
+.header-button { flex-shrink: 0; }
+.header-button.memory-button { width: auto; gap: .5rem; padding: 0 .75rem; white-space: nowrap; }
+.memory-recall-count { border-radius: 999px; padding: .1rem .35rem; color: var(--color-primary); background: var(--color-primary-dim); font-size: .7rem; }
+@container chat (max-width: 520px) {
+  .header-button.memory-button { width: 44px; padding: 0; }
+  .memory-button-label, .memory-recall-count { display: none; }
+  .header-actions .model-selector-container { min-width: 64px; }
+}
+@container chat (max-width: 360px) {
+  .header-actions .spend-pill-state, .model-indicator-button .manual-badge, .model-indicator-button .debate-badge { display: none; }
+}
+
 .model-selector-container { position: relative; }
 
 .thinking-toggle-container {
@@ -521,7 +533,15 @@
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.6);
   z-index: 1000;
   animation: dropdownIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  max-height: calc(100dvh - var(--prismatix-model-dropdown-top, 5.25rem) - 1rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
+.model-dropdown > .dropdown-header, .model-dropdown-nav { flex-shrink: 0; }
+.model-dropdown .model-dropdown-panel { overflow-y: auto; overscroll-behavior: contain; }
+.model-dropdown .model-options-scroll { max-height: none; overflow: visible; }
 
 .model-dropdown-nav {
   display: flex;
@@ -596,6 +616,13 @@
   color: var(--color-text-dim);
   font-weight: 600;
 }
+
+.model-dropdown > .dropdown-header { position: sticky; top: -.5rem; z-index: 2; background: var(--color-surface); gap: .5rem; }
+.popover-close { flex-shrink: 0; width: 44px; height: 44px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text-dim); cursor: pointer; font-size: 1.2rem; }
+.popover-close:hover { color: var(--color-text); border-color: var(--color-primary); }
+.chat-header .spend-popover { max-height: calc(100dvh - var(--prismatix-model-dropdown-top, 5.25rem) - 1rem); overflow-y: auto; }
+.spend-popover-header { gap: .5rem; flex-wrap: wrap; }
+.spend-popover-header .sync-indicator.error { color: var(--color-danger); }
 
 .auto-mode-btn {
   background: var(--color-primary-dim);
@@ -2394,7 +2421,8 @@
   }
 
   .provider-settings-header {
-    top: 0;
+    top: calc(-1 * max(1rem, env(safe-area-inset-top)));
+    margin-top: calc(-1 * max(1rem, env(safe-area-inset-top)));
     margin-left: -1rem;
     margin-right: -1rem;
     padding-left: max(1rem, env(safe-area-inset-left));

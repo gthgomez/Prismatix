@@ -25,6 +25,8 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
   const refreshCycleRef = useRef(0);
   const refreshTimersRef = useRef<number[]>([]);
   const widgetRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const close = () => { setIsOpen(false); triggerRef.current?.focus(); };
 
   const fetchServerStats = async (): Promise<SpendStats | null> => {
     const {
@@ -120,12 +122,16 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
   }, []);
 
   return (
-    <div className='spend-widget' ref={widgetRef}>
+    <div className='spend-widget' ref={widgetRef} onKeyDown={(e) => {
+      if (e.key === 'Escape' && isOpen) { e.stopPropagation(); close(); }
+    }}>
       <button
         type='button'
         className='spend-pill'
+        ref={triggerRef}
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
+        aria-label={`Spend analytics: USD ${stats.today.toFixed(2)} today · ${syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : lastSyncAt ? 'Live' : 'Not synced'}`}
         title='View spend analytics'
       >
         <span className='spend-pill-value'>${stats.today.toFixed(2)}</span>
@@ -135,18 +141,19 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
             syncState === 'syncing' ? 'syncing' : syncState === 'error' ? 'error' : 'idle'
           }`}
         >
-          {syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : 'Live'}
+          {syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : lastSyncAt ? 'Live' : 'Not synced'}
         </span>
       </button>
 
       {isOpen && (
-        <aside className='spend-popover'>
+        <aside className='spend-popover' aria-label='Spend analytics'>
           <div className="spend-popover-header">
             <h3>Spend Analytics</h3>
             <div className={`sync-indicator ${syncState}`}>
               {syncState === 'syncing' && <div className="sync-spinner" />}
-              <span>{syncState === 'syncing' ? 'Syncing' : 'Connected'}</span>
+              <span>{syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : lastSyncAt ? 'Connected' : 'Not synced'}</span>
             </div>
+            <button type='button' className='popover-close' aria-label='Close spend analytics' onClick={close}>×</button>
           </div>
           
           <div className='spend-grid'>
