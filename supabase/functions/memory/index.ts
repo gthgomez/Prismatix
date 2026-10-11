@@ -104,7 +104,7 @@ export async function handleMemoryRequest(req: Request, deps: MemoryDeps = {}): 
   ) return json({ error: 'invalid_memory_settings' }, 400);
   if (
     action === 'list' && body.before !== undefined &&
-    (typeof body.before !== 'string' || !Number.isFinite(Date.parse(body.before)))
+    (typeof body.before !== 'string' || !uuid.test(body.before))
   ) return json({ error: 'invalid_memory_cursor' }, 400);
   try {
     if (action === 'status') {

@@ -7,7 +7,10 @@ begin
  insert into public.conversations(id,user_id) values(conv,a);
  insert into public.messages(id,conversation_id,role,content,created_at) values(msg,conv,'user','I prefer café and concise answers.','2026-10-10T00:00:00Z'),(msg2,conv,'assistant','Acknowledged.','2026-10-10T00:00:00Z');
  insert into public.memory_items(user_id,kind,text,basis,created_at,updated_at) values(a,'preference','Ancient durable café preference','manual','2020-01-01','2020-01-01') returning id into item;
- insert into public.memory_items(user_id,kind,text,basis) select a,'fact','Recent unrelated item '||i,'manual' from generate_series(1,33) i;
+ insert into public.memory_items(user_id,kind,text,basis) select a,'fact','Recent unrelated item '||i,'manual' from generate_series(1,60) i;
+ payload=public.memory_list(a);
+ if jsonb_array_length(payload)<>50 then raise exception 'memory list page size'; end if;
+ if jsonb_array_length(public.memory_list(a,(payload->-1->>'id')::uuid))<>11 then raise exception 'memory list timestamp tie cursor'; end if;
  if jsonb_array_length(public.memory_search(a,'café',8))<>1 then raise exception 'old Unicode retrieval failed'; end if;
  if public.memory_search(a,'no-matching-zebra',8)<>'[]'::jsonb then raise exception 'irrelevant fallback'; end if;
  if public.memory_read(b,array[item])<>'[]'::jsonb then raise exception 'cross-owner recall'; end if;

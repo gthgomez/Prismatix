@@ -56,6 +56,7 @@ interface RouterRequestPayload {
 }
 
 export interface RouterResponseBase {
+  memoryHits?: number;
   model: RouterModel;
   provider?: RouterProvider;
   complexityScore: number;
@@ -472,6 +473,8 @@ export async function askPrismatix(
     const rationaleHeader = response.headers.get('X-Router-Rationale');
     const costEstimateHeader = response.headers.get('X-Cost-Estimate-USD');
     const costPricingVersion = response.headers.get('X-Cost-Pricing-Version') || undefined;
+    const memoryHitsRaw = response.headers.get('X-Memory-Hits');
+    const memoryHits = memoryHitsRaw !== null && /^\d+$/.test(memoryHitsRaw) ? Number(memoryHitsRaw) : undefined;
     // PX06: execution identity for the terminal receipt correlation/lookup.
     const executionId = response.headers.get('X-Prismatix-Execution-Id') || undefined;
     // PX02 release identity: record the server tariff version for skew detection.
@@ -544,6 +547,7 @@ export async function askPrismatix(
       debateCostNote: debateMetadata.debateCostNote,
       executionId,
       clientRequestId,
+      memoryHits,
     };
   } catch (error) {
     devError('[smartFetch] Error:', error);

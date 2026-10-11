@@ -99,7 +99,7 @@ create function public.memory_payload(p_item public.memory_items) returns jsonb
 language sql stable security definer set search_path='' as $$
  select jsonb_build_object('id',p_item.id,'text',p_item.text,'kind',p_item.kind,'basis',p_item.basis,'state',p_item.state,
  'created_at',p_item.created_at,'updated_at',p_item.updated_at,'expires_at',p_item.expires_at,
- 'sources',coalesce((select jsonb_agg(jsonb_build_object('conversation_id',s.conversation_id,'message_id',s.message_id)) from public.memory_sources s where s.item_id=p_item.id and s.user_id=p_item.user_id),'[]'::jsonb))
+ 'sources',coalesce((select jsonb_agg(jsonb_build_object('conversation_id',s.conversation_id,'message_id',s.message_id)) from (select conversation_id,message_id from public.memory_sources where item_id=p_item.id and user_id=p_item.user_id order by conversation_id,message_id limit 8) s),'[]'::jsonb))
 $$;
 
 create function public.memory_search(p_subject_id uuid,p_query text,p_limit integer default 8) returns jsonb
@@ -130,11 +130,11 @@ language sql stable security definer set search_path='' as $$
  from (select 1) anchor left join public.memory_settings s on s.user_id=p_subject_id
 $$;
 
-create function public.memory_list(p_subject_id uuid,p_before timestamptz default null) returns jsonb
+create function public.memory_list(p_subject_id uuid,p_before uuid default null) returns jsonb
 language sql stable security definer set search_path='' as $$
  select coalesce(jsonb_agg(public.memory_payload(x)),'[]'::jsonb) from (
  select i.* from public.memory_items i where i.user_id=p_subject_id and i.state='active'
- and(i.expires_at is null or i.expires_at>now()) and(p_before is null or i.updated_at<p_before)
+ and(i.expires_at is null or i.expires_at>now()) and(p_before is null or (i.updated_at,i.id)<(select x.updated_at,x.id from public.memory_items x where x.id=p_before and x.user_id=p_subject_id))
  order by i.updated_at desc,i.id desc limit 50) x
 $$;
 
