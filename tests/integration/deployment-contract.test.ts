@@ -781,6 +781,28 @@ describe('strict unknown manual model rejection (F17)', () => {
     expect(providerCalls(calls)).toEqual([]);
   });
 
+  it('dispatches the stable Qwen selection to its official Messages endpoint and wire ID', async () => {
+    const happy = supabaseRoutes();
+    const calls = installFetchRecorder((call) => {
+      if (call.url === 'https://opencode.ai/zen/v1/messages') return anthropicSseResponse();
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, {
+      ...BASE_ROUTER_ENV,
+      OPENCODE_API_KEY: 'test-opencode-key',
+    });
+    const res = await handler(routerRequest(
+      chatBody({ platform: 'mobile', modelOverride: 'qwen-3.8-flash' }),
+      'px02-user-token',
+    ));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('Hello from Prism');
+    await flushAsync();
+    const dispatch = calls.find((call) => call.url === 'https://opencode.ai/zen/v1/messages');
+    expect(dispatch).toBeDefined();
+    expect(JSON.parse(dispatch!.body).model).toBe('qwen3.8-flash');
+  });
+
   it('does not reject modelOverride "auto" — it streams normally', async () => {
     const calls = installFetchRecorder(supabaseRoutes());
     const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });

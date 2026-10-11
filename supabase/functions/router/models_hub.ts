@@ -235,6 +235,7 @@ const OPENCODE_SPECS: Record<string, CuratedSpec> = {
     sourceRef: 'google-official',
   },
   'deepseek-v4-1-flash': {
+    modelId: 'deepseek-v4.1-flash',
     displayName: 'DeepSeek V4.1 Flash',
     gateway: 'opencode',
     protocol: 'openai-chat',
@@ -255,9 +256,10 @@ const OPENCODE_SPECS: Record<string, CuratedSpec> = {
     sourceRef: 'opencode-zen-official',
   },
   'qwen-3.8-flash': {
+    modelId: 'qwen3.8-flash',
     displayName: 'Qwen 3.8 Flash',
     gateway: 'opencode',
-    protocol: 'openai-chat',
+    protocol: 'anthropic-messages',
     family: 'qwen',
     supportsImages: false,
     budgetCap: 8192,
@@ -306,7 +308,7 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = Object.fro
     {
       ...spec,
       modelId: spec.modelId ?? key,
-      pricing: getCuratedPricing(spec.modelId ?? key, spec.pricingVersion, spec.sourceRef),
+      pricing: getCuratedPricing(key, spec.pricingVersion, spec.sourceRef),
     },
   ])
 );
@@ -390,6 +392,7 @@ export interface CandidateRejection {
 }
 
 export interface RoleResolution {
+  modelTier: string;
   config: ModelConfig;
   /** Candidates evaluated before the chosen model, with why each was skipped. */
   attempted: CandidateRejection[];
@@ -431,12 +434,12 @@ export function resolveRoleCandidates(
     }
 
     // Candidate must be present in runtime discovery
-    if (discoveredModelIds && !discoveredModelIds.has(modelId)) {
+    if (discoveredModelIds && !discoveredModelIds.has(config.modelId)) {
       attempted.push({ modelId, reason: 'not-discovered' });
       continue;
     }
 
-    return { config, attempted };
+    return { modelTier: modelId, config, attempted };
   }
 
   throw new ModelUnavailableError(role);

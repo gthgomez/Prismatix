@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { CURATED_OPENCODE_REGISTRY } from '../../supabase/functions/router/models_hub';
+import { CURATED_OPENCODE_REGISTRY, resolveModelForRole } from '../../supabase/functions/router/models_hub';
 
 describe('OpenCode Protocol Wire Invariants', () => {
+  it('uses official wire IDs and protocols while retaining stable application IDs', () => {
+    expect(CURATED_OPENCODE_REGISTRY['deepseek-v4-1-flash']?.modelId).toBe('deepseek-v4.1-flash');
+    expect(CURATED_OPENCODE_REGISTRY['qwen-3.8-flash']?.modelId).toBe('qwen3.8-flash');
+    expect(CURATED_OPENCODE_REGISTRY['qwen-3.8-flash']?.protocol).toBe('anthropic-messages');
+    expect(CURATED_OPENCODE_REGISTRY['deepseek-v4-1-flash']?.pricing.isUnknown).toBeFalsy();
+    expect(resolveModelForRole('balanced', new Set(['deepseek-v4.1-flash'])).modelId)
+      .toBe('deepseek-v4.1-flash');
+  });
   it('binds GPT-5.6 family and Grok 4.6 to openai-responses', () => {
     expect(CURATED_OPENCODE_REGISTRY['gpt-5.6-luna']?.protocol).toBe('openai-responses');
     expect(CURATED_OPENCODE_REGISTRY['gpt-5.6-terra']?.protocol).toBe('openai-responses');

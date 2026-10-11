@@ -1229,7 +1229,7 @@ async function callOpenCode(
   signal: AbortSignal,
   apiKey: string,
 ): Promise<UpstreamCallResult> {
-  const modelConfig = CURATED_OPENCODE_REGISTRY[decision.model] || {
+  const modelConfig = CURATED_OPENCODE_REGISTRY[decision.modelTier] || {
     modelId: decision.model,
     displayName: decision.model,
     gateway: 'opencode' as const,

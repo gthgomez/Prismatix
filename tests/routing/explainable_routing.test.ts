@@ -88,7 +88,7 @@ describe('cost safety: unknown price cannot auto-send', () => {
   });
 
   it('resolveRoleCandidates skips unknown-priced candidates and reports why', () => {
-    const allIds = new Set(Object.keys(CURATED_OPENCODE_REGISTRY));
+    const allIds = new Set(Object.values(CURATED_OPENCODE_REGISTRY).map((model) => model.modelId));
     const resolution = resolveRoleCandidates('economy', allIds);
 
     // Primary gpt-6-luna is unknown-priced in this fixture -> skipped
@@ -202,7 +202,7 @@ describe('fallback chains preserve explainability', () => {
 
     // vision_fast primary is gemini-3.8-flash; discovery only has the
     // deepseek-v4-1-flash fallback.
-    const visionDiscovered = new Set(['deepseek-v4-1-flash']);
+    const visionDiscovered = new Set(['deepseek-v4.1-flash']);
     const decision = determineRoute(
       baseParams({
         userQuery: 'What is shown in this screenshot?',

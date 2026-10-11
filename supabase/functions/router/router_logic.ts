@@ -133,7 +133,7 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
   },
   'deepseek-v4-1-flash': {
     provider: 'opencode',
-    modelId: 'deepseek-v4-1-flash',
+    modelId: 'deepseek-v4.1-flash',
     budgetCap: 8192,
     supportsImages: true,
   },
@@ -145,7 +145,7 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
   },
   'qwen-3.8-flash': {
     provider: 'opencode',
-    modelId: 'qwen-3.8-flash',
+    modelId: 'qwen3.8-flash',
     budgetCap: 8192,
     supportsImages: false,
   },
@@ -701,20 +701,20 @@ export function determineRoute(
     // The error propagates so the request fails deterministically and the user
     // is told why — never surprise-routed onto a more expensive provider.
     const resolution = resolveRoleCandidates(role, discoveredModelIds);
-    return buildDecision(resolution.config.modelId, `opencode-${role}`, analysis, {
+    return buildDecision(resolution.modelTier, `opencode-${role}`, analysis, {
       routeStep: `opencode-${role}`,
       routeRole: role,
       explanation: {
         selection: 'auto',
         role,
-        modelTier: resolution.config.modelId,
+        modelTier: resolution.modelTier,
         gateway: 'opencode',
         reason: resolution.attempted.length === 0
           ? `Highest-ranked available model for role '${role}'.`
           : `Best available model for role '${role}' after skipping ${resolution.attempted.length} candidate(s).`,
-        fallbackUsed: resolution.config.modelId !== CURATED_ROUTE_POLICY[role].primary,
+        fallbackUsed: resolution.modelTier !== CURATED_ROUTE_POLICY[role].primary,
         attemptedModels: resolution.attempted.map((a) => `${a.modelId}: ${a.reason}`),
-        priceKnown: priceIsKnown(resolution.config.modelId),
+        priceKnown: priceIsKnown(resolution.modelTier),
       },
     });
   }
