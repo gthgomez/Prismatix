@@ -276,7 +276,7 @@ async function summarizeConversationWindow(
   }
 
   if (apiKeys.anthropic) {
-    const anthropicModel = MODEL_REGISTRY['haiku-4.5'].modelId;
+    const anthropicModel = MODEL_REGISTRY['claude-haiku-5-5'].modelId;
     const response = await meteredFetch('anthropic', anthropicModel, () =>
       fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -301,7 +301,7 @@ async function summarizeConversationWindow(
   }
 
   if (apiKeys.google) {
-    const resolvedModel = MODEL_REGISTRY['gemini-2.5-flash'].modelId;
+    const resolvedModel = MODEL_REGISTRY['gemini-3.8-flash'].modelId;
     const response = await meteredFetch('google', resolvedModel, () => {
       const endpoint =
         `https://generativelanguage.googleapis.com/v1beta/models/${

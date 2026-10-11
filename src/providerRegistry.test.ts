@@ -74,10 +74,8 @@ describe('model visibility', () => {
   it('does not unlock a model with no OpenRouter route via openrouter', () => {
     // gemini-3.1-pro has a route; a model without a mapping would stay hidden.
     const enabled = new Set<ProviderId>(['openrouter']);
-    const onlyOpencode = filterVisibleModels(MODEL_ORDER, { enabledProviders: enabled });
-    for (const id of onlyOpencode) {
-      expect(providerForModel(id)).not.toBe('opencode');
-    }
+    expect(isModelVisible('deepseek-v4-1-flash', { enabledProviders: enabled })).toBe(false);
+    expect(isModelVisible('gpt-6.1-sol', { enabledProviders: enabled })).toBe(true);
   });
 
   it('filterVisibleModels never returns models from disabled providers', () => {

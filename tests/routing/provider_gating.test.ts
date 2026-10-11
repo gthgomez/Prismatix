@@ -41,7 +41,7 @@ describe('auto-routing provider gating', () => {
     expect(decision.provider).toBe('google');
   });
 
-  it('fails closed rather than escalate to a disabled (pricier) provider', async () => {
+  it('allows the current cheaper Haiku fallback only when Anthropic is enabled', async () => {
     // Only anthropic is enabled; the decided model is the cheaper google tier.
     // The guard must NOT silently substitute a pricier provider.
     const r = resolver(
@@ -50,14 +50,15 @@ describe('auto-routing provider gating', () => {
     );
 
     const decided = await resolveProductionRoute(PARAMS, undefined, { openCodePrimary: false });
-    const { error } = normalizeDecisionAgainstProviderAvailability(
+    const { decision, error } = normalizeDecisionAgainstProviderAvailability(
       decided,
       undefined,
       (p) => r.isReady(p),
     );
 
-    expect(error).toBeTruthy();
-    expect(error).toContain('google');
+    expect(error).toBeUndefined();
+    expect(decision.provider).toBe('anthropic');
+    expect(decision.modelTier).toBe('claude-haiku-5-5');
   });
 
   it('fails closed when a manual pick targets a disabled provider', async () => {

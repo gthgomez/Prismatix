@@ -1,6 +1,7 @@
 // ModelSelectorDropdown.tsx — Routing / debate vs model override (tabbed), layout prefs persisted
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
 import type { GeminiFlashThinkingLevel, RouterModel } from '../types';
 import {
   MODEL_EXTENDED_ORDER,
@@ -85,6 +86,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   const [showAllOverrides, setShowAllOverrides] = useState(false);
   const [groupByProvider, setGroupByProvider] = useState(readStoredGroupByProvider);
   const [modelSearch, setModelSearch] = useState('');
+  const [showHistoric, setShowHistoric] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -125,16 +127,26 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
 
   // Only models whose provider is enabled for this user are selectable.
   const visibleOrder = useMemo(
-    () => filterVisibleModels(MODEL_ORDER, { enabledProviders }),
+    () => filterVisibleModels(MODEL_ORDER, { enabledProviders }).filter((id) => !isHistoricModel(id)),
     [enabledProviders],
   );
   const visibleHighlights = useMemo(
     () => filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders }),
     [enabledProviders],
   );
+  const historicModels = useMemo(
+    () => filterVisibleModels(MODEL_ORDER, { enabledProviders }).filter(isHistoricModel),
+    [enabledProviders],
+  );
+  const filteredHistoricModels = historicModels.filter((id) => {
+    const model = getCatalogEntry(id);
+    return `${model.shortName} ${model.description} ${id}`.toLowerCase()
+      .includes(modelSearch.trim().toLowerCase());
+  });
 
   const extendedIncludesSelection = useMemo(
-    () => filterVisibleModels(MODEL_EXTENDED_ORDER, { enabledProviders }).includes(currentModel),
+    () => filterVisibleModels(MODEL_EXTENDED_ORDER, { enabledProviders })
+      .filter((id) => !isHistoricModel(id)).includes(currentModel),
     [enabledProviders, currentModel],
   );
 
@@ -358,6 +370,9 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
               ? `Manual model: ${getCatalogEntry(manualModelOverride).shortName}`
               : `Automatic routing · currently using ${getCatalogEntry(currentModel).shortName}`}
           </p>
+          {manualModelOverride && isHistoricModel(manualModelOverride) && !showHistoric && (
+            <div aria-label='Selected historic model'>{renderModelButton(manualModelOverride)}</div>
+          )}
 
           <div className='model-options-scroll'>
             {filteredOverrideKeys.length === 0 ? (
@@ -397,6 +412,21 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
             >
               Show fewer models
             </button>
+          )}
+
+          {historicModels.length > 0 && (
+            <section aria-label='Historic model catalog'>
+              <button type='button' className='model-override-expand'
+                aria-expanded={showHistoric} onClick={() => setShowHistoric((value) => !value)}>
+                Historic models ({historicModels.length})
+              </button>
+              {showHistoric && (
+                <div className='model-options'>
+                  <p>Older models are available for manual selection only.</p>
+                  {filteredHistoricModels.map(renderModelButton)}
+                </div>
+              )}
+            </section>
           )}
 
           <button

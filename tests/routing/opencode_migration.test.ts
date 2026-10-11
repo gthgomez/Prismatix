@@ -18,13 +18,13 @@ import {
 describe('OpenCode Model Hub & Semantic Routing Migration', () => {
   describe('Semantic Role Resolution & Privacy Invariants', () => {
     it('resolves primary paid model for every curated role when all models are available', () => {
-      const allIds = new Set(Object.keys(CURATED_OPENCODE_REGISTRY));
+      const allIds = new Set(Object.values(CURATED_OPENCODE_REGISTRY).map((model) => model.modelId));
 
       expect(resolveModelForRole('economy', allIds).modelId).toBe('gpt-6-luna');
       expect(resolveModelForRole('fast', allIds).modelId).toBe('gpt-6-luna');
-      expect(resolveModelForRole('balanced', allIds).modelId).toBe('deepseek-v4-1-flash');
+      expect(resolveModelForRole('balanced', allIds).modelId).toBe('deepseek-v4.1-flash');
       expect(resolveModelForRole('strong', allIds).modelId).toBe('claude-sonnet-5-5');
-      expect(resolveModelForRole('max', allIds).modelId).toBe('gpt-6-sol');
+      expect(resolveModelForRole('max', allIds).modelId).toBe('gpt-6.1-sol');
       expect(resolveModelForRole('vision_fast', allIds).modelId).toBe('gemini-3.8-flash');
       expect(resolveModelForRole('code_review', allIds).modelId).toBe('claude-sonnet-5-5');
       expect(resolveModelForRole('cheap_critic', allIds).modelId).toBe('gpt-6-luna');

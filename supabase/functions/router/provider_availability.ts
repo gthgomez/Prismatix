@@ -19,6 +19,7 @@
 import {
   createStubRoutingDebug,
   MODEL_REGISTRY,
+  nativeProviderForTier,
   type Provider,
   type RouteDecision,
   type RouterModel,
@@ -38,9 +39,9 @@ export function modelRateBasis(modelTier: RouterModel): number {
 
 /** Deterministic, price-known fallback order for provider-unavailable re-routing. */
 export const PROVIDER_UNAVAILABLE_FALLBACKS: RouterModel[] = [
-  'gemini-2.5-flash',
-  'gemini-3-flash',
-  'sonnet-4.6',
+  'claude-haiku-5-5',
+  'gemini-3.8-flash',
+  'claude-sonnet-5-5',
 ];
 
 export function priceKnownFor(modelTier: RouterModel): boolean {
@@ -51,13 +52,14 @@ export function decisionFromModel(
   modelTier: RouterModel,
   complexityScore: number,
   rationaleTag: string,
+  native = false,
 ): RouteDecision {
   const modelCfg = MODEL_REGISTRY[modelTier];
   if (!modelCfg) {
     throw new Error(`Unknown model tier '${modelTier}' for provider availability decision.`);
   }
   return {
-    provider: modelCfg.provider,
+    provider: native ? nativeProviderForTier(modelTier) : modelCfg.provider,
     model: modelCfg.modelId,
     modelTier,
     budgetCap: modelCfg.budgetCap,
@@ -135,8 +137,9 @@ export function normalizeDecisionAgainstProviderAvailability(
   const decidedBasis = modelRateBasis(decision.modelTier);
   const attemptedModels: string[] = [];
   for (const candidate of PROVIDER_UNAVAILABLE_FALLBACKS) {
-    const config = MODEL_REGISTRY[candidate];
-    if (!config || !isProviderReady(config.provider)) {
+    const candidateDecision = decisionFromModel(candidate, decision.complexityScore,
+      `provider-unavailable-fallback-${decision.provider}`, true);
+    if (!isProviderReady(candidateDecision.provider)) {
       attemptedModels.push(`${candidate}: provider-not-ready`);
       continue;
     }
@@ -148,6 +151,7 @@ export function normalizeDecisionAgainstProviderAvailability(
       candidate,
       decision.complexityScore,
       `provider-unavailable-fallback-${decision.provider}`,
+      true,
     );
     fallbackDecision.explanation = {
       selection: 'auto',

@@ -205,6 +205,14 @@ export function userHasStoredKey(
  * models when their native provider is not connected.
  */
 export const OPENROUTER_MODEL_MAP: Record<string, string> = {
+  'gpt-6-astra': 'openai/gpt-6-astra',
+  'gpt-6-sol': 'openai/gpt-6-sol',
+  'gpt-6-luna': 'openai/gpt-6-luna',
+  'gpt-6.1-sol': 'openai/gpt-6.1-sol',
+  'claude-haiku-5-5': 'anthropic/claude-haiku-5.5',
+  'claude-sonnet-5-5': 'anthropic/claude-sonnet-5.5',
+  'claude-opus-5-5': 'anthropic/claude-opus-5.5',
+  'gemini-3.8-flash': 'google/gemini-3.8-flash',
   'opus-4.6': 'anthropic/claude-opus-4.6',
   'sonnet-4.6': 'anthropic/claude-sonnet-4.6',
   'haiku-4.5': 'anthropic/claude-haiku-4.5',

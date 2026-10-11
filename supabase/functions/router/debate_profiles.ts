@@ -15,23 +15,21 @@ export interface DebatePlan {
 export const DEFAULT_DEBATE_THRESHOLD = 85;
 
 export const GENERAL_CHALLENGER_FALLBACKS: RouterModel[] = [
-  'deepseek-v4-flash',
+  'deepseek-v4-1-flash',
   'gpt-6-luna',
   'gemini-3.8-flash',
-  'deepseek-v4-1-flash',
 ];
 
 export const CODE_CRITIC_FALLBACKS: RouterModel[] = [
-  'deepseek-v4-flash',
+  'deepseek-v4-1-flash',
   'deepseek-v4-pro',
   'claude-sonnet-5-5',
-  'claude-sonnet-5',
 ];
 
 export const CODE_IMPLEMENTER_FALLBACKS: RouterModel[] = [
   'deepseek-v4-pro',
   'gpt-6-sol',
-  'gpt-5.6-terra',
+  'gpt-6.1-sol',
 ];
 
 export const DEBATE_COST_CASCADE: RouterModel[] = GENERAL_CHALLENGER_FALLBACKS;
@@ -80,18 +78,18 @@ export function getDebatePlan(
 ): DebatePlan {
   const base = profile === 'code'
     ? [
-        { role: 'critic', modelTier: 'deepseek-v4-flash' as RouterModel },
+        { role: 'critic', modelTier: 'deepseek-v4-1-flash' as RouterModel },
         { role: 'implementer', modelTier: 'deepseek-v4-pro' as RouterModel },
       ]
     : profile === 'video_ui'
     ? [
-        { role: 'UI Designer Critic', modelTier: 'gemini-3.7-flash' as RouterModel },
-        { role: 'Product QA / UX Researcher', modelTier: 'gemini-3.7-flash' as RouterModel },
-        { role: 'Customer Persona', modelTier: 'gemini-3.7-flash' as RouterModel },
+        { role: 'UI Designer Critic', modelTier: 'gemini-3.8-flash' as RouterModel },
+        { role: 'Product QA / UX Researcher', modelTier: 'gemini-3.8-flash' as RouterModel },
+        { role: 'Customer Persona', modelTier: 'gemini-3.8-flash' as RouterModel },
       ]
     : [
-        { role: 'skeptic', modelTier: 'deepseek-v4-flash' as RouterModel },
-        { role: 'alternative architect', modelTier: 'gpt-5.6-luna' as RouterModel },
+        { role: 'skeptic', modelTier: 'deepseek-v4-1-flash' as RouterModel },
+        { role: 'alternative architect', modelTier: 'gpt-6-luna' as RouterModel },
       ];
 
   const filtered = profile === 'video_ui'

@@ -3,6 +3,36 @@ import { dispatchOpenCodeStream } from '../../supabase/functions/router/opencode
 import { CURATED_OPENCODE_REGISTRY } from '../../supabase/functions/router/models_hub';
 
 describe('OpenCode Stream Delta Extraction & Multimodal Payload Preservation', () => {
+  it.each([
+    ['deepseek-v4-flash', '/chat/completions'],
+    ['gpt-6-luna', '/responses'],
+    ['qwen-3.8-flash', '/messages'],
+    ['gemini-3.8-flash', '/models/gemini-3.8-flash:streamGenerateContent?alt=sse'],
+  ])('preserves the configured endpoint and client session for %s', async (tier, path) => {
+    const originalFetch = globalThis.fetch;
+    let requestUrl = '';
+    let requestHeaders = new Headers();
+    globalThis.fetch = (async (url, init) => {
+      requestUrl = String(url);
+      requestHeaders = new Headers(init?.headers);
+      return new Response('data: [DONE]\n\n');
+    }) as typeof fetch;
+    try {
+      await dispatchOpenCodeStream({
+        config: CURATED_OPENCODE_REGISTRY[tier]!,
+        messages: [{ role: 'user', content: 'Reply OK.' }],
+        openCodeApiKey: 'fixture-only-key',
+        openCodeBaseUrl: 'https://opencode.ai/zen/go/v1',
+        sessionId: 'fixture-conversation',
+        maxTokens: 16,
+      });
+      expect(requestUrl).toBe(`https://opencode.ai/zen/go/v1${path}`);
+      expect(requestHeaders.get('user-agent')).toBe('Prismatix/1.0');
+      expect(requestHeaders.get('x-opencode-session')).toBe('fixture-conversation');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
   describe('Responses Protocol Streaming Parser', () => {
     it('accurately extracts deltas from real OpenAI Responses SSE frames', async () => {
       // Mock upstream responses stream emitting standard response.output_text.delta frames

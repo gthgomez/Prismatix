@@ -46,6 +46,23 @@ describe('ModelSelectorDropdown', () => {
     localStorage.clear();
   });
 
+  it('keeps historic models collapsed until requested and selects them only manually', () => {
+    localStorage.setItem('prismatix.modelSelector.activeTab', 'models');
+    const props = makeProps({ currentModel: 'deepseek-v4-1-flash' });
+    const container = document.createElement('div');
+    roots.push(renderInto(container, <ModelSelectorDropdown {...props} />));
+    expect(container.textContent).not.toContain('Gemini 2.5 Flash');
+    const historicToggle = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.startsWith('Historic models'))!;
+    act(() => historicToggle.click());
+    const historicModel = Array.from(container.querySelectorAll('.model-option'))
+      .find((button) => button.textContent?.includes('Gemini 2.5 Flash')) as HTMLButtonElement;
+    expect(historicModel).toBeDefined();
+    act(() => historicModel.click());
+    expect(props.onModelSelect).toHaveBeenCalledWith('gemini-2.5-flash');
+    expect(props.onClearOverride).not.toHaveBeenCalled();
+  });
+
   it('filters searchable models and reports an empty result', () => {
     localStorage.setItem('prismatix.modelSelector.activeTab', 'models');
     const container = document.createElement('div');
@@ -53,7 +70,7 @@ describe('ModelSelectorDropdown', () => {
 
     const search = container.querySelector<HTMLInputElement>('.model-search-input')!;
     expect(container.querySelectorAll('.model-option').length).toBeGreaterThan(0);
-    const matchingModel = MODEL_ORDER[0] as RouterModel;
+    const matchingModel = 'deepseek-v4-1-flash' as RouterModel;
     setInputValue(search, getCatalogEntry(matchingModel).shortName);
     expect(
       Array.from(container.querySelectorAll('.model-option')).some((option) =>
