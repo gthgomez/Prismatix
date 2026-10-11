@@ -61,6 +61,7 @@ describe('OpenCode Stream Delta Extraction & Multimodal Payload Preservation', (
         { type: 'response.output_text.delta', delta: { text: 'Hello' } },
         { type: 'response.output_text.delta', delta: { text: ', ' } },
         { type: 'response.output_text.delta', delta: { text: 'world!' } },
+        { type: 'response.output_text.done', text: 'Hello, world!' },
         { type: 'response.completed', response: { id: 'resp-1', usage: { total_tokens: 15 } } },
       ];
 
