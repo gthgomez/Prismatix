@@ -131,9 +131,11 @@ import {
 } from './usage.ts';
 import {
   fetchRelevantMemories,
-  maybeSummarizeConversationAsync,
+  enqueueMemoryJob,
   type MemoryRetrievalResult,
 } from './memory_helpers.ts';
+import { runMemoryJobs } from '../memory/worker.ts';
+import { keepAlive } from '../memory/runtime.ts';
 import {
   buildVideoContextBlock,
   buildVideoUiNotesJson,
@@ -1830,10 +1832,8 @@ interface CapabilitiesPayload {
 //             video pipeline passes its own qualification gate)
 //   - review: debate enablement (ENABLE_DEBATE_MODE)
 //   - smd:    experimental SMD flag (ENABLE_SMD_LIGHT, default off)
-//   - memory: server-side memory retrieval/summarization is always active for
-//             web-platform requests; mobile clients are their own memory
-//             authority (bypass invariant), which is a platform rule, not a
-//             feature toggle
+//   - memory: supported capability; actual access depends on account
+//             entitlement and setting. Mobile owns its memory.
 //   - models: the canonical manual model IDs accepted by
 //             normalizeModelOverride (the exact-match catalog — no substring
 //             mapping)
@@ -3218,6 +3218,7 @@ Deno.serve(async (req: Request) => {
           // receipt `transcript.saved=false` and records a durable
           // reconciliation job. Billing/execution truth is unchanged.
           let transcript: { saved: boolean } | undefined;
+          let memoryQueued = false;
           if (assistantText.trim()) {
             try {
               const assistantPersist = await persistExecutionMessage(storeClient, {
@@ -3266,15 +3267,13 @@ Deno.serve(async (req: Request) => {
             }
             // INVARIANT: Mobile clients (Prism) own their own conversation history.
             // Server-side long-term memory extraction/summarization is bypassed for platform === 'mobile'.
-            if (platform !== 'mobile' && isEntitled(activeGrant, 'memory')) {
-              void maybeSummarizeConversationAsync(
-                supabaseClient as unknown as ReturnType<typeof createClient>,
-                userId,
-                conversationId,
-                ownership.tokenCount + userTokenCount + assistantTokenCount,
-                { openai: OPENAI_API_KEY, anthropic: ANTHROPIC_API_KEY, google: GOOGLE_API_KEY },
-                makeMeter,
-              );
+            if (transcript?.saved && platform !== 'mobile' && isEntitled(activeGrant, 'memory')) {
+              try {
+                await enqueueMemoryJob(storeClient, userId, conversationId);
+                memoryQueued = true;
+              } catch {
+                console.warn('[Memory] enqueue failed; saved source messages retained');
+              }
             }
           }
 
@@ -3297,6 +3296,8 @@ Deno.serve(async (req: Request) => {
             receiptOk ? 'ok' : 'receipt_write_failed',
             effectiveModelId,
           );
+          // Auxiliary admission starts after the chat lease is settled.
+          if (memoryQueued) keepAlive(runMemoryJobs(storeClient, userId));
 
           // PX06: project the terminal receipt for the in-stream event. This is
           // a read of the authority ledger; a failure is recorded durably and

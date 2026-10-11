@@ -396,6 +396,9 @@ verify_jwt = true
 [functions.provider-settings]
 verify_jwt = true
 
+[functions.memory]
+verify_jwt = true
+
 [functions.spend_stats]
 verify_jwt = true
 

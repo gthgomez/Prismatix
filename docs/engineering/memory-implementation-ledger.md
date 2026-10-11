@@ -7,4 +7,5 @@ User approved design and requested implementation. Executing inline in isolated 
 
 Task 1: complete. Contracts RED missing module -> GREEN 3/3. SQL missing RPC RED -> migration+fixtures transaction: memory_storage_assertions_passed, rollback. Actual authenticated-role RLS and RPC privileges verified. Complete source/cursor transaction rejects assistant claims without progress, exclusive lease, Unicode old-match/no-match, forget suppression, last-source deletion and pause tested.
 Ruling: repair live messages_conversation_id_fkey to ON DELETE CASCADE — canonical schema/UI already expect this; transaction test exposed live NO ACTION drift. No existing chats deleted. Rollback requires restoring NO ACTION before reverting dependent tables; existing memory originals remain.
-Task 2: in progress.
+Task 2: complete. Handler/worker/provider modules observed RED then GREEN. Focused contracts/handler 51 tests passed; provider settlement tests expanded to 4/4 with reported usage settled, absent usage pending. Typecheck and Deno memory/router checks passed. Old detached native summarizer removed. Configured gateway extraction separately admitted, bounded to $0.025, and scheduled after chat lease settlement. Jobs resume on new turns or Retry.
+Task 3: in progress.

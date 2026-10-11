@@ -379,6 +379,8 @@ function supabaseRoutes(options?: { authOk?: boolean; memoryEntitled?: boolean }
     if (call.url.includes('/rest/v1/user_memories')) {
       return jsonResponse([]);
     }
+    if (call.url.includes('/rest/v1/rpc/memory_search')) return jsonResponse([]);
+    if (call.url.includes('/rest/v1/rpc/memory_enqueue') || call.url.includes('/rest/v1/rpc/memory_claim')) return jsonResponse(null);
     if (call.url.includes('/rest/v1/conversation_memory_state')) {
       return jsonResponse(null);
     }
@@ -913,9 +915,9 @@ describe('mobile memory isolation (real handler)', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('Hello from Prism');
     await flushAsync();
-    expect(calls.some((call) => call.url.includes('user_memories'))).toBe(false);
+    expect(calls.some((call) => call.url.includes('user_memories') || call.url.includes('memory_search'))).toBe(false);
     expect(calls.some((call) => call.url.includes('conversation_memory_state'))).toBe(false);
-    expect(calls.some((call) => call.body.includes('memory-summarize'))).toBe(false);
+    expect(calls.some((call) => call.body.includes('memory-summarize') || call.url.includes('memory_enqueue') || call.url.includes('memory_claim'))).toBe(false);
   });
   it('platform=mobile streams with ZERO server memory retrieval/extraction calls', async () => {
     const calls = installFetchRecorder(supabaseRoutes());
@@ -960,7 +962,7 @@ describe('mobile memory isolation (real handler)', () => {
     await res.text();
     await flushAsync();
 
-    expect(calls.some((call) => call.url.includes('user_memories'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('memory_search'))).toBe(true);
   });
 });
 
