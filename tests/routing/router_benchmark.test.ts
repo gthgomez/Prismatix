@@ -125,7 +125,7 @@ const FIXTURES: BenchmarkFixture[] = [
         'analyze research comprehensive detailed analysis evaluate synthesize critique design architect strategy in-depth thorough explain why reasoning implications trade-offs debug this review this code optimize refactor',
     }),
     expectedRoles: ['max'],
-    expectedModelTiers: ['gpt-6-sol'],
+    expectedModelTiers: ['gpt-6.1-sol'],
   },
 
   // 5. Multimodal / Vision Queries
@@ -161,7 +161,7 @@ const FIXTURES: BenchmarkFixture[] = [
       currentSessionTokens: 130000,
     }),
     expectedRoles: ['max'],
-    expectedModelTiers: ['gpt-6-sol'],
+    expectedModelTiers: ['gpt-6.1-sol'],
   },
 ];
 

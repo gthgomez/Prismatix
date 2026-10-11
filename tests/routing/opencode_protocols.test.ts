@@ -1,11 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { CURATED_OPENCODE_REGISTRY, resolveModelForRole } from '../../supabase/functions/router/models_hub';
+import { CURATED_ROUTE_POLICY } from '../../supabase/functions/router/models_hub';
+import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
 
 describe('OpenCode Protocol Wire Invariants', () => {
+  it('keeps historic generations out of every automatic route policy', () => {
+    for (const policy of Object.values(CURATED_ROUTE_POLICY)) {
+      for (const id of [policy.primary, ...policy.fallback]) expect(isHistoricModel(id)).toBe(false);
+    }
+    expect(CURATED_OPENCODE_REGISTRY['claude-haiku-5-5']?.protocol).toBe('anthropic-messages');
+    expect(CURATED_OPENCODE_REGISTRY['gpt-6.1-sol']?.protocol).toBe('openai-responses');
+    expect(CURATED_OPENCODE_REGISTRY['gpt-6-astra']?.protocol).toBe('openai-responses');
+  });
   it('uses official wire IDs and protocols while retaining stable application IDs', () => {
     expect(CURATED_OPENCODE_REGISTRY['deepseek-v4-1-flash']?.modelId).toBe('deepseek-v4.1-flash');
     expect(CURATED_OPENCODE_REGISTRY['qwen-3.8-flash']?.modelId).toBe('qwen3.8-flash');
     expect(CURATED_OPENCODE_REGISTRY['qwen-3.8-flash']?.protocol).toBe('anthropic-messages');
+    expect(CURATED_OPENCODE_REGISTRY['mimo-2.6-flash']?.modelId).toBe('mimo-v2.6-flash');
     expect(CURATED_OPENCODE_REGISTRY['deepseek-v4-1-flash']?.pricing.isUnknown).toBeFalsy();
     expect(resolveModelForRole('balanced', new Set(['deepseek-v4.1-flash'])).modelId)
       .toBe('deepseek-v4.1-flash');

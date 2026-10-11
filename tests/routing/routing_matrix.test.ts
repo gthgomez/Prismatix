@@ -35,7 +35,7 @@ describe('routing matrix', () => {
       const a = analyzeRouting(params);
       expect(a.reasoningDifficulty).toBeGreaterThanOrEqual(90);
       const d = determineRoute(params);
-      expect(d.modelTier).toBe('gpt-6-sol');
+      expect(d.modelTier).toBe('gpt-6.1-sol');
       expect(d.routeRole).toBe('max');
     });
 
@@ -67,7 +67,7 @@ describe('routing matrix', () => {
     it('low complexity fallback → gemini-2.5-flash', () => {
       const params = baseParams({ userQuery: 'hi' });
       const d = determineRoute(params, undefined, false);
-      expect(d.modelTier).toBe('gemini-2.5-flash');
+      expect(d.modelTier).toBe('gemini-3.8-flash');
     });
 
     it('opus fallback when reasoning difficulty crosses threshold', () => {
@@ -75,7 +75,7 @@ describe('routing matrix', () => {
         'analyze research comprehensive detailed analysis evaluate synthesize critique design architect strategy in-depth thorough explain why reasoning implications trade-offs debug this review this code optimize refactor';
       const params = baseParams({ userQuery: kw });
       const d = determineRoute(params, undefined, false);
-      expect(d.modelTier).toBe('opus-4.6');
+      expect(d.modelTier).toBe('claude-opus-5-5');
     });
   });
 });

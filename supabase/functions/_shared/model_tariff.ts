@@ -6,7 +6,7 @@
 // asOfDate policy: first-party rates carry the audit date; anything else is
 // isEstimated: true until verified.
 
-export const MODEL_TARIFF_VERSION = '2026-10-10-v10' as const;
+export const MODEL_TARIFF_VERSION = '2026-10-10-v11' as const;
 
 export interface TariffEntry {
   asOfDate?: number | string | boolean;
@@ -37,6 +37,41 @@ export interface TariffEntry {
 }
 
 export const MODEL_TARIFF: Record<string, TariffEntry> = {
+  'gpt-6-astra': {
+    inputRatePer1M: 10, outputRatePer1M: 50,
+    cachedReadRatePer1M: 1, cachedWriteRatePer1M: 12.5,
+    longContextThreshold: 272000,
+    longContextInputRatePer1M: 20, longContextOutputRatePer1M: 75,
+    longContextCachedReadRatePer1M: 2, longContextCachedWriteRatePer1M: 25,
+    asOfDate: '2026-10-10', sourceRef: 'https://openrouter.ai/openai/gpt-6-astra',
+    isEstimated: false, isEligibleForAutoRouting: true,
+  },
+  'gpt-6.1-sol': {
+    inputRatePer1M: 2, outputRatePer1M: 10,
+    cachedReadRatePer1M: 0.1, cachedWriteRatePer1M: 2.5,
+    longContextThreshold: 272000,
+    longContextInputRatePer1M: 4, longContextOutputRatePer1M: 15,
+    longContextCachedReadRatePer1M: 0.2, longContextCachedWriteRatePer1M: 5,
+    asOfDate: '2026-10-10', sourceRef: 'https://openrouter.ai/openai/gpt-6.1-sol',
+    isEstimated: false, isEligibleForAutoRouting: true,
+  },
+  'claude-haiku-5-5': {
+    inputRatePer1M: 0.1, outputRatePer1M: 0.5,
+    cachedReadRatePer1M: 0.01, cachedWriteRatePer1M: 0.125,
+    longContextThreshold: 100000,
+    longContextInputRatePer1M: 0.5, longContextOutputRatePer1M: 2.5,
+    longContextCachedReadRatePer1M: 0.05, longContextCachedWriteRatePer1M: 0.625,
+    asOfDate: '2026-10-10', sourceRef: 'https://openrouter.ai/anthropic/claude-haiku-5.5',
+    isEstimated: false, isEligibleForAutoRouting: true,
+  },
+  'grok-4.7': {
+    inputRatePer1M: 2, outputRatePer1M: 6, cachedReadRatePer1M: 0.5,
+    longContextThreshold: 200000,
+    longContextInputRatePer1M: 4, longContextOutputRatePer1M: 12,
+    longContextCachedReadRatePer1M: 1,
+    asOfDate: '2026-10-10', sourceRef: 'https://opencode.ai/docs/go/',
+    isEstimated: false, isEligibleForAutoRouting: true,
+  },
   'claude-3-5-haiku': {
     inputRatePer1M: 0.8,
     outputRatePer1M: 4.0,

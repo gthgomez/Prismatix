@@ -227,6 +227,7 @@ interface FetchCall {
   url: string;
   method: string;
   body: string;
+  headers: Headers;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -266,7 +267,7 @@ function fetchCallInfo(input: RequestInfo | URL, init?: RequestInit): FetchCall 
     method = init?.method ?? input.method;
   }
   const body = typeof init?.body === 'string' ? init.body : '';
-  return { url, method: method.toUpperCase(), body };
+  return { url, method: method.toUpperCase(), body, headers: new Headers(init?.headers) };
 }
 
 function installFetchRecorder(routes?: (call: FetchCall) => Response | null): FetchCall[] {
@@ -345,7 +346,7 @@ function chatBody(overrides: Record<string, unknown> = {}): Record<string, unkno
 
 // Full happy-path supabase routing: auth ok, entitled grant, owned conversation,
 // empty spend/memory tables, anthropic streams.
-function supabaseRoutes(options?: { authOk?: boolean }): (call: FetchCall) => Response | null {
+function supabaseRoutes(options?: { authOk?: boolean; memoryEntitled?: boolean }): (call: FetchCall) => Response | null {
   const authOk = options?.authOk ?? true;
   return (call: FetchCall): Response | null => {
     if (call.url.includes('/auth/v1/user')) {
@@ -363,7 +364,7 @@ function supabaseRoutes(options?: { authOk?: boolean }): (call: FetchCall) => Re
           );
     }
     if (call.url.includes('/rest/v1/rpc/get_access_grant')) {
-      return jsonResponse(grantRow());
+      return jsonResponse({ ...grantRow(), allowed_features: options?.memoryEntitled ? ['chat', 'memory'] : ['chat'] });
     }
     if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
       return jsonResponse({ default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] });
@@ -784,12 +785,13 @@ describe('strict unknown manual model rejection (F17)', () => {
   it('dispatches the stable Qwen selection to its official Messages endpoint and wire ID', async () => {
     const happy = supabaseRoutes();
     const calls = installFetchRecorder((call) => {
-      if (call.url === 'https://opencode.ai/zen/v1/messages') return anthropicSseResponse();
+      if (call.url === 'https://opencode.ai/zen/go/v1/messages') return anthropicSseResponse();
       return happy(call);
     });
     const handler = await loadServeHandler(ROUTER_ENTRY, {
       ...BASE_ROUTER_ENV,
       OPENCODE_API_KEY: 'test-opencode-key',
+      OPENCODE_BASE_URL: 'https://opencode.ai/zen/go/v1',
     });
     const res = await handler(routerRequest(
       chatBody({ platform: 'mobile', modelOverride: 'qwen-3.8-flash' }),
@@ -798,9 +800,11 @@ describe('strict unknown manual model rejection (F17)', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('Hello from Prism');
     await flushAsync();
-    const dispatch = calls.find((call) => call.url === 'https://opencode.ai/zen/v1/messages');
+    const dispatch = calls.find((call) => call.url === 'https://opencode.ai/zen/go/v1/messages');
     expect(dispatch).toBeDefined();
     expect(JSON.parse(dispatch!.body).model).toBe('qwen3.8-flash');
+    expect(dispatch!.headers.get('user-agent')).toBe('Prismatix/1.0');
+    expect(dispatch!.headers.get('x-opencode-session')).toBe(CONVERSATION_ID);
   });
 
   it('does not reject modelOverride "auto" — it streams normally', async () => {
@@ -869,6 +873,19 @@ describe('strict unknown manual model rejection (F17)', () => {
 // ---------------------------------------------------------------------------
 
 describe('mobile memory isolation (real handler)', () => {
+  it('chat-only web access does not retrieve memory or launch memory model calls', async () => {
+    const calls = installFetchRecorder(supabaseRoutes());
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+    const res = await handler(routerRequest(
+      chatBody({ platform: 'web', modelOverride: 'anthropic:haiku' }), 'px02-user-token',
+    ));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('Hello from Prism');
+    await flushAsync();
+    expect(calls.some((call) => call.url.includes('user_memories'))).toBe(false);
+    expect(calls.some((call) => call.url.includes('conversation_memory_state'))).toBe(false);
+    expect(calls.some((call) => call.body.includes('memory-summarize'))).toBe(false);
+  });
   it('platform=mobile streams with ZERO server memory retrieval/extraction calls', async () => {
     const calls = installFetchRecorder(supabaseRoutes());
     const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
@@ -898,7 +915,7 @@ describe('mobile memory isolation (real handler)', () => {
   });
 
   it('control: platform=web DOES invoke server memory retrieval (detector works)', async () => {
-    const calls = installFetchRecorder(supabaseRoutes());
+    const calls = installFetchRecorder(supabaseRoutes({ memoryEntitled: true }));
     const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
 
     const res = await handler(

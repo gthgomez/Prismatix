@@ -24,6 +24,7 @@ export async function dispatchOpenCodeStream(params: {
   images?: AdapterImage[];
   openCodeApiKey: string;
   openCodeBaseUrl?: string;
+  sessionId?: string;
   signal?: AbortSignal;
   maxTokens?: number;
   temperature?: number;
@@ -34,10 +35,16 @@ export async function dispatchOpenCodeStream(params: {
     images = [],
     openCodeApiKey,
     openCodeBaseUrl = 'https://opencode.ai/zen/v1',
+    sessionId,
     signal,
     maxTokens = config.budgetCap,
     temperature = 0.7,
   } = params;
+
+  const clientHeaders = {
+    'User-Agent': 'Prismatix/1.0',
+    ...(sessionId ? { 'x-opencode-session': sessionId } : {}),
+  };
 
   switch (config.protocol) {
     case 'openai-chat': {
@@ -70,6 +77,7 @@ export async function dispatchOpenCodeStream(params: {
       const response = await fetch(`${openCodeBaseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
+          ...clientHeaders,
           'Authorization': `Bearer ${openCodeApiKey}`,
           'Content-Type': 'application/json',
           'Accept': 'text/event-stream',
@@ -127,6 +135,7 @@ export async function dispatchOpenCodeStream(params: {
       const response = await fetch(`${openCodeBaseUrl}/responses`, {
         method: 'POST',
         headers: {
+          ...clientHeaders,
           'Authorization': `Bearer ${openCodeApiKey}`,
           'Content-Type': 'application/json',
           'Accept': 'text/event-stream',
@@ -208,6 +217,7 @@ export async function dispatchOpenCodeStream(params: {
       const response = await fetch(`${openCodeBaseUrl}/messages`, {
         method: 'POST',
         headers: {
+          ...clientHeaders,
           'x-api-key': openCodeApiKey,
           'Authorization': `Bearer ${openCodeApiKey}`,
           'anthropic-version': '2023-06-01',
@@ -267,6 +277,7 @@ export async function dispatchOpenCodeStream(params: {
         {
           method: 'POST',
           headers: {
+            ...clientHeaders,
             'Authorization': `Bearer ${openCodeApiKey}`,
             'Content-Type': 'application/json',
             'Accept': 'text/event-stream',

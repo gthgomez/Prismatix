@@ -16,6 +16,12 @@ function openRouterDecision() {
 }
 
 describe('applyOpenRouterFallback', () => {
+  it('serves GPT-6 Luna through OpenRouter when OpenCode is unavailable', () => {
+    const out = applyOpenRouterFallback(decisionFromModel('gpt-6-luna', 50, 'test'), () => false, true);
+    expect(out.provider).toBe('openrouter');
+    expect(out.model).toBe('openai/gpt-6-luna');
+    expect(out.modelTier).toBe('gpt-6-luna');
+  });
   it('keeps the decision when the native provider is ready', () => {
     const decision = decisionFromModel('sonnet-4.6', 50, 'test');
     const out = applyOpenRouterFallback(decision, (p: Provider) => p === 'anthropic', true);

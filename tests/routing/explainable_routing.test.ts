@@ -92,7 +92,7 @@ describe('cost safety: unknown price cannot auto-send', () => {
     const resolution = resolveRoleCandidates('economy', allIds);
 
     // Primary gpt-6-luna is unknown-priced in this fixture -> skipped
-    expect(resolution.config.modelId).toBe('deepseek-v4-flash');
+    expect(resolution.config.modelId).toBe('claude-haiku-5-5');
     expect(resolution.attempted).toContainEqual({
       modelId: 'gpt-6-luna',
       reason: 'pricing-unknown',
@@ -171,7 +171,7 @@ describe('discovery failure fails closed (no expensive silent fallback)', () => 
   it('legacy direct mode remains available only as an explicit deployment posture', () => {
     const decision = determineRoute(baseParams(), undefined, false);
 
-    expect(decision.modelTier).toBe('gemini-2.5-flash');
+    expect(decision.modelTier).toBe('gemini-3.8-flash');
     const e = decision.explanation as RouteExplanation;
     expect(e.selection).toBe('auto');
     expect(e.gateway).toBe('direct_fallback');
@@ -274,7 +274,7 @@ describe('provider-unavailable fallback cost guard', () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(result.decision.modelTier).toBe('gemini-2.5-flash');
+    expect(result.decision.modelTier).toBe('gemini-3.8-flash');
     const e = result.decision.explanation as RouteExplanation;
     expect(e.fallbackUsed).toBe(true);
     expect(e.attemptedModels?.[0]).toBe('opus-4.6: provider-unavailable');
@@ -304,9 +304,9 @@ describe('provider-unavailable fallback cost guard', () => {
 
   it('fallback order is deterministic and every entry is priced', () => {
     expect(PROVIDER_UNAVAILABLE_FALLBACKS).toEqual([
-      'gemini-2.5-flash',
-      'gemini-3-flash',
-      'sonnet-4.6',
+      'claude-haiku-5-5',
+      'gemini-3.8-flash',
+      'claude-sonnet-5-5',
     ]);
     for (const tier of PROVIDER_UNAVAILABLE_FALLBACKS) {
       expect(Number.isFinite(modelRateBasis(tier)), `${tier} basis must be finite`).toBe(true);

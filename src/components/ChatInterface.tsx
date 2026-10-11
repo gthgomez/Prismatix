@@ -2,6 +2,7 @@
 // Main chat interface with multi-file upload support and model selector
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
 import { useContextManager } from '../hooks/useContextManager';
 import {
   isCatalogSkewed,
@@ -146,7 +147,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isWaitingFirstToken, setIsWaitingFirstToken] = useState(false);
-  const [currentModel, setCurrentModel] = useState<RouterModel>('gemini-2.5-flash');
+  const [currentModel, setCurrentModel] = useState<RouterModel>('gemini-3.8-flash');
   const [currentComplexity, setCurrentComplexity] = useState<number>(50);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
@@ -181,13 +182,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // visible default so we never send to a hidden/disabled provider.
   useEffect(() => {
     if (providerPlugins.loading) return;
-    if (isModelVisible(currentModel, { enabledProviders })) return;
+    if (isModelVisible(currentModel, { enabledProviders }) &&
+      (manualModelOverride !== null || !isHistoricModel(currentModel))) return;
     const fallback =
       filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders })[0] ??
-      filterVisibleModels(MODEL_ORDER, { enabledProviders })[0];
+      filterVisibleModels(MODEL_ORDER, { enabledProviders }).find((id) => !isHistoricModel(id));
     setManualModelOverride(null);
     if (fallback) setCurrentModel(fallback);
-  }, [providerPlugins.loading, enabledProviders, currentModel]);
+  }, [providerPlugins.loading, enabledProviders, currentModel, manualModelOverride]);
 
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
   const hasPendingVideoUploads = draftAttachments.some(
@@ -1174,7 +1176,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (confirm('Reset conversation? This will clear all messages.')) {
       // Start a fresh deterministic conversation (New Chat) and clear selection.
       handleNewChat();
-      setCurrentModel('gemini-2.5-flash');
+      setCurrentModel('gemini-3.8-flash');
       setCurrentComplexity(50);
       setDraftAttachments([]);
       setManualModelOverride(null);

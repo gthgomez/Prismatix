@@ -112,7 +112,7 @@ import {
   resolveEffectiveLimits,
   type AdmissionResult,
 } from './admission.ts';
-import { getModelPricing, PRICING_VERSION } from './pricing_registry.ts';
+import { configureOpenCodePricing, getModelPricing, PRICING_VERSION } from './pricing_registry.ts';
 import {
   MeteredCallAccountingError,
   runMeteredCall,
@@ -145,6 +145,7 @@ import {
 } from './security_guards.ts';
 import {
   assertEntitled,
+  isEntitled,
   EntitlementError,
   loadAccessGrant,
   type AccessGrant,
@@ -216,6 +217,7 @@ const NVIDIA_API_KEY = Deno.env.get('NVIDIA_API_KEY') || '';
 const DEEPINFRA_API_KEY = Deno.env.get('DEEPINFRA_API_KEY') || '';
 const OPENCODE_API_KEY = Deno.env.get('OPENCODE_API_KEY') || '';
 const OPENCODE_BASE_URL = Deno.env.get('OPENCODE_BASE_URL') || 'https://opencode.ai/zen/v1';
+configureOpenCodePricing(OPENCODE_BASE_URL);
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') || '';
 const OPENROUTER_BASE_URL = Deno.env.get('OPENROUTER_BASE_URL') || 'https://openrouter.ai/api/v1';
 
@@ -260,7 +262,7 @@ const ENABLE_SMD_LIGHT = envFlag('ENABLE_SMD_LIGHT', false);
 // Fast-path guard thresholds (tune without redeploying via env vars).
 const SMD_FAST_PATH_MIN_TOKENS = Number(Deno.env.get('SMD_FAST_PATH_MIN_TOKENS') || '') || 25;
 // SMD is locked to Gemini Flash for the experiment (cost control + single-model rule).
-const SMD_MODEL_TIER: RouterModel = 'gemini-2.5-flash';
+const SMD_MODEL_TIER: RouterModel = 'gemini-3.8-flash';
 // Draft output cap fed to later stages (chars, not tokens — cheap truncation guard).
 const SMD_DRAFT_MAX_CHARS = Number(Deno.env.get('SMD_DRAFT_MAX_CHARS') || '') || 6000;
 // Token budget caps per stage.
@@ -491,7 +493,7 @@ function normalizeDebateProfile(input?: string): DebateProfile {
 }
 
 function parseVideoUiModelLadder(input?: string): RouterModel[] {
-  const fallback: RouterModel[] = ['gemini-3.1-pro', 'gemini-2.5-flash'];
+  const fallback: RouterModel[] = ['gemini-3.8-flash'];
   const raw = String(input || '')
     .split(',')
     .map((v) => v.trim().toLowerCase())
@@ -500,10 +502,7 @@ function parseVideoUiModelLadder(input?: string): RouterModel[] {
 
   const out: RouterModel[] = [];
   for (const item of raw) {
-    // Accept both new and old env var values for backwards compat
-    if (item === 'gemini-3.1-pro' || item === 'gemini-3-pro') out.push('gemini-3.1-pro');
-    if (item === 'gemini-3-flash') out.push('gemini-3-flash');
-    if (item === 'gemini-2.5-flash') out.push('gemini-2.5-flash');
+    if (item === 'gemini-3.8-flash') out.push('gemini-3.8-flash');
   }
   return out.length > 0 ? out : fallback;
 }
@@ -1228,6 +1227,7 @@ async function callOpenCode(
   images: ImageAttachment[],
   signal: AbortSignal,
   apiKey: string,
+  sessionId?: string,
 ): Promise<UpstreamCallResult> {
   const modelConfig = CURATED_OPENCODE_REGISTRY[decision.modelTier] || {
     modelId: decision.model,
@@ -1257,6 +1257,8 @@ async function callOpenCode(
     messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
     images: images.map((img) => ({ data: img.data, mediaType: img.mediaType })),
     openCodeApiKey: apiKey,
+    openCodeBaseUrl: OPENCODE_BASE_URL,
+    sessionId,
     signal,
   });
 
@@ -1305,7 +1307,7 @@ async function callProviderStream(
   const dispatch = async (): Promise<UpstreamCallResult> => {
     switch (decision.provider) {
       case 'opencode':
-        return await callOpenCode(decision, allMessages, images, signal, apiKey);
+        return await callOpenCode(decision, allMessages, images, signal, apiKey, meter?.execution.conversation_id ?? undefined);
       case 'openrouter':
         return await callOpenRouter(decision, allMessages, images, signal, apiKey);
       case 'anthropic':
@@ -2331,7 +2333,7 @@ Deno.serve(async (req: Request) => {
     };
     // INVARIANT: Mobile clients (Prism) are sole personal memory authorities.
     // Server-side memory retrieval is bypassed for platform === 'mobile'.
-    if (platform !== 'mobile') {
+    if (platform !== 'mobile' && isEntitled(activeGrant, 'memory')) {
       try {
         memoryRetrieval = await fetchRelevantMemories(
           supabaseClient as unknown as ReturnType<typeof createClient>,
@@ -3258,7 +3260,7 @@ Deno.serve(async (req: Request) => {
             }
             // INVARIANT: Mobile clients (Prism) own their own conversation history.
             // Server-side long-term memory extraction/summarization is bypassed for platform === 'mobile'.
-            if (platform !== 'mobile') {
+            if (platform !== 'mobile' && isEntitled(activeGrant, 'memory')) {
               void maybeSummarizeConversationAsync(
                 supabaseClient as unknown as ReturnType<typeof createClient>,
                 userId,

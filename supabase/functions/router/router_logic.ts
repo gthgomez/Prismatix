@@ -1,9 +1,16 @@
 // router_logic.ts - Pure routing + message transform logic (no Deno.serve side effects)
 
-import { CURATED_ROUTE_POLICY, type Gateway, type RouteRole, resolveRoleCandidates } from './models_hub.ts';
+import { CURATED_OPENCODE_REGISTRY, CURATED_ROUTE_POLICY, type Gateway, type RouteRole, resolveRoleCandidates } from './models_hub.ts';
 import { getPricingForModel } from './pricing_registry.ts';
 
 export type Provider = 'opencode' | 'openrouter' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
+
+export function nativeProviderForTier(modelTier: string): Provider {
+  const family = CURATED_OPENCODE_REGISTRY[modelTier]?.family;
+  if (family === 'anthropic' || family === 'openai') return family;
+  if (family === 'google') return 'google';
+  return MODEL_REGISTRY[modelTier]?.provider ?? 'opencode';
+}
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -89,6 +96,12 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
     budgetCap: 8192,
     supportsImages: true,
   },
+  'claude-haiku-5-5': {
+    provider: 'opencode',
+    modelId: 'claude-haiku-5-5',
+    budgetCap: 8192,
+    supportsImages: true,
+  },
   'gemini-3.7-flash': {
     provider: 'opencode',
     modelId: 'gemini-3.7-flash',
@@ -101,9 +114,27 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
     budgetCap: 16384,
     supportsImages: true,
   },
+  'grok-4.7': {
+    provider: 'opencode',
+    modelId: 'grok-4.7',
+    budgetCap: 16384,
+    supportsImages: true,
+  },
   'gpt-6-sol': {
     provider: 'opencode',
     modelId: 'gpt-6-sol',
+    budgetCap: 32768,
+    supportsImages: true,
+  },
+  'gpt-6.1-sol': {
+    provider: 'opencode',
+    modelId: 'gpt-6.1-sol',
+    budgetCap: 32768,
+    supportsImages: true,
+  },
+  'gpt-6-astra': {
+    provider: 'opencode',
+    modelId: 'gpt-6-astra',
     budgetCap: 32768,
     supportsImages: true,
   },
@@ -151,7 +182,7 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
   },
   'mimo-2.6-flash': {
     provider: 'opencode',
-    modelId: 'mimo-2.6-flash',
+    modelId: 'mimo-v2.6-flash',
     budgetCap: 4096,
     supportsImages: false,
   },
@@ -679,7 +710,7 @@ export function determineRoute(
   const analysis = analyzeRouting(params);
 
   if (modelOverride && MODEL_REGISTRY[modelOverride]) {
-    return buildDecision(modelOverride, 'manual-override', analysis, {
+    const decision = buildDecision(modelOverride, 'manual-override', analysis, {
       routeStep: 'manual-override',
       explanation: {
         selection: 'override',
@@ -690,6 +721,7 @@ export function determineRoute(
         priceKnown: priceIsKnown(modelOverride),
       },
     });
+    return openCodePrimary ? decision : { ...decision, provider: nativeProviderForTier(modelOverride) };
   }
 
   const role = determineRouteRole(params);
@@ -719,59 +751,16 @@ export function determineRoute(
     });
   }
 
-  // Legacy direct mode: reached only when the OpenCode gateway is explicitly
-  // not primary (deployment posture without OpenCode credentials). Each role
-  // keeps a deterministic, priced mapping; every route is flagged as a
-  // gateway fallback so the UI can explain it.
-  const { complexityScore: c, hasImages, hasVideoAssets } = analysis;
-  if (hasVideoAssets) {
-    return buildDecision('gemini-3.1-pro', 'video-default-pro', analysis, {
-      routeStep: 'video-default-pro',
-      routeRole: role,
-      explanation: legacyExplanation(role, 'gemini-3.1-pro', 'Video assets require a vision-capable pro model.'),
-    });
-  }
-  if (hasImages) {
-    const tier = c >= 75 ? 'gemini-3.1-pro' : 'gemini-2.5-flash';
-    return buildDecision(tier, 'images-fallback', analysis, {
-      routeStep: 'images-fallback',
-      routeRole: role,
-      explanation: legacyExplanation(role, tier, `Images routed to a ${c >= 75 ? 'pro' : 'fast'} vision model.`),
-    });
-  }
-  if (role === 'max') {
-    return buildDecision('opus-4.6', 'opus-fallback', analysis, {
-      routeStep: 'opus',
-      routeRole: role,
-      explanation: legacyExplanation(role, 'opus-4.6', 'Maximum-complexity queries map to the strongest legacy model.'),
-    });
-  }
-  if (role === 'strong' || role === 'code_review') {
-    return buildDecision('sonnet-4.6', 'sonnet-fallback', analysis, {
-      routeStep: 'sonnet',
-      routeRole: role,
-      explanation: legacyExplanation(role, 'sonnet-4.6', 'Strong/code-review queries map to a strong legacy model.'),
-    });
-  }
-  if (role === 'fast') {
-    return buildDecision('gemini-2.5-flash', 'fast-fallback', analysis, {
-      routeStep: 'fast',
-      routeRole: role,
-      explanation: legacyExplanation(role, 'gemini-2.5-flash', 'Fast queries map to a low-latency legacy model.'),
-    });
-  }
-  if (role === 'balanced') {
-    return buildDecision('gemini-3-flash', 'balanced-fallback', analysis, {
-      routeStep: 'balanced',
-      routeRole: role,
-      explanation: legacyExplanation(role, 'gemini-3-flash', 'Balanced queries map to a mid-cost legacy model.'),
-    });
-  }
-  return buildDecision('gemini-2.5-flash', 'economy-fallback', analysis, {
-    routeStep: 'economy',
+  // Native/OpenRouter mode uses current models; historic models require an override.
+  const tier = role === 'max' ? 'claude-opus-5-5'
+    : role === 'strong' || role === 'code_review' ? 'claude-sonnet-5-5'
+    : 'gemini-3.8-flash';
+  const decision = buildDecision(tier, `current-${role}`, analysis, {
+    routeStep: role,
     routeRole: role,
-    explanation: legacyExplanation(role, 'gemini-2.5-flash', 'Economy queries map to the cheapest legacy model.'),
+    explanation: legacyExplanation(role, tier, 'Selected the current model for this task.'),
   });
+  return { ...decision, provider: tier === 'gemini-3.8-flash' ? 'google' : 'anthropic' };
 }
 
 function legacyExplanation(role: RouteRole, modelTier: RouterModel, why: string): RouteExplanation {

@@ -57,6 +57,21 @@ export function isDeepSeekOffPeak(date: Date = new Date()): boolean {
 export const PRICING_REGISTRY: Record<string, ModelPricing> =
   MODEL_TARIFF as unknown as Record<string, ModelPricing>;
 
+// Go subscription usage has different rates from Zen pay-as-you-go. Use peak
+// rates for admission and accounting so off-peak usage is never underestimated.
+const GO_RATES: Record<string, [number, number]> = {
+  'deepseek-v4-flash': [0.30, 1.20],
+  'deepseek-v4-pro': [1.32, 3.96],
+  'deepseek-v4-1-flash': [0.30, 1.20],
+  'glm-5.3-flash': [0.15, 0.50],
+  'qwen-3.8-flash': [0.15, 0.47],
+  'mimo-2.6-flash': [0.14, 0.28],
+};
+let useGoPricing = false;
+export function configureOpenCodePricing(baseUrl: string): void {
+  useGoPricing = baseUrl.replace(/\/$/, '') === 'https://opencode.ai/zen/go/v1';
+}
+
 
 /**
  * Fail-Closed Pricing Retrieval.
@@ -80,7 +95,14 @@ export function getPricingForModel(model: string, now: Date = new Date()): Model
         isEligibleForAutoRouting: false,
       };
     }
-    return existing;
+    const goRates = useGoPricing ? GO_RATES[model] : undefined;
+    return goRates ? {
+      ...existing,
+      inputRatePer1M: goRates[0], outputRatePer1M: goRates[1],
+      asOfDate: '2026-10-10', sourceRef: 'https://opencode.ai/docs/go/',
+      isEstimated: true,
+      offPeakInputRatePer1M: undefined, offPeakOutputRatePer1M: undefined,
+    } : existing;
   }
 
   // Unknown model pricing: auto-routing forbidden

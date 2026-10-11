@@ -24,7 +24,7 @@ describe('OpenCode Model Hub & Semantic Routing Migration', () => {
       expect(resolveModelForRole('fast', allIds).modelId).toBe('gpt-6-luna');
       expect(resolveModelForRole('balanced', allIds).modelId).toBe('deepseek-v4.1-flash');
       expect(resolveModelForRole('strong', allIds).modelId).toBe('claude-sonnet-5-5');
-      expect(resolveModelForRole('max', allIds).modelId).toBe('gpt-6-sol');
+      expect(resolveModelForRole('max', allIds).modelId).toBe('gpt-6.1-sol');
       expect(resolveModelForRole('vision_fast', allIds).modelId).toBe('gemini-3.8-flash');
       expect(resolveModelForRole('code_review', allIds).modelId).toBe('claude-sonnet-5-5');
       expect(resolveModelForRole('cheap_critic', allIds).modelId).toBe('gpt-6-luna');

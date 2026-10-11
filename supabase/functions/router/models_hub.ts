@@ -2,6 +2,7 @@
 // Multi-plane model hub abstractions: Gateway, Protocol, Family, Role, and Curated Policy.
 
 import { MODEL_TARIFF } from '../_shared/model_tariff.ts';
+import { isHistoricModel } from '../_shared/model_lifecycle.ts';
 
 export type Gateway = 'opencode' | 'direct_fallback';
 
@@ -151,6 +152,14 @@ const OPENCODE_SPECS: Record<string, CuratedSpec> = {
     supportsImages: true,
     budgetCap: 16384,
   },
+  'grok-4.7': {
+    displayName: 'Grok 4.7',
+    gateway: 'opencode',
+    protocol: 'openai-responses',
+    family: 'xai',
+    supportsImages: true,
+    budgetCap: 16384,
+  },
   'claude-sonnet-5': {
     displayName: 'Claude Sonnet 5',
     gateway: 'opencode',
@@ -175,6 +184,14 @@ const OPENCODE_SPECS: Record<string, CuratedSpec> = {
     supportsImages: true,
     budgetCap: 8192,
   },
+  'claude-haiku-5-5': {
+    displayName: 'Claude Haiku 5.5',
+    gateway: 'opencode',
+    protocol: 'anthropic-messages',
+    family: 'anthropic',
+    supportsImages: true,
+    budgetCap: 8192,
+  },
   'gemini-3.7-flash': {
     displayName: 'Gemini 3.7 Flash',
     gateway: 'opencode',
@@ -186,6 +203,26 @@ const OPENCODE_SPECS: Record<string, CuratedSpec> = {
 
   'gpt-6-sol': {
     displayName: 'GPT-6 Sol',
+    gateway: 'opencode',
+    protocol: 'openai-responses',
+    family: 'openai',
+    supportsImages: true,
+    budgetCap: 32768,
+    pricingVersion: '2026-10-06',
+    sourceRef: 'openai-official',
+  },
+  'gpt-6.1-sol': {
+    displayName: 'GPT-6.1 Sol',
+    gateway: 'opencode',
+    protocol: 'openai-responses',
+    family: 'openai',
+    supportsImages: true,
+    budgetCap: 32768,
+    pricingVersion: '2026-10-06',
+    sourceRef: 'openai-official',
+  },
+  'gpt-6-astra': {
+    displayName: 'GPT-6 Astra',
     gateway: 'opencode',
     protocol: 'openai-responses',
     family: 'openai',
@@ -267,6 +304,7 @@ const OPENCODE_SPECS: Record<string, CuratedSpec> = {
     sourceRef: 'opencode-zen-official',
   },
   'mimo-2.6-flash': {
+    modelId: 'mimo-v2.6-flash',
     displayName: 'Mimo 2.6 Flash',
     gateway: 'opencode',
     protocol: 'openai-chat',
@@ -322,39 +360,39 @@ export const CURATED_OPENCODE_REGISTRY: Record<string, ModelConfig> = Object.fro
 export const CURATED_ROUTE_POLICY: Record<RouteRole, RolePolicy> = {
   economy: {
     primary: 'gpt-6-luna',
-    fallback: ['deepseek-v4-flash', 'deepseek-v4-1-flash'],
+    fallback: ['claude-haiku-5-5', 'deepseek-v4-1-flash'],
   },
   fast: {
     primary: 'gpt-6-luna',
-    fallback: ['gemini-3.8-flash', 'gpt-5.6-luna'],
+    fallback: ['gemini-3.8-flash', 'claude-haiku-5-5'],
   },
   balanced: {
     primary: 'deepseek-v4-1-flash',
-    fallback: ['deepseek-v4-pro', 'grok-4.6'],
+    fallback: ['deepseek-v4-pro', 'grok-4.7'],
   },
   strong: {
     primary: 'claude-sonnet-5-5',
-    fallback: ['gpt-6-sol', 'claude-sonnet-5', 'grok-4.6'],
+    fallback: ['gpt-6.1-sol', 'gpt-6-sol', 'grok-4.7'],
   },
   max: {
-    primary: 'gpt-6-sol',
-    fallback: ['claude-opus-5-5', 'gpt-5.6-sol', 'claude-opus-5'],
+    primary: 'gpt-6.1-sol',
+    fallback: ['gpt-6-astra', 'claude-opus-5-5', 'gpt-6-sol'],
   },
   vision_fast: {
     primary: 'gemini-3.8-flash',
-    fallback: ['deepseek-v4-1-flash', 'gemini-3.7-flash', 'claude-haiku-4-5'],
+    fallback: ['deepseek-v4-1-flash', 'claude-haiku-5-5'],
   },
   vision_strong: {
     primary: 'claude-sonnet-5-5',
-    fallback: ['gpt-6-sol', 'claude-sonnet-5', 'gemini-3.8-flash'],
+    fallback: ['gpt-6.1-sol', 'gpt-6-sol', 'gemini-3.8-flash'],
   },
   code_review: {
     primary: 'claude-sonnet-5-5',
-    fallback: ['deepseek-v4-pro', 'gpt-6-sol'],
+    fallback: ['deepseek-v4-pro', 'gpt-6.1-sol', 'gpt-6-sol'],
   },
   cheap_critic: {
     primary: 'gpt-6-luna',
-    fallback: ['deepseek-v4-flash'],
+    fallback: ['claude-haiku-5-5', 'deepseek-v4-1-flash'],
   },
 };
 
@@ -422,7 +460,7 @@ export function resolveRoleCandidates(
     }
 
     // Reject free/experimental models from standard production auto-routing
-    if (config.isExperimentalFree) {
+    if (config.isExperimentalFree || isHistoricModel(modelId)) {
       attempted.push({ modelId, reason: 'experimental-free' });
       continue;
     }

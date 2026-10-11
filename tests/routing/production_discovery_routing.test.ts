@@ -104,6 +104,6 @@ describe('production discovery routing integration', () => {
     });
 
     expect(fetchCalled).toBe(false);
-    expect(decision.modelTier).toBe('gemini-2.5-flash');
+    expect(decision.modelTier).toBe('gemini-3.8-flash');
   });
 });

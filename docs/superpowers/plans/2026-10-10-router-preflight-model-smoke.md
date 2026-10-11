@@ -1,28 +1,42 @@
-# Router preflight and live model verification
+# Router, OpenCode Go, and current model rollout
 
-**Goal:** Restore browser chat requests and verify every added OpenCode model with a short synthetic message, then test Anthropic, OpenAI, and Google through OpenRouter when its key is available.
+## Authorized scope
 
-**Architecture:** Keep the existing authenticated router, idempotent request IDs, provider resolution, streaming, pricing, and spending gates. Extend the explicit CORS request-header list to match the existing client contract.
+Restore browser chat, integrate the owner's OpenCode Go subscription, refresh the current model catalog, retain older models in a collapsed manual-only Historic catalog, merge PR #30, deploy, and run sequential synthetic inference tests within a $1 total limit. Preserve JWT verification, ownership checks, entitlement gates, and server-side credentials. No schema changes. Independent review was explicitly waived by the owner.
 
-**Constraints:** Never retrieve credential values. Keep JWT verification enabled. Run paid tests sequentially within the owner's confirmed total budget. Preserve unrelated work. No schema changes.
+## Implemented
 
-## Task 1: Browser preflight fix
+- [x] Browser preflight permits the existing client request-ID headers; regression observed failing before the fix.
+- [x] Correct physical DeepSeek, Qwen, and MiMo model IDs; preserve application IDs for routing and pricing.
+- [x] Dispatch through the configured OpenCode base URL, identify Prismatix honestly, and send stable conversation sessions across protocols.
+- [x] Use documented conservative peak Go rates when the official Go endpoint is configured.
+- [x] Add GPT-6 Astra, GPT-6.1 Sol, Claude Haiku 5.5, and Grok 4.7 alongside existing current models; map requested OpenAI, Anthropic, and Google models through OpenRouter.
+- [x] Exclude historic models from automatic routing and the default picker; allow explicit manual selection from the collapsed Historic catalog.
+- [x] Require memory entitlement before retrieval or auxiliary summarization so chat-only tests do not invoke those workflows.
+- [x] Inspect source and test diffs. Retain the stale-model audit; its documented budget records deliberate current-ID references, official Qwen wire IDs, and reduced older-model coupling counts. Its substring matches also count newer Claude IDs under older prefixes.
 
-- [ ] Add a handler regression test in `tests/integration/deployment-contract.test.ts`: production-origin OPTIONS with authorization, apikey, content-type, and x-client-request-id must allow every requested header; OPTIONS must not authenticate or dispatch providers.
-- [ ] Run the test before the fix and confirm failure on x-client-request-id.
-- [ ] Add x-client-request-id and the already-supported x-request-id alias to the explicit header allowlist in `supabase/functions/router/index.ts`.
-- [ ] Run deployment-contract tests, relevant router/security tests, and `deno check supabase/functions/router/index.ts`.
-- [ ] Inspect the diff and obtain independent review if host capacity permits; publish the task branch/PR with exact verification evidence.
+## Verification before merge
 
-## Task 2: Deploy and verify live routing
+- Full Vitest: 562 tests / 54 files passed.
+- Latest frontend edit: ChatInterface end-to-end and model selector tests, 8 tests / 2 files passed.
+- TypeScript typecheck and Vite production build passed.
+- ESLint: zero errors, 44 existing warnings.
+- Deno checks: router and provider-settings passed.
+- Stale-model budget check passed.
 
-- [ ] Deploy the reviewed router to Prismatix project `sqjfbqjogylkfwzsyprd` with JWT verification retained.
-- [ ] Confirm the production OPTIONS response allows the full client header set.
-- [ ] Use the existing authenticated app session for a minimal automatic-routing request.
-- [ ] Enumerate every OpenCode model in the app/curated catalog; test each with a distinct short synthetic prompt and record selected model, served provider/model, response, and cost/error. Do not count a fallback as the selected model passing.
-- [ ] Once OpenRouter is configured, test at least one Anthropic, OpenAI, and Google model through that gateway. Record missing configuration as blocked rather than a successful test.
-- [ ] Save sanitized results and report actual coverage, failures, total spend, and any remaining blockers.
+## Deployment and live verification
 
-## Review focus
+- [x] Initial CORS-only router deployment retained JWT verification; production OPTIONS returned 200 with the requested headers.
+- [x] Confirmed OpenRouter credentials available by metadata, without retrieving any key.
+- [x] Existing OpenRouter Haiku 4.5 and Gemini 2.5 Flash returned OK. These superseded probes do not establish current-model coverage.
+- [ ] Merge the exact passing PR candidate and deploy its router with the Go endpoint and current catalog/tariff versions.
+- [ ] Verify production frontend deployment and the collapsed Historic catalog.
+- [ ] Test every configured model advertised by Go, including manually selected historic entries. Record unsupported catalog entries separately and do not count fallback success as selected-model success.
+- [ ] Test Haiku/Sonnet/Opus 5.5, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol, and Gemini 3.8 Flash through OpenRouter.
+- [ ] Record exact served identities, outcome, settled cost, pending accounting, and coverage limitations. Restore the original default gateway after tests.
 
-Fixed CORS allowlist, unauthenticated preflight only, unchanged POST authentication, request-ID replay safety, exact served-model identity, and no secrets in artifacts.
+## Official evidence
+
+OpenCode third-party endpoint, identification/session requirements, coverage, and rates: https://opencode.ai/docs/go/
+
+Provider model discovery: https://opencode.ai/zen/go/v1/models and https://openrouter.ai/api/v1/models
