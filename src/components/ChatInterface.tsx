@@ -129,6 +129,25 @@ function shouldTreatAsVideoAttachment(file: FileUploadPayload): boolean {
   return VIDEO_NAME_PATTERN.test(file.name || '');
 }
 
+// Router/edge error codes arrive as terse message strings; map the known ones
+// to user-actionable text instead of surfacing raw codes like "not_entitled".
+function describeStreamError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const code = raw.replace(/^Error:\s*/i, '').trim();
+  switch (code) {
+    case 'not_entitled':
+      return 'Your account doesn\u2019t have access to this feature yet. If you just signed up, sign out and back in once \u2014 if it still fails, contact support.';
+    case 'entitlement_unavailable':
+      return 'We couldn\u2019t verify your account access right now. Please try again in a moment.';
+    case 'DuplicateRequestError':
+    case 'duplicate_request':
+      return 'That exact request was already sent just now. Edit your message slightly and send again.';
+    default:
+      return raw ? `Error: ${raw}` : 'Unknown error occurred';
+  }
+}
+
+
 function normalizeAttachmentKind(file: FileUploadPayload): FileUploadPayload {
   if (!shouldTreatAsVideoAttachment(file)) {
     return file;
@@ -1142,7 +1161,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         console.error('Stream error:', error);
         setMessages((prev) => [...prev, {
           role: 'assistant',
-          content: `⚠️ Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+          content: `⚠️ ${describeStreamError(error)}`,
           timestamp: Date.now(),
         }]);
         scheduleCostEstimatorHide(1500);
