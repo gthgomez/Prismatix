@@ -81,6 +81,7 @@ const PROVIDER_HOSTS = [
   'api.openai.com',
   'generativelanguage.googleapis.com',
   'opencode.ai',
+  'openrouter.ai',
   'api.nvidia.com',
   'api.deepinfra.com',
 ];
@@ -805,6 +806,36 @@ describe('strict unknown manual model rejection (F17)', () => {
     expect(JSON.parse(dispatch!.body).model).toBe('qwen3.8-flash');
     expect(dispatch!.headers.get('user-agent')).toBe('Prismatix/1.0');
     expect(dispatch!.headers.get('x-opencode-session')).toBe(CONVERSATION_ID);
+  });
+
+  it('honors OpenRouter as the default when OpenCode and native keys are also ready', async () => {
+    const happy = supabaseRoutes();
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+        return jsonResponse({ default_provider: 'openrouter', providers: [
+          { provider: 'opencode', enabled: true, has_key: false },
+          { provider: 'openrouter', enabled: true, has_key: false },
+          { provider: 'anthropic', enabled: true, has_key: false },
+        ] });
+      }
+      if (call.url === 'https://openrouter.ai/api/v1/chat/completions') {
+        return new Response('data: {"choices":[{"delta":{"content":"Hello from Prism"}}]}\n\ndata: [DONE]\n\n',
+          { headers: { 'content-type': 'text/event-stream' } });
+      }
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, {
+      ...BASE_ROUTER_ENV, OPENCODE_API_KEY: 'fixture-opencode', OPENROUTER_API_KEY: 'fixture-openrouter',
+    });
+    const res = await handler(routerRequest(chatBody({ modelOverride: 'claude-haiku-5-5' }), 'px02-user-token'));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('Hello from Prism');
+    await flushAsync();
+    expect(calls.some((call) => call.url.startsWith('https://opencode.ai'))).toBe(false);
+    const dispatches = providerCalls(calls);
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0].url).toBe('https://openrouter.ai/api/v1/chat/completions');
+    expect(JSON.parse(dispatches[0].body).model).toBe('anthropic/claude-haiku-5.5');
   });
 
   it('does not reject modelOverride "auto" — it streams normally', async () => {
