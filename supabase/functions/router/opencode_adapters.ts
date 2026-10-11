@@ -129,7 +129,8 @@ export async function dispatchOpenCodeStream(params: {
         input: inputPayload,
         stream: true,
         max_output_tokens: maxTokens,
-        temperature,
+        // GPT reasoning defaults reject sampling parameters. Grok supports them.
+        ...(config.family === 'openai' ? {} : { temperature }),
       };
 
       const response = await fetch(`${openCodeBaseUrl}/responses`, {
@@ -148,6 +149,9 @@ export async function dispatchOpenCodeStream(params: {
         response,
         extractDeltas: (payload: any) => {
           if (!payload) return [];
+          // Typed Responses events carry output, reasoning summaries, and terminal
+          // snapshots. Only output-text deltas belong in the assistant's answer.
+          if (typeof payload.type === 'string' && payload.type !== 'response.output_text.delta') return [];
           // Support official OpenAI Responses streaming event types & output items
           const text =
             payload?.delta?.text ||
@@ -208,7 +212,8 @@ export async function dispatchOpenCodeStream(params: {
         messages: nonSystemMessages,
         max_tokens: maxTokens,
         stream: true,
-        temperature,
+        // Claude 5.5 removed sampling controls; compatible Messages models keep them.
+        ...(/^claude-.*-5-5$/.test(config.modelId) ? {} : { temperature }),
       };
       if (systemMsg) {
         body.system = systemMsg;

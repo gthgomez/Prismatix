@@ -3,6 +3,26 @@ import { dispatchOpenCodeStream } from '../../supabase/functions/router/opencode
 import { CURATED_OPENCODE_REGISTRY } from '../../supabase/functions/router/models_hub';
 
 describe('OpenCode Stream Delta Extraction & Multimodal Payload Preservation', () => {
+  it.each(Object.entries(CURATED_OPENCODE_REGISTRY)
+    .filter(([, config]) => config.family === 'openai' || /^claude-.*-5-5$/.test(config.modelId))
+    .map(([tier]) => tier))(
+    'omits unsupported sampling parameters for %s', async (tier) => {
+      const originalFetch = globalThis.fetch;
+      let body: Record<string, unknown> = {};
+      globalThis.fetch = (async (_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return new Response('data: [DONE]\n\n');
+      }) as typeof fetch;
+      try {
+        await dispatchOpenCodeStream({
+          config: CURATED_OPENCODE_REGISTRY[tier]!,
+          messages: [{ role: 'user', content: 'Reply OK.' }],
+          openCodeApiKey: 'fixture-only-key', maxTokens: 16,
+        });
+        expect(body).not.toHaveProperty('temperature');
+      } finally { globalThis.fetch = originalFetch; }
+    },
+  );
   it.each([
     ['deepseek-v4-flash', '/chat/completions'],
     ['gpt-6-luna', '/responses'],
@@ -38,9 +58,12 @@ describe('OpenCode Stream Delta Extraction & Multimodal Payload Preservation', (
       // Mock upstream responses stream emitting standard response.output_text.delta frames
       const frames = [
         { type: 'response.created', response: { id: 'resp-1', model: 'gpt-5.6-luna' } },
+        { type: 'response.reasoning_summary_text.delta', delta: 'Private reasoning summary' },
+        { type: 'response.reasoning_summary_text.done', text: 'Private reasoning summary' },
         { type: 'response.output_text.delta', delta: { text: 'Hello' } },
         { type: 'response.output_text.delta', delta: { text: ', ' } },
         { type: 'response.output_text.delta', delta: { text: 'world!' } },
+        { type: 'response.output_text.done', text: 'Hello, world!' },
         { type: 'response.completed', response: { id: 'resp-1', usage: { total_tokens: 15 } } },
       ];
 

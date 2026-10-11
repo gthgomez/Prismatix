@@ -1,6 +1,7 @@
 // index.ts - Multi-provider Router Edge Function (Anthropic + OpenAI + Google)
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { openRouterModelId, resolveDefaultProvider } from '../_shared/provider_registry.ts';
 import {
   countImageTokens,
   countTokens,
@@ -2395,10 +2396,11 @@ Deno.serve(async (req: Request) => {
       );
     }
     const normalizedOverride = normalizeModelOverride(manualModelOverride);
+    const defaultGateway = resolveDefaultProvider(userProviderConfig);
     let decision: RouteDecision;
     try {
       decision = await resolveProductionRoute(routerParams, normalizedOverride, {
-        openCodePrimary: providerResolver.isReady('opencode'),
+        openCodePrimary: defaultGateway === 'opencode' && providerResolver.isReady('opencode'),
         openCodeApiKey: OPENCODE_API_KEY || undefined,
         openCodeBaseUrl: OPENCODE_BASE_URL,
       });
@@ -2425,6 +2427,10 @@ Deno.serve(async (req: Request) => {
 
     // OpenRouter unlock: a model whose native provider is not enabled still
     // routes when OpenRouter is on and the model has an OpenRouter route.
+    if (defaultGateway === 'openrouter' && providerResolver.isReady('openrouter')) {
+      const gatewayModelId = openRouterModelId(decision.modelTier);
+      if (gatewayModelId) decision = { ...decision, provider: 'openrouter', model: gatewayModelId };
+    }
     decision = applyOpenRouterFallback(
       decision,
       (provider) => providerResolver.isReady(provider),
