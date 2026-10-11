@@ -834,8 +834,8 @@ describe('strict unknown manual model rejection (F17)', () => {
     expect(calls.some((call) => call.url.startsWith('https://opencode.ai'))).toBe(false);
     const dispatches = providerCalls(calls);
     expect(dispatches).toHaveLength(1);
-    expect(dispatches[0].url).toBe('https://openrouter.ai/api/v1/chat/completions');
-    expect(JSON.parse(dispatches[0].body).model).toBe('anthropic/claude-haiku-5.5');
+    expect(dispatches[0]!.url).toBe('https://openrouter.ai/api/v1/chat/completions');
+    expect(JSON.parse(dispatches[0]!.body).model).toBe('anthropic/claude-haiku-5.5');
   });
 
   it('does not reject modelOverride "auto" — it streams normally', async () => {
