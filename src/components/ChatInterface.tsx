@@ -1242,6 +1242,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     <div className='app-with-sidebar'>
       {!chatsHidden && (
         <ConversationSidebar
+          preferenceScope={user?.id ?? null}
           conversations={conversations}
           selectedId={selectedConversationId}
           isLoading={conversationsLoading}
