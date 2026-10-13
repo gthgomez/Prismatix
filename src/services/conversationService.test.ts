@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createClient } from '@supabase/supabase-js';
 import {
   deleteConversation,
   listConversations,
@@ -110,6 +111,33 @@ function imageRef(storageRef: string, ordinal = 0): AttachmentRef {
 }
 
 describe('listConversations', () => {
+  it('bounds the nested preview query independently of conversation pagination', async () => {
+    let requestUrl = '';
+    const client = createClient('https://fixture.invalid', 'synthetic-public-key', {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input) => {
+        requestUrl = String(input);
+        return new Response(JSON.stringify([{ id: CONV, title: null, last_activity_at: '2026-10-13', messages: [] }]), { headers: { 'Content-Type': 'application/json' } });
+      } },
+    });
+    const rows = await listConversations(client, { limit: 20 });
+    const params = new URL(requestUrl).searchParams;
+    expect(params.get('messages.limit')).toBe('1');
+    expect(params.get('messages.order')).toBe('created_at.asc,id.asc');
+    expect(params.get('messages.role')).toBe('eq.user');
+    expect(params.get('limit')).toBe('20');
+    expect(params.get('order')).toBe('last_activity_at.desc,id.desc');
+    expect(params.get('select')).not.toContain('!inner');
+    expect(rows).toEqual([{ id: CONV, title: null, lastActivityAt: '2026-10-13' }]);
+  });
+  it('uses the first user message for legacy placeholder titles without replacing renamed chats', async () => {
+    const fake = makeClient({ conversations: [{ data: [
+      { id: CONV, title: 'New Chat', last_activity_at: '2026-10-13', messages: [{ content: '  Compare\n two approaches  ' }] },
+      { id: MSG, title: 'My chosen title', last_activity_at: '2026-10-12', messages: [{ content: 'Original prompt' }] },
+    ], error: null }] });
+    const result = await listConversations(fake.client as never);
+    expect(result.map(row => row.title)).toEqual(['Compare two approaches', 'My chosen title']);
+  });
   it('maps rows and orders by last activity then id descending', async () => {
     const fake = makeClient({
       conversations: [

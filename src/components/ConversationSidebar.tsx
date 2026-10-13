@@ -36,6 +36,17 @@ function formatActivity(value: string): string {
   return new Date(timestamp).toLocaleDateString();
 }
 
+function activityGroup(value: string): string {
+  const date = new Date(value);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date >= today) return 'Today';
+  if (date >= yesterday) return 'Yesterday';
+  return 'Earlier';
+}
+
 export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
   conversations,
   selectedId,
@@ -146,9 +157,13 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
           )}
 
         <ul className='conversation-list'>
-          {visibleConversations.map((conversation) => {
+          {visibleConversations.map((conversation, index) => {
             const isSelected = selectedId === conversation.id;
+            const group = activityGroup(conversation.lastActivityAt);
+            const startsGroup = index === 0 || activityGroup(visibleConversations[index - 1]!.lastActivityAt) !== group;
             return (
+              <React.Fragment key={conversation.id}>
+              {startsGroup && <li className='conversation-group-heading'>{group}</li>}
               <li
                 key={conversation.id}
                 className={`conversation-item ${isSelected ? 'selected' : ''}`}
@@ -193,7 +208,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
                     aria-label={`Rename ${conversation.title ?? 'conversation'}`}
                     title='Rename chat'
                   >
-                    ✎
+                    <svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'><path d='m16 3 5 5-12 12-6 1 1-6Z' /></svg>
                   </button>
                 )}
                 <button
@@ -204,9 +219,10 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
                   aria-label={`Delete ${conversation.title ?? 'conversation'}`}
                   title='Delete chat'
                 >
-                  🗑
+                  <svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'><path d='M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7' /></svg>
                 </button>
               </li>
+              </React.Fragment>
             );
           })}
         </ul>

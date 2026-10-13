@@ -1305,6 +1305,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <h1>Prismatix</h1>
             </div>
           </div>
+          <div className='header-actions'>
           {contextStatus && (
             <details className='context-disclosure'>
               <summary title='View conversation context usage' aria-label='Conversation context usage'>
@@ -1314,7 +1315,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <div className='context-popover'><ContextStatus contextStatus={contextStatus} /></div>
             </details>
           )}
-          <div className='header-actions'>
             {catalogSkewed && (
               <span
                 className='catalog-skew-hint'
@@ -1386,7 +1386,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               )}
             </div>
 
-            <button type='button' className='header-button' aria-haspopup='dialog' aria-expanded={showMemorySettings} onClick={() => setShowMemorySettings(true)}>Memory{lastRecall?.conversationId === selectedConversationId ? ` · ${lastRecall.hits} recalled` : ''}</button>
+            <button type='button' className='header-button memory-trigger' aria-label={lastRecall?.conversationId === selectedConversationId ? `Memory: ${lastRecall.hits} recalled` : 'Memory'} aria-haspopup='dialog' aria-expanded={showMemorySettings} onClick={() => setShowMemorySettings(true)}>
+              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'><rect x='5' y='5' width='14' height='14' rx='3' /><path d='M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4' /></svg>
+              <span className='memory-trigger-label'>Memory</span>
+              {lastRecall?.conversationId === selectedConversationId && <span className='memory-recall-count' aria-hidden='true'>{lastRecall.hits}</span>}
+            </button>
             <button
               type='button'
               onClick={() => setShowProviderSettings(true)}
@@ -1551,7 +1555,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   }}
                 >
                   <div className='message-avatar'>
-                    {msg.role === 'user' ? '👤' : '🤖'}
+                    <svg width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'>
+                      {msg.role === 'user' ? <><circle cx='12' cy='8' r='4' /><path d='M4 21v-2a8 8 0 0 1 16 0v2' /></> : <><rect x='4' y='7' width='16' height='13' rx='3' /><path d='M12 3v4m-4 6h1m6 0h1m-7 4h6' /></>}
+                    </svg>
                   </div>
                   <div className='message-content'>
                     <div className='message-header'>
@@ -1841,9 +1847,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           )}
           {streamOutcome && (
             <div className='stream-outcome' role='status' aria-live='polite'>
-              {streamOutcome.status === 'cancelled'
-                ? `Cancelled${streamOutcome.executionId ? ` · execution ${streamOutcome.executionId.slice(0, 8)}` : ''}`
-                : `Receipt · ${streamOutcome.settlementState ?? 'pending'}${streamOutcome.executionId ? ` · execution ${streamOutcome.executionId.slice(0, 8)}` : ''}`}
+              <span>{streamOutcome.status === 'cancelled' ? 'Response stopped' : streamOutcome.settlementState === 'settled' ? 'Usage recorded' : streamOutcome.settlementState === 'released' ? 'Reservation released' : 'Usage recording pending'}</span>
+              <details className='receipt-details'><summary>Receipt details</summary><div>
+                Settlement: {streamOutcome.settlementState ?? 'pending'}
+                {streamOutcome.executionId && <span>Execution: {streamOutcome.executionId}</span>}
+              </div></details>
             </div>
           )}
           {/* PX07: bounded-context indicator — older messages are excluded. */}
