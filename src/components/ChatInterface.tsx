@@ -121,6 +121,22 @@ const PROMPT_STARTERS: PromptStarter[] = [
   },
 ];
 
+/**
+ * Accessible name + tooltip for the send control, keyed by why it is blocked
+ * (`null` reason = ready). Keeps the disabled state self-explanatory instead of
+ * leaving a generic "Send message" label on an inert control.
+ */
+const SEND_BLOCKED_TITLES: Record<
+  'ready' | 'empty' | 'streaming' | 'video' | 'invalid',
+  string
+> = {
+  ready: 'Send message',
+  empty: 'Send message — type a message or attach a file first',
+  streaming: 'Send message — waiting for the current response; use Stop to cancel',
+  video: 'Send message — video is still processing',
+  invalid: 'Send message — resolve the routing issue below first',
+};
+
 function shouldTreatAsVideoAttachment(file: FileUploadPayload): boolean {
   if (file.kind === 'video') return true;
   if (typeof file.mediaType === 'string' && file.mediaType.toLowerCase().startsWith('video/')) {
@@ -1232,6 +1248,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // Server-selected IDs can be ahead of the deployed catalog; degrade, never crash.
   const modelConfig = getCatalogEntry(currentModel);
   const composerValidationView = getComposerSendValidationView(sendValidationError);
+  // Why the composer cannot send right now, surfaced on the send control itself
+  // so its disabled state is self-explanatory and never looks actionable.
+  const sendBlockedReason = isStreaming
+    ? 'streaming'
+    : hasPendingVideoUploads
+      ? 'video'
+      : sendValidationError
+        ? 'invalid'
+        : !input.trim() && draftAttachments.length === 0
+          ? 'empty'
+          : null;
 
   const openRoutingDebateMenu = () => {
     setShowUserMenu(false);
@@ -1275,6 +1302,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               className='header-button chats-toggle-button'
               onClick={toggleChatsHidden}
               aria-pressed={!chatsHidden}
+              aria-label={chatsHidden ? 'Show past chats' : 'Hide past chats'}
+              data-tooltip={chatsHidden ? 'Show past chats' : 'Hide past chats'}
               title={chatsHidden ? 'Show past chats' : 'Hide past chats'}
             >
               <svg
@@ -1395,9 +1424,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <button
               type='button'
               onClick={() => setShowProviderSettings(true)}
-              className='header-button'
+              className='header-button provider-plugins-button'
               title='Provider plug-ins'
               aria-label='Provider plug-ins'
+              data-tooltip='Provider plug-ins'
               aria-haspopup='dialog'
               aria-expanded={showProviderSettings}
             >
@@ -1785,10 +1815,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               onClick={() => {
                 void handleSend();
               }}
-              disabled={(!input.trim() && draftAttachments.length === 0) || isStreaming || hasPendingVideoUploads}
+              disabled={sendBlockedReason !== null}
               className='send-button'
-              aria-label='Send message'
-              title={hasPendingVideoUploads ? 'Video processing in progress' : 'Send message'}
+              data-state={sendBlockedReason ?? 'ready'}
+              aria-label={SEND_BLOCKED_TITLES[sendBlockedReason ?? 'ready']}
+              title={SEND_BLOCKED_TITLES[sendBlockedReason ?? 'ready']}
             >
               {isWaitingFirstToken ? <div className='loading-spinner' /> : (
                 <svg
@@ -1825,6 +1856,44 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </button>
             )}
           </div>
+
+          {/* Routing context at the point of composing. The automatic default is
+              already stated by the sticky header pill, so this only appears when
+              the user has changed routing (manual override or debate) — it never
+              predicts which model Auto will pick for the next message. */}
+          {manualModelOverride && (
+            <div className='composer-routing-context'>
+              <button
+                type='button'
+                className='composer-routing-chip'
+                onClick={openRoutingDebateMenu}
+                title={`Routing & debate — manual override: ${modelConfig.name}`}
+              >
+                <span className='composer-routing-chip-label'>Routing</span>
+                <span className='composer-routing-chip-value' style={{ color: modelConfig.color }}>
+                  {modelConfig.name}
+                </span>
+                <span className='composer-routing-chip-tag'>Manual</span>
+                {debateSelection !== 'off' && (
+                  <span className='composer-routing-chip-tag debate'>Debate</span>
+                )}
+              </button>
+            </div>
+          )}
+          {!manualModelOverride && debateSelection !== 'off' && (
+            <div className='composer-routing-context'>
+              <button
+                type='button'
+                className='composer-routing-chip'
+                onClick={openRoutingDebateMenu}
+                title='Routing & debate — model chosen automatically, debate framing enabled'
+              >
+                <span className='composer-routing-chip-label'>Routing</span>
+                <span className='composer-routing-chip-value'>Auto</span>
+                <span className='composer-routing-chip-tag debate'>Debate</span>
+              </button>
+            </div>
+          )}
 
           {messages.length === 0 && (
             <div className='prompt-starters-section' aria-label='Suggested starting points'>
