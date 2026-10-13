@@ -174,7 +174,12 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
                   <svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'><circle cx='5' cy='12' r='1.5' /><circle cx='12' cy='12' r='1.5' /><circle cx='19' cy='12' r='1.5' /></svg>
                 </button>}
                 {menuId === conversation.id && <div className='conversation-actions-menu' role='menu' aria-label={`Actions for ${title}`} ref={menuRef}
-                  onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setMenuId(null); }}
+                  onBlur={event => {
+                    const next = event.relatedTarget;
+                    const trigger = actionButtons.current.get(conversation.id);
+                    // A trigger click must toggle the state from before focus moved.
+                    if (!(next instanceof Node) || (!event.currentTarget.contains(next) && !trigger?.contains(next))) setMenuId(null);
+                  }}
                   onKeyDown={event => {
                     if (event.key === 'Escape') { event.preventDefault(); dismissMenu(true); }
                     const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));

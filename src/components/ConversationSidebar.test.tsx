@@ -67,6 +67,20 @@ describe('ConversationSidebar', () => {
     act(() => root.unmount()); container.remove();
   });
 
+  it('closes an open actions menu when its trigger receives pointer focus before click', () => {
+    const container = document.createElement('div'); document.body.append(container);
+    const root = renderInto(container, <ConversationSidebar conversations={CONVERSATIONS} selectedId={null} isLoading={false} onRename={noop} onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    const trigger = container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!;
+    act(() => trigger.click());
+    expect(document.activeElement).toBe(container.querySelector('[role="menuitem"]'));
+    // Native pointer clicks focus the trigger (and blur the menu) before click.
+    act(() => trigger.focus());
+    act(() => trigger.click());
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    act(() => root.unmount()); container.remove();
+  });
+
   it('isolates display preferences by account and clamps stored widths', () => {
     localStorage.setItem('prismatix:chat-list:user-a', JSON.stringify({ density: 'comfortable', width: 9999 }));
     const container = document.createElement('div');
