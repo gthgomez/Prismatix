@@ -1,9 +1,8 @@
 // ConversationSidebar.test.tsx
 // PX07: the sidebar lists conversations and wires select / New Chat / Delete.
 
-import { describe, expect, it, vi } from 'vitest';
-import type { ReactNode } from 'react';
-import { act } from 'react-dom/test-utils';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { ConversationSidebar } from './ConversationSidebar';
 import type { ConversationSummary } from '../services/conversationService';
@@ -32,6 +31,98 @@ const CONVERSATIONS: ConversationSummary[] = [
 function noop() {}
 
 describe('ConversationSidebar', () => {
+  afterEach(() => { vi.useRealTimers(); localStorage.clear(); });
+
+  it('does not label a chat from two calendar days ago as Yesterday', () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 9, 13, 10));
+    const container = document.createElement('div');
+    const root = renderInto(container, <ConversationSidebar conversations={[{ id: 'old', title: 'Older chat', lastActivityAt: new Date(2026, 9, 11, 23).toISOString() }]} selectedId={null} isLoading={false} onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    expect(container.querySelector('.conversation-item-activity')?.textContent).not.toBe('Yesterday');
+    act(() => root.unmount());
+  });
+
+  it('moves focus with arrow keys without opening another chat', () => {
+    const onSelect = vi.fn();
+    const container = document.createElement('div'); document.body.append(container);
+    const root = renderInto(container, <ConversationSidebar conversations={CONVERSATIONS} selectedId={null} isLoading={false} onSelect={onSelect} onNewChat={noop} onDelete={noop} />);
+    const buttons = container.querySelectorAll<HTMLButtonElement>('.conversation-item-button');
+    buttons[0]!.focus();
+    act(() => buttons[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(buttons[1]);
+    expect(onSelect).not.toHaveBeenCalled();
+    act(() => root.unmount()); container.remove();
+  });
+
+  it('keeps destructive actions in a menu and returns focus on Escape', () => {
+    const container = document.createElement('div'); document.body.append(container);
+    const root = renderInto(container, <ConversationSidebar conversations={CONVERSATIONS} selectedId={null} isLoading={false} onRename={noop} onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    expect(container.querySelector('.conversation-item-delete')).toBeNull();
+    const trigger = container.querySelector<HTMLButtonElement>('.conversation-actions-trigger');
+    expect(trigger).not.toBeNull();
+    act(() => trigger!.click());
+    expect(container.querySelector('[role="menu"]')).not.toBeNull();
+    act(() => container.querySelector('[role="menu"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    act(() => root.unmount()); container.remove();
+  });
+
+  it('isolates display preferences by account and clamps stored widths', () => {
+    localStorage.setItem('prismatix:chat-list:user-a', JSON.stringify({ density: 'comfortable', width: 9999 }));
+    const container = document.createElement('div');
+    const props = { conversations: CONVERSATIONS, selectedId: null, isLoading: false, onSelect: noop, onNewChat: noop, onDelete: noop };
+    const root = renderInto(container, <ConversationSidebar {...props} preferenceScope='user-a' />);
+    expect(container.querySelector('aside')?.getAttribute('data-density')).toBe('comfortable');
+    expect(container.querySelector('[role="separator"]')?.getAttribute('aria-valuenow')).toBe('360');
+    act(() => root.render(<ConversationSidebar {...props} preferenceScope='user-b' />));
+    expect(container.querySelector('aside')?.getAttribute('data-density')).toBe('compact');
+    expect(container.querySelector('[role="separator"]')?.getAttribute('aria-valuenow')).toBe('296');
+    act(() => root.unmount());
+  });
+
+  it('keeps the list usable when browser storage is unavailable', () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+    const container = document.createElement('div');
+    let root: Root | undefined;
+    try {
+      expect(() => { root = renderInto(container, <ConversationSidebar preferenceScope='user' conversations={CONVERSATIONS} selectedId={null} isLoading={false} onSelect={noop} onNewChat={noop} onDelete={noop} />); }).not.toThrow();
+      expect(container.querySelector('aside')?.getAttribute('data-density')).toBe('compact');
+    } finally { if (root) act(() => root!.unmount()); getItem.mockRestore(); }
+  });
+
+  it('persists keyboard resizing and density changes for the active account only', () => {
+    const container = document.createElement('div');
+    const props = { conversations: CONVERSATIONS, selectedId: null, isLoading: false, onSelect: noop, onNewChat: noop, onDelete: noop };
+    const root = renderInto(container, <ConversationSidebar {...props} preferenceScope='user-a' />);
+    act(() => container.querySelector('[role="separator"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })));
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-display-toggle')!.click());
+    const density = container.querySelector<HTMLSelectElement>('[aria-label="Chat row density"]')!;
+    act(() => { density.value = 'comfortable'; density.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(JSON.parse(localStorage.getItem('prismatix:chat-list:user-a')!)).toEqual({ width: 306, density: 'comfortable' });
+    act(() => root.render(<ConversationSidebar {...props} preferenceScope='user-b' />));
+    expect(localStorage.getItem('prismatix:chat-list:user-b')).toBeNull();
+    act(() => root.render(<ConversationSidebar {...props} preferenceScope='user-a' />));
+    expect(container.querySelector('aside')?.getAttribute('data-density')).toBe('comfortable');
+    expect(container.querySelector('[role="separator"]')?.getAttribute('aria-valuenow')).toBe('306');
+    act(() => root.unmount());
+  });
+
+  it('cancels rename with Escape and dismisses a menu after an outside pointer event', () => {
+    const onRename = vi.fn();
+    const container = document.createElement('div'); document.body.append(container);
+    const root = renderInto(container, <ConversationSidebar conversations={CONVERSATIONS} selectedId={null} isLoading={false} onRename={onRename} onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    act(() => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-item-rename')!.click());
+    const input = container.querySelector<HTMLInputElement>('.conversation-rename-input')!;
+    act(() => setNativeValue(input, 'Discard this rename'));
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+    expect(onRename).not.toHaveBeenCalled();
+    expect(container.querySelector('.conversation-rename-input')).toBeNull();
+    act(() => root.unmount()); container.remove();
+  });
   it('groups chats by local calendar day while preserving selection order', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 9, 13, 12));
@@ -41,7 +132,7 @@ describe('ConversationSidebar', () => {
       { id: 'yesterday', title: 'Yesterday chat', lastActivityAt: new Date(2026, 9, 12, 23).toISOString() },
       { id: 'older', title: 'Older chat', lastActivityAt: new Date(2026, 9, 10, 12).toISOString() },
     ]} selectedId='today' isLoading={false} onSelect={noop} onNewChat={noop} onDelete={noop} />);
-    expect(Array.from(container.querySelectorAll('.conversation-group-heading')).map(node => node.textContent)).toEqual(['Today', 'Yesterday', 'Earlier']);
+    expect(Array.from(container.querySelectorAll('.conversation-group-heading')).map(node => node.textContent)).toEqual(['Today', 'Yesterday', 'Last 7 days']);
     act(() => root.unmount());
     vi.useRealTimers();
   });
@@ -113,7 +204,8 @@ describe('ConversationSidebar', () => {
     act(() => container.querySelector<HTMLButtonElement>('.conversation-new-button')!.click());
     expect(onNewChat).toHaveBeenCalledTimes(1);
 
-    act(() => container.querySelectorAll<HTMLButtonElement>('.conversation-item-delete')[0]!.click());
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-item-delete')!.click());
     expect(onDelete).toHaveBeenCalledWith(CONVERSATIONS[0]!.id);
 
     act(() => root.unmount());
@@ -248,6 +340,7 @@ describe('ConversationSidebar', () => {
       />,
     );
 
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
     const renameBtn = container.querySelector<HTMLButtonElement>('.conversation-item-rename')!;
     expect(renameBtn).not.toBeNull();
     act(() => renameBtn.click());
@@ -260,6 +353,7 @@ describe('ConversationSidebar', () => {
     });
 
     expect(onRename).toHaveBeenCalledWith(CONVERSATIONS[0]!.id, 'Renamed chat');
+    expect(onRename).toHaveBeenCalledTimes(1);
     expect(container.querySelector('.conversation-rename-input')).toBeNull();
 
     act(() => root.unmount());
