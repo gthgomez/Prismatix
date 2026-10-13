@@ -258,7 +258,12 @@ export const ResetPassword: React.FC = () => {
           border: 1px solid var(--color-border);
           background: var(--color-bg);
           color: var(--color-text);
-          outline: none;
+        }
+
+        .reset-form input:focus-visible {
+          outline: 2px solid var(--color-focus, #65e8ff);
+          outline-offset: 2px;
+          border-color: var(--color-primary);
         }
 
         .reset-submit {

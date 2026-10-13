@@ -197,3 +197,25 @@ body {
     min-width: 44px !important;
   }
 }
+
+/* Touch devices: primary controls keep a ~44px target even when the viewport is
+   wide enough for the desktop layout (large phones, tablets, touch laptops in
+   tablet mode). Pointer-based devices are unaffected. */
+@media (hover: none), (pointer: coarse) {
+  .model-indicator-button,
+  .spend-pill,
+  .context-disclosure summary,
+  .conversation-new-button,
+  .conversation-sidebar-close,
+  .conversation-item-rename,
+  .conversation-item-delete {
+    min-height: 44px;
+  }
+
+  .model-indicator-button,
+  .conversation-sidebar-close,
+  .conversation-item-rename,
+  .conversation-item-delete {
+    min-width: 44px;
+  }
+}
