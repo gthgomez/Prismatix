@@ -130,6 +130,10 @@
   gap: 0.25rem;
 }
 
+.conversation-group-heading { padding: 0.75rem 0.5rem 0.25rem; font-size: 0.7rem; font-weight: 600; color: var(--color-text-muted); }
+.conversation-item-rename, .conversation-item-delete { min-width: 28px; min-height: 28px; display: flex; align-items: center; justify-content: center; }
+.conversation-item:focus-within .conversation-item-rename, .conversation-item:focus-within .conversation-item-delete { opacity: 1; }
+
 .conversation-item {
   display: flex;
   align-items: stretch;

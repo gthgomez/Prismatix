@@ -103,6 +103,8 @@
   background: var(--color-surface-elevated);
   backdrop-filter: none;
 }
+.chat-header .spend-pill-label { color: var(--color-text-muted); }
+.chat-header .spend-pill-state.idle { display: none; }
 
 .sidebar-toggle-button {
   display: none;
@@ -190,6 +192,7 @@
 
 .header-button {
   width: 40px; height: 40px;
+  flex-shrink: 0;
   border-radius: var(--radius-md);
   background: var(--color-border-subtle);
   border: 1px solid var(--color-border);
@@ -204,6 +207,13 @@
   color: var(--color-text);
   border-color: var(--color-text-muted);
 }
+
+.header-button.memory-trigger { width: auto; min-height: 44px; height: auto; padding: 0.5rem 0.75rem; gap: 0.5rem; white-space: nowrap; font-size: 0.8rem; }
+.memory-recall-count { min-width: 1.25rem; padding: 0 0.25rem; border-radius: var(--radius-full); background: var(--color-primary-dim); color: var(--color-content-on-selected); font-size: 0.75rem; }
+.receipt-details { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.25rem; }
+.receipt-details summary { cursor: pointer; min-height: 24px; width: fit-content; }
+.receipt-details div { padding: 0.5rem 0; overflow-wrap: anywhere; }
+.receipt-details span { display: block; }
 
 .model-selector-container { position: relative; }
 
@@ -1036,7 +1046,7 @@
 .card-name { font-weight: 700; color: var(--card-color); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .card-desc { font-size: 0.6rem; color: var(--color-text-muted); text-align: center; padding: 0 var(--spacing-xs); line-height: 1.4; }
 
-.messages-list { max-width: var(--max-content-width); margin: 0 auto; display: flex; flex-direction: column; gap: var(--spacing-lg); }
+.messages-list { max-width: min(var(--max-content-width), 52rem); margin: 0 auto; display: flex; flex-direction: column; gap: var(--spacing-lg); }
 
 .message { display: flex; gap: var(--spacing-md); animation: slideIn 0.3s ease-out; }
 
@@ -1049,7 +1059,7 @@
 }
 
 .message-user .message-avatar { background: var(--color-primary-dim); border: 1px solid rgba(78, 205, 196, 0.3); }
-.message-assistant .message-avatar { background: rgba(255, 107, 107, 0.1); border: 1px solid rgba(255, 107, 107, 0.3); }
+.message-assistant .message-avatar { background: var(--color-surface-elevated); border: 1px solid var(--color-border-strong); color: var(--color-primary); }
 
 .message-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--spacing-sm); }
 .message-header { display: flex; align-items: center; gap: var(--spacing-md); font-size: 0.75rem; margin-bottom: 2px; }
@@ -1852,7 +1862,7 @@
   .header-left { flex: 1 1 auto; }
   .header-actions {
     flex: 1 1 100%;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     max-width: 100%;
     justify-content: flex-end;
     gap: 0.5rem;
@@ -1874,6 +1884,11 @@
 }
 
 @container chat (max-width: 520px) {
+  .header-actions .model-selector-container { flex: 1 1 100%; order: -1; }
+  .header-actions .model-indicator-button { min-width: 44px; }
+  .memory-trigger-label { display: none; }
+  .header-button.memory-trigger { padding: 0.5rem; min-width: 44px; }
+  .header-actions .spend-pill-state.idle { display: none; }
   .header-brand-mark { display: none; }
   .header-actions { gap: 0.375rem; }
   .context-disclosure summary { min-width: 44px; min-height: 44px; }
@@ -2140,6 +2155,7 @@
 
 .provider-settings {
   width: min(32rem, calc(100vw - 2rem));
+  height: min(48rem, calc(100dvh - 2rem));
   max-height: min(48rem, calc(100dvh - 2rem));
   overflow-y: auto;
   padding: 1.25rem;
@@ -2166,6 +2182,8 @@
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface-elevated);
 }
+
+.provider-settings .provider-key-remove { color: var(--color-danger); }
 
 .provider-settings-close,
 .provider-key-save,

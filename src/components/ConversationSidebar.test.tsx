@@ -32,6 +32,19 @@ const CONVERSATIONS: ConversationSummary[] = [
 function noop() {}
 
 describe('ConversationSidebar', () => {
+  it('groups chats by local calendar day while preserving selection order', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 13, 12));
+    const container = document.createElement('div');
+    const root = renderInto(container, <ConversationSidebar conversations={[
+      { id: 'today', title: 'Today chat', lastActivityAt: new Date(2026, 9, 13, 1).toISOString() },
+      { id: 'yesterday', title: 'Yesterday chat', lastActivityAt: new Date(2026, 9, 12, 23).toISOString() },
+      { id: 'older', title: 'Older chat', lastActivityAt: new Date(2026, 9, 10, 12).toISOString() },
+    ]} selectedId='today' isLoading={false} onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    expect(Array.from(container.querySelectorAll('.conversation-group-heading')).map(node => node.textContent)).toEqual(['Today', 'Yesterday', 'Earlier']);
+    act(() => root.unmount());
+    vi.useRealTimers();
+  });
   it('renders the conversation list with titles and activity, marking selection', () => {
     const container = document.createElement('div');
     const root = renderInto(

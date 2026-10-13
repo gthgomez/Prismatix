@@ -174,7 +174,11 @@ export async function listConversations(
   const limit = options.limit ?? DEFAULT_LIST_LIMIT;
   let query = client
     .from('conversations')
-    .select('id, title, last_activity_at')
+    .select('id, title, last_activity_at, messages(content)')
+    .eq('messages.role', 'user')
+    .order('created_at', { ascending: true, referencedTable: 'messages' })
+    .order('id', { ascending: true, referencedTable: 'messages' })
+    .limit(1, { referencedTable: 'messages' })
     .order('last_activity_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(limit);
@@ -189,11 +193,16 @@ export async function listConversations(
   const { data, error } = await query;
   if (error) throw new Error(`list_conversations_failed: ${error.message ?? 'unknown'}`);
 
-  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
-    id: String(row.id),
-    title: typeof row.title === 'string' ? row.title : null,
-    lastActivityAt: String(row.last_activity_at),
-  }));
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
+    const title = typeof row.title === 'string' ? row.title : null;
+    const first = Array.isArray(row.messages) ? row.messages[0] as Record<string, unknown> | undefined : undefined;
+    const preview = typeof first?.content === 'string' ? first.content.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+    return {
+      id: String(row.id),
+      title: (!title?.trim() || title.trim() === 'New Chat') && preview ? preview : title,
+      lastActivityAt: String(row.last_activity_at),
+    };
+  });
 }
 
 /**

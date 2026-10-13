@@ -46,6 +46,20 @@ describe('ProviderSettings', () => {
     roots.splice(0).forEach((root) => act(() => root.unmount()));
   });
 
+  it('keeps reverse keyboard navigation inside the dialog from initial focus', () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    roots.push(renderInto(container, <ProviderSettings plugins={makePlugins(makeProvider(true))} onClose={vi.fn()} />));
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(document.activeElement).toBe(dialog);
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    act(() => dialog.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(container.querySelector('button:not(:disabled)'));
+    act(() => roots.pop()!.unmount());
+    container.remove();
+  });
+
   it('describes deployment-provided credentials only when configured', () => {
     for (const hasKey of [true, false]) {
       const container = document.createElement('div');

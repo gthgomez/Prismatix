@@ -52,7 +52,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
       const first = focusable[0]!;
       const last = focusable[focusable.length - 1]!;
       const active = document.activeElement;
-      if (e.shiftKey && (active === first || !panelRef.current.contains(active))) {
+      if (e.shiftKey && (active === first || active === panelRef.current || !panelRef.current.contains(active))) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && active === last) {
@@ -190,10 +190,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
                       aria-live='polite'
                     >
                       {!provider.hasKey
-                        ? 'No key saved'
-                        : provider.enabled
-                          ? 'Key saved · On'
-                          : 'Key saved · Off'}
+                        ? 'Key required'
+                        : 'Key saved'}
                     </div>
                     <div className='provider-key-row'>
                       <input
