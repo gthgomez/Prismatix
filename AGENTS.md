@@ -97,3 +97,11 @@ deno lint .\supabase\functions\router\
 - Name the exact files inspected.
 - If the task touches auth, routing, streaming, costs, or migrations, call out the risk before editing.
 - Do not call work complete without naming the checks actually run.
+
+## Cursor Cloud specific instructions
+
+- This VM is Linux. Use bash. The PowerShell snippets in Quick Commands are for Windows workstations; the same npm scripts and `deno check supabase/functions/router/index.ts` apply here.
+- Node on the image satisfies `package.json` `engines` (`^20.19.0 || >=22.12.0`). Do not reinstall Node. `deno` 2.9.7 is installed at `/usr/local/bin/deno` by the environment install script.
+- `npm run dev` listens on port 3000 (`vite.config.ts`). The environment start script launches it with `--host 0.0.0.0`. `server.open` is true; a missing display does not stop the server.
+- `/demo` and `/about` render without Supabase env vars. `/` throws `supabaseUrl is required` until `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_ROUTER_ENDPOINT` are set (see `.env.example`). Unit tests, `npm run type-check`, `npm run lint`, and `npm run build` do not need those values.
+- `deno check supabase/functions/router/index.ts` is the router gate that passes in this environment. `deno lint supabase/functions/router/` currently reports existing `no-explicit-any` findings in router sources; that is repository lint, not a missing toolchain.
