@@ -32,21 +32,6 @@ export function AuthenticatedApp() {
     return (
       <div className="app">
         <ResetPassword />
-
-        <style>{`
-          html, body, #root {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            overflow: auto;
-          }
-
-          .app {
-            height: 100%;
-            width: 100%;
-          }
-
-        `}</style>
       </div>
     );
   }
@@ -59,53 +44,6 @@ export function AuthenticatedApp() {
           <div className="loading-spinner-large" />
           <p>Initializing Prismatix...</p>
         </div>
-
-        <style>{`
-          .loading-screen {
-            height: calc(var(--app-vh, 1vh) * 100);
-            min-height: 100dvh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--color-bg);
-            font-family: var(--font-sans);
-          }
-
-          .loading-content {
-            text-align: center;
-            color: var(--color-text-dim);
-          }
-
-          .loading-logo {
-            font-size: 4rem;
-            margin-bottom: 1.5rem;
-            animation: float 3s ease-in-out infinite;
-          }
-
-          .loading-spinner-large {
-            width: 40px;
-            height: 40px;
-            margin: 0 auto 1rem;
-            border: 3px solid rgba(78, 205, 196, 0.2);
-            border-top-color: var(--color-primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-          }
-
-          .loading-content p {
-            font-size: 0.9rem;
-            color: var(--color-text-muted);
-          }
-
-          @keyframes float {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-10px); }
-          }
-
-          @keyframes spin {
-            to { transform: rotate(360deg); }
-          }
-        `}</style>
       </div>
     );
   }
@@ -119,21 +57,6 @@ export function AuthenticatedApp() {
           onSignInWithProvider={signInWithProvider}
           onResetPassword={resetPassword}
         />
-
-        <style>{`
-          html, body, #root {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            overflow: auto;
-          }
-
-          .app {
-            height: 100%;
-            width: 100%;
-          }
-
-        `}</style>
       </div>
     );
   }
@@ -141,21 +64,6 @@ export function AuthenticatedApp() {
   return (
     <div className="app">
       <ChatInterface user={user} onSignOut={signOut} />
-
-      <style>{`
-        html, body, #root {
-          margin: 0;
-          padding: 0;
-          height: 100%;
-          overflow: hidden;
-        }
-
-        .app {
-          height: 100%;
-          width: 100%;
-        }
-
-      `}</style>
     </div>
   );
 }
