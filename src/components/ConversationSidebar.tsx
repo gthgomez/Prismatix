@@ -29,6 +29,7 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
   preferenceScope, onClose, onRename, onSelect, onNewChat, onDelete }: ConversationSidebarProps) {
   const [query, setQuery] = useState('');
   const [menuId, setMenuId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const editSession = useRef<{ id: string; original: string } | null>(null);
@@ -52,7 +53,12 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
   const dismissMenu = (restoreFocus = false) => {
     if (restoreFocus && menuId) actionButtons.current.get(menuId)?.focus();
     setMenuId(null);
+    setConfirmDeleteId(null);
   };
+
+  useEffect(() => {
+    setConfirmDeleteId(null);
+  }, [menuId]);
 
   useEffect(() => {
     if (!menuId) return;
@@ -188,9 +194,23 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
                     if (next >= 0) { event.preventDefault(); buttons[next]?.focus(); }
                   }}>
                   {onRename && <button type='button' role='menuitem' className='conversation-item-rename' disabled={disabled}
-                    onClick={() => { editSession.current = { id: conversation.id, original: title }; setEditingId(conversation.id); setEditDraft(title); setMenuId(null); }}>Rename</button>}
-                  <button type='button' role='menuitem' className='conversation-item-delete' disabled={disabled}
-                    onClick={() => { dismissMenu(true); onDelete(conversation.id); }}>Delete chat</button>
+                    onClick={() => { editSession.current = { id: conversation.id, original: title }; setEditingId(conversation.id); setEditDraft(title); setMenuId(null); setConfirmDeleteId(null); }}>Rename</button>}
+                  <button
+                    type='button'
+                    role='menuitem'
+                    className={`conversation-item-delete ${confirmDeleteId === conversation.id ? 'confirm' : ''}`}
+                    disabled={disabled}
+                    onClick={() => {
+                      if (confirmDeleteId === conversation.id) {
+                        dismissMenu(true);
+                        onDelete(conversation.id);
+                      } else {
+                        setConfirmDeleteId(conversation.id);
+                      }
+                    }}
+                  >
+                    {confirmDeleteId === conversation.id ? 'Confirm delete?' : 'Delete chat'}
+                  </button>
                 </div>}
               </li>
             </React.Fragment>;

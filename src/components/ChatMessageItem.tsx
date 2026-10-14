@@ -17,31 +17,30 @@ export interface ChatMessageItemProps {
   message: Message;
   index: number;
   isStreaming: boolean;
-  isLastMessage: boolean;
   isWaitingFirstToken: boolean;
   defaultModelColor: string;
   isMetadataExpanded: boolean;
-  onToggleMetadata: () => void;
-  messageRef?: (el: HTMLDivElement | null) => void;
+  onToggleMetadata: (index: number) => void;
+  registerRef?: (index: number, el: HTMLDivElement | null) => void;
 }
 
 export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   message,
+  index,
   isStreaming,
-  isLastMessage,
   isWaitingFirstToken,
   defaultModelColor,
   isMetadataExpanded,
   onToggleMetadata,
-  messageRef,
+  registerRef,
 }) => {
   const modelPillMeta = message.model ? assistantModelPillDisplay(message) : null;
-  const isStreamingAssistant = isStreaming && isLastMessage && message.role === 'assistant';
+  const isStreamingAssistant = isStreaming && message.role === 'assistant';
 
   return (
     <div
       className={`message message-${message.role}`}
-      ref={messageRef}
+      ref={(el) => registerRef?.(index, el)}
     >
       <div className='message-avatar'>
         <svg width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'>
@@ -69,7 +68,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               <button
                 type='button'
                 className={`message-model-pill ${isMetadataExpanded ? 'expanded' : ''}`}
-                onClick={onToggleMetadata}
+                onClick={() => onToggleMetadata(index)}
                 title={modelPillMeta?.title}
               >
                 <span className='pill-text'>{modelPillMeta?.label}</span>

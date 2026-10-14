@@ -5,17 +5,10 @@ import React from 'react';
 import { AttachmentPreview } from './AttachmentPreview';
 import { FileUpload } from './FileUpload';
 import type { FileUploadPayload } from '../types';
-import type { SendBlockedReason } from './ChatInterface';
 import type { ComposerSendValidationView } from '../sendValidationPresentation';
-import type { StreamOutcomeState } from './ChatInterface';
 import type { DebateSelection } from '../debateMode';
-
-export interface PromptStarter {
-  title: string;
-  prompt: string;
-  icon?: string;
-  desc?: string;
-}
+import type { PromptStarter, SendBlockedReason, StreamOutcomeState } from './chatTypes';
+export type { PromptStarter };
 
 export interface ChatInputComposerProps {
   input: string;

@@ -1,7 +1,7 @@
 // src/components/ChatInterface.tsx
 // Main chat interface with multi-file upload support and model selector
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
 import { useContextManager } from '../hooks/useContextManager';
 import {
@@ -12,21 +12,19 @@ import {
 } from '../catalogSkew';
 import { ContextWarning } from './ContextWarning';
 import { ContextStatus } from './ContextStatus';
-import { FileUpload } from './FileUpload';
 import { BudgetGuard, evaluateBudget } from './BudgetGuard';
 import { CostEstimator } from './CostEstimator';
-import { CostBadge } from './CostBadge';
-import { PrismatixPulse } from './PrismatixPulse';
 import { SpendTracker } from './SpendTracker';
-import { ThinkingProcess } from './ThinkingProcess';
-import { DebateView } from './DebateView';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
-import { AttachmentPreview } from './AttachmentPreview';
 import { ConversationSidebar } from './ConversationSidebar';
-import { FormattedMessage } from './FormattedMessage';
 import { ChatBackdrop } from './ChatBackdrop';
 import { ChatMessageItem } from './ChatMessageItem';
 import { ChatInputComposer } from './ChatInputComposer';
+import {
+  type StreamOutcomeState,
+  type PromptStarter,
+  SEND_BLOCKED_TITLES,
+} from './chatTypes';
 import '../styles/ChatInterface.css';
 import {
   askPrismatix,
@@ -80,8 +78,6 @@ import { filterVisibleModels, isModelVisible } from '../providerRegistry';
 import { useProviderPlugins } from '../hooks/useProviderPlugins';
 import { ProviderSettings } from './ProviderSettings';
 import { MemorySettings } from './MemorySettings';
-import { assistantModelPillDisplay, buildRouteExplanationRows } from '../modelDisplay';
-import { RouteExplanationList } from './RouteExplanationList';
 import {
   getComposerSendValidationView,
   VIDEO_UI_DEBATE_SEND_ERROR,
@@ -91,7 +87,6 @@ import {
   getDebatePayload,
   hasReadyVideoAttachment,
   type DebateSelection,
-  shouldShowDebateBadges,
 } from '../debateMode';
 
 interface ChatInterfaceProps {
@@ -102,11 +97,6 @@ interface ChatInterfaceProps {
 const DAILY_BUDGET_LIMIT_USD = 2.0;
 const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
 const CHATS_HIDDEN_KEY = 'prismatix.sidebar.chatsHidden';
-
-interface PromptStarter {
-  title: string;
-  prompt: string;
-}
 
 const PROMPT_STARTERS: PromptStarter[] = [
   {
@@ -122,30 +112,6 @@ const PROMPT_STARTERS: PromptStarter[] = [
     prompt: 'Help me understand a topic step by step, using clear explanations and concrete examples. Ask what I want to learn.',
   },
 ];
-
-export type SendBlockedReason = 'empty' | 'streaming' | 'video' | 'invalid' | null;
-
-export interface StreamOutcomeState {
-  status: 'cancelled' | 'receipt';
-  executionId?: string;
-  settlementState?: string;
-}
-
-/**
- * Accessible name + tooltip for the send control, keyed by why it is blocked
- * (`null` reason = ready). Keeps the disabled state self-explanatory instead of
- * leaving a generic "Send message" label on an inert control.
- */
-export const SEND_BLOCKED_TITLES: Record<
-  'ready' | 'empty' | 'streaming' | 'video' | 'invalid',
-  string
-> = {
-  ready: 'Send message',
-  empty: 'Send message — type a message or attach a file first',
-  streaming: 'Send message — waiting for the current response; use Stop to cancel',
-  video: 'Send message — video is still processing',
-  invalid: 'Send message — resolve the routing issue below first',
-};
 
 function shouldTreatAsVideoAttachment(file: FileUploadPayload): boolean {
   if (file.kind === 'video') return true;
@@ -302,11 +268,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // terminal outcome surfaced to the user (cancelled, or the receipt state).
   const abortControllerRef = useRef<AbortController | null>(null);
   const executionIdRef = useRef<string | undefined>(undefined);
-  const [streamOutcome, setStreamOutcome] = useState<{
-    status: 'cancelled' | 'receipt';
-    executionId?: string;
-    settlementState?: string;
-  } | null>(null);
+  const [streamOutcome, setStreamOutcome] = useState<StreamOutcomeState | null>(null);
 
   // Scroll only when a new message bubble is created, and only if user is near bottom.
   useEffect(() => {
@@ -1255,6 +1217,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
   };
 
+  const handleToggleMetadata = useCallback((idx: number) => {
+    setExpandedMetadataIdx((prev) => (prev === idx ? null : idx));
+  }, []);
+
+  const registerMessageRef = useCallback((idx: number, el: HTMLDivElement | null) => {
+    messageRefs.current[idx] = el;
+  }, []);
+
   // Server-selected IDs can be ahead of the deployed catalog; degrade, never crash.
   const modelConfig = getCatalogEntry(currentModel);
   const composerValidationView = getComposerSendValidationView(sendValidationError);
@@ -1585,24 +1555,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           )
           : (
             <div className='messages-list'>
-              {messages.map((msg, idx) => (
-                <ChatMessageItem
-                  key={idx}
-                  message={msg}
-                  index={idx}
-                  isStreaming={isStreaming}
-                  isLastMessage={idx === messages.length - 1}
-                  isWaitingFirstToken={isWaitingFirstToken}
-                  defaultModelColor={modelConfig.color}
-                  isMetadataExpanded={expandedMetadataIdx === idx}
-                  onToggleMetadata={() =>
-                    setExpandedMetadataIdx(expandedMetadataIdx === idx ? null : idx)
-                  }
-                  messageRef={(el) => {
-                    messageRefs.current[idx] = el;
-                  }}
-                />
-              ))}
+              {messages.map((msg, idx) => {
+                const isLast = idx === messages.length - 1;
+                return (
+                  <ChatMessageItem
+                    key={idx}
+                    message={msg}
+                    index={idx}
+                    isStreaming={isStreaming && isLast}
+                    isWaitingFirstToken={isWaitingFirstToken && isLast}
+                    defaultModelColor={modelConfig.color}
+                    isMetadataExpanded={expandedMetadataIdx === idx}
+                    onToggleMetadata={handleToggleMetadata}
+                    registerRef={registerMessageRef}
+                  />
+                );
+              })}
               <div ref={messagesEndRef} />
             </div>
           )}

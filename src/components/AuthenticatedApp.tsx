@@ -30,7 +30,7 @@ export function AuthenticatedApp() {
 
   if (isRecoveryFlow()) {
     return (
-      <div className="app">
+      <div className="app app--scroll">
         <ResetPassword />
       </div>
     );
@@ -38,7 +38,7 @@ export function AuthenticatedApp() {
 
   if (isLoading) {
     return (
-      <div className="app loading-screen">
+      <div className="app app--chat loading-screen">
         <div className="loading-content">
           <div className="loading-logo">🤖</div>
           <div className="loading-spinner-large" />
@@ -50,7 +50,7 @@ export function AuthenticatedApp() {
 
   if (!isAuthenticated) {
     return (
-      <div className="app">
+      <div className="app app--scroll">
         <Auth
           onSignIn={signIn}
           onSignUp={signUp}
@@ -62,7 +62,7 @@ export function AuthenticatedApp() {
   }
 
   return (
-    <div className="app">
+    <div className="app app--chat">
       <ChatInterface user={user} onSignOut={signOut} />
     </div>
   );

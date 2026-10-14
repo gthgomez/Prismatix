@@ -108,4 +108,28 @@ describe('FormattedMessage', () => {
     expect(writeTextMock).toHaveBeenCalledWith('npm run test');
     expect(copyBtn.textContent).toBe('✓ Copied');
   });
+
+  it('renders multi-line blockquotes into a single blockquote element with line breaks', () => {
+    const quote = '> Line one of quote\n> Line two of quote';
+    root = render(<FormattedMessage content={quote} />);
+
+    const bq = container.querySelectorAll('blockquote.formatted-quote');
+    expect(bq.length).toBe(1);
+    expect(bq[0]?.textContent).toContain('Line one of quote');
+    expect(bq[0]?.textContent).toContain('Line two of quote');
+  });
+
+  it('renders markdown tables cleanly', () => {
+    const table = '| Header A | Header B |\n| --- | --- |\n| Cell 1 | Cell 2 |';
+    root = render(<FormattedMessage content={table} />);
+
+    const tableEl = container.querySelector('table.formatted-table');
+    expect(tableEl).not.toBeNull();
+    const ths = container.querySelectorAll('th');
+    expect(ths.length).toBe(2);
+    expect(ths[0]?.textContent).toBe('Header A');
+    const tds = container.querySelectorAll('td');
+    expect(tds.length).toBe(2);
+    expect(tds[0]?.textContent).toBe('Cell 1');
+  });
 });

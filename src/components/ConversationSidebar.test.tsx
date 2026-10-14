@@ -219,8 +219,51 @@ describe('ConversationSidebar', () => {
     expect(onNewChat).toHaveBeenCalledTimes(1);
 
     act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
-    act(() => container.querySelector<HTMLButtonElement>('.conversation-item-delete')!.click());
+    const deleteBtn = container.querySelector<HTMLButtonElement>('.conversation-item-delete')!;
+    // First click: prompts for confirmation, does not delete yet
+    act(() => deleteBtn.click());
+    expect(deleteBtn.textContent).toBe('Confirm delete?');
+    expect(deleteBtn.classList.contains('confirm')).toBe(true);
+    expect(onDelete).not.toHaveBeenCalled();
+
+    // Second click: commits deletion
+    act(() => deleteBtn.click());
     expect(onDelete).toHaveBeenCalledWith(CONVERSATIONS[0]!.id);
+
+    act(() => root.unmount());
+  });
+
+  it('resets delete confirmation when menu is closed with Escape', () => {
+    const onDelete = vi.fn();
+    const container = document.createElement('div');
+    const root = renderInto(
+      container,
+      <ConversationSidebar
+        conversations={CONVERSATIONS}
+        selectedId={null}
+        isLoading={false}
+        onSelect={noop}
+        onNewChat={noop}
+        onDelete={onDelete}
+      />,
+    );
+
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    const deleteBtn = container.querySelector<HTMLButtonElement>('.conversation-item-delete')!;
+    act(() => deleteBtn.click());
+    expect(deleteBtn.textContent).toBe('Confirm delete?');
+
+    // Dismiss with Escape
+    act(() => {
+      container.querySelector('[role="menu"]')!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      );
+    });
+
+    // Reopen menu: confirm state must be reset
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    expect(container.querySelector<HTMLButtonElement>('.conversation-item-delete')!.textContent).toBe('Delete chat');
+    expect(onDelete).not.toHaveBeenCalled();
 
     act(() => root.unmount());
   });
