@@ -55,4 +55,15 @@ describe('costSavingsCalculator', () => {
     expect(analysis.tokensPerSec).toBeUndefined();
     expect(analysis.isSettled).toBe(false);
   });
+
+  it('correctly marks free models with costUsd 0 as settled', () => {
+    const analysis = computeCostSavings({
+      model: 'deepseek-v4-flash-free',
+      costUsd: 0,
+      promptTokens: 100,
+      completionTokens: 50,
+    });
+    expect(analysis.actualCostUsd).toBe(0);
+    expect(analysis.isSettled).toBe(true);
+  });
 });

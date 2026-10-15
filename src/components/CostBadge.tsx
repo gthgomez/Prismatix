@@ -65,26 +65,20 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
   };
 
   return (
-    <span
-      ref={containerRef}
-      className={`message-model-override cost-badge-interactive ${isOpen ? 'popover-open' : ''}`}
-      title={cost.pricingVersion || 'cost'}
-      role='button'
-      tabIndex={0}
-      aria-haspopup='dialog'
-      aria-expanded={isOpen}
-      aria-label={`Cost: $${value.toFixed(4)} ${label}. Click for details`}
-      onClick={togglePopover}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          togglePopover(e);
-        }
-      }}
-    >
-      <span className='cost-badge-label'>
-        ${value.toFixed(4)} {label}
-      </span>
+    <span ref={containerRef} className='cost-badge-container'>
+      <button
+        type='button'
+        className={`message-model-override cost-badge-interactive ${isOpen ? 'popover-open' : ''}`}
+        title={cost.pricingVersion || 'cost'}
+        aria-haspopup='dialog'
+        aria-expanded={isOpen}
+        aria-label={`Cost: $${value.toFixed(4)} ${label}. Click for details`}
+        onClick={togglePopover}
+      >
+        <span className='cost-badge-label'>
+          ${value.toFixed(4)} {label}
+        </span>
+      </button>
 
       {isOpen && (
         <div

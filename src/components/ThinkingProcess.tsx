@@ -91,73 +91,71 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
 
   return (
     <div className={`thinking-process ${isExpanded ? 'expanded' : 'collapsed'} ${isStreaming ? 'is-streaming' : ''}`}>
-      <button
-        type='button'
-        className='thinking-process-header'
-        onClick={toggleAccordion}
-        aria-expanded={isExpanded}
-        aria-label={isStreaming ? 'Streaming thinking process' : 'Toggle thinking process'}
-      >
-        <span className='thinking-header-left'>
-          {isStreaming ? (
-            <span className='thinking-beacon' aria-hidden='true' />
-          ) : (
+      <div className='thinking-process-header-bar'>
+        <button
+          type='button'
+          className='thinking-process-header'
+          onClick={toggleAccordion}
+          aria-expanded={isExpanded}
+          aria-label={isStreaming ? 'Streaming thinking process' : 'Toggle thinking process'}
+        >
+          <span className='thinking-header-left'>
+            {isStreaming ? (
+              <span className='thinking-beacon' aria-hidden='true' />
+            ) : (
+              <svg
+                className='thinking-icon'
+                width='14'
+                height='14'
+                viewBox='0 0 24 24'
+                fill='none'
+                stroke='currentColor'
+                strokeWidth='2'
+                aria-hidden='true'
+              >
+                <circle cx='12' cy='12' r='10' />
+                <path d='M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3' />
+                <line x1='12' y1='17' x2='12.01' y2='17' />
+              </svg>
+            )}
+            <span className='thinking-title'>
+              {isStreaming ? 'Thinking' : 'Thought process'}
+              {displaySeconds ? ` (${displaySeconds})` : ''}
+            </span>
+          </span>
+
+          <span className='thinking-header-right'>
             <svg
-              className='thinking-icon'
-              width='14'
-              height='14'
+              className={`thinking-chevron ${isExpanded ? 'open' : ''}`}
+              width='12'
+              height='12'
               viewBox='0 0 24 24'
               fill='none'
               stroke='currentColor'
-              strokeWidth='2'
+              strokeWidth='2.5'
+              strokeLinecap='round'
+              strokeLinejoin='round'
               aria-hidden='true'
             >
-              <circle cx='12' cy='12' r='10' />
-              <path d='M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3' />
-              <line x1='12' y1='17' x2='12.01' y2='17' />
+              <polyline points='6 9 12 15 18 9' />
             </svg>
-          )}
-          <span className='thinking-title'>
-            {isStreaming ? 'Thinking' : 'Thought process'}
-            {displaySeconds ? ` (${displaySeconds})` : ''}
           </span>
-        </span>
+        </button>
 
-        <span className='thinking-header-right'>
-          {isExpanded && thoughts.length > 0 && (
-            <span
-              role='button'
-              tabIndex={0}
+        {isExpanded && thoughts.length > 0 && (
+          <div className='thinking-header-actions'>
+            <button
+              type='button'
               className={`thinking-copy-btn ${copied ? 'is-copied' : ''}`}
               onClick={handleCopyThoughts}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  void handleCopyThoughts(e as unknown as React.MouseEvent);
-                }
-              }}
               title={copied ? 'Copied thoughts' : 'Copy thoughts'}
               aria-label={copied ? 'Copied thoughts' : 'Copy thoughts'}
             >
               {copied ? '✓ Copied' : 'Copy'}
-            </span>
-          )}
-          <svg
-            className={`thinking-chevron ${isExpanded ? 'open' : ''}`}
-            width='12'
-            height='12'
-            viewBox='0 0 24 24'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='2.5'
-            strokeLinecap='round'
-            strokeLinejoin='round'
-            aria-hidden='true'
-          >
-            <polyline points='6 9 12 15 18 9' />
-          </svg>
-        </span>
-      </button>
+            </button>
+          </div>
+        )}
+      </div>
 
       {isExpanded && (
         <pre className='thinking-process-content' ref={contentRef} tabIndex={0}>

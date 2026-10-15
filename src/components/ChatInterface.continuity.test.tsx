@@ -199,4 +199,51 @@ describe('ChatInterface in-flight conversation load invalidation', () => {
     expect(costBadge).not.toBeNull();
     expect(costBadge?.textContent).toContain('$0.0001 final');
   });
+
+  it('recalls multimodal array prompt on ArrowUp', async () => {
+    writeSelectedConversation(USER_A.id, CONV_A);
+    vi.mocked(loadConversation).mockResolvedValue([
+      {
+        id: '66666666-6666-4666-8666-666666666666',
+        role: 'user',
+        content: [{ type: 'text', text: 'Explain quantum computing simply' }] as unknown as string,
+        createdAt: '2026-10-01T00:00:00Z',
+        attachments: [],
+      },
+    ]);
+
+    root = renderInto(container, <ChatInterface user={USER_A} onSignOut={onSignOut} />);
+    await flush();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>('textarea')!;
+    expect(textarea).not.toBeNull();
+    expect(textarea.value).toBe('');
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    });
+
+    expect(textarea.value).toBe('Explain quantum computing simply');
+  });
+
+  it('toggles model selector dropdown on Ctrl+K', async () => {
+    root = renderInto(container, <ChatInterface user={USER_A} onSignOut={onSignOut} />);
+    await flush();
+
+    expect(container.querySelector('.model-dropdown')).toBeNull();
+
+    // Trigger Ctrl+K
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+    });
+
+    expect(container.querySelector('.model-dropdown')).not.toBeNull();
+
+    // Trigger Ctrl+K again to dismiss
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+    });
+
+    expect(container.querySelector('.model-dropdown')).toBeNull();
+  });
 });

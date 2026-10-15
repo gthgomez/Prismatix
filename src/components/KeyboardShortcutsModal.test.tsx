@@ -64,4 +64,27 @@ describe('KeyboardShortcutsModal', () => {
       root.unmount();
     });
   });
+
+  it('stops immediate propagation on Escape to prevent sibling window listeners from firing', async () => {
+    const onClose = vi.fn();
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<KeyboardShortcutsModal isOpen={true} onClose={onClose} />);
+    });
+
+    const siblingListener = vi.fn();
+    window.addEventListener('keydown', siblingListener);
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(siblingListener).not.toHaveBeenCalled();
+
+    window.removeEventListener('keydown', siblingListener);
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
