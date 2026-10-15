@@ -55,6 +55,7 @@ interface ModelSelectorDropdownProps {
   debateSelection: DebateSelection;
   sendValidationError: string | null;
   enabledProviders: ReadonlySet<ProviderId>;
+  userId?: string | null;
   onModelSelect: (model: RouterModel) => void;
   onClearOverride: () => void;
   onGeminiThinkingChange: (level: GeminiFlashThinkingLevel) => void;
@@ -72,6 +73,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   debateSelection,
   sendValidationError,
   enabledProviders,
+  userId,
   onModelSelect,
   onClearOverride,
   onGeminiThinkingChange,

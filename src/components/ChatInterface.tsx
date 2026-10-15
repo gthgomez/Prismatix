@@ -1379,6 +1379,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   debateSelection={debateSelection}
                   sendValidationError={sendValidationError}
                   enabledProviders={enabledProviders}
+                  userId={user?.id}
                   onModelSelect={handleModelSelect}
                   onClearOverride={clearModelOverride}
                   onGeminiThinkingChange={setGeminiFlashThinkingLevel}
@@ -1504,6 +1505,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             {showProviderSettings && (
               <ProviderSettings
                 plugins={providerPlugins}
+                userId={user?.id}
                 onClose={() => setShowProviderSettings(false)}
               />
             )}
@@ -1595,9 +1597,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onFileSelect={handleFileSelect}
         onMultipleFiles={handleMultipleFiles}
         manualModelOverride={manualModelOverride}
+        currentModel={currentModel}
         modelConfigName={modelConfig.name}
         modelConfigColor={modelConfig.color}
         debateSelection={debateSelection}
+        enabledProviders={enabledProviders}
+        userId={user?.id}
+        geminiFlashThinkingLevel={geminiFlashThinkingLevel}
+        onModelSelect={handleModelSelect}
+        onClearOverride={clearModelOverride}
+        onGeminiThinkingChange={setGeminiFlashThinkingLevel}
+        onOpenProviderSettings={() => setShowProviderSettings(true)}
         openRoutingDebateMenu={openRoutingDebateMenu}
         showPromptStarters={messages.length === 0}
         promptStarters={PROMPT_STARTERS}

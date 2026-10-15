@@ -3,24 +3,51 @@
 // the default first-class gateway. OpenCode configuration is reported by the
 // deployment and must not be presented as ready when no server key is set.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProviderPlugins } from '../hooks/useProviderPlugins';
 import { getProviderPlugin, isProviderId, type ProviderId } from '../providerRegistry';
+import { MODEL_ORDER, formatModelPriceLabel, getCatalogEntry } from '../modelCatalog';
+import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
+import { useModelPickerPreferences } from '../hooks/useModelPickerPreferences';
 
 interface ProviderSettingsProps {
   plugins: ProviderPlugins;
+  userId?: string | null;
   onClose: () => void;
 }
 
 const FOCUSABLE_SELECTOR =
   'button:not(:disabled), input:not(:disabled), [href], select, textarea, [tabindex]:not([tabindex="-1"])';
 
-export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onClose }) => {
+export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, userId, onClose }) => {
   const { providers, defaultProvider, loading, error, refresh } = plugins;
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [expandedModelsProvider, setExpandedModelsProvider] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+
+  const {
+    favoriteModels,
+    hiddenModels,
+    toggleFavorite,
+    setModelVisible,
+    isFavorite,
+    isModelHidden,
+  } = useModelPickerPreferences(userId);
+
+  // Group catalog models by provider
+  const modelsByProviderId = useMemo(() => {
+    const map = new Map<string, typeof MODEL_ORDER>();
+    for (const modelId of MODEL_ORDER) {
+      if (isHistoricModel(modelId)) continue;
+      const entry = getCatalogEntry(modelId);
+      const list = map.get(entry.provider) ?? [];
+      list.push(modelId);
+      map.set(entry.provider, list);
+    }
+    return map;
+  }, []);
 
   // Modal lifecycle: lock background scroll, move focus into the dialog, and
   // restore it when the dialog unmounts.
@@ -249,6 +276,79 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
                     {provider.defaultProvider ? 'Default gateway' : 'Set as default'}
                   </button>
                 )}
+
+                {/* Per-provider Model Management & Visibility */}
+                {(() => {
+                  const providerModels = modelsByProviderId.get(provider.id) ?? [];
+                  if (providerModels.length === 0) return null;
+                  const isExpanded = expandedModelsProvider === provider.id;
+                  const activeCount = providerModels.filter((m) => !isModelHidden(m)).length;
+
+                  return (
+                    <div className='provider-models-section'>
+                      <button
+                        type='button'
+                        className='provider-models-toggle'
+                        aria-expanded={isExpanded}
+                        onClick={() =>
+                          setExpandedModelsProvider((curr) =>
+                            curr === provider.id ? null : provider.id,
+                          )
+                        }
+                      >
+                        <span className='provider-models-toggle-title'>
+                          Models ({activeCount} active / {providerModels.length} available)
+                        </span>
+                        <span className='provider-models-toggle-chevron' aria-hidden='true'>
+                          {isExpanded ? '▴' : '▾'}
+                        </span>
+                      </button>
+
+                      {isExpanded && (
+                        <div className='provider-models-list' role='region' aria-label={`${provider.label} models`}>
+                          {providerModels.map((modelId) => {
+                            const config = getCatalogEntry(modelId);
+                            const visible = !isModelHidden(modelId);
+                            const fav = isFavorite(modelId);
+
+                            return (
+                              <div key={modelId} className='provider-model-item'>
+                                <label className='provider-model-checkbox-label'>
+                                  <input
+                                    type='checkbox'
+                                    className='provider-model-checkbox'
+                                    checked={visible}
+                                    onChange={(e) => setModelVisible(modelId, e.target.checked)}
+                                    aria-label={`Enable ${config.shortName}`}
+                                  />
+                                  <span className='provider-model-icon' aria-hidden='true'>
+                                    {config.icon}
+                                  </span>
+                                  <div className='provider-model-item-info'>
+                                    <span className='provider-model-name'>{config.shortName}</span>
+                                    <span className='provider-model-price'>
+                                      {formatModelPriceLabel(modelId)}
+                                    </span>
+                                  </div>
+                                </label>
+
+                                <button
+                                  type='button'
+                                  className={`provider-model-star ${fav ? 'is-favorite' : ''}`}
+                                  title={fav ? 'Remove from pinned models' : 'Pin model to quick access'}
+                                  aria-label={fav ? `Unpin ${config.shortName}` : `Pin ${config.shortName}`}
+                                  onClick={() => toggleFavorite(modelId)}
+                                >
+                                  {fav ? '★' : '☆'}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
