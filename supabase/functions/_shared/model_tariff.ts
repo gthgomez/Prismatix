@@ -6,7 +6,7 @@
 // asOfDate policy: first-party rates carry the audit date; anything else is
 // isEstimated: true until verified.
 
-export const MODEL_TARIFF_VERSION = '2026-10-10-v11' as const;
+export const MODEL_TARIFF_VERSION = '2026-10-15-v12' as const;
 
 export interface TariffEntry {
   asOfDate?: number | string | boolean;
@@ -101,7 +101,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     outputRatePer1M: 5.0,
     cachedReadRatePer1M: 0.1,
     cachedWriteRatePer1M: 1.25,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -111,7 +111,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     outputRatePer1M: 25.0,
     cachedReadRatePer1M: 0.5,
     cachedWriteRatePer1M: 6.25,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -131,7 +131,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     outputRatePer1M: 10.0,
     cachedReadRatePer1M: 0.2,
     cachedWriteRatePer1M: 2.5,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -204,7 +204,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     offPeakInputRatePer1M: 0.22,
     offPeakOutputRatePer1M: 0.66,
     offPeakCachedReadRatePer1M: 0.007,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -212,7 +212,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
   'deepseek-v4-flash-free': {
     inputRatePer1M: 0.0,
     outputRatePer1M: 0.0,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-free',
     isEstimated: false,
     isEligibleForAutoRouting: false,
@@ -273,7 +273,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     inputRatePer1M: 1.5,
     outputRatePer1M: 7.5,
     cachedReadRatePer1M: 0.05,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -319,7 +319,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     longContextOutputRatePer1M: 1.8,
     longContextCachedReadRatePer1M: 0.04,
     longContextCachedWriteRatePer1M: 0.5,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -334,7 +334,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     longContextOutputRatePer1M: 45.0,
     longContextCachedReadRatePer1M: 1.0,
     longContextCachedWriteRatePer1M: 12.5,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -349,7 +349,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     longContextOutputRatePer1M: 18.0,
     longContextCachedReadRatePer1M: 0.4,
     longContextCachedWriteRatePer1M: 5.0,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -382,7 +382,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
     longContextInputRatePer1M: 4.0,
     longContextOutputRatePer1M: 12.0,
     longContextCachedReadRatePer1M: 1.0,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-official',
     isEstimated: false,
     isEligibleForAutoRouting: true,
@@ -398,7 +398,7 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
   'mimo-v2.5-free': {
     inputRatePer1M: 0.0,
     outputRatePer1M: 0.0,
-    asOfDate: '2026-08-16',
+    asOfDate: '2026-10-15',
     sourceRef: 'opencode-zen-free',
     isEstimated: false,
     isEligibleForAutoRouting: false,
