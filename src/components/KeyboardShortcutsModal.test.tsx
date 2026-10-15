@@ -1,0 +1,67 @@
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe('KeyboardShortcutsModal', () => {
+  let container: HTMLDivElement | null = null;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    if (container) {
+      document.body.removeChild(container);
+      container = null;
+    }
+  });
+
+  it('renders nothing when isOpen is false', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<KeyboardShortcutsModal isOpen={false} onClose={vi.fn()} />);
+    });
+
+    expect(container?.querySelector('.shortcuts-modal')).toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('renders shortcuts dialog and triggers onClose via close button and Escape', async () => {
+    const onClose = vi.fn();
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<KeyboardShortcutsModal isOpen={true} onClose={onClose} />);
+    });
+
+    const modal = container?.querySelector('.shortcuts-modal');
+    expect(modal).not.toBeNull();
+    expect(modal?.textContent).toContain('Keyboard Shortcuts');
+    expect(modal?.textContent).toContain('Start new chat');
+    expect(modal?.textContent).toContain('Toggle conversation sidebar');
+
+    const closeBtn = container?.querySelector('.shortcuts-close-button') as HTMLButtonElement;
+    expect(closeBtn).not.toBeNull();
+
+    await act(async () => {
+      closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Escape key
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(onClose).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+});

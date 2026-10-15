@@ -115,6 +115,9 @@ export interface MessageCost {
   estimatedUsd?: number;
   finalUsd?: number;
   pricingVersion?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  durationMs?: number;
 }
 
 export interface Message {

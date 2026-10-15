@@ -21,12 +21,49 @@ import { ChatBackdrop } from './ChatBackdrop';
 import { ChatMessageItem } from './ChatMessageItem';
 import { ScrollToBottomButton } from './ScrollToBottomButton';
 import { ChatInputComposer } from './ChatInputComposer';
+import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 import {
   type StreamOutcomeState,
   type PromptStarter,
   SEND_BLOCKED_TITLES,
 } from './chatTypes';
 import '../styles/ChatInterface.css';
+
+interface CapabilityPillar {
+  icon: string;
+  title: string;
+  description: string;
+  prompt: string;
+  isDebate?: boolean;
+}
+
+const CAPABILITY_PILLARS: CapabilityPillar[] = [
+  {
+    icon: '⚡',
+    title: 'Auto-Routed Development',
+    description: 'Architect an efficient solution. Prismatix auto-routes code generation to top-tier reasoning.',
+    prompt: 'Design a high-throughput event processing architecture in TypeScript with backpressure handling.',
+  },
+  {
+    icon: '⚖️',
+    title: 'Multi-Model Debate',
+    description: 'Have frontier models cross-examine an architectural decision or technical tradeoff.',
+    prompt: 'Debate the tradeoffs between event-sourcing vs. traditional relational schemas for financial auditing.',
+    isDebate: true,
+  },
+  {
+    icon: '🔍',
+    title: 'Deep Research & Analysis',
+    description: 'Deconstruct complex documentation, research papers, or distributed systems concepts.',
+    prompt: 'Analyze the consensus algorithms Raft vs. Paxos, highlighting edge cases in network partition recovery.',
+  },
+  {
+    icon: '💡',
+    title: 'Ideation & Build Planning',
+    description: 'Turn a raw product idea into an actionable, prioritized engineering roadmap.',
+    prompt: 'Create a 3-phase technical roadmap for building a real-time collaborative whiteboard.',
+  },
+];
 import {
   askPrismatix,
   DuplicateRequestError,
@@ -247,6 +284,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   });
   const [contextExcludedCount, setContextExcludedCount] = useState(0);
   const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const selectedConversationIdRef = useRef<string | null>(null);
   // Monotonic token so a stale conversation load can never overwrite the
   // messages of a newer selection (rapid A→B switching).
@@ -1099,6 +1137,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 estimatedUsd: costEstimateUsd,
                 finalUsd,
                 pricingVersion: costPricingVersion || computedCost.pricingVersion,
+                promptTokens,
+                completionTokens,
+                durationMs: Date.now() - streamStartMs,
               },
               thinkingLog: [...thinkingLog],
               thinkingDurationMs: Date.now() - streamStartMs,
@@ -1344,8 +1385,76 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
+    } else if (e.key === 'ArrowUp' && !input.trim() && messages.length > 0) {
+      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+      if (lastUserMsg && typeof lastUserMsg.content === 'string') {
+        e.preventDefault();
+        setInput(lastUserMsg.content);
+      }
     }
   };
+
+  const handleCapabilityCardClick = (card: CapabilityPillar) => {
+    setInput(card.prompt);
+    if (card.isDebate) {
+      setDebateSelection('general');
+    }
+    inputRef.current?.focus();
+  };
+
+  const handleNewChatRef = useRef(handleNewChat);
+  handleNewChatRef.current = handleNewChat;
+
+  useEffect(() => {
+    const handleGlobalShortcuts = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      const isInputFocused =
+        activeTag === 'input' ||
+        activeTag === 'textarea' ||
+        activeTag === 'select' ||
+        (document.activeElement as HTMLElement)?.isContentEditable;
+
+      if (e.key === 'Escape') {
+        if (isShortcutsOpen) {
+          setIsShortcutsOpen(false);
+          return;
+        }
+        if (isStreaming) {
+          handleStop();
+          return;
+        }
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault();
+        handleNewChatRef.current();
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        setSidebarOpen((prev) => !prev);
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        inputRef.current?.focus();
+        return;
+      }
+
+      if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey && !isInputFocused) {
+        e.preventDefault();
+        setIsShortcutsOpen((prev) => !prev);
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalShortcuts);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalShortcuts);
+    };
+  }, [isShortcutsOpen, isStreaming]);
 
   const handleBudgetCancel = () => {
     pendingActionRef.current = null;
@@ -1514,6 +1623,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </span>
             )}
             <SpendTracker refreshKey={spendRefreshKey} />
+            <button
+              type='button'
+              className='header-button shortcuts-toggle-button'
+              onClick={() => setIsShortcutsOpen((prev) => !prev)}
+              aria-label='Keyboard shortcuts'
+              title='Keyboard shortcuts (?)'
+            >
+              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'>
+                <rect x='2' y='4' width='20' height='16' rx='2' />
+                <path d='M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8' />
+              </svg>
+            </button>
 
             {/* Model Selector - CLICKABLE */}
             <div className='model-selector-container' ref={modelSelectorRef}>
@@ -1728,11 +1849,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         {messages.length === 0
           ? (
             <div className='empty-state'>
-              <div className='empty-state-badge'>A spectrum of possibilities</div>
-              <h2>What would you like<br />to <span>explore?</span></h2>
+              <div className='empty-state-badge'>Intelligent Orchestration</div>
+              <h2>Intelligent Orchestration<br />for <span>Every Turn</span></h2>
               <p>
-                Bring your ideas. Prismatix finds the right model for every turn.
+                Bring your ideas. Prismatix dynamically routes to the optimal model for speed, cost, and reasoning power.
               </p>
+
+              <div className='empty-state-capabilities'>
+                {CAPABILITY_PILLARS.map((card) => (
+                  <button
+                    key={card.title}
+                    type='button'
+                    className='capability-card'
+                    onClick={() => handleCapabilityCardClick(card)}
+                  >
+                    <div className='capability-card-header'>
+                      <span className='capability-card-icon' aria-hidden='true'>{card.icon}</span>
+                      <span className='capability-card-title'>{card.title}</span>
+                    </div>
+                    <p className='capability-card-desc'>{card.description}</p>
+                    <span className='capability-card-action'>Use this workflow →</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )
           : (
@@ -1824,6 +1963,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         totalCost={sessionCostTotal}
         finalCostUsd={finalMessageCost}
         routerPricingVersion={routerPricingVersion}
+      />
+
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsOpen}
+        onClose={() => setIsShortcutsOpen(false)}
       />
       </div>
     </div>

@@ -171,7 +171,14 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               )}
             </div>
           )}
-          <CostBadge cost={message.cost} />
+          <CostBadge
+            cost={message.cost}
+            model={message.model}
+            durationMs={message.thinkingDurationMs}
+            content={typeof message.content === 'string' ? message.content : undefined}
+            promptTokens={message.cost?.promptTokens}
+            completionTokens={message.cost?.completionTokens}
+          />
           <span className='message-time'>
             {new Date(message.timestamp).toLocaleTimeString()}
           </span>
@@ -244,6 +251,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
           <ThinkingProcess
             thoughts={message.thinkingLog}
             elapsedMs={message.thinkingDurationMs}
+            isStreaming={isStreamingAssistant}
           />
         )}
 
