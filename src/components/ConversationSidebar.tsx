@@ -43,8 +43,61 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
   const actionButtons = useRef(new Map<string, HTMLButtonElement>());
   const trimmedQuery = query.trim().toLowerCase();
   const visible = useMemo(() => conversations.filter(c => !trimmedQuery || (c.title ?? 'Untitled conversation').toLowerCase().includes(trimmedQuery)), [conversations, trimmedQuery]);
-  const now = new Date();
-  const rows = visible.map(conversation => ({ conversation, activity: describeChatActivity(conversation.lastActivityAt, now) }));
+  const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
+    try {
+      const key = `prismatix:pinned-chats:${preferenceScope ?? 'anonymous'}`;
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const togglePin = (id: string) => {
+    setPinnedIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id];
+      try {
+        const key = `prismatix:pinned-chats:${preferenceScope ?? 'anonymous'}`;
+        localStorage.setItem(key, JSON.stringify(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  };
+
+  const pinnedSet = useMemo(() => new Set(pinnedIds), [pinnedIds]);
+  const pinnedRows = useMemo(
+    () => {
+      const now = new Date();
+      return visible
+        .filter((c) => pinnedSet.has(c.id))
+        .map((conversation) => ({
+          conversation,
+          activity: describeChatActivity(conversation.lastActivityAt, now),
+          isPinned: true,
+        }));
+    },
+    [visible, pinnedSet],
+  );
+  const unpinnedRows = useMemo(
+    () => {
+      const now = new Date();
+      return visible
+        .filter((c) => !pinnedSet.has(c.id))
+        .map((conversation) => ({
+          conversation,
+          activity: describeChatActivity(conversation.lastActivityAt, now),
+          isPinned: false,
+        }));
+    },
+    [visible, pinnedSet],
+  );
+
+  const allRenderedRows = useMemo(
+    () => [...pinnedRows, ...unpinnedRows],
+    [pinnedRows, unpinnedRows],
+  );
 
   const updatePreferences = (next: ChatListPreferences) => {
     setPreferences(next);
@@ -110,7 +163,7 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
   };
 
   const navigateTitles = (event: React.KeyboardEvent, id: string) => {
-    const ids = visible.map(c => c.id);
+    const ids = allRenderedRows.map(r => r.conversation.id);
     const index = ids.indexOf(id);
     const target = event.key === 'Home' ? 0 : event.key === 'End' ? ids.length - 1
       : event.key === 'ArrowDown' ? Math.min(index + 1, ids.length - 1)
@@ -155,65 +208,337 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
         {!isLoading && conversations.length > 0 && visible.length === 0 && <div className='conversation-sidebar-status' role='status'>No matching chats</div>}
         {trimmedQuery && <div className='conversation-search-note'>Matching titles in loaded history</div>}
         <ul className='conversation-list'>
-          {rows.map(({ conversation, activity }, index) => {
-            const title = conversation.title?.trim() || 'Untitled conversation';
-            return <React.Fragment key={conversation.id}>
-              {(index === 0 || rows[index - 1]!.activity.group !== activity.group) && <li className='conversation-group-heading'>{activity.group}</li>}
-              <li className={`conversation-item ${selectedId === conversation.id ? 'selected' : ''} ${menuId === conversation.id ? 'has-menu' : ''}`}>
-                {editingId === conversation.id ? <input type='text' className='conversation-rename-input' aria-label='Rename chat' autoFocus
-                  maxLength={120} disabled={disabled} value={editDraft} onChange={event => setEditDraft(event.target.value)}
-                  onBlur={() => finishRename(true)} onKeyDown={event => {
-                    if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); finishRename(event.key === 'Enter'); }
-                  }} /> : <button type='button' className='conversation-item-button' disabled={disabled}
-                    ref={node => { if (node) titleButtons.current.set(conversation.id, node); else titleButtons.current.delete(conversation.id); }}
-                    aria-current={selectedId === conversation.id ? 'true' : undefined} title={title}
-                    onKeyDown={event => navigateTitles(event, conversation.id)}
-                    onClick={() => { setMenuId(null); onSelect(conversation.id); onClose?.(); }}>
-                    <span className='conversation-item-title'>{title}</span>
-                    <span className='conversation-item-activity' title={activity.full}>{activity.label}</span>
-                  </button>}
-                {editingId !== conversation.id && <button type='button' className='conversation-actions-trigger' disabled={disabled}
-                  ref={node => { if (node) actionButtons.current.set(conversation.id, node); else actionButtons.current.delete(conversation.id); }}
-                  aria-label={`Actions for ${title}`} aria-haspopup='menu' aria-expanded={menuId === conversation.id}
-                  onClick={() => setMenuId(previous => previous === conversation.id ? null : conversation.id)}
-                  onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuId(conversation.id); } }}>
-                  <svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'><circle cx='5' cy='12' r='1.5' /><circle cx='12' cy='12' r='1.5' /><circle cx='19' cy='12' r='1.5' /></svg>
-                </button>}
-                {menuId === conversation.id && <div className='conversation-actions-menu' role='menu' aria-label={`Actions for ${title}`} ref={menuRef}
-                  onBlur={event => {
-                    const next = event.relatedTarget;
-                    const trigger = actionButtons.current.get(conversation.id);
-                    // A trigger click must toggle the state from before focus moved.
-                    if (!(next instanceof Node) || (!event.currentTarget.contains(next) && !trigger?.contains(next))) setMenuId(null);
-                  }}
-                  onKeyDown={event => {
-                    if (event.key === 'Escape') { event.preventDefault(); dismissMenu(true); }
-                    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
-                    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
-                    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : event.key === 'ArrowDown' ? (current + 1) % buttons.length : event.key === 'ArrowUp' ? (current + buttons.length - 1) % buttons.length : -1;
-                    if (next >= 0) { event.preventDefault(); buttons[next]?.focus(); }
-                  }}>
-                  {onRename && <button type='button' role='menuitem' className='conversation-item-rename' disabled={disabled}
-                    onClick={() => { editSession.current = { id: conversation.id, original: title }; setEditingId(conversation.id); setEditDraft(title); setMenuId(null); setConfirmDeleteId(null); }}>Rename</button>}
-                  <button
-                    type='button'
-                    role='menuitem'
-                    className={`conversation-item-delete ${confirmDeleteId === conversation.id ? 'confirm' : ''}`}
-                    disabled={disabled}
-                    onClick={() => {
-                      if (confirmDeleteId === conversation.id) {
-                        dismissMenu(true);
-                        onDelete(conversation.id);
-                      } else {
-                        setConfirmDeleteId(conversation.id);
-                      }
-                    }}
+          {pinnedRows.length > 0 && (
+            <>
+              <li className='conversation-group-heading conversation-pinned-heading'>📌 Pinned</li>
+              {pinnedRows.map(({ conversation, activity }) => {
+                const title = conversation.title?.trim() || 'Untitled conversation';
+                return (
+                  <li
+                    key={conversation.id}
+                    className={`conversation-item ${selectedId === conversation.id ? 'selected' : ''} ${menuId === conversation.id ? 'has-menu' : ''} pinned`}
                   >
-                    {confirmDeleteId === conversation.id ? 'Confirm delete?' : 'Delete chat'}
-                  </button>
-                </div>}
-              </li>
-            </React.Fragment>;
+                    {editingId === conversation.id ? (
+                      <input
+                        type='text'
+                        className='conversation-rename-input'
+                        aria-label='Rename chat'
+                        autoFocus
+                        maxLength={120}
+                        disabled={disabled}
+                        value={editDraft}
+                        onChange={(event) => setEditDraft(event.target.value)}
+                        onBlur={() => finishRename(true)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === 'Escape') {
+                            event.preventDefault();
+                            finishRename(event.key === 'Enter');
+                          }
+                        }}
+                      />
+                    ) : (
+                      <button
+                        type='button'
+                        className='conversation-item-button'
+                        disabled={disabled}
+                        ref={(node) => {
+                          if (node) titleButtons.current.set(conversation.id, node);
+                          else titleButtons.current.delete(conversation.id);
+                        }}
+                        aria-current={selectedId === conversation.id ? 'true' : undefined}
+                        title={title}
+                        onKeyDown={(event) => navigateTitles(event, conversation.id)}
+                        onClick={() => {
+                          setMenuId(null);
+                          onSelect(conversation.id);
+                          onClose?.();
+                        }}
+                      >
+                        <span className='conversation-item-title'>
+                          <span className='conversation-pin-badge' aria-label='Pinned'>📌 </span>
+                          {title}
+                        </span>
+                        <span className='conversation-item-activity' title={activity.full}>
+                          {activity.label}
+                        </span>
+                      </button>
+                    )}
+                    {editingId !== conversation.id && (
+                      <button
+                        type='button'
+                        className='conversation-actions-trigger'
+                        disabled={disabled}
+                        ref={(node) => {
+                          if (node) actionButtons.current.set(conversation.id, node);
+                          else actionButtons.current.delete(conversation.id);
+                        }}
+                        aria-label={`Actions for ${title}`}
+                        aria-haspopup='menu'
+                        aria-expanded={menuId === conversation.id}
+                        onClick={() => setMenuId((previous) => (previous === conversation.id ? null : conversation.id))}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowDown') {
+                            event.preventDefault();
+                            setMenuId(conversation.id);
+                          }
+                        }}
+                      >
+                        <svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'>
+                          <circle cx='5' cy='12' r='1.5' />
+                          <circle cx='12' cy='12' r='1.5' />
+                          <circle cx='19' cy='12' r='1.5' />
+                        </svg>
+                      </button>
+                    )}
+                    {menuId === conversation.id && (
+                      <div
+                        className='conversation-actions-menu'
+                        role='menu'
+                        aria-label={`Actions for ${title}`}
+                        ref={menuRef}
+                        onBlur={(event) => {
+                          const next = event.relatedTarget;
+                          const trigger = actionButtons.current.get(conversation.id);
+                          if (!(next instanceof Node) || (!event.currentTarget.contains(next) && !trigger?.contains(next))) setMenuId(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            dismissMenu(true);
+                          }
+                          const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+                          const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+                          const next =
+                            event.key === 'Home'
+                              ? 0
+                              : event.key === 'End'
+                              ? buttons.length - 1
+                              : event.key === 'ArrowDown'
+                              ? (current + 1) % buttons.length
+                              : event.key === 'ArrowUp'
+                              ? (current + buttons.length - 1) % buttons.length
+                              : -1;
+                          if (next >= 0) {
+                            event.preventDefault();
+                            buttons[next]?.focus();
+                          }
+                        }}
+                      >
+                        <button
+                          type='button'
+                          role='menuitem'
+                          className='conversation-item-pin'
+                          disabled={disabled}
+                          onClick={() => {
+                            togglePin(conversation.id);
+                            setMenuId(null);
+                          }}
+                        >
+                          Unpin chat
+                        </button>
+                        {onRename && (
+                          <button
+                            type='button'
+                            role='menuitem'
+                            className='conversation-item-rename'
+                            disabled={disabled}
+                            onClick={() => {
+                              editSession.current = { id: conversation.id, original: title };
+                              setEditingId(conversation.id);
+                              setEditDraft(title);
+                              setMenuId(null);
+                              setConfirmDeleteId(null);
+                            }}
+                          >
+                            Rename
+                          </button>
+                        )}
+                        <button
+                          type='button'
+                          role='menuitem'
+                          className={`conversation-item-delete ${confirmDeleteId === conversation.id ? 'confirm' : ''}`}
+                          disabled={disabled}
+                          onClick={() => {
+                            if (confirmDeleteId === conversation.id) {
+                              dismissMenu(true);
+                              onDelete(conversation.id);
+                            } else {
+                              setConfirmDeleteId(conversation.id);
+                            }
+                          }}
+                        >
+                          {confirmDeleteId === conversation.id ? 'Confirm delete?' : 'Delete chat'}
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </>
+          )}
+          {unpinnedRows.map(({ conversation, activity }, index) => {
+            const title = conversation.title?.trim() || 'Untitled conversation';
+            return (
+              <React.Fragment key={conversation.id}>
+                {(index === 0 || unpinnedRows[index - 1]!.activity.group !== activity.group) && (
+                  <li className='conversation-group-heading'>{activity.group}</li>
+                )}
+                <li
+                  className={`conversation-item ${selectedId === conversation.id ? 'selected' : ''} ${menuId === conversation.id ? 'has-menu' : ''}`}
+                >
+                  {editingId === conversation.id ? (
+                    <input
+                      type='text'
+                      className='conversation-rename-input'
+                      aria-label='Rename chat'
+                      autoFocus
+                      maxLength={120}
+                      disabled={disabled}
+                      value={editDraft}
+                      onChange={(event) => setEditDraft(event.target.value)}
+                      onBlur={() => finishRename(true)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === 'Escape') {
+                          event.preventDefault();
+                          finishRename(event.key === 'Enter');
+                        }
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type='button'
+                      className='conversation-item-button'
+                      disabled={disabled}
+                      ref={(node) => {
+                        if (node) titleButtons.current.set(conversation.id, node);
+                        else titleButtons.current.delete(conversation.id);
+                      }}
+                      aria-current={selectedId === conversation.id ? 'true' : undefined}
+                      title={title}
+                      onKeyDown={(event) => navigateTitles(event, conversation.id)}
+                      onClick={() => {
+                        setMenuId(null);
+                        onSelect(conversation.id);
+                        onClose?.();
+                      }}
+                    >
+                      <span className='conversation-item-title'>{title}</span>
+                      <span className='conversation-item-activity' title={activity.full}>
+                        {activity.label}
+                      </span>
+                    </button>
+                  )}
+                  {editingId !== conversation.id && (
+                    <button
+                      type='button'
+                      className='conversation-actions-trigger'
+                      disabled={disabled}
+                      ref={(node) => {
+                        if (node) actionButtons.current.set(conversation.id, node);
+                        else actionButtons.current.delete(conversation.id);
+                      }}
+                      aria-label={`Actions for ${title}`}
+                      aria-haspopup='menu'
+                      aria-expanded={menuId === conversation.id}
+                      onClick={() => setMenuId((previous) => (previous === conversation.id ? null : conversation.id))}
+                      onKeyDown={(event) => {
+                        if (event.key === 'ArrowDown') {
+                          event.preventDefault();
+                          setMenuId(conversation.id);
+                        }
+                      }}
+                    >
+                      <svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'>
+                        <circle cx='5' cy='12' r='1.5' />
+                        <circle cx='12' cy='12' r='1.5' />
+                        <circle cx='19' cy='12' r='1.5' />
+                      </svg>
+                    </button>
+                  )}
+                  {menuId === conversation.id && (
+                    <div
+                      className='conversation-actions-menu'
+                      role='menu'
+                      aria-label={`Actions for ${title}`}
+                      ref={menuRef}
+                      onBlur={(event) => {
+                        const next = event.relatedTarget;
+                        const trigger = actionButtons.current.get(conversation.id);
+                        if (!(next instanceof Node) || (!event.currentTarget.contains(next) && !trigger?.contains(next))) setMenuId(null);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') {
+                          event.preventDefault();
+                          dismissMenu(true);
+                        }
+                        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+                        const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+                        const next =
+                          event.key === 'Home'
+                            ? 0
+                            : event.key === 'End'
+                            ? buttons.length - 1
+                            : event.key === 'ArrowDown'
+                            ? (current + 1) % buttons.length
+                            : event.key === 'ArrowUp'
+                            ? (current + buttons.length - 1) % buttons.length
+                            : -1;
+                        if (next >= 0) {
+                          event.preventDefault();
+                          buttons[next]?.focus();
+                        }
+                      }}
+                    >
+                      <button
+                        type='button'
+                        role='menuitem'
+                        className='conversation-item-pin'
+                        disabled={disabled}
+                        onClick={() => {
+                          togglePin(conversation.id);
+                          setMenuId(null);
+                        }}
+                      >
+                        Pin chat
+                      </button>
+                      {onRename && (
+                        <button
+                          type='button'
+                          role='menuitem'
+                          className='conversation-item-rename'
+                          disabled={disabled}
+                          onClick={() => {
+                            editSession.current = { id: conversation.id, original: title };
+                            setEditingId(conversation.id);
+                            setEditDraft(title);
+                            setMenuId(null);
+                            setConfirmDeleteId(null);
+                          }}
+                        >
+                          Rename
+                        </button>
+                      )}
+                      <button
+                        type='button'
+                        role='menuitem'
+                        className={`conversation-item-delete ${confirmDeleteId === conversation.id ? 'confirm' : ''}`}
+                        disabled={disabled}
+                        onClick={() => {
+                          if (confirmDeleteId === conversation.id) {
+                            dismissMenu(true);
+                            onDelete(conversation.id);
+                          } else {
+                            setConfirmDeleteId(conversation.id);
+                          }
+                        }}
+                      >
+                        {confirmDeleteId === conversation.id ? 'Confirm delete?' : 'Delete chat'}
+                      </button>
+                    </div>
+                  )}
+                </li>
+              </React.Fragment>
+            );
           })}
         </ul>
       </div>

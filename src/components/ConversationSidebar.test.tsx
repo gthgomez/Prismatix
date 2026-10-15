@@ -415,4 +415,45 @@ describe('ConversationSidebar', () => {
 
     act(() => root.unmount());
   });
+
+  it('pins and unpins a conversation via the actions menu', () => {
+    const container = document.createElement('div');
+    const root = renderInto(
+      container,
+      <ConversationSidebar
+        conversations={CONVERSATIONS}
+        selectedId={null}
+        isLoading={false}
+        preferenceScope='pin-test'
+        onSelect={noop}
+        onNewChat={noop}
+        onDelete={noop}
+      />,
+    );
+
+    expect(container.querySelector('.conversation-pinned-heading')).toBeNull();
+
+    // Open menu on first chat and click 'Pin chat'
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    const pinBtn = container.querySelector<HTMLButtonElement>('.conversation-item-pin')!;
+    expect(pinBtn).not.toBeNull();
+    expect(pinBtn.textContent).toBe('Pin chat');
+    act(() => pinBtn.click());
+
+    // Pinned section heading and pin badge appear
+    expect(container.querySelector('.conversation-pinned-heading')).not.toBeNull();
+    expect(container.querySelector('.conversation-pin-badge')).not.toBeNull();
+
+    // Open menu on the pinned item and click 'Unpin chat'
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    const unpinBtn = container.querySelector<HTMLButtonElement>('.conversation-item-pin')!;
+    expect(unpinBtn.textContent).toBe('Unpin chat');
+    act(() => unpinBtn.click());
+
+    // Pinned heading goes away
+    expect(container.querySelector('.conversation-pinned-heading')).toBeNull();
+
+    act(() => root.unmount());
+  });
 });
+
