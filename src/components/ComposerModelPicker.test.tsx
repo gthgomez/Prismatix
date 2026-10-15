@@ -24,14 +24,14 @@ describe('ComposerModelPicker component', () => {
   });
 
   const mockPreferences = {
-    favoriteModels: ['claude-sonnet-5' as const, 'gemini-3.8-flash' as const],
+    favoriteModels: ['claude-haiku-5-5' as const, 'gemini-3.8-flash' as const],
     hiddenModels: [],
     activeProviderFilter: 'all' as const,
     toggleFavorite: vi.fn(),
     toggleModelVisibility: vi.fn(),
     setModelVisible: vi.fn(),
     setProviderFilter: vi.fn(),
-    isFavorite: vi.fn((m) => ['claude-sonnet-5', 'gemini-3.8-flash'].includes(m)),
+    isFavorite: vi.fn((m) => ['claude-haiku-5-5', 'gemini-3.8-flash'].includes(m)),
     isModelHidden: vi.fn(() => false),
   };
 
@@ -64,14 +64,14 @@ describe('ComposerModelPicker component', () => {
       root!.render(
         <ComposerModelPicker
           {...defaultProps}
-          manualModelOverride='claude-sonnet-5'
+          manualModelOverride='claude-haiku-5-5'
           onClearOverride={onClearOverride}
         />,
       );
     });
 
     const pill = container.querySelector<HTMLButtonElement>('.composer-model-pill')!;
-    expect(pill.textContent).toContain('Sonnet 5');
+    expect(pill.textContent).toContain('Haiku 5.5');
     expect(pill.textContent).toContain('Manual');
 
     const clearBtn = container.querySelector<HTMLButtonElement>('.composer-pill-clear-btn')!;

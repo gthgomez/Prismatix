@@ -27,7 +27,7 @@ describe('useModelPickerPreferences storage helpers', () => {
 
   it('writes and reads persisted preferences per user', () => {
     const user1Prefs: ModelPickerPreferences = {
-      favoriteModels: ['claude-sonnet-5', 'gpt-5.6-luna'],
+      favoriteModels: ['claude-haiku-5-5', 'gemini-3.8-flash'],
       hiddenModels: ['deepseek-v4-flash'],
       activeProviderFilter: 'anthropic',
     };

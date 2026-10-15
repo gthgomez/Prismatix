@@ -30,7 +30,7 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof ModelSelectorD
     sendValidationError: null,
     enabledProviders: new Set<ProviderId>(PROVIDER_PLUGIN_ORDER),
     preferences: {
-      favoriteModels: ['claude-sonnet-5' as const, 'gemini-3.8-flash' as const],
+      favoriteModels: ['claude-haiku-5-5' as const, 'gemini-3.8-flash' as const],
       hiddenModels: [],
       activeProviderFilter: 'all' as const,
       toggleFavorite: vi.fn(),

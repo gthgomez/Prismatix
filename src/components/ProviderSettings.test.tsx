@@ -42,14 +42,14 @@ function makePlugins(provider: ProviderState): ProviderPlugins {
 
 function makePreferences(overrides = {}) {
   return {
-    favoriteModels: ['claude-sonnet-5' as const, 'gemini-3.8-flash' as const],
+    favoriteModels: ['claude-haiku-5-5' as const, 'gemini-3.8-flash' as const],
     hiddenModels: [],
     activeProviderFilter: 'all' as const,
     toggleFavorite: vi.fn(),
     toggleModelVisibility: vi.fn(),
     setModelVisible: vi.fn(),
     setProviderFilter: vi.fn(),
-    isFavorite: vi.fn((m) => ['claude-sonnet-5', 'gemini-3.8-flash'].includes(m)),
+    isFavorite: vi.fn((m) => ['claude-haiku-5-5', 'gemini-3.8-flash'].includes(m)),
     isModelHidden: vi.fn(() => false),
     ...overrides,
   };
