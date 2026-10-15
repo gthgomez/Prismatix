@@ -254,15 +254,30 @@ body:has(.app--chat) {
   .draft-remove-btn,
   .spend-pill,
   .thinking-process-header,
-  .sidebar-toggle-button {
+  .sidebar-toggle-button,
+  .composer-model-pill,
+  .composer-thinking-pill,
+  .composer-debate-context-chip {
     min-height: 44px !important;
   }
 
   .header-button,
   .user-button,
   .draft-remove-btn,
-  .sidebar-toggle-button {
+  .sidebar-toggle-button,
+  .composer-pill-clear-btn {
     min-width: 44px !important;
+  }
+
+  /* Composer Model Popover turns into a responsive bottom sheet on phones */
+  .composer-model-popover {
+    bottom: max(0.5rem, env(safe-area-inset-bottom)) !important;
+    left: max(0.5rem, env(safe-area-inset-left)) !important;
+    right: max(0.5rem, env(safe-area-inset-right)) !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: min(75vh, 480px) !important;
+    border-radius: var(--radius-lg) !important;
   }
 }
 

@@ -1,13 +1,13 @@
-// src/components/ChatInputComposer.tsx
-// Input composer area for ChatInterface: textarea, attachments, upload, send/stop controls
-
 import React from 'react';
 import { AttachmentPreview } from './AttachmentPreview';
 import { FileUpload } from './FileUpload';
-import type { FileUploadPayload } from '../types';
+import { ComposerModelPicker } from './ComposerModelPicker';
+import type { FileUploadPayload, GeminiFlashThinkingLevel, RouterModel } from '../types';
 import type { ComposerSendValidationView } from '../sendValidationPresentation';
 import type { DebateSelection } from '../debateMode';
+import type { ProviderId } from '../providerRegistry';
 import type { PromptStarter, SendBlockedReason, StreamOutcomeState } from './chatTypes';
+import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
 export type { PromptStarter };
 
 export interface ChatInputComposerProps {
@@ -27,10 +27,16 @@ export interface ChatInputComposerProps {
   onClearAllAttachments: () => void;
   onFileSelect: (payload: FileUploadPayload) => void;
   onMultipleFiles: (payloads: FileUploadPayload[]) => void;
-  manualModelOverride: string | null;
-  modelConfigName: string;
-  modelConfigColor: string;
+  currentModel: RouterModel;
+  manualModelOverride: RouterModel | null;
   debateSelection: DebateSelection;
+  enabledProviders: ReadonlySet<ProviderId>;
+  preferences: ModelPickerPreferencesHook;
+  geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
+  onModelSelect: (model: RouterModel) => void;
+  onClearOverride: () => void;
+  onGeminiThinkingChange?: (level: GeminiFlashThinkingLevel) => void;
+  onOpenProviderSettings: () => void;
   openRoutingDebateMenu: () => void;
   showPromptStarters: boolean;
   promptStarters: PromptStarter[];
@@ -58,10 +64,16 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   onClearAllAttachments,
   onFileSelect,
   onMultipleFiles,
+  currentModel,
   manualModelOverride,
-  modelConfigName,
-  modelConfigColor,
   debateSelection,
+  enabledProviders,
+  preferences,
+  geminiFlashThinkingLevel,
+  onModelSelect,
+  onClearOverride,
+  onGeminiThinkingChange,
+  onOpenProviderSettings,
   openRoutingDebateMenu,
   showPromptStarters,
   promptStarters,
@@ -152,40 +164,23 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
           )}
         </div>
 
-        {/* Routing context at the point of composing */}
-        {manualModelOverride && (
-          <div className='composer-routing-context'>
-            <button
-              type='button'
-              className='composer-routing-chip'
-              onClick={openRoutingDebateMenu}
-              title={`Routing & debate — manual override: ${modelConfigName}`}
-            >
-              <span className='composer-routing-chip-label'>Routing</span>
-              <span className='composer-routing-chip-value' style={{ color: modelConfigColor }}>
-                {modelConfigName}
-              </span>
-              <span className='composer-routing-chip-tag'>Manual</span>
-              {debateSelection !== 'off' && (
-                <span className='composer-routing-chip-tag debate'>Debate</span>
-              )}
-            </button>
-          </div>
-        )}
-        {!manualModelOverride && debateSelection !== 'off' && (
-          <div className='composer-routing-context'>
-            <button
-              type='button'
-              className='composer-routing-chip'
-              onClick={openRoutingDebateMenu}
-              title='Routing & debate — model chosen automatically, debate framing enabled'
-            >
-              <span className='composer-routing-chip-label'>Routing</span>
-              <span className='composer-routing-chip-value'>Auto</span>
-              <span className='composer-routing-chip-tag debate'>Debate</span>
-            </button>
-          </div>
-        )}
+        {/* Integrated Composer Model & Routing Bar */}
+        <div className='composer-model-bar'>
+          <ComposerModelPicker
+            currentModel={currentModel}
+            manualModelOverride={manualModelOverride}
+            enabledProviders={enabledProviders}
+            preferences={preferences}
+            inputRef={inputRef}
+            geminiFlashThinkingLevel={geminiFlashThinkingLevel}
+            debateSelection={debateSelection}
+            onModelSelect={onModelSelect}
+            onClearOverride={onClearOverride}
+            onGeminiThinkingChange={onGeminiThinkingChange}
+            onOpenProviderSettings={onOpenProviderSettings}
+            disabled={isStreaming}
+          />
+        </div>
 
         {showPromptStarters && (
           <div className='prompt-starters-section' aria-label='Suggested starting points'>
