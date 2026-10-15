@@ -44,7 +44,7 @@ export function readPreferences(userId?: string | null): ModelPickerPreferences 
         : 'all';
 
     return {
-      favoriteModels: favoriteModels.length > 0 ? favoriteModels : DEFAULT_FAVORITES,
+      favoriteModels,
       hiddenModels,
       activeProviderFilter: activeProviderFilter as ProviderId | 'all',
     };
@@ -65,6 +65,8 @@ export function writePreferences(userId: string | null | undefined, prefs: Model
   }
 }
 
+export type ModelPickerPreferencesHook = ReturnType<typeof useModelPickerPreferences>;
+
 export function useModelPickerPreferences(userId?: string | null) {
   const [preferences, setPreferences] = useState<ModelPickerPreferences>(() =>
     readPreferences(userId),
@@ -73,6 +75,17 @@ export function useModelPickerPreferences(userId?: string | null) {
   // Re-read when the authenticated user identity changes
   useEffect(() => {
     setPreferences(readPreferences(userId));
+  }, [userId]);
+
+  // Sync across tabs/windows
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === getStorageKey(userId)) {
+        setPreferences(readPreferences(userId));
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, [userId]);
 
   const updatePreferences = useCallback(

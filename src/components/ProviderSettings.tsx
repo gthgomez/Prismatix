@@ -8,46 +8,48 @@ import type { ProviderPlugins } from '../hooks/useProviderPlugins';
 import { getProviderPlugin, isProviderId, type ProviderId } from '../providerRegistry';
 import { MODEL_ORDER, formatModelPriceLabel, getCatalogEntry } from '../modelCatalog';
 import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
-import { useModelPickerPreferences } from '../hooks/useModelPickerPreferences';
+import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
+import { hasOpenRouterRoute, providerForModel } from '../providerRegistry';
 
 interface ProviderSettingsProps {
   plugins: ProviderPlugins;
-  userId?: string | null;
+  preferences: ModelPickerPreferencesHook;
   onClose: () => void;
 }
 
 const FOCUSABLE_SELECTOR =
   'button:not(:disabled), input:not(:disabled), [href], select, textarea, [tabindex]:not([tabindex="-1"])';
 
-export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, userId, onClose }) => {
+export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, preferences, onClose }) => {
   const { providers, defaultProvider, loading, error, refresh } = plugins;
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expandedModelsProvider, setExpandedModelsProvider] = useState<string | null>(null);
+  const [showHistoricByProvider, setShowHistoricByProvider] = useState<Record<string, boolean>>({});
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   const {
-    favoriteModels,
-    hiddenModels,
     toggleFavorite,
     setModelVisible,
     isFavorite,
     isModelHidden,
-  } = useModelPickerPreferences(userId);
+  } = preferences;
 
-  // Group catalog models by provider
-  const modelsByProviderId = useMemo(() => {
-    const map = new Map<string, typeof MODEL_ORDER>();
-    for (const modelId of MODEL_ORDER) {
-      if (isHistoricModel(modelId)) continue;
-      const entry = getCatalogEntry(modelId);
-      const list = map.get(entry.provider) ?? [];
-      list.push(modelId);
-      map.set(entry.provider, list);
-    }
-    return map;
-  }, []);
+  // Resolve models associated with each provider:
+  // - For direct providers: catalog models whose owner matches
+  // - For openrouter: models that have an openrouter route
+  const getModelsForProvider = (providerId: string, includeHistoric: boolean) => {
+    return MODEL_ORDER.filter((modelId) => {
+      const isHistoric = isHistoricModel(modelId);
+      if (isHistoric && !includeHistoric) return false;
+
+      if (providerId === 'openrouter') {
+        return hasOpenRouterRoute(modelId);
+      }
+      return providerForModel(modelId) === providerId;
+    });
+  };
 
   // Modal lifecycle: lock background scroll, move focus into the dialog, and
   // restore it when the dialog unmounts.
@@ -279,10 +281,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, use
 
                 {/* Per-provider Model Management & Visibility */}
                 {(() => {
-                  const providerModels = modelsByProviderId.get(provider.id) ?? [];
-                  if (providerModels.length === 0) return null;
+                  const showHistoric = !!showHistoricByProvider[provider.id];
+                  const providerModels = getModelsForProvider(provider.id, showHistoric);
+                  const allProviderModels = getModelsForProvider(provider.id, true);
+                  const hasHistoric = allProviderModels.length > getModelsForProvider(provider.id, false).length;
+
+                  if (allProviderModels.length === 0) return null;
                   const isExpanded = expandedModelsProvider === provider.id;
-                  const activeCount = providerModels.filter((m) => !isModelHidden(m)).length;
+                  const activeCount = allProviderModels.filter((m) => !isModelHidden(m)).length;
 
                   return (
                     <div className='provider-models-section'>
@@ -297,7 +303,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, use
                         }
                       >
                         <span className='provider-models-toggle-title'>
-                          Models ({activeCount} active / {providerModels.length} available)
+                          Models ({activeCount} active / {allProviderModels.length} available)
                         </span>
                         <span className='provider-models-toggle-chevron' aria-hidden='true'>
                           {isExpanded ? '▴' : '▾'}
@@ -306,10 +312,15 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, use
 
                       {isExpanded && (
                         <div className='provider-models-list' role='region' aria-label={`${provider.label} models`}>
+                          <p className='provider-models-help'>
+                            Unchecking a model removes it from quick model pickers. Intelligent Auto Routing can still select it when ideal.
+                          </p>
+
                           {providerModels.map((modelId) => {
                             const config = getCatalogEntry(modelId);
                             const visible = !isModelHidden(modelId);
                             const fav = isFavorite(modelId);
+                            const historic = isHistoricModel(modelId);
 
                             return (
                               <div key={modelId} className='provider-model-item'>
@@ -325,7 +336,10 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, use
                                     {config.icon}
                                   </span>
                                   <div className='provider-model-item-info'>
-                                    <span className='provider-model-name'>{config.shortName}</span>
+                                    <span className='provider-model-name'>
+                                      {config.shortName}
+                                      {historic && <span className='provider-model-historic-badge'>Historic</span>}
+                                    </span>
                                     <span className='provider-model-price'>
                                       {formatModelPriceLabel(modelId)}
                                     </span>
@@ -344,6 +358,21 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, use
                               </div>
                             );
                           })}
+
+                          {hasHistoric && (
+                            <button
+                              type='button'
+                              className='provider-models-historic-toggle'
+                              onClick={() =>
+                                setShowHistoricByProvider((prev) => ({
+                                  ...prev,
+                                  [provider.id]: !prev[provider.id],
+                                }))
+                              }
+                            >
+                              {showHistoric ? 'Hide older models' : `Show older models (${allProviderModels.length - getModelsForProvider(provider.id, false).length})`}
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>

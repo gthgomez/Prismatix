@@ -17,14 +17,15 @@ import {
   type ProviderId,
 } from '../providerRegistry';
 import { useModelCatalogFilter } from '../hooks/useModelCatalogFilter';
-import { useModelPickerPreferences } from '../hooks/useModelPickerPreferences';
+import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
 import type { DebateSelection } from '../debateMode';
 
 export interface ComposerModelPickerProps {
   currentModel: RouterModel;
   manualModelOverride: RouterModel | null;
   enabledProviders: ReadonlySet<ProviderId>;
-  userId?: string | null;
+  preferences: ModelPickerPreferencesHook;
+  inputRef?: React.RefObject<HTMLTextAreaElement>;
   geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
   debateSelection?: DebateSelection;
   onModelSelect: (model: RouterModel) => void;
@@ -38,7 +39,8 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
   currentModel,
   manualModelOverride,
   enabledProviders,
-  userId,
+  preferences,
+  inputRef,
   geminiFlashThinkingLevel,
   debateSelection,
   onModelSelect,
@@ -64,7 +66,13 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
     toggleFavorite,
     setProviderFilter,
     isFavorite,
-  } = useModelPickerPreferences(userId);
+  } = preferences;
+
+  // If the active filter tab belongs to a provider that was disabled, fall back to 'all'
+  const effectiveProviderFilter: ProviderId | 'all' =
+    activeProviderFilter === 'all' || enabledProviders.has(activeProviderFilter)
+      ? activeProviderFilter
+      : 'all';
 
   const {
     filteredModels,
@@ -75,7 +83,7 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
     hiddenModels,
     favoriteModels,
     searchQuery,
-    providerFilter: activeProviderFilter,
+    providerFilter: effectiveProviderFilter,
   });
 
   // Calculate coordinates to anchor the popover dynamically right above the trigger
@@ -91,6 +99,13 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
 
   const handleOpen = () => {
     if (disabled) return;
+    // On mobile devices, blur active textarea to prevent virtual keyboard from pushing/obscuring popover
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+      inputRef?.current?.blur();
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    }
     updatePosition();
     setIsOpen(true);
   };
@@ -100,16 +115,27 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
     setSearchQuery('');
   };
 
-  // Keep popover positioned on scroll/resize
+  // Keep popover positioned on scroll/resize and textarea resizing
   useEffect(() => {
     if (!isOpen) return;
     updatePosition();
     const onResize = () => updatePosition();
     window.addEventListener('resize', onResize);
     window.addEventListener('scroll', onResize, true);
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && triggerRef.current) {
+      ro = new ResizeObserver(onResize);
+      ro.observe(triggerRef.current);
+      if (triggerRef.current.parentElement) {
+        ro.observe(triggerRef.current.parentElement);
+      }
+    }
+
     return () => {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('scroll', onResize, true);
+      ro?.disconnect();
     };
   }, [isOpen]);
 
@@ -152,8 +178,10 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
   }, [isOpen]);
 
   const activeEntry = getCatalogEntry(manualModelOverride ?? currentModel);
-  const activeProvider = providerForModel(manualModelOverride ?? currentModel);
-  const isFlashModel = (manualModelOverride ?? currentModel).toLowerCase().includes('flash');
+  // Flash thinking level applies only when a Gemini Flash family model is selected
+  const activeModelId = manualModelOverride ?? currentModel;
+  const isGeminiFlashModel =
+    activeModelId.startsWith('gemini-') && activeModelId.includes('flash');
 
   // Available provider tabs: 'all' + enabled providers that have models
   const providerTabs = useMemo(() => {
@@ -184,12 +212,12 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
       <div
         key={`${sectionKey}-${modelId}`}
         className={`composer-model-item ${isSelected ? 'is-selected' : ''}`}
-        role='option'
-        aria-selected={isSelected}
       >
         <button
           type='button'
           className='composer-model-item-btn'
+          role='option'
+          aria-selected={isSelected}
           onClick={() => {
             onModelSelect(modelId);
             handleClose();
@@ -442,8 +470,8 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
           </button>
         )}
 
-        {/* Inline Gemini Thinking Toggle */}
-        {isFlashModel && onGeminiThinkingChange && geminiFlashThinkingLevel && (
+        {/* Inline Gemini Thinking Toggle: applies strictly to Gemini Flash family models */}
+        {isGeminiFlashModel && onGeminiThinkingChange && geminiFlashThinkingLevel && (
           <button
             type='button'
             className='composer-thinking-pill'

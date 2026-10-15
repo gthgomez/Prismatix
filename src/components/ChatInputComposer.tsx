@@ -7,6 +7,7 @@ import type { ComposerSendValidationView } from '../sendValidationPresentation';
 import type { DebateSelection } from '../debateMode';
 import type { ProviderId } from '../providerRegistry';
 import type { PromptStarter, SendBlockedReason, StreamOutcomeState } from './chatTypes';
+import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
 export type { PromptStarter };
 
 export interface ChatInputComposerProps {
@@ -28,11 +29,9 @@ export interface ChatInputComposerProps {
   onMultipleFiles: (payloads: FileUploadPayload[]) => void;
   currentModel: RouterModel;
   manualModelOverride: RouterModel | null;
-  modelConfigName: string;
-  modelConfigColor: string;
   debateSelection: DebateSelection;
   enabledProviders: ReadonlySet<ProviderId>;
-  userId?: string | null;
+  preferences: ModelPickerPreferencesHook;
   geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
   onModelSelect: (model: RouterModel) => void;
   onClearOverride: () => void;
@@ -67,11 +66,9 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   onMultipleFiles,
   currentModel,
   manualModelOverride,
-  modelConfigName,
-  modelConfigColor,
   debateSelection,
   enabledProviders,
-  userId,
+  preferences,
   geminiFlashThinkingLevel,
   onModelSelect,
   onClearOverride,
@@ -173,7 +170,8 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
             currentModel={currentModel}
             manualModelOverride={manualModelOverride}
             enabledProviders={enabledProviders}
-            userId={userId}
+            preferences={preferences}
+            inputRef={inputRef}
             geminiFlashThinkingLevel={geminiFlashThinkingLevel}
             debateSelection={debateSelection}
             onModelSelect={onModelSelect}
@@ -182,18 +180,6 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
             onOpenProviderSettings={onOpenProviderSettings}
             disabled={isStreaming}
           />
-
-          {debateSelection !== 'off' && (
-            <button
-              type='button'
-              className='composer-debate-context-chip'
-              onClick={openRoutingDebateMenu}
-              title='Debate framing enabled — click to configure debate mode in header'
-            >
-              <span className='composer-debate-chip-label'>Debate</span>
-              <span className='composer-debate-chip-value'>{debateSelection}</span>
-            </button>
-          )}
         </div>
 
         {showPromptStarters && (

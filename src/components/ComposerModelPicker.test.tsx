@@ -23,11 +23,23 @@ describe('ComposerModelPicker component', () => {
     vi.restoreAllMocks();
   });
 
+  const mockPreferences = {
+    favoriteModels: ['claude-sonnet-5' as const, 'gemini-3.8-flash' as const],
+    hiddenModels: [],
+    activeProviderFilter: 'all' as const,
+    toggleFavorite: vi.fn(),
+    toggleModelVisibility: vi.fn(),
+    setModelVisible: vi.fn(),
+    setProviderFilter: vi.fn(),
+    isFavorite: vi.fn((m) => ['claude-sonnet-5', 'gemini-3.8-flash'].includes(m)),
+    isModelHidden: vi.fn(() => false),
+  };
+
   const defaultProps: ComposerModelPickerProps = {
     currentModel: 'gemini-3.8-flash',
     manualModelOverride: null,
     enabledProviders: new Set(['opencode']),
-    userId: 'test-user',
+    preferences: mockPreferences,
     onModelSelect: vi.fn(),
     onClearOverride: vi.fn(),
     onOpenProviderSettings: vi.fn(),
@@ -87,7 +99,7 @@ describe('ComposerModelPicker component', () => {
     expect(popover?.textContent).toContain('Prismatix Smart Router');
   });
 
-  it('allows model selection from popover list', () => {
+  it('allows model selection and favorite toggling from popover list', () => {
     const onModelSelect = vi.fn();
     root = createRoot(container);
     act(() => {
@@ -104,7 +116,24 @@ describe('ComposerModelPicker component', () => {
       pill.click();
     });
 
-    const firstModelItem = document.querySelector<HTMLButtonElement>('.composer-model-item-btn')!;
-    expect(firstModelItem).not.toBeNull();
+    const modelSelectBtn = document.querySelector<HTMLButtonElement>(
+      '.composer-model-item .composer-model-item-btn',
+    )!;
+    expect(modelSelectBtn).not.toBeNull();
+    act(() => {
+      modelSelectBtn.click();
+    });
+    expect(onModelSelect).toHaveBeenCalled();
+
+    // Reopen popover and test star pin button
+    act(() => {
+      pill.click();
+    });
+    const starBtn = document.querySelector<HTMLButtonElement>('.composer-model-fav-btn')!;
+    expect(starBtn).not.toBeNull();
+    act(() => {
+      starBtn.click();
+    });
+    expect(mockPreferences.toggleFavorite).toHaveBeenCalled();
   });
 });

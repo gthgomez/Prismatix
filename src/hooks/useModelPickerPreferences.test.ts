@@ -51,4 +51,15 @@ describe('useModelPickerPreferences storage helpers', () => {
     expect(prefs.hiddenModels).toEqual([]);
     expect(prefs.activeProviderFilter).toBe('all');
   });
+
+  it('preserves empty favoriteModels array when user unpins all favorites', () => {
+    const emptyFavoritesPrefs: ModelPickerPreferences = {
+      favoriteModels: [],
+      hiddenModels: [],
+      activeProviderFilter: 'all',
+    };
+    writePreferences('user-unpinned', emptyFavoritesPrefs);
+    const prefs = readPreferences('user-unpinned');
+    expect(prefs.favoriteModels).toEqual([]);
+  });
 });

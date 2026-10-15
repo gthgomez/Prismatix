@@ -76,6 +76,7 @@ import type {
 import { MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog';
 import { filterVisibleModels, isModelVisible } from '../providerRegistry';
 import { useProviderPlugins } from '../hooks/useProviderPlugins';
+import { useModelPickerPreferences } from '../hooks/useModelPickerPreferences';
 import { ProviderSettings } from './ProviderSettings';
 import { MemorySettings } from './MemorySettings';
 import {
@@ -192,18 +193,36 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const providerPlugins = useProviderPlugins(user?.id);
   const enabledProviders = providerPlugins.enabledProviders;
 
-  // If the active model's provider is turned off, fall back to Auto with a
-  // visible default so we never send to a hidden/disabled provider.
+  // Single authoritative model preferences store (favorites, hidden models, provider tabs)
+  const modelPreferences = useModelPickerPreferences(user?.id);
+
+  // If the active model's provider is turned off OR the manual override model was hidden by the user,
+  // fall back to Auto with a visible default so we never send to a hidden/disabled provider or model.
   useEffect(() => {
     if (providerPlugins.loading) return;
-    if (isModelVisible(currentModel, { enabledProviders }) &&
-      (manualModelOverride !== null || !isHistoricModel(currentModel))) return;
-    const fallback =
-      filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders })[0] ??
-      filterVisibleModels(MODEL_ORDER, { enabledProviders }).find((id) => !isHistoricModel(id));
+
+    const isCurrentVisible = isModelVisible(currentModel, { enabledProviders });
+    const isOverrideHidden = manualModelOverride !== null && modelPreferences.hiddenModels.includes(manualModelOverride);
+
+    if (isCurrentVisible && !isOverrideHidden && (manualModelOverride !== null || !isHistoricModel(currentModel))) {
+      return;
+    }
+
+    const unhiddenHighlights = filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders })
+      .filter((id) => !modelPreferences.hiddenModels.includes(id));
+    const unhiddenOrder = filterVisibleModels(MODEL_ORDER, { enabledProviders })
+      .filter((id) => !isHistoricModel(id) && !modelPreferences.hiddenModels.includes(id));
+
+    const fallback = unhiddenHighlights[0] ?? unhiddenOrder[0];
     setManualModelOverride(null);
     if (fallback) setCurrentModel(fallback);
-  }, [providerPlugins.loading, enabledProviders, currentModel, manualModelOverride]);
+  }, [
+    providerPlugins.loading,
+    enabledProviders,
+    currentModel,
+    manualModelOverride,
+    modelPreferences.hiddenModels,
+  ]);
 
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
   const hasPendingVideoUploads = draftAttachments.some(
@@ -1379,7 +1398,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   debateSelection={debateSelection}
                   sendValidationError={sendValidationError}
                   enabledProviders={enabledProviders}
-                  userId={user?.id}
+                  preferences={modelPreferences}
                   onModelSelect={handleModelSelect}
                   onClearOverride={clearModelOverride}
                   onGeminiThinkingChange={setGeminiFlashThinkingLevel}
@@ -1505,7 +1524,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             {showProviderSettings && (
               <ProviderSettings
                 plugins={providerPlugins}
-                userId={user?.id}
+                preferences={modelPreferences}
                 onClose={() => setShowProviderSettings(false)}
               />
             )}
@@ -1598,11 +1617,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onMultipleFiles={handleMultipleFiles}
         manualModelOverride={manualModelOverride}
         currentModel={currentModel}
-        modelConfigName={modelConfig.name}
-        modelConfigColor={modelConfig.color}
         debateSelection={debateSelection}
         enabledProviders={enabledProviders}
-        userId={user?.id}
+        preferences={modelPreferences}
         geminiFlashThinkingLevel={geminiFlashThinkingLevel}
         onModelSelect={handleModelSelect}
         onClearOverride={clearModelOverride}
