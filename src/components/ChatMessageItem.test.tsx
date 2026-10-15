@@ -104,4 +104,130 @@ describe('ChatMessageItem', () => {
 
     expect(container.querySelector('.message-image-placeholder')?.textContent).toContain('image unavailable');
   });
+
+  it('renders MessageActionToolbar on assistant message and invokes onRegenerate and onFeedback', () => {
+    const onRegenerate = vi.fn();
+    const onFeedback = vi.fn();
+
+    root = render(
+      <ChatMessageItem
+        message={sampleAssistantMessage}
+        index={1}
+        isStreaming={false}
+        isWaitingFirstToken={false}
+        defaultModelColor='#4ECDC4'
+        isMetadataExpanded={false}
+        onToggleMetadata={vi.fn()}
+        onRegenerate={onRegenerate}
+        onFeedback={onFeedback}
+      />,
+    );
+
+    const toolbar = container.querySelector('.message-action-toolbar');
+    expect(toolbar).not.toBeNull();
+
+    const regenBtn = container.querySelector<HTMLButtonElement>('.message-regenerate-btn');
+    expect(regenBtn).not.toBeNull();
+    act(() => {
+      regenBtn?.click();
+    });
+    expect(onRegenerate).toHaveBeenCalledWith(1, undefined);
+
+    const feedbackBtns = container.querySelectorAll<HTMLButtonElement>('.feedback-btn');
+    expect(feedbackBtns.length).toBe(2);
+    act(() => {
+      feedbackBtns[0]?.click();
+    });
+    expect(onFeedback).toHaveBeenCalledWith(1, 'up');
+  });
+
+  it('allows user to enter inline edit mode, modify prompt, and submit', () => {
+    const onEditPrompt = vi.fn();
+    const userMessage: Message = {
+      role: 'user',
+      content: 'Original user question',
+      timestamp: 1700000000000,
+    };
+
+    root = render(
+      <ChatMessageItem
+        message={userMessage}
+        index={0}
+        isStreaming={false}
+        isWaitingFirstToken={false}
+        defaultModelColor='#4ECDC4'
+        isMetadataExpanded={false}
+        onToggleMetadata={vi.fn()}
+        onEditPrompt={onEditPrompt}
+      />,
+    );
+
+    // Click Edit button in toolbar
+    const editBtn = container.querySelector<HTMLButtonElement>('.message-edit-btn');
+    expect(editBtn).not.toBeNull();
+    act(() => {
+      editBtn?.click();
+    });
+
+    // Check textarea is displayed
+    const textarea = container.querySelector<HTMLTextAreaElement>('.message-inline-edit-textarea');
+    expect(textarea).not.toBeNull();
+    expect(textarea?.value).toBe('Original user question');
+
+    // Change text
+    act(() => {
+      if (textarea) {
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+        nativeSetter?.call(textarea, 'Updated question with more details');
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+
+    // Click Save & Submit
+    const saveBtn = container.querySelector<HTMLButtonElement>('.message-inline-edit-save');
+    expect(saveBtn).not.toBeNull();
+    act(() => {
+      saveBtn?.click();
+    });
+
+    expect(onEditPrompt).toHaveBeenCalledWith(0, 'Updated question with more details');
+    // After submit, inline edit mode exits
+    expect(container.querySelector('.message-inline-edit-textarea')).toBeNull();
+  });
+
+  it('cancels inline edit mode on Cancel click without calling onEditPrompt', () => {
+    const onEditPrompt = vi.fn();
+    const userMessage: Message = {
+      role: 'user',
+      content: 'Another prompt',
+      timestamp: 1700000000000,
+    };
+
+    root = render(
+      <ChatMessageItem
+        message={userMessage}
+        index={0}
+        isStreaming={false}
+        isWaitingFirstToken={false}
+        defaultModelColor='#4ECDC4'
+        isMetadataExpanded={false}
+        onToggleMetadata={vi.fn()}
+        onEditPrompt={onEditPrompt}
+      />,
+    );
+
+    const editBtn = container.querySelector<HTMLButtonElement>('.message-edit-btn');
+    act(() => {
+      editBtn?.click();
+    });
+
+    const cancelBtn = container.querySelector<HTMLButtonElement>('.message-inline-edit-cancel');
+    expect(cancelBtn).not.toBeNull();
+    act(() => {
+      cancelBtn?.click();
+    });
+
+    expect(onEditPrompt).not.toHaveBeenCalled();
+    expect(container.querySelector('.message-inline-edit-textarea')).toBeNull();
+  });
 });

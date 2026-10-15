@@ -1,8 +1,5 @@
-// src/components/ChatMessageItem.tsx
-// Memoized individual message item in the chat transcript
-
-import React from 'react';
-import type { Message } from '../types';
+import React, { useEffect, useState } from 'react';
+import type { Message, RouterModel } from '../types';
 import { assistantModelPillDisplay, buildRouteExplanationRows } from '../modelDisplay';
 import { RouteExplanationList } from './RouteExplanationList';
 import { shouldShowDebateBadges } from '../debateMode';
@@ -12,6 +9,7 @@ import { FormattedMessage } from './FormattedMessage';
 import { DebateView } from './DebateView';
 import { PrismatixPulse } from './PrismatixPulse';
 import { getCatalogEntry } from '../modelCatalog';
+import { MessageActionToolbar } from './MessageActionToolbar';
 
 export interface ChatMessageItemProps {
   message: Message;
@@ -22,6 +20,10 @@ export interface ChatMessageItemProps {
   isMetadataExpanded: boolean;
   onToggleMetadata: (index: number) => void;
   registerRef?: (index: number, el: HTMLDivElement | null) => void;
+  onCopy?: (index: number) => void;
+  onRegenerate?: (index: number, modelOverride?: RouterModel) => void;
+  onEditPrompt?: (index: number, newContent: string) => void;
+  onFeedback?: (index: number, type: 'up' | 'down') => void;
 }
 
 export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
@@ -33,9 +35,35 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   isMetadataExpanded,
   onToggleMetadata,
   registerRef,
+  onCopy,
+  onRegenerate,
+  onEditPrompt,
+  onFeedback,
 }) => {
   const modelPillMeta = message.model ? assistantModelPillDisplay(message) : null;
   const isStreamingAssistant = isStreaming && message.role === 'assistant';
+  const textContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState(textContent);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setEditText(textContent);
+    }
+  }, [textContent, isEditing]);
+
+  const handleSaveEdit = () => {
+    const trimmed = editText.trim();
+    if (!trimmed) return;
+    setIsEditing(false);
+    onEditPrompt?.(index, trimmed);
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setEditText(textContent);
+  };
 
   return (
     <div
@@ -219,25 +247,83 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
           />
         )}
 
-        <div className='message-text'>
-          <FormattedMessage
-            content={typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}
-            isStreaming={isStreamingAssistant}
-            showCursor={isStreamingAssistant}
-          />
-        </div>
-
-        {message.role === 'assistant' && message.debateParticipants && message.debateParticipants.length > 0 && (
-          <DebateView participants={message.debateParticipants} />
-        )}
-
-        {isWaitingFirstToken && isStreamingAssistant && (
-          <div className='message-thinking-loader'>
-            <PrismatixPulse
-              color={message.model ? getCatalogEntry(message.model).color : defaultModelColor}
-              showLogo
+        {message.role === 'user' && isEditing ? (
+          <div className='message-inline-edit'>
+            <textarea
+              className='message-inline-edit-textarea'
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  handleCancelEdit();
+                } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  handleSaveEdit();
+                }
+              }}
+              rows={Math.min(8, Math.max(2, editText.split('\n').length))}
+              aria-label='Edit prompt'
+              autoFocus
             />
+            <div className='message-inline-edit-actions'>
+              <button
+                type='button'
+                className='message-inline-edit-cancel'
+                onClick={handleCancelEdit}
+              >
+                Cancel
+              </button>
+              <button
+                type='button'
+                className='message-inline-edit-save'
+                onClick={handleSaveEdit}
+                disabled={!editText.trim()}
+              >
+                Save &amp; Submit
+              </button>
+            </div>
           </div>
+        ) : (
+          <>
+            <div className='message-text'>
+              <FormattedMessage
+                content={textContent}
+                isStreaming={isStreamingAssistant}
+                showCursor={isStreamingAssistant}
+              />
+            </div>
+
+            {message.role === 'assistant' && message.debateParticipants && message.debateParticipants.length > 0 && (
+              <DebateView participants={message.debateParticipants} />
+            )}
+
+            {isWaitingFirstToken && isStreamingAssistant && (
+              <div className='message-thinking-loader'>
+                <PrismatixPulse
+                  color={message.model ? getCatalogEntry(message.model).color : defaultModelColor}
+                  showLogo
+                />
+              </div>
+            )}
+
+            {/* Message Action Toolbar (Copy, Edit, Regenerate, Feedback) */}
+            {(!isWaitingFirstToken || !isStreamingAssistant) && (
+              <MessageActionToolbar
+                role={message.role}
+                content={textContent}
+                isStreaming={isStreamingAssistant}
+                onCopy={() => onCopy?.(index)}
+                onEdit={() => {
+                  setEditText(textContent);
+                  setIsEditing(true);
+                }}
+                onRegenerate={(override) => onRegenerate?.(index, override)}
+                feedback={message.feedback}
+                onFeedback={(type) => onFeedback?.(index, type)}
+              />
+            )}
+          </>
         )}
       </div>
     </div>

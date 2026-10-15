@@ -141,6 +141,7 @@ export interface Message {
   thinkingLog?: string[];
   thinkingDurationMs?: number;
   cost?: MessageCost;
+  feedback?: 'up' | 'down';
 }
 
 export interface FileUploadPayload {
