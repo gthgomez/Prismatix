@@ -1,7 +1,7 @@
 // src/components/ChatInterface.tsx
 // Main chat interface with multi-file upload support and model selector
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
 import { useContextManager } from '../hooks/useContextManager';
 import {
@@ -12,19 +12,19 @@ import {
 } from '../catalogSkew';
 import { ContextWarning } from './ContextWarning';
 import { ContextStatus } from './ContextStatus';
-import { FileUpload } from './FileUpload';
 import { BudgetGuard, evaluateBudget } from './BudgetGuard';
 import { CostEstimator } from './CostEstimator';
-import { CostBadge } from './CostBadge';
-import { PrismatixPulse } from './PrismatixPulse';
 import { SpendTracker } from './SpendTracker';
-import { ThinkingProcess } from './ThinkingProcess';
-import { DebateView } from './DebateView';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
-import { AttachmentPreview } from './AttachmentPreview';
 import { ConversationSidebar } from './ConversationSidebar';
-import { FormattedMessage } from './FormattedMessage';
 import { ChatBackdrop } from './ChatBackdrop';
+import { ChatMessageItem } from './ChatMessageItem';
+import { ChatInputComposer } from './ChatInputComposer';
+import {
+  type StreamOutcomeState,
+  type PromptStarter,
+  SEND_BLOCKED_TITLES,
+} from './chatTypes';
 import '../styles/ChatInterface.css';
 import {
   askPrismatix,
@@ -78,8 +78,6 @@ import { filterVisibleModels, isModelVisible } from '../providerRegistry';
 import { useProviderPlugins } from '../hooks/useProviderPlugins';
 import { ProviderSettings } from './ProviderSettings';
 import { MemorySettings } from './MemorySettings';
-import { assistantModelPillDisplay, buildRouteExplanationRows } from '../modelDisplay';
-import { RouteExplanationList } from './RouteExplanationList';
 import {
   getComposerSendValidationView,
   VIDEO_UI_DEBATE_SEND_ERROR,
@@ -89,7 +87,6 @@ import {
   getDebatePayload,
   hasReadyVideoAttachment,
   type DebateSelection,
-  shouldShowDebateBadges,
 } from '../debateMode';
 
 interface ChatInterfaceProps {
@@ -100,11 +97,6 @@ interface ChatInterfaceProps {
 const DAILY_BUDGET_LIMIT_USD = 2.0;
 const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
 const CHATS_HIDDEN_KEY = 'prismatix.sidebar.chatsHidden';
-
-interface PromptStarter {
-  title: string;
-  prompt: string;
-}
 
 const PROMPT_STARTERS: PromptStarter[] = [
   {
@@ -120,22 +112,6 @@ const PROMPT_STARTERS: PromptStarter[] = [
     prompt: 'Help me understand a topic step by step, using clear explanations and concrete examples. Ask what I want to learn.',
   },
 ];
-
-/**
- * Accessible name + tooltip for the send control, keyed by why it is blocked
- * (`null` reason = ready). Keeps the disabled state self-explanatory instead of
- * leaving a generic "Send message" label on an inert control.
- */
-const SEND_BLOCKED_TITLES: Record<
-  'ready' | 'empty' | 'streaming' | 'video' | 'invalid',
-  string
-> = {
-  ready: 'Send message',
-  empty: 'Send message — type a message or attach a file first',
-  streaming: 'Send message — waiting for the current response; use Stop to cancel',
-  video: 'Send message — video is still processing',
-  invalid: 'Send message — resolve the routing issue below first',
-};
 
 function shouldTreatAsVideoAttachment(file: FileUploadPayload): boolean {
   if (file.kind === 'video') return true;
@@ -292,11 +268,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // terminal outcome surfaced to the user (cancelled, or the receipt state).
   const abortControllerRef = useRef<AbortController | null>(null);
   const executionIdRef = useRef<string | undefined>(undefined);
-  const [streamOutcome, setStreamOutcome] = useState<{
-    status: 'cancelled' | 'receipt';
-    executionId?: string;
-    settlementState?: string;
-  } | null>(null);
+  const [streamOutcome, setStreamOutcome] = useState<StreamOutcomeState | null>(null);
 
   // Scroll only when a new message bubble is created, and only if user is near bottom.
   useEffect(() => {
@@ -1245,6 +1217,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
   };
 
+  const handleToggleMetadata = useCallback((idx: number) => {
+    setExpandedMetadataIdx((prev) => (prev === idx ? null : idx));
+  }, []);
+
+  const registerMessageRef = useCallback((idx: number, el: HTMLDivElement | null) => {
+    messageRefs.current[idx] = el;
+  }, []);
+
   // Server-selected IDs can be ahead of the deployed catalog; degrade, never crash.
   const modelConfig = getCatalogEntry(currentModel);
   const composerValidationView = getComposerSendValidationView(sendValidationError);
@@ -1576,202 +1556,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           : (
             <div className='messages-list'>
               {messages.map((msg, idx) => {
-                const modelPillMeta = msg.model ? assistantModelPillDisplay(msg) : null;
+                const isLast = idx === messages.length - 1;
                 return (
-                <div
-                  key={idx}
-                  className={`message message-${msg.role}`}
-                  ref={(el) => {
-                    messageRefs.current[idx] = el;
-                  }}
-                >
-                  <div className='message-avatar'>
-                    <svg width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'>
-                      {msg.role === 'user' ? <><circle cx='12' cy='8' r='4' /><path d='M4 21v-2a8 8 0 0 1 16 0v2' /></> : <><rect x='4' y='7' width='16' height='13' rx='3' /><path d='M12 3v4m-4 6h1m6 0h1m-7 4h6' /></>}
-                    </svg>
-                  </div>
-                  <div className='message-content'>
-                    <div className='message-header'>
-                      <span className='message-role'>
-                        {msg.role === 'user' ? 'You' : 'Assistant'}
-                      </span>
-                      {msg.model && (
-                        <div className='message-metadata-container'>
-                          <button
-                            type='button'
-                            className={`message-model-pill ${expandedMetadataIdx === idx ? 'expanded' : ''}`}
-                            onClick={() => setExpandedMetadataIdx(expandedMetadataIdx === idx ? null : idx)}
-                            title={modelPillMeta?.title}
-                          >
-                            <span className='pill-text'>{modelPillMeta?.label}</span>
-                            <span className='info-icon'>
-                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                                <circle cx="12" cy="12" r="10" />
-                                <line x1="12" y1="16" x2="12" y2="12" />
-                                <line x1="12" y1="8" x2="12.01" y2="8" />
-                              </svg>
-                            </span>
-                          </button>
-                          
-                          {expandedMetadataIdx === idx && (
-                            <div className='metadata-popover'>
-                              {msg.provider && (
-                                <div className='metadata-item'>
-                                  <span className='item-label'>Provider</span>
-                                  <span className='item-value'>{msg.provider}</span>
-                                </div>
-                              )}
-                              {msg.modelId && (
-                                <div className='metadata-item'>
-                                  <span className='item-label'>API ID</span>
-                                  <span className='item-value metadata-value-break'>{msg.modelId}</span>
-                                </div>
-                              )}
-                              {msg.modelOverride && msg.modelOverride !== 'auto' && (
-                                <div className='metadata-item'>
-                                  <span className='item-label'>Override</span>
-                                  <span className='item-value'>Manual</span>
-                                </div>
-                              )}
-                              {msg.geminiFlashThinkingLevel && (
-                                <div className='metadata-item'>
-                                  <span className='item-label'>Thinking</span>
-                                  <span className='item-value'>{msg.geminiFlashThinkingLevel}</span>
-                                </div>
-                              )}
-                              {msg.role === 'assistant' && (
-                                <RouteExplanationList {...buildRouteExplanationRows(msg)} />
-                              )}
-                              {msg.role === 'assistant' && shouldShowDebateBadges(msg) && (
-                                <div className='metadata-debate-details'>
-                                  <div className='metadata-divider' />
-                                  {msg.debateProfile && (
-                                    <div className='metadata-item'>
-                                      <span className='item-label'>Debate</span>
-                                      <span className='item-value'>{msg.debateProfile}</span>
-                                    </div>
-                                  )}
-                                  {msg.debateTrigger && (
-                                    <div className='metadata-item'>
-                                      <span className='item-label'>Trigger</span>
-                                      <span className='item-value'>{msg.debateTrigger}</span>
-                                    </div>
-                                  )}
-                                  {msg.debateModel && (
-                                    <div className='metadata-item'>
-                                      <span className='item-label'>Synth</span>
-                                      <span className='item-value'>{msg.debateModel}</span>
-                                    </div>
-                                  )}
-                                  {msg.debateCostNote && (
-                                    <div className='metadata-item'>
-                                      <span className='item-label'>Cost Note</span>
-                                      <span className='item-value'>{msg.debateCostNote}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      <CostBadge cost={msg.cost} />
-                      <span className='message-time'>
-                        {new Date(msg.timestamp).toLocaleTimeString()}
-                      </span>
-                    </div>
-                    {/* Render images if present */}
-                    {msg.imageData && (
-                      <div className='message-image-container'>
-                        <img
-                          src={`data:${msg.mediaType || 'image/png'};base64,${msg.imageData}`}
-                          alt='Uploaded content'
-                          className='message-image'
-                        />
-                      </div>
-                    )}
-                    {/* PX07: render restored image attachments from signed URLs
-                        (never persisted) and video attachments as a safe
-                        placeholder. Live base64 images keep the imageData path. */}
-                    {!msg.imageData && msg.attachments && (
-                      <div className='message-attachments-row'>
-                        {msg.attachments.map((attachment, attachmentIndex) => {
-                          if (attachment.isImage && attachment.storageUrl) {
-                            return (
-                              <div className='message-image-container' key={attachmentIndex}>
-                                <img
-                                  src={attachment.storageUrl}
-                                  alt={attachment.name || 'Uploaded content'}
-                                  className='message-image'
-                                />
-                              </div>
-                            );
-                          }
-                          if (attachment.isImage) {
-                            // Signed-URL failure: never render the raw storage
-                            // reference; show an unavailable placeholder.
-                            return (
-                              <div className='message-image-placeholder' key={attachmentIndex}>
-                                🖼 image unavailable
-                              </div>
-                            );
-                          }
-                          if (attachment.kind === 'video') {
-                            return (
-                              <div className='message-video-placeholder' key={attachmentIndex}>
-                                🎞 video attachment
-                              </div>
-                            );
-                          }
-                          if (attachment.kind === 'text') {
-                            const size = attachment.size ?? attachment.sizeBytes;
-                            return (
-                              <div className='message-file-chip' key={attachmentIndex}>
-                                📄 {attachment.name}
-                                {typeof size === 'number'
-                                  ? ` · ${size < 1024 ? `${size} B` : `${Math.round(size / 1024)} KB`}`
-                                  : ''}
-                              </div>
-                            );
-                          }
-                          return null;
-                        })}
-                      </div>
-                    )}
-                    {/* Show attachment count if multiple */}
-                    {msg.attachments && msg.attachments.length > 1 && (
-                      <div className='message-attachments-badge'>
-                        📎 {msg.attachments.length} files attached
-                      </div>
-                    )}
-                    {msg.role === 'assistant' && (
-                      <ThinkingProcess
-                        thoughts={msg.thinkingLog}
-                        elapsedMs={msg.thinkingDurationMs}
-                      />
-                    )}
-                    <div className='message-text'>
-                      <FormattedMessage
-                        content={typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
-                        isStreaming={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
-                        showCursor={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
-                      />
-                    </div>
-                    {msg.role === 'assistant' && msg.debateParticipants && msg.debateParticipants.length > 0 && (
-                      <DebateView participants={msg.debateParticipants} />
-                    )}
-                    {isWaitingFirstToken && isStreaming && idx === messages.length - 1 &&
-                      msg.role === 'assistant' && (
-                      <div className='message-thinking-loader'>
-                        <PrismatixPulse
-                          color={msg.model ? getCatalogEntry(msg.model).color : modelConfig.color}
-                          showLogo
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
+                  <ChatMessageItem
+                    key={idx}
+                    message={msg}
+                    index={idx}
+                    isStreaming={isStreaming && isLast}
+                    isWaitingFirstToken={isWaitingFirstToken && isLast}
+                    defaultModelColor={modelConfig.color}
+                    isMetadataExpanded={expandedMetadataIdx === idx}
+                    onToggleMetadata={handleToggleMetadata}
+                    registerRef={registerMessageRef}
+                  />
+                );
               })}
               <div ref={messagesEndRef} />
             </div>
@@ -1779,183 +1577,39 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       </main>
 
       {/* Input Area */}
-      <div className='chat-input-container'>
-        <div className='input-wrapper'>
-          <AttachmentPreview
-            attachments={draftAttachments}
-            onRemove={removeAttachment}
-            onClearAll={clearAllAttachments}
-          />
-
-          {/* Input Row */}
-          <div className='input-row glass-surface' data-glass-variant='floating' data-glass-mode='glass'>
-            <FileUpload
-              onFileContent={handleFileSelect}
-              onMultipleFiles={handleMultipleFiles}
-              disabled={isStreaming}
-              maxFiles={10}
-            />
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
-              placeholder={draftAttachments.length > 0
-                ? hasPendingVideoUploads
-                  ? 'Video is processing... sending is disabled until ready.'
-                  : 'Add a message (optional)...'
-                : 'Ask anything…'}
-              aria-label='Message Prismatix'
-              className='chat-input'
-              disabled={isStreaming}
-              rows={1}
-            />
-            <button
-              type='button'
-              onClick={() => {
-                void handleSend();
-              }}
-              disabled={sendBlockedReason !== null}
-              className='send-button'
-              data-state={sendBlockedReason ?? 'ready'}
-              aria-label={SEND_BLOCKED_TITLES[sendBlockedReason ?? 'ready']}
-              title={SEND_BLOCKED_TITLES[sendBlockedReason ?? 'ready']}
-            >
-              {isWaitingFirstToken ? <div className='loading-spinner' /> : (
-                <svg
-                  width='20'
-                  height='20'
-                  viewBox='0 0 24 24'
-                  fill='none'
-                  stroke='currentColor'
-                  strokeWidth='2'
-                >
-                  <line x1='22' y1='2' x2='11' y2='13' />
-                  <polygon points='22 2 15 22 11 13 2 9 22 2' />
-                </svg>
-              )}
-            </button>
-            {isStreaming && (
-              <button
-                type='button'
-                onClick={handleStop}
-                className='stop-button'
-                title='Stop generating'
-                aria-label='Stop generating'
-              >
-                <svg
-                  width='18'
-                  height='18'
-                  viewBox='0 0 24 24'
-                  fill='currentColor'
-                  stroke='currentColor'
-                  strokeWidth='2'
-                >
-                  <rect x='6' y='6' width='12' height='12' rx='2' />
-                </svg>
-              </button>
-            )}
-          </div>
-
-          {/* Routing context at the point of composing. The automatic default is
-              already stated by the sticky header pill, so this only appears when
-              the user has changed routing (manual override or debate) — it never
-              predicts which model Auto will pick for the next message. */}
-          {manualModelOverride && (
-            <div className='composer-routing-context'>
-              <button
-                type='button'
-                className='composer-routing-chip'
-                onClick={openRoutingDebateMenu}
-                title={`Routing & debate — manual override: ${modelConfig.name}`}
-              >
-                <span className='composer-routing-chip-label'>Routing</span>
-                <span className='composer-routing-chip-value' style={{ color: modelConfig.color }}>
-                  {modelConfig.name}
-                </span>
-                <span className='composer-routing-chip-tag'>Manual</span>
-                {debateSelection !== 'off' && (
-                  <span className='composer-routing-chip-tag debate'>Debate</span>
-                )}
-              </button>
-            </div>
-          )}
-          {!manualModelOverride && debateSelection !== 'off' && (
-            <div className='composer-routing-context'>
-              <button
-                type='button'
-                className='composer-routing-chip'
-                onClick={openRoutingDebateMenu}
-                title='Routing & debate — model chosen automatically, debate framing enabled'
-              >
-                <span className='composer-routing-chip-label'>Routing</span>
-                <span className='composer-routing-chip-value'>Auto</span>
-                <span className='composer-routing-chip-tag debate'>Debate</span>
-              </button>
-            </div>
-          )}
-
-          {messages.length === 0 && (
-            <div className='prompt-starters-section' aria-label='Suggested starting points'>
-              <div className='prompt-starters-grid'>
-                {PROMPT_STARTERS.map((starter) => (
-                  <button
-                    key={starter.title}
-                    type='button'
-                    className='prompt-starter-chip'
-                    onClick={() => {
-                      setInput(starter.prompt);
-                      inputRef.current?.focus();
-                    }}
-                  >
-                    <span className='starter-chip-title'>{starter.title}</span>
-                    <span aria-hidden='true'>↗</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {streamOutcome && (
-            <div className='stream-outcome' role='status' aria-live='polite'>
-              <span>{streamOutcome.status === 'cancelled' ? 'Response stopped' : streamOutcome.settlementState === 'settled' ? 'Usage recorded' : streamOutcome.settlementState === 'released' ? 'Reservation released' : 'Usage recording pending'}</span>
-              <details className='receipt-details'><summary>Receipt details</summary><div>
-                Settlement: {streamOutcome.settlementState ?? 'pending'}
-                {streamOutcome.executionId && <span>Execution: {streamOutcome.executionId}</span>}
-              </div></details>
-            </div>
-          )}
-          {/* PX07: bounded-context indicator — older messages are excluded. */}
-          {contextExcludedCount > 0 && (
-            <div className='context-out-of-window-indicator' role='status'>
-              {contextExcludedCount} older message
-              {contextExcludedCount === 1 ? ' is' : 's are'} outside the current context.
-            </div>
-          )}
-          {/* PX07: duplicate_request — the turn already exists; no re-dispatch. */}
-          {duplicateNotice && (
-            <div className='duplicate-request-notice' role='status' aria-live='polite'>
-              {duplicateNotice}
-            </div>
-          )}
-          {composerValidationView && (
-            <div className='send-validation-error' role='alert' aria-live='polite'>
-              <p className='send-validation-summary'>{composerValidationView.summary}</p>
-              {composerValidationView.detail && (
-                <p className='send-validation-detail'>{composerValidationView.detail}</p>
-              )}
-              {composerValidationView.showRoutingCta && (
-                <button
-                  type='button'
-                  className='send-validation-routing-cta'
-                  onClick={openRoutingDebateMenu}
-                >
-                  Open routing & debate
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+      <ChatInputComposer
+        input={input}
+        inputRef={inputRef}
+        onChange={handleInputChange}
+        onKeyDown={handleKeyDown}
+        onSend={() => void handleSend()}
+        onStop={handleStop}
+        isStreaming={isStreaming}
+        isWaitingFirstToken={isWaitingFirstToken}
+        sendBlockedReason={sendBlockedReason}
+        sendBlockedTitles={SEND_BLOCKED_TITLES}
+        hasPendingVideoUploads={hasPendingVideoUploads}
+        draftAttachments={draftAttachments}
+        onRemoveAttachment={removeAttachment}
+        onClearAllAttachments={clearAllAttachments}
+        onFileSelect={handleFileSelect}
+        onMultipleFiles={handleMultipleFiles}
+        manualModelOverride={manualModelOverride}
+        modelConfigName={modelConfig.name}
+        modelConfigColor={modelConfig.color}
+        debateSelection={debateSelection}
+        openRoutingDebateMenu={openRoutingDebateMenu}
+        showPromptStarters={messages.length === 0}
+        promptStarters={PROMPT_STARTERS}
+        onSelectPromptStarter={(prompt) => {
+          setInput(prompt);
+          inputRef.current?.focus();
+        }}
+        streamOutcome={streamOutcome}
+        contextExcludedCount={contextExcludedCount}
+        duplicateNotice={duplicateNotice}
+        composerValidationView={composerValidationView}
+      />
 
       <BudgetGuard
         isOpen={!!budgetConfirm}
