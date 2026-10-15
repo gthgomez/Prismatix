@@ -22,24 +22,28 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
 
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamStartRef = useRef<number>(Date.now());
+  const elapsedMsRef = useRef(elapsedMs);
+  elapsedMsRef.current = elapsedMs;
   const contentRef = useRef<HTMLPreElement | null>(null);
 
   // Live timer while streaming reasoning tokens
   useEffect(() => {
-    if (!isStreaming) {
-      if (elapsedMs) {
-        setStreamSeconds(elapsedMs / 1000);
-      }
-      return;
-    }
+    if (!isStreaming) return;
 
-    streamStartRef.current = Date.now() - (elapsedMs ?? 0);
+    streamStartRef.current = Date.now() - (elapsedMsRef.current ?? 0);
     const interval = setInterval(() => {
       const elapsed = (Date.now() - streamStartRef.current) / 1000;
       setStreamSeconds(elapsed);
     }, 100);
 
     return () => clearInterval(interval);
+  }, [isStreaming]);
+
+  // Sync final or updated duration when not streaming
+  useEffect(() => {
+    if (!isStreaming && elapsedMs !== undefined) {
+      setStreamSeconds(elapsedMs / 1000);
+    }
   }, [isStreaming, elapsedMs]);
 
   // When streaming starts, auto-expand if user hasn't explicitly interacted
@@ -62,7 +66,7 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
     };
   }, []);
 
-  if (!thoughts.length && !isStreaming) return null;
+  if (!thoughts.length) return null;
 
   const displaySeconds = streamSeconds > 0
     ? `${streamSeconds.toFixed(1)}s`

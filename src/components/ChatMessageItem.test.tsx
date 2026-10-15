@@ -230,4 +230,56 @@ describe('ChatMessageItem', () => {
     expect(onEditPrompt).not.toHaveBeenCalled();
     expect(container.querySelector('.message-inline-edit-textarea')).toBeNull();
   });
+
+  it('extracts plain text from multimodal content arrays without raw JSON stringification', () => {
+    const multimodalMessage: Message = {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Describe the contents of this image' },
+        { type: 'image_url', image_url: { url: 'https://example.com/image.png' } },
+      ],
+      timestamp: 1700000000000,
+    };
+
+    root = render(
+      <ChatMessageItem
+        message={multimodalMessage}
+        index={0}
+        isStreaming={false}
+        isWaitingFirstToken={false}
+        defaultModelColor='#4ECDC4'
+        isMetadataExpanded={false}
+        onToggleMetadata={vi.fn()}
+      />,
+    );
+
+    const messageText = container.querySelector('.message-text');
+    expect(messageText).not.toBeNull();
+    expect(messageText?.textContent).toContain('Describe the contents of this image');
+    expect(messageText?.textContent).not.toContain('image_url');
+    expect(messageText?.textContent).not.toContain('[{');
+  });
+
+  it('does not render ThinkingProcess when thinkingLog is empty during streaming', () => {
+    const nonReasoningAssistantMessage: Message = {
+      role: 'assistant',
+      content: 'Standard stream chunk',
+      timestamp: 1700000000000,
+      thinkingLog: [],
+    };
+
+    root = render(
+      <ChatMessageItem
+        message={nonReasoningAssistantMessage}
+        index={1}
+        isStreaming={true}
+        isWaitingFirstToken={false}
+        defaultModelColor='#4ECDC4'
+        isMetadataExpanded={false}
+        onToggleMetadata={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector('.thinking-process')).toBeNull();
+  });
 });

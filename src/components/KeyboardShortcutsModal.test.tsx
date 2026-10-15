@@ -87,4 +87,49 @@ describe('KeyboardShortcutsModal', () => {
       root.unmount();
     });
   });
+
+  it('does not place aria-hidden="true" on the backdrop containing dialog', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
+    });
+
+    const backdrop = container?.querySelector('.shortcuts-modal-backdrop');
+    expect(backdrop).not.toBeNull();
+    expect(backdrop?.getAttribute('aria-hidden')).toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('does not re-steal focus when parent re-renders with a new onClose function reference', async () => {
+    let onCloseHandler = vi.fn();
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<KeyboardShortcutsModal isOpen={true} onClose={onCloseHandler} />);
+    });
+
+    const closeBtn = container?.querySelector('.shortcuts-close-button') as HTMLButtonElement;
+    expect(document.activeElement).toBe(closeBtn);
+
+    // Create a temporary input inside the modal to move focus to
+    const tempInput = document.createElement('input');
+    container?.querySelector('.shortcuts-modal')?.appendChild(tempInput);
+    tempInput.focus();
+    expect(document.activeElement).toBe(tempInput);
+
+    // Re-render with a new function reference
+    onCloseHandler = vi.fn();
+    await act(async () => {
+      root.render(<KeyboardShortcutsModal isOpen={true} onClose={onCloseHandler} />);
+    });
+
+    // Focus must NOT have been stolen back to close button
+    expect(document.activeElement).toBe(tempInput);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

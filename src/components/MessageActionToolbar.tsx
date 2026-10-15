@@ -13,7 +13,7 @@ export interface QuickModelOption {
 const REGENERATE_QUICK_MODELS: QuickModelOption[] = [
   { value: 'auto', label: 'Auto Route', badge: 'Smart' },
   { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', badge: 'Fast' },
-  { value: 'claude-haiku-5-5', label: 'Claude 3.5 Haiku', badge: 'Fast' },
+  { value: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', badge: 'Fast' },
   { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', badge: 'Reason' },
   { value: 'gpt-6-sol', label: 'GPT-6 Sol', badge: 'Frontier' },
 ];

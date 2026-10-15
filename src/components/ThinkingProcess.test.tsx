@@ -35,6 +35,51 @@ describe('ThinkingProcess', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('returns null when thoughts are empty even if isStreaming is true', () => {
+    root = render(<ThinkingProcess thoughts={[]} isStreaming={true} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('keeps streaming timer running without tearing down interval on token updates', () => {
+    vi.useFakeTimers();
+    try {
+      root = render(
+        <ThinkingProcess
+          thoughts={['Initial thought']}
+          elapsedMs={1000}
+          isStreaming={true}
+        />,
+      );
+
+      const header = container.querySelector<HTMLButtonElement>('.thinking-process-header');
+      expect(header).not.toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      // Update with new token chunk and new elapsedMs
+      act(() => {
+        root!.render(
+          <ThinkingProcess
+            thoughts={['Initial thought', ' continuing...']}
+            elapsedMs={1500}
+            isStreaming={true}
+          />,
+        );
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      // Streaming header displays live ticking elapsed time
+      expect(header?.textContent).toMatch(/Thinking \(\d+\.\d+s\)/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('renders thinking process header with elapsed time and toggles content', () => {
     root = render(
       <ThinkingProcess
