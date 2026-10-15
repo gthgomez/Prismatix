@@ -102,6 +102,11 @@ describe('ThinkingProcess', () => {
 
     const copyBtn = container.querySelector<HTMLElement>('.thinking-copy-btn');
     expect(copyBtn).not.toBeNull();
+    expect(copyBtn?.tagName).toBe('BUTTON');
+
+    const header = container.querySelector<HTMLButtonElement>('.thinking-process-header');
+    expect(header).not.toBeNull();
+    expect(header?.contains(copyBtn)).toBe(false);
 
     await act(async () => {
       copyBtn?.click();

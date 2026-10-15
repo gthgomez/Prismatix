@@ -1251,9 +1251,16 @@
   margin: var(--spacing-sm) 0;
 }
 
-.thinking-process-header {
-  width: 100%;
+.thinking-process-header-bar {
+  display: flex;
+  align-items: center;
   background: rgba(0, 0, 0, 0.2);
+  width: 100%;
+}
+
+.thinking-process-header {
+  flex: 1;
+  background: transparent;
   border: none;
   color: var(--color-text-dim);
   display: flex;
@@ -1267,9 +1274,16 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  text-align: left;
 }
 
 .thinking-process-header:hover { background: rgba(255, 255, 255, 0.04); color: var(--color-text); }
+
+.thinking-header-actions {
+  display: flex;
+  align-items: center;
+  padding-right: var(--spacing-md);
+}
 
 .thinking-process-content {
   margin: 0;
@@ -3555,6 +3569,11 @@
 }
 
 /* CostBadge & Intelligence Popover */
+.cost-badge-container {
+  position: relative;
+  display: inline-flex;
+}
+
 .cost-badge-interactive {
   position: relative;
   cursor: pointer;
@@ -3566,6 +3585,9 @@
   display: inline-flex;
   align-items: center;
   user-select: none;
+  font-family: inherit;
+  font-size: 0.72rem;
+  line-height: normal;
 }
 
 .cost-badge-interactive:hover,
@@ -3577,7 +3599,7 @@
 
 .cost-intelligence-popover {
   position: absolute;
-  bottom: calc(100% + 8px);
+  top: calc(100% + 6px);
   left: 0;
   z-index: 100;
   width: 290px;

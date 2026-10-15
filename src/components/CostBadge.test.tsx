@@ -69,10 +69,14 @@ describe('CostBadge', () => {
       );
     });
 
-    const badge = container?.querySelector('.cost-badge-interactive') as HTMLSpanElement;
+    const badge = container?.querySelector('.cost-badge-interactive') as HTMLButtonElement;
     expect(badge).not.toBeNull();
+    expect(badge.tagName).toBe('BUTTON');
     expect(badge.textContent).toContain('$0.0002 final');
     expect(container?.querySelector('.cost-intelligence-popover')).toBeNull();
+
+    const badgeContainer = container?.querySelector('.cost-badge-container');
+    expect(badgeContainer).not.toBeNull();
 
     // Click badge to open popover
     await act(async () => {
@@ -81,6 +85,8 @@ describe('CostBadge', () => {
 
     const popover = container?.querySelector('.cost-intelligence-popover');
     expect(popover).not.toBeNull();
+    expect(badge.contains(popover ?? null)).toBe(false);
+    expect(badgeContainer?.contains(popover ?? null)).toBe(true);
     expect(popover?.textContent).toContain('Cost & Performance');
     expect(popover?.textContent).toContain('Final Ledger');
     expect(popover?.textContent).toContain('1,200 tok');

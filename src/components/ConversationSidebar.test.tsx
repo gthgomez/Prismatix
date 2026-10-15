@@ -455,5 +455,43 @@ describe('ConversationSidebar', () => {
 
     act(() => root.unmount());
   });
+
+  it('prunes deleted pinned conversation from state and localStorage', () => {
+    const onDelete = vi.fn();
+    const container = document.createElement('div');
+    const scope = 'delete-pin-test';
+    const storageKey = `prismatix:pinned-chats:${scope}`;
+    localStorage.setItem(storageKey, JSON.stringify([CONVERSATIONS[0]!.id]));
+
+    const root = renderInto(
+      container,
+      <ConversationSidebar
+        conversations={CONVERSATIONS}
+        selectedId={null}
+        isLoading={false}
+        preferenceScope={scope}
+        onSelect={noop}
+        onNewChat={noop}
+        onDelete={onDelete}
+      />,
+    );
+
+    expect(container.querySelector('.conversation-pinned-heading')).not.toBeNull();
+
+    // Open menu on pinned conversation
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    const deleteBtn = container.querySelector<HTMLButtonElement>('.conversation-item-delete')!;
+    expect(deleteBtn.textContent).toBe('Delete chat');
+    // First click asks confirmation
+    act(() => deleteBtn.click());
+    expect(deleteBtn.textContent).toBe('Confirm delete?');
+    // Second click deletes
+    act(() => deleteBtn.click());
+
+    expect(onDelete).toHaveBeenCalledWith(CONVERSATIONS[0]!.id);
+    expect(JSON.parse(localStorage.getItem(storageKey) || '[]')).toEqual([]);
+
+    act(() => root.unmount());
+  });
 });
 

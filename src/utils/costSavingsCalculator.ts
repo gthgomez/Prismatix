@@ -74,6 +74,6 @@ export function computeCostSavings(input: CostSavingsInput): CostSavingsAnalysis
     baselineCostUsd,
     savingsUsd,
     savingsPercent,
-    isSettled: actualCostUsd > 0,
+    isSettled: input.costUsd !== undefined && input.costUsd >= 0,
   };
 }

@@ -1387,9 +1387,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       void handleSend();
     } else if (e.key === 'ArrowUp' && !input.trim() && messages.length > 0) {
       const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-      if (lastUserMsg && typeof lastUserMsg.content === 'string') {
-        e.preventDefault();
-        setInput(lastUserMsg.content);
+      if (lastUserMsg) {
+        let promptText = '';
+        if (typeof lastUserMsg.content === 'string') {
+          promptText = lastUserMsg.content;
+        } else if (Array.isArray(lastUserMsg.content)) {
+          const textPart = lastUserMsg.content.find(
+            (part): part is { text: string } =>
+              typeof part === 'object' &&
+              part !== null &&
+              'text' in part &&
+              typeof (part as { text: unknown }).text === 'string',
+          );
+          if (textPart) {
+            promptText = textPart.text;
+          }
+        }
+        if (promptText) {
+          e.preventDefault();
+          setInput(promptText);
+          queueMicrotask(() => {
+            if (inputRef.current) {
+              inputRef.current.selectionStart = inputRef.current.value.length;
+              inputRef.current.selectionEnd = inputRef.current.value.length;
+            }
+          });
+        }
       }
     }
   };
@@ -1439,7 +1462,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
-        inputRef.current?.focus();
+        setShowModelSelector((prev) => !prev);
         return;
       }
 
