@@ -19,6 +19,7 @@ import { ModelSelectorDropdown } from './ModelSelectorDropdown';
 import { ConversationSidebar } from './ConversationSidebar';
 import { ChatBackdrop } from './ChatBackdrop';
 import { ChatMessageItem } from './ChatMessageItem';
+import { ScrollToBottomButton } from './ScrollToBottomButton';
 import { ChatInputComposer } from './ChatInputComposer';
 import {
   type StreamOutcomeState,
@@ -267,10 +268,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const chatMessagesRef = useRef<HTMLElement | null>(null);
   const {
     shouldStickToBottomRef,
+    showScrollButton,
     updateStickyScrollState,
     markUserInterruption,
     resetAutoScroll,
   } = useAutoScroll(32);
+  const pendingActionRef = useRef<(() => void) | null>(null);
+
+  const handleScrollToBottom = useCallback(() => {
+    resetAutoScroll();
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [resetAutoScroll]);
   const waitingFirstTokenRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -772,59 +780,35 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     });
   };
 
-  const handleSend = async (skipBudgetCheck = false) => {
-    // Allow send if there's text OR attachments
-    const hasContent = input.trim() || draftAttachments.length > 0;
-    if (!hasContent || isStreaming || hasPendingVideoUploads) return;
-    if (debateSelection === 'video_ui' && !hasReadyVideo) {
-      setSendValidationError(VIDEO_UI_DEBATE_SEND_ERROR);
-      return;
-    }
-    setSendValidationError(null);
-    resetAutoScroll();
-
-    // Build query text
-    const hasImages = draftAttachments.some((f) => f.isImage);
-    const hasTextFiles = draftAttachments.some((f) => !f.isImage && f.kind !== 'video');
-
-    let queryText = input.trim();
-
-    // If no text but has attachments, use default prompts
-    if (!queryText) {
-      const hasVideos = draftAttachments.some((f) => f.kind === 'video');
-      if (hasImages && hasTextFiles && hasVideos) {
-        queryText = 'Analyze these videos, files, and images.';
-      } else if (hasVideos && hasImages) {
-        queryText = 'Analyze this video and related images.';
-      } else if (hasVideos && hasTextFiles) {
-        queryText = 'Analyze this video with the attached text files.';
-      } else if (hasVideos) {
-        queryText = draftAttachments.length === 1 ? 'Analyze this video.' : 'Analyze these videos.';
-      } else if (hasImages && hasTextFiles) {
-        queryText = 'Analyze these files and images.';
-      } else if (hasImages) {
-        queryText = draftAttachments.length === 1 ? 'Analyze this image.' : 'Analyze these images.';
-      } else if (hasTextFiles) {
-        queryText = 'Process these files.';
-      }
-    }
-
-    const estimatedModel = manualModelOverride || currentModel;
-    const historyText = messages.map((msg) => {
+  const executeTurn = async ({
+    queryText,
+    attachmentsToProcess,
+    historyMessages,
+    overrideModel,
+    promptTokenEstimate: passedPromptTokenEstimate,
+    skipBudgetCheck = false,
+  }: {
+    queryText: string;
+    attachmentsToProcess: FileUploadPayload[];
+    historyMessages: Message[];
+    overrideModel?: RouterModel | null;
+    promptTokenEstimate?: number;
+    skipBudgetCheck?: boolean;
+  }) => {
+    const estimatedModel = overrideModel || manualModelOverride || currentModel;
+    const historyText = historyMessages.map((msg) => {
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
       return `${msg.role}: ${content}`;
     }).join('\n');
-    const imageCount = draftAttachments.filter((file) => file.isImage).length;
+    const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
     const preflight = calculatePreFlightCost(
       estimatedModel,
       `${historyText}\nuser: ${queryText}`,
       imageCount,
     );
-    const promptTokenEstimate = preflight.promptTokens;
+    const promptTokenEstimate = passedPromptTokenEstimate ?? preflight.promptTokens;
 
     if (!skipBudgetCheck) {
-      // Fetch from server first so budget cannot be bypassed by clearing localStorage or opening a new tab.
-      // Falls back to localStorage total if the server is unreachable.
       const dailyTotalUsd = await fetchServerDailyTotal();
       const budgetDecision = evaluateBudget({
         estimateUsd: preflight.estimatedUsd,
@@ -845,6 +829,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
 
       if (budgetDecision.requiresConfirm) {
+        pendingActionRef.current = () => void executeTurn({
+          queryText,
+          attachmentsToProcess,
+          historyMessages,
+          overrideModel,
+          promptTokenEstimate,
+          skipBudgetCheck: true,
+        });
         setBudgetConfirm({
           estimateUsd: preflight.estimatedUsd,
           dailyTotalUsd,
@@ -852,31 +844,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         return;
       }
     }
-
-    // Build display content for user message
-    const attachmentSummary = draftAttachments.length > 0
-      ? `[${draftAttachments.length} file${draftAttachments.length > 1 ? 's' : ''} attached]`
-      : '';
-
-    const firstImage = draftAttachments.find((f) => f.isImage);
-    const userMessage: Message = {
-      role: 'user',
-      content: input.trim() || attachmentSummary,
-      timestamp: Date.now(),
-      ...(firstImage?.imageData && {
-        imageData: firstImage.imageData,
-        mediaType: firstImage.mediaType,
-      }),
-      attachments: draftAttachments.length > 0 ? [...draftAttachments] : undefined,
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-
-    // Clear inputs
-    setInput('');
-    const attachmentsToProcess = [...draftAttachments];
-    setDraftAttachments([]);
-    if (inputRef.current) inputRef.current.style.height = 'auto';
 
     // PX07: pin the active conversation for this logical send (the selected
     // conversation, or the deterministic New Chat id).
@@ -888,7 +855,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
     // PX07 bounded context (group 3): send only the sanctioned recent window,
     // and surface how many older messages fall outside it.
-    const contextSelection = selectContextHistory(messages);
+    const contextSelection = selectContextHistory(historyMessages);
     setContextExcludedCount(contextSelection.excludedCount);
     const historyForRequest = contextSelection.history.map((item) => ({
       role: item.role,
@@ -969,7 +936,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         queryText,
         historyForRequest,
         attachmentsToProcess,
-        manualModelOverride,
+        overrideModel || manualModelOverride,
         geminiFlashThinkingLevel,
         getDebatePayload(debateSelection),
         firstImageStorageRef,
@@ -1015,7 +982,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         writeSelectedConversation(user?.id ?? null, sendConversationId);
       }
 
-      if (!manualModelOverride) {
+      if (!manualModelOverride && !overrideModel) {
         setCurrentModel(model);
       }
       setCostModel(model);
@@ -1103,7 +1070,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         settlementState: receipt?.settlement.state,
       });
 
-      const promptTokens = calculateHistoryTokens(messages) +
+      const promptTokens = calculateHistoryTokens(historyMessages) +
         estimateTokenCount(queryText) +
         attachmentsToProcess.filter((file) => file.isImage).length * 1600;
       const completionTokens = estimateTokenCount(assistantContent);
@@ -1182,6 +1149,193 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     }
   };
 
+  const handleSend = async (skipBudgetCheck = false) => {
+    // Allow send if there's text OR attachments
+    const hasContent = input.trim() || draftAttachments.length > 0;
+    if (!hasContent || isStreaming || hasPendingVideoUploads) return;
+    if (debateSelection === 'video_ui' && !hasReadyVideo) {
+      setSendValidationError(VIDEO_UI_DEBATE_SEND_ERROR);
+      return;
+    }
+    setSendValidationError(null);
+    resetAutoScroll();
+
+    // Build query text
+    const hasImages = draftAttachments.some((f) => f.isImage);
+    const hasTextFiles = draftAttachments.some((f) => !f.isImage && f.kind !== 'video');
+
+    let queryText = input.trim();
+
+    // If no text but has attachments, use default prompts
+    if (!queryText) {
+      const hasVideos = draftAttachments.some((f) => f.kind === 'video');
+      if (hasImages && hasTextFiles && hasVideos) {
+        queryText = 'Analyze these videos, files, and images.';
+      } else if (hasVideos && hasImages) {
+        queryText = 'Analyze this video and related images.';
+      } else if (hasVideos && hasTextFiles) {
+        queryText = 'Analyze this video with the attached text files.';
+      } else if (hasVideos) {
+        queryText = draftAttachments.length === 1 ? 'Analyze this video.' : 'Analyze these videos.';
+      } else if (hasImages && hasTextFiles) {
+        queryText = 'Analyze these files and images.';
+      } else if (hasImages) {
+        queryText = draftAttachments.length === 1 ? 'Analyze this image.' : 'Analyze these images.';
+      } else if (hasTextFiles) {
+        queryText = 'Process these files.';
+      }
+    }
+
+    const estimatedModel = manualModelOverride || currentModel;
+    const historyText = messages.map((msg) => {
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      return `${msg.role}: ${content}`;
+    }).join('\n');
+    const imageCount = draftAttachments.filter((file) => file.isImage).length;
+    const preflight = calculatePreFlightCost(
+      estimatedModel,
+      `${historyText}\nuser: ${queryText}`,
+      imageCount,
+    );
+    const promptTokenEstimate = preflight.promptTokens;
+
+    if (!skipBudgetCheck) {
+      // Fetch from server first so budget cannot be bypassed by clearing localStorage or opening a new tab.
+      // Falls back to localStorage total if the server is unreachable.
+      const dailyTotalUsd = await fetchServerDailyTotal();
+      const budgetDecision = evaluateBudget({
+        estimateUsd: preflight.estimatedUsd,
+        dailyTotalUsd,
+        dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
+      });
+
+      if (budgetDecision.blocked) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
+            timestamp: Date.now(),
+          },
+        ]);
+        return;
+      }
+
+      if (budgetDecision.requiresConfirm) {
+        pendingActionRef.current = () => void handleSend(true);
+        setBudgetConfirm({
+          estimateUsd: preflight.estimatedUsd,
+          dailyTotalUsd,
+        });
+        return;
+      }
+    }
+
+    // Build display content for user message
+    const attachmentSummary = draftAttachments.length > 0
+      ? `[${draftAttachments.length} file${draftAttachments.length > 1 ? 's' : ''} attached]`
+      : '';
+
+    const firstImage = draftAttachments.find((f) => f.isImage);
+    const userMessage: Message = {
+      role: 'user',
+      content: input.trim() || attachmentSummary,
+      timestamp: Date.now(),
+      ...(firstImage?.imageData && {
+        imageData: firstImage.imageData,
+        mediaType: firstImage.mediaType,
+      }),
+      attachments: draftAttachments.length > 0 ? [...draftAttachments] : undefined,
+    };
+
+    const historyForRequest = [...messages];
+    setMessages((prev) => [...prev, userMessage]);
+
+    // Clear inputs
+    setInput('');
+    const attachmentsToProcess = [...draftAttachments];
+    setDraftAttachments([]);
+    if (inputRef.current) inputRef.current.style.height = 'auto';
+
+    await executeTurn({
+      queryText,
+      attachmentsToProcess,
+      historyMessages: historyForRequest,
+      overrideModel: manualModelOverride,
+      promptTokenEstimate,
+      skipBudgetCheck: true,
+    });
+  };
+
+  const handleRegenerate = async (index: number, modelOverride?: RouterModel) => {
+    if (isStreaming) return;
+    let userIndex = -1;
+    for (let i = index - 1; i >= 0; i--) {
+      if (messages[i]?.role === 'user') {
+        userIndex = i;
+        break;
+      }
+    }
+    if (userIndex === -1) return;
+
+    const userMessage = messages[userIndex];
+    if (!userMessage) return;
+    const userPrompt = typeof userMessage.content === 'string' ? userMessage.content : '';
+    const attachmentsToProcess = userMessage.attachments ? [...userMessage.attachments] : [];
+    const historyBeforeUser = messages.slice(0, userIndex);
+
+    // Keep messages up to user message, discarding the old assistant turn
+    setMessages(messages.slice(0, userIndex + 1));
+    resetAutoScroll();
+
+    await executeTurn({
+      queryText: userPrompt,
+      attachmentsToProcess,
+      historyMessages: historyBeforeUser,
+      overrideModel: modelOverride !== undefined ? modelOverride : manualModelOverride,
+    });
+  };
+
+  const handleEditPrompt = async (index: number, newPrompt: string) => {
+    if (isStreaming) return;
+    const targetUserMessage = messages[index];
+    if (!targetUserMessage || targetUserMessage.role !== 'user') return;
+
+    const attachmentsToProcess = targetUserMessage.attachments ? [...targetUserMessage.attachments] : [];
+    const historyBeforeUser = messages.slice(0, index);
+
+    const updatedUserMessage: Message = {
+      ...targetUserMessage,
+      content: newPrompt,
+      timestamp: Date.now(),
+    };
+
+    // Discard any messages after index, set the edited user message
+    setMessages([...historyBeforeUser, updatedUserMessage]);
+    resetAutoScroll();
+
+    await executeTurn({
+      queryText: newPrompt,
+      attachmentsToProcess,
+      historyMessages: historyBeforeUser,
+      overrideModel: manualModelOverride,
+    });
+  };
+
+  const handleFeedback = (index: number, type: 'up' | 'down') => {
+    setMessages((prev) => {
+      const updated = [...prev];
+      const target = updated[index];
+      if (target) {
+        updated[index] = {
+          ...target,
+          feedback: target.feedback === type ? undefined : type,
+        };
+      }
+      return updated;
+    });
+  };
+
   const handleStop = () => {
     abortControllerRef.current?.abort();
   };
@@ -1194,12 +1348,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const handleBudgetCancel = () => {
+    pendingActionRef.current = null;
     setBudgetConfirm(null);
   };
 
   const handleBudgetConfirmSend = () => {
     setBudgetConfirm(null);
-    void handleSend(true);
+    if (pendingActionRef.current) {
+      const action = pendingActionRef.current;
+      pendingActionRef.current = null;
+      action();
+    } else {
+      void handleSend(true);
+    }
   };
 
   const handleReset = () => {
@@ -1589,12 +1750,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     isMetadataExpanded={expandedMetadataIdx === idx}
                     onToggleMetadata={handleToggleMetadata}
                     registerRef={registerMessageRef}
+                    onRegenerate={handleRegenerate}
+                    onEditPrompt={handleEditPrompt}
+                    onFeedback={handleFeedback}
                   />
                 );
               })}
               <div ref={messagesEndRef} />
             </div>
           )}
+        <ScrollToBottomButton
+          visible={showScrollButton && messages.length > 0}
+          isStreaming={isStreaming}
+          onClick={handleScrollToBottom}
+        />
       </main>
 
       {/* Input Area */}
