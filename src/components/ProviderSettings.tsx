@@ -3,7 +3,7 @@
 // the default first-class gateway. OpenCode configuration is reported by the
 // deployment and must not be presented as ready when no server key is set.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { ProviderPlugins } from '../hooks/useProviderPlugins';
 import { getProviderPlugin, isProviderId, type ProviderId } from '../providerRegistry';
 import { MODEL_ORDER, formatModelPriceLabel, getCatalogEntry } from '../modelCatalog';
