@@ -1295,6 +1295,10 @@
   word-break: break-word;
   line-height: 1.5;
   background: rgba(0, 0, 0, 0.1);
+  max-height: min(45dvh, 280px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 
 .chat-input-container {
@@ -1304,7 +1308,10 @@
   max-height: calc(100% - var(--prismatix-chat-header-h) - 2rem);
   overflow-y: auto;
   scrollbar-width: thin;
-  padding: 0 var(--spacing-lg) calc(1.25rem + env(safe-area-inset-bottom));
+  padding-top: 0;
+  padding-left: max(var(--spacing-lg), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--spacing-lg), env(safe-area-inset-right, 0px));
+  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
   position: relative;
 }
 
@@ -2572,9 +2579,14 @@
   .routing-label-compact { display: inline; }
   .model-icon { display: none; }
   .manual-badge, .debate-badge { font-size: 0.55rem; padding: 2px 4px; }
-  .chat-input-container { padding-inline: 1rem; }
+  .chat-input-container {
+    padding-left: max(1rem, env(safe-area-inset-left, 0px));
+    padding-right: max(1rem, env(safe-area-inset-right, 0px));
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
   .input-row { padding: 0.4rem; border-radius: 16px; }
   .chat-input { font-size: 1rem; }
+  .message-inline-edit-textarea { font-size: 1rem; }
   .prompt-starters-grid { gap: 0.5rem; }
   .prompt-starter-chip { padding-inline: 0.65rem; }
   /* Keep the live cost panel off the message column on phones: anchor it to the
@@ -2604,7 +2616,10 @@
   .empty-state h2 { font-size: 1.4rem; }
 }
 
-.keyboard-open .chat-container.is-empty .prompt-starters-section { display: none; }
+.keyboard-open .chat-container.is-empty .prompt-starters-section,
+.keyboard-open .chat-container.is-empty .empty-state-capabilities {
+  display: none;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .chat-container *, .conversation-sidebar {
@@ -3471,12 +3486,51 @@
     min-height: 36px;
     padding: 0 9px;
   }
+  .message-regenerate-menu-btn {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .thinking-copy-btn {
+    min-height: 36px;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .message-inline-edit-cancel,
+  .message-inline-edit-save {
+    min-height: 40px;
+    padding: 0.5rem 1.15rem;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
   .feedback-btn {
     width: 36px;
   }
   .scroll-to-bottom-btn {
     min-height: 40px;
     padding: 8px 16px;
+  }
+}
+
+@media (pointer: coarse) {
+  .message-regenerate-menu-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .thinking-copy-btn {
+    min-height: 44px;
+  }
+  .message-inline-edit-cancel,
+  .message-inline-edit-save {
+    min-height: 44px;
   }
 }
 
@@ -3816,6 +3870,9 @@
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.7), 0 0 20px rgba(78, 205, 196, 0.06);
   width: 100%;
   max-width: 480px;
+  max-height: min(85dvh, 520px);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   animation: scaleIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -3831,6 +3888,7 @@
   justify-content: space-between;
   padding: 16px 20px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
 }
 
 .shortcuts-modal-title-wrap {
@@ -3855,6 +3913,11 @@
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   transition: all 0.15s ease;
+  min-height: 36px;
+  min-width: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .shortcuts-close-button:hover {
@@ -3867,6 +3930,8 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .shortcuts-section-heading {
@@ -3919,6 +3984,14 @@
   font-size: 0.72rem;
   color: var(--color-text-dim);
   text-align: center;
+  flex-shrink: 0;
+}
+
+/* Hide keyboard shortcuts modal trigger on touch-first & narrow mobile screens */
+@media (max-width: 640px), ((hover: none) and (pointer: coarse)) {
+  .header-button.shortcuts-toggle-button {
+    display: none;
+  }
 }
 
 /* Mobile responsive overlays */
@@ -3926,9 +3999,117 @@
   .empty-state-capabilities {
     grid-template-columns: 1fr;
   }
-  .cost-intelligence-popover {
-    left: auto;
-    right: 0;
-    width: 260px;
+}
+
+/* ==========================================================================
+   BudgetGuard Modal Styles
+   ========================================================================== */
+.budget-guard-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-md);
+  animation: fadeIn 0.15s ease-out;
+}
+
+.budget-guard-modal {
+  background: #0f1621;
+  border: 1px solid rgba(255, 196, 70, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.8), 0 0 24px rgba(255, 196, 70, 0.12);
+  width: 100%;
+  max-width: 440px;
+  max-height: min(85dvh, 480px);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  color: var(--color-text);
+  animation: scaleIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.budget-guard-modal h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--color-warning, #ffc446);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.budget-guard-modal p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text-dim);
+}
+
+.budget-guard-modal p strong {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.budget-guard-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.budget-guard-btn-cancel,
+.budget-guard-btn-confirm {
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.55rem 1.15rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-height: 38px;
+}
+
+.budget-guard-btn-cancel {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-dim);
+}
+
+.budget-guard-btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text);
+}
+
+.budget-guard-btn-confirm {
+  background: var(--color-warning, #ffc446);
+  border: 1px solid transparent;
+  color: #0d131a;
+}
+
+.budget-guard-btn-confirm:hover {
+  background: #ffd066;
+  box-shadow: 0 0 12px rgba(255, 196, 70, 0.3);
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  .budget-guard-btn-cancel,
+  .budget-guard-btn-confirm {
+    min-height: 44px;
+    padding: 0.65rem 1.25rem;
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 }
