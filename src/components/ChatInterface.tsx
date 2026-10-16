@@ -12,7 +12,8 @@ import {
 } from '../catalogSkew';
 import { ContextWarning } from './ContextWarning';
 import { ContextStatus } from './ContextStatus';
-import { BudgetGuard, evaluateBudget } from './BudgetGuard';
+import { BudgetGuard } from './BudgetGuard';
+import { evaluateBudget } from '../utils/budgetEvaluator';
 import { CostEstimator } from './CostEstimator';
 import { SpendTracker } from './SpendTracker';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';

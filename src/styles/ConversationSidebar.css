@@ -178,12 +178,13 @@
     box-shadow: 4px 0 24px rgba(0, 0, 0, 0.6);
     transform: translateX(-100%);
     visibility: hidden;
-    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.25s;
   }
 
   .conversation-sidebar.open {
     transform: translateX(0);
     visibility: visible;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .conversation-sidebar-close {

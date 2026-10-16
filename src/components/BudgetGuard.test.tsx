@@ -1,0 +1,97 @@
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BudgetGuard } from './BudgetGuard';
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe('BudgetGuard component', () => {
+  let container: HTMLDivElement | null = null;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    if (container) {
+      document.body.removeChild(container);
+      container = null;
+    }
+  });
+
+  it('renders nothing when isOpen is false', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(
+        <BudgetGuard
+          isOpen={false}
+          estimateUsd={0.75}
+          dailyTotalUsd={2.0}
+          dailyLimitUsd={10.0}
+          onCancel={vi.fn()}
+          onConfirm={vi.fn()}
+        />
+      );
+    });
+
+    expect(container?.querySelector('.budget-guard-overlay')).toBeNull();
+    expect(container?.querySelector('.budget-guard-modal')).toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('renders modal dialog with accessible labels, cost values, and triggers callbacks', async () => {
+    const onCancel = vi.fn();
+    const onConfirm = vi.fn();
+
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(
+        <BudgetGuard
+          isOpen={true}
+          estimateUsd={0.75}
+          dailyTotalUsd={2.0}
+          dailyLimitUsd={10.0}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+      );
+    });
+
+    const overlay = container?.querySelector('.budget-guard-overlay');
+    expect(overlay).not.toBeNull();
+    expect(overlay?.getAttribute('role')).toBe('dialog');
+    expect(overlay?.getAttribute('aria-modal')).toBe('true');
+    expect(overlay?.getAttribute('aria-labelledby')).toBe('budget-guard-title');
+
+    const heading = container?.querySelector('#budget-guard-title');
+    expect(heading?.textContent).toContain('High-Cost Message Warning');
+
+    const modal = container?.querySelector('.budget-guard-modal');
+    expect(modal?.textContent).toContain('$0.7500');
+    expect(modal?.textContent).toContain('$2.7500');
+    expect(modal?.textContent).toContain('$10.00');
+
+    const cancelBtn = container?.querySelector('.budget-guard-btn-cancel') as HTMLButtonElement;
+    const confirmBtn = container?.querySelector('.budget-guard-btn-confirm') as HTMLButtonElement;
+    expect(cancelBtn).not.toBeNull();
+    expect(confirmBtn).not.toBeNull();
+
+    await act(async () => {
+      cancelBtn.click();
+    });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      confirmBtn.click();
+    });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+});

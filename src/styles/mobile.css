@@ -269,15 +269,26 @@ body:has(.app--chat) {
     min-width: 44px !important;
   }
 
-  /* Composer Model Popover turns into a responsive bottom sheet on phones */
-  .composer-model-popover {
-    bottom: max(0.5rem, env(safe-area-inset-bottom)) !important;
-    left: max(0.5rem, env(safe-area-inset-left)) !important;
-    right: max(0.5rem, env(safe-area-inset-right)) !important;
+  /* Popovers turn into responsive bottom sheets on phones */
+  .composer-model-popover,
+  .metadata-popover,
+  .cost-intelligence-popover {
+    position: fixed !important;
+    bottom: max(0.75rem, env(safe-area-inset-bottom)) !important;
+    left: max(0.75rem, env(safe-area-inset-left)) !important;
+    right: max(0.75rem, env(safe-area-inset-right)) !important;
+    top: auto !important;
     width: auto !important;
     max-width: none !important;
-    max-height: min(75vh, 480px) !important;
+    max-height: min(70dvh, 420px) !important;
+    overflow-y: auto !important;
     border-radius: var(--radius-lg) !important;
+    z-index: 2200 !important;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75) !important;
+  }
+
+  .route-explanation .item-value {
+    max-width: min(14rem, 50vw);
   }
 }
 
@@ -291,14 +302,17 @@ body:has(.app--chat) {
   .conversation-new-button,
   .conversation-sidebar-close,
   .conversation-item-rename,
-  .conversation-item-delete {
+  .conversation-item-delete,
+  .budget-guard-btn-cancel,
+  .budget-guard-btn-confirm {
     min-height: 44px;
   }
 
   .model-indicator-button,
   .conversation-sidebar-close,
   .conversation-item-rename,
-  .conversation-item-delete {
+  .conversation-item-delete,
+  .shortcuts-close-button {
     min-width: 44px;
   }
 }
