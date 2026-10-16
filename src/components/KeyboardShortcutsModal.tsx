@@ -39,17 +39,22 @@ const KEYBOARD_SHORTCUT_CATEGORIES: ShortcutCategory[] = [
 export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({ isOpen, onClose }) => {
   const modalRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (isOpen) {
+      closeButtonRef.current?.focus();
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
 
-    // Focus the close button on mount
-    closeButtonRef.current?.focus();
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopImmediatePropagation();
-        onClose();
+        onCloseRef.current();
       }
     };
 
@@ -57,7 +62,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({ 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -65,7 +70,6 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({ 
     <div
       className='modal-backdrop shortcuts-modal-backdrop'
       onClick={onClose}
-      aria-hidden='true'
     >
       <div
         className='shortcuts-modal'

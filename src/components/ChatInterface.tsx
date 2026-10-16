@@ -98,7 +98,7 @@ import {
   estimateTokenCount,
   type UsageEstimate,
 } from '../costEngine';
-import { calculateHistoryTokens } from '../utils';
+import { calculateHistoryTokens, extractTextContent } from '../utils';
 import {
   uploadAttachment,
   uploadVideoAttachment,
@@ -835,7 +835,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   }) => {
     const estimatedModel = overrideModel || manualModelOverride || currentModel;
     const historyText = historyMessages.map((msg) => {
-      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      const content = extractTextContent(msg.content);
       return `${msg.role}: ${content}`;
     }).join('\n');
     const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
@@ -1229,7 +1229,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
     const estimatedModel = manualModelOverride || currentModel;
     const historyText = messages.map((msg) => {
-      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      const content = extractTextContent(msg.content);
       return `${msg.role}: ${content}`;
     }).join('\n');
     const imageCount = draftAttachments.filter((file) => file.isImage).length;
@@ -1321,20 +1321,64 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
     const userMessage = messages[userIndex];
     if (!userMessage) return;
-    const userPrompt = typeof userMessage.content === 'string' ? userMessage.content : '';
+    const userPrompt = extractTextContent(userMessage.content);
     const attachmentsToProcess = userMessage.attachments ? [...userMessage.attachments] : [];
     const historyBeforeUser = messages.slice(0, userIndex);
 
-    // Keep messages up to user message, discarding the old assistant turn
-    setMessages(messages.slice(0, userIndex + 1));
-    resetAutoScroll();
+    const targetModel = modelOverride !== undefined ? modelOverride : (manualModelOverride || currentModel);
+    const historyText = historyBeforeUser.map((msg) => {
+      const content = extractTextContent(msg.content);
+      return `${msg.role}: ${content}`;
+    }).join('\n');
+    const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
+    const preflight = calculatePreFlightCost(
+      targetModel,
+      `${historyText}\nuser: ${userPrompt}`,
+      imageCount,
+    );
 
-    await executeTurn({
-      queryText: userPrompt,
-      attachmentsToProcess,
-      historyMessages: historyBeforeUser,
-      overrideModel: modelOverride !== undefined ? modelOverride : manualModelOverride,
+    const dailyTotalUsd = await fetchServerDailyTotal();
+    const budgetDecision = evaluateBudget({
+      estimateUsd: preflight.estimatedUsd,
+      dailyTotalUsd,
+      dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
     });
+
+    if (budgetDecision.blocked) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
+          timestamp: Date.now(),
+        },
+      ]);
+      return;
+    }
+
+    const executeRegenerateAction = () => {
+      setMessages(messages.slice(0, userIndex + 1));
+      resetAutoScroll();
+      void executeTurn({
+        queryText: userPrompt,
+        attachmentsToProcess,
+        historyMessages: historyBeforeUser,
+        overrideModel: modelOverride !== undefined ? modelOverride : manualModelOverride,
+        promptTokenEstimate: preflight.promptTokens,
+        skipBudgetCheck: true,
+      });
+    };
+
+    if (budgetDecision.requiresConfirm) {
+      pendingActionRef.current = executeRegenerateAction;
+      setBudgetConfirm({
+        estimateUsd: preflight.estimatedUsd,
+        dailyTotalUsd,
+      });
+      return;
+    }
+
+    executeRegenerateAction();
   };
 
   const handleEditPrompt = async (index: number, newPrompt: string) => {
@@ -1351,16 +1395,60 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       timestamp: Date.now(),
     };
 
-    // Discard any messages after index, set the edited user message
-    setMessages([...historyBeforeUser, updatedUserMessage]);
-    resetAutoScroll();
+    const targetModel = manualModelOverride || currentModel;
+    const historyText = historyBeforeUser.map((msg) => {
+      const content = extractTextContent(msg.content);
+      return `${msg.role}: ${content}`;
+    }).join('\n');
+    const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
+    const preflight = calculatePreFlightCost(
+      targetModel,
+      `${historyText}\nuser: ${newPrompt}`,
+      imageCount,
+    );
 
-    await executeTurn({
-      queryText: newPrompt,
-      attachmentsToProcess,
-      historyMessages: historyBeforeUser,
-      overrideModel: manualModelOverride,
+    const dailyTotalUsd = await fetchServerDailyTotal();
+    const budgetDecision = evaluateBudget({
+      estimateUsd: preflight.estimatedUsd,
+      dailyTotalUsd,
+      dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
     });
+
+    if (budgetDecision.blocked) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
+          timestamp: Date.now(),
+        },
+      ]);
+      return;
+    }
+
+    const executeEditAction = () => {
+      setMessages([...historyBeforeUser, updatedUserMessage]);
+      resetAutoScroll();
+      void executeTurn({
+        queryText: newPrompt,
+        attachmentsToProcess,
+        historyMessages: historyBeforeUser,
+        overrideModel: manualModelOverride,
+        promptTokenEstimate: preflight.promptTokens,
+        skipBudgetCheck: true,
+      });
+    };
+
+    if (budgetDecision.requiresConfirm) {
+      pendingActionRef.current = executeEditAction;
+      setBudgetConfirm({
+        estimateUsd: preflight.estimatedUsd,
+        dailyTotalUsd,
+      });
+      return;
+    }
+
+    executeEditAction();
   };
 
   const handleFeedback = (index: number, type: 'up' | 'down') => {
@@ -1388,21 +1476,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     } else if (e.key === 'ArrowUp' && !input.trim() && messages.length > 0) {
       const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
       if (lastUserMsg) {
-        let promptText = '';
-        if (typeof lastUserMsg.content === 'string') {
-          promptText = lastUserMsg.content;
-        } else if (Array.isArray(lastUserMsg.content)) {
-          const textPart = lastUserMsg.content.find(
-            (part): part is { text: string } =>
-              typeof part === 'object' &&
-              part !== null &&
-              'text' in part &&
-              typeof (part as { text: unknown }).text === 'string',
-          );
-          if (textPart) {
-            promptText = textPart.text;
-          }
-        }
+        const promptText = extractTextContent(lastUserMsg.content);
         if (promptText) {
           e.preventDefault();
           setInput(promptText);
@@ -1478,6 +1552,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       window.removeEventListener('keydown', handleGlobalShortcuts);
     };
   }, [isShortcutsOpen, isStreaming]);
+
+  const handleCloseShortcuts = useCallback(() => {
+    setIsShortcutsOpen(false);
+  }, []);
 
   const handleBudgetCancel = () => {
     pendingActionRef.current = null;
@@ -1990,7 +2068,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
       <KeyboardShortcutsModal
         isOpen={isShortcutsOpen}
-        onClose={() => setIsShortcutsOpen(false)}
+        onClose={handleCloseShortcuts}
       />
       </div>
     </div>

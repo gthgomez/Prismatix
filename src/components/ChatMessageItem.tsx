@@ -10,6 +10,7 @@ import { DebateView } from './DebateView';
 import { PrismatixPulse } from './PrismatixPulse';
 import { getCatalogEntry } from '../modelCatalog';
 import { MessageActionToolbar } from './MessageActionToolbar';
+import { extractTextContent } from '../utils';
 
 export interface ChatMessageItemProps {
   message: Message;
@@ -42,7 +43,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 }) => {
   const modelPillMeta = message.model ? assistantModelPillDisplay(message) : null;
   const isStreamingAssistant = isStreaming && message.role === 'assistant';
-  const textContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+  const textContent = extractTextContent(message.content);
 
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(textContent);
@@ -247,7 +248,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
           </div>
         )}
 
-        {message.role === 'assistant' && (
+        {message.role === 'assistant' && Boolean(message.thinkingLog?.length) && (
           <ThinkingProcess
             thoughts={message.thinkingLog}
             elapsedMs={message.thinkingDurationMs}

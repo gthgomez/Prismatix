@@ -145,6 +145,32 @@ describe('MessageActionToolbar', () => {
     expect(onRegenerate).toHaveBeenCalledWith('gemini-3.8-flash');
   });
 
+  it('displays Claude Haiku 5.5 in dropdown and selects claude-haiku-5-5', () => {
+    const onRegenerate = vi.fn();
+    root = render(
+      <MessageActionToolbar
+        role='assistant'
+        content='Assistant reply'
+        onRegenerate={onRegenerate}
+      />,
+    );
+
+    const menuBtn = container.querySelector<HTMLButtonElement>('.message-regenerate-menu-btn');
+    act(() => {
+      menuBtn?.click();
+    });
+
+    const haikuOption = Array.from(container.querySelectorAll<HTMLButtonElement>('.regenerate-dropdown-item'))
+      .find((el) => el.textContent?.includes('Claude Haiku 5.5'));
+    expect(haikuOption).toBeDefined();
+
+    act(() => {
+      haikuOption?.click();
+    });
+
+    expect(onRegenerate).toHaveBeenCalledWith('claude-haiku-5-5');
+  });
+
   it('handles feedback up and down clicks', () => {
     const onFeedback = vi.fn();
     root = render(
