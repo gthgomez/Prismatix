@@ -79,6 +79,7 @@ describe('BudgetGuard component', () => {
     const confirmBtn = container?.querySelector('.budget-guard-btn-confirm') as HTMLButtonElement;
     expect(cancelBtn).not.toBeNull();
     expect(confirmBtn).not.toBeNull();
+    expect(document.activeElement).toBe(cancelBtn);
 
     await act(async () => {
       cancelBtn.click();
@@ -89,6 +90,69 @@ describe('BudgetGuard component', () => {
       confirmBtn.click();
     });
     expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('dismisses modal on Escape key press', async () => {
+    const onCancel = vi.fn();
+    const root = createRoot(container!);
+
+    await act(async () => {
+      root.render(
+        <BudgetGuard
+          isOpen={true}
+          estimateUsd={0.6}
+          dailyTotalUsd={1.0}
+          dailyLimitUsd={10.0}
+          onCancel={onCancel}
+          onConfirm={vi.fn()}
+        />
+      );
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('dismisses modal on overlay backdrop click, but not on inner modal click', async () => {
+    const onCancel = vi.fn();
+    const root = createRoot(container!);
+
+    await act(async () => {
+      root.render(
+        <BudgetGuard
+          isOpen={true}
+          estimateUsd={0.6}
+          dailyTotalUsd={1.0}
+          dailyLimitUsd={10.0}
+          onCancel={onCancel}
+          onConfirm={vi.fn()}
+        />
+      );
+    });
+
+    const overlay = container?.querySelector('.budget-guard-overlay') as HTMLDivElement;
+    const modal = container?.querySelector('.budget-guard-modal') as HTMLDivElement;
+
+    await act(async () => {
+      modal.click();
+    });
+    expect(onCancel).not.toHaveBeenCalled();
+
+    await act(async () => {
+      overlay.click();
+    });
+    expect(onCancel).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       root.unmount();

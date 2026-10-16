@@ -1295,7 +1295,7 @@
   word-break: break-word;
   line-height: 1.5;
   background: rgba(0, 0, 0, 0.1);
-  max-height: min(45vh, 280px);
+  max-height: min(45dvh, 280px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
@@ -3522,15 +3522,15 @@
 
 @media (pointer: coarse) {
   .message-regenerate-menu-btn {
-    min-width: 36px;
-    min-height: 36px;
+    min-width: 44px;
+    min-height: 44px;
   }
   .thinking-copy-btn {
-    min-height: 36px;
+    min-height: 44px;
   }
   .message-inline-edit-cancel,
   .message-inline-edit-save {
-    min-height: 40px;
+    min-height: 44px;
   }
 }
 
@@ -3998,24 +3998,6 @@
 @media (max-width: 768px) {
   .empty-state-capabilities {
     grid-template-columns: 1fr;
-  }
-  .metadata-popover,
-  .cost-intelligence-popover {
-    position: fixed !important;
-    bottom: max(0.75rem, env(safe-area-inset-bottom)) !important;
-    left: max(0.75rem, env(safe-area-inset-left)) !important;
-    right: max(0.75rem, env(safe-area-inset-right)) !important;
-    top: auto !important;
-    width: auto !important;
-    max-width: none !important;
-    max-height: min(70dvh, 420px) !important;
-    overflow-y: auto !important;
-    border-radius: var(--radius-lg) !important;
-    z-index: 2200 !important;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75) !important;
-  }
-  .route-explanation .item-value {
-    max-width: min(14rem, 50vw);
   }
 }
 

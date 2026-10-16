@@ -304,7 +304,11 @@ body:has(.app--chat) {
   .conversation-item-rename,
   .conversation-item-delete,
   .budget-guard-btn-cancel,
-  .budget-guard-btn-confirm {
+  .budget-guard-btn-confirm,
+  .shortcuts-close-button,
+  .thinking-copy-btn,
+  .message-inline-edit-cancel,
+  .message-inline-edit-save {
     min-height: 44px;
   }
 
@@ -312,7 +316,8 @@ body:has(.app--chat) {
   .conversation-sidebar-close,
   .conversation-item-rename,
   .conversation-item-delete,
-  .shortcuts-close-button {
+  .shortcuts-close-button,
+  .message-regenerate-menu-btn {
     min-width: 44px;
   }
 }
