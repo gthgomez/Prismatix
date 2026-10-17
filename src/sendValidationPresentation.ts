@@ -9,12 +9,19 @@ export interface ComposerSendValidationView {
   detail: string | null;
   /** Whether to show “Open routing & debate” (header menu). */
   showRoutingCta: boolean;
+  /** Whether to show “Open Provider Settings”. */
+  showProviderCta: boolean;
 }
 
 function shouldOfferRoutingMenu(full: string): boolean {
   if (full === VIDEO_UI_DEBATE_SEND_ERROR) return true;
   const lower = full.toLowerCase();
   return lower.includes('debate') || lower.includes('video ui');
+}
+
+function shouldOfferProviderSettings(full: string): boolean {
+  const lower = full.toLowerCase();
+  return lower.includes('provider') || lower.includes('api key') || lower.includes('byok');
 }
 
 /** Composer hybrid: concise summary + optional full detail + routing CTA when relevant. */
@@ -29,6 +36,7 @@ export function getComposerSendValidationView(
         'Video UI debate needs a ready video, or switch debate mode under Routing & debate.',
       detail: full,
       showRoutingCta: true,
+      showProviderCta: false,
     };
   }
 
@@ -36,5 +44,6 @@ export function getComposerSendValidationView(
     summary: full,
     detail: null,
     showRoutingCta: shouldOfferRoutingMenu(full),
+    showProviderCta: shouldOfferProviderSettings(full),
   };
 }

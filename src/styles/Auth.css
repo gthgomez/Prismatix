@@ -276,6 +276,18 @@
   margin: 0;
 }
 
+.auth-beta-notice {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  padding: 0.875rem 1rem;
+}
+
+.auth-beta-subtext {
+  margin-top: 0.5rem !important;
+  font-size: 0.8125rem !important;
+}
+
 .auth-link {
   background: none;
   border: none;

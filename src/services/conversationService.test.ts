@@ -365,6 +365,7 @@ describe('loadConversation', () => {
     expect(msg.provenance?.cost).toEqual({
       totalUsd: 0.00015,
       pricingVersion: '2026-10-07-v9',
+      costStatus: 'settled',
     });
   });
 

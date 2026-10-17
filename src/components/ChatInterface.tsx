@@ -41,27 +41,27 @@ interface CapabilityPillar {
 const CAPABILITY_PILLARS: CapabilityPillar[] = [
   {
     icon: '⚡',
-    title: 'Auto-Routed Development',
-    description: 'Architect an efficient solution. Prismatix auto-routes code generation to top-tier reasoning.',
+    title: 'Code & Architecture',
+    description: 'Auto-routes complex logic to deep-reasoning models.',
     prompt: 'Design a high-throughput event processing architecture in TypeScript with backpressure handling.',
   },
   {
     icon: '⚖️',
-    title: 'Multi-Model Debate',
-    description: 'Have frontier models cross-examine an architectural decision or technical tradeoff.',
+    title: 'Tradeoff Debate',
+    description: 'Compares perspectives across two models in parallel.',
     prompt: 'Debate the tradeoffs between event-sourcing vs. traditional relational schemas for financial auditing.',
     isDebate: true,
   },
   {
     icon: '🔍',
-    title: 'Deep Research & Analysis',
-    description: 'Deconstruct complex documentation, research papers, or distributed systems concepts.',
+    title: 'Systems Analysis',
+    description: 'Examines distributed consensus protocols and failure recovery.',
     prompt: 'Analyze the consensus algorithms Raft vs. Paxos, highlighting edge cases in network partition recovery.',
   },
   {
     icon: '💡',
-    title: 'Ideation & Build Planning',
-    description: 'Turn a raw product idea into an actionable, prioritized engineering roadmap.',
+    title: 'Technical Roadmap',
+    description: 'Drafts phased milestones with concrete deliverables and risks.',
     prompt: 'Create a 3-phase technical roadmap for building a real-time collaborative whiteboard.',
   },
 ];
@@ -845,9 +845,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const handleDeleteConversation = async (conversationId: string) => {
     if (isStreaming) return;
-    if (!confirm('Delete this chat? Its messages and any images used only here will be removed.')) {
-      return;
-    }
     try {
       await deleteConversation(supabase, conversationId);
     } catch (error) {
@@ -1329,7 +1326,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const handleSend = async (skipBudgetCheck = false) => {
     // Allow send if there's text OR attachments
     const hasContent = input.trim() || draftAttachments.length > 0;
-    if (!hasContent || isStreaming || hasPendingVideoUploads) return;
+    if (!hasContent || isStreaming) return;
+    if (hasPendingVideoUploads) {
+      setSendValidationError('Attachments are still processing. Please wait for completion before sending.');
+      return;
+    }
+    if (enabledProviders.size === 0) {
+      setSendValidationError('No providers are currently enabled. Open Provider Settings to configure OpenCode or BYOK keys.');
+      return;
+    }
     if (debateSelection === 'video_ui' && !hasReadyVideo) {
       setSendValidationError(VIDEO_UI_DEBATE_SEND_ERROR);
       return;
@@ -2103,10 +2108,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         {messages.length === 0
           ? (
             <div className='empty-state'>
-              <div className='empty-state-badge'>Intelligent Orchestration</div>
-              <h2>Intelligent Orchestration<br />for <span>Every Turn</span></h2>
+              <div className='empty-state-badge'>Adaptive AI Router</div>
+              <h2>What would you like to<br /><span>build or explore?</span></h2>
               <p>
-                Bring your ideas. Prismatix dynamically routes to the optimal model for speed, cost, and reasoning power.
+                Type a prompt below and let Auto select the best model, or click a starter prompt:
               </p>
 
               <div className='empty-state-capabilities'>
@@ -2122,7 +2127,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                       <span className='capability-card-title'>{card.title}</span>
                     </div>
                     <p className='capability-card-desc'>{card.description}</p>
-                    <span className='capability-card-action'>Use this workflow →</span>
+                    <span className='capability-card-action'>Try this prompt →</span>
                   </button>
                 ))}
               </div>

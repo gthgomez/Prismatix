@@ -251,6 +251,15 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
                 Open routing & debate
               </button>
             )}
+            {composerValidationView.showProviderCta && (
+              <button
+                type='button'
+                className='send-validation-routing-cta send-validation-provider-cta'
+                onClick={onOpenProviderSettings}
+              >
+                Open Provider Settings
+              </button>
+            )}
           </div>
         )}
       </div>

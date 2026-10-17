@@ -24,6 +24,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const refreshCycleRef = useRef(0);
   const refreshTimersRef = useRef<number[]>([]);
+  const activeRequestIdRef = useRef(0);
   const widgetRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const close = () => {
@@ -70,10 +71,15 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
   };
 
   const refreshStats = async () => {
+    const requestId = ++activeRequestIdRef.current;
     setSyncState('syncing');
     setSyncMessage('');
 
     const serverStats = await fetchServerStats();
+    if (activeRequestIdRef.current !== requestId) {
+      return;
+    }
+
     if (serverStats) {
       setStats(serverStats);
       setSyncState('idle');
@@ -204,7 +210,17 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
 
           <div className='spend-sync-note'>
             {syncState === 'error' ? (
-              <span className="error-text">⚠️ {syncMessage}</span>
+              <span className="error-text">
+                ⚠️ {syncMessage}
+                <button
+                  type="button"
+                  className="spend-retry-btn"
+                  onClick={() => void refreshStats()}
+                  style={{ marginLeft: '0.5rem', background: 'none', border: 'none', color: 'var(--color-primary)', textDecoration: 'underline', cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}
+                >
+                  Retry
+                </button>
+              </span>
             ) : (
               lastSyncAt && `Verified at ${new Date(lastSyncAt).toLocaleTimeString()}`
             )}
