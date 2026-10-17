@@ -150,7 +150,7 @@ describe('Wave A — Provenance and Route Explanation', () => {
     const openRouterMsg: Pick<Message, 'routeInfo' | 'cost'> = {
       routeInfo: {
         selection: 'auto',
-        modelTier: 'claude-sonnet-5',
+        modelTier: 'gemini-3.8-flash',
         gateway: 'openrouter',
         reason: 'balanced_tier',
       },
