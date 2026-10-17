@@ -67,6 +67,23 @@ describe('Wave A — Error messaging and retry-after preservation', () => {
     expect(msg).toContain('The connection closed prematurely');
     expect(msg).toContain('Partial output preserved');
   });
+  it('maps active_limit to concurrency guidance with retry-after', () => {
+    const err = new RouterApiError(429, 'active_limit', 'Concurrency limit hit', {
+      retryAfterSeconds: 5,
+    });
+    const msg = describeStreamError(err);
+    expect(msg).toContain('Another request is currently processing.');
+    expect(msg).toContain('5 seconds');
+  });
+
+  it('maps rate_limited denial code to rate limit guidance', () => {
+    const err = new RouterApiError(429, 'rate_limited', 'Too many requests', {
+      retryAfterSeconds: 20,
+    });
+    const msg = describeStreamError(err);
+    expect(msg).toContain('Rate limit exceeded');
+    expect(msg).toContain('20 seconds');
+  });
 });
 
 describe('Wave A — Provenance and Route Explanation', () => {
@@ -127,5 +144,29 @@ describe('Wave A — Provenance and Route Explanation', () => {
     expect(priceWarning).toContain('Pricing for this model is unknown');
     const costBasisRow = rows.find((r) => r.label === 'Est. cost basis');
     expect(costBasisRow).toBeUndefined();
+  });
+
+  it('supports OpenRouter gateway and omits gateway row when gateway is undefined', () => {
+    const openRouterMsg: Pick<Message, 'routeInfo' | 'cost'> = {
+      routeInfo: {
+        selection: 'auto',
+        modelTier: 'gemini-3.8-flash',
+        gateway: 'openrouter',
+        reason: 'balanced_tier',
+      },
+    };
+    const { rows: orRows } = buildRouteExplanationRows(openRouterMsg);
+    expect(orRows.find((r) => r.label === 'Gateway')?.value).toBe('OpenRouter gateway');
+
+    const unknownGatewayMsg: Pick<Message, 'routeInfo' | 'cost'> = {
+      routeInfo: {
+        selection: 'auto',
+        modelTier: 'gemini-3.8-flash',
+        reason: 'legacy_turn',
+        // gateway undefined
+      },
+    };
+    const { rows: ugRows } = buildRouteExplanationRows(unknownGatewayMsg);
+    expect(ugRows.find((r) => r.label === 'Gateway')).toBeUndefined();
   });
 });

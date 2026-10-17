@@ -167,7 +167,7 @@ export async function readRouterStream(
     terminationStatus = 'cancelled';
   } else if (streamError) {
     terminationStatus = 'error';
-  } else if (isDoneReceived || receipt !== undefined) {
+  } else if (isDoneReceived) {
     terminationStatus = 'completed';
   } else {
     terminationStatus = 'interrupted';

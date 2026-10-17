@@ -263,14 +263,14 @@ export async function loadConversation(
     for (const cl of costLogsResult.data as Array<Record<string, unknown>>) {
       if (typeof cl.idempotency_key === 'string' && cl.idempotency_key) {
         const rawStatus = typeof cl.cost_status === 'string' ? cl.cost_status : undefined;
-        const costStatus: 'settled' | 'pending' | 'estimated' =
+        const costStatus: 'settled' | 'pending' | 'estimated' | 'unknown' =
           rawStatus === 'settled'
             ? 'settled'
             : rawStatus === 'pending'
             ? 'pending'
             : rawStatus === 'estimated_legacy'
             ? 'estimated'
-            : 'settled';
+            : 'unknown';
 
         costLogsByExecutionId.set(cl.idempotency_key, {
           totalCost: typeof cl.total_cost === 'number' ? cl.total_cost : Number(cl.total_cost ?? 0),

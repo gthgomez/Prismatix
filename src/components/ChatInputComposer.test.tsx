@@ -122,4 +122,48 @@ describe('ChatInputComposer', () => {
     });
     expect(onStop).toHaveBeenCalledTimes(1);
   });
+
+  it('renders interrupted stream outcome with explicit error message and receipt details', () => {
+    root = render(
+      <ChatInputComposer
+        {...defaultProps}
+        streamOutcome={{
+          status: 'interrupted',
+          executionId: 'ex-int-99',
+          settlementState: 'settled',
+          receiptStatus: 'started',
+          error: 'Connection closed prematurely before the response completed.',
+        }}
+      />,
+    );
+
+    const outcome = container.querySelector('.stream-outcome');
+    expect(outcome).not.toBeNull();
+    expect(outcome?.textContent).toContain('Connection closed prematurely before the response completed.');
+    expect(outcome?.textContent).not.toContain('Usage recording pending');
+    expect(outcome?.textContent).toContain('Settlement: settled');
+    expect(outcome?.textContent).toContain('Status: started');
+    expect(outcome?.textContent).toContain('Execution: ex-int-99');
+  });
+
+  it('renders failed and indeterminate execution outcomes truthfully', () => {
+    root = render(
+      <ChatInputComposer
+        {...defaultProps}
+        streamOutcome={{
+          status: 'receipt',
+          executionId: 'ex-fail-1',
+          settlementState: 'released',
+          receiptStatus: 'failed',
+          terminalOutcome: 'upstream_timeout',
+          error: 'The model provider timed out while generating a response.',
+        }}
+      />,
+    );
+
+    const outcome = container.querySelector('.stream-outcome');
+    expect(outcome?.textContent).toContain('The model provider timed out while generating a response.');
+    expect(outcome?.textContent).toContain('Status: failed');
+    expect(outcome?.textContent).toContain('Outcome: upstream_timeout');
+  });
 });

@@ -313,7 +313,7 @@ export const Auth: React.FC<AuthProps> = ({
           </div>
         ) : (
           <div className="auth-footer auth-beta-notice">
-            <p>Prismatix is currently in invite-only private preview.</p>
+            <p>Public registration is currently unavailable.</p>
             <p className="auth-beta-subtext">
               Want to see how adaptive routing and cost transparency work?{' '}
               <a href="/demo" className="auth-link">

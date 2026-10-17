@@ -345,6 +345,7 @@ describe('loadConversation', () => {
               complexity_score: 80,
               provider: 'google',
               model: 'gemini-3.8-flash',
+              cost_status: 'settled',
             },
           ],
           error: null,
@@ -367,6 +368,50 @@ describe('loadConversation', () => {
       pricingVersion: '2026-10-07-v9',
       costStatus: 'settled',
     });
+  });
+
+  it('maps missing or unsupported cost_status to unknown', async () => {
+    const EXEC_ID = '88888888-8888-4888-8888-888888888888';
+    const fake = makeClient({
+      messages: [
+        {
+          data: [
+            {
+              id: MSG,
+              role: 'assistant',
+              content: 'Hello',
+              created_at: '2026-10-07T00:00:00Z',
+              attachments: [],
+              image_url: null,
+              model_used: 'google:gemini-3.8-flash',
+              token_count: null,
+              execution_id: EXEC_ID,
+            },
+          ],
+          error: null,
+        },
+      ],
+      cost_logs: [
+        {
+          data: [
+            {
+              idempotency_key: EXEC_ID,
+              total_cost: 0.00015,
+              pricing_version: '2026-10-07-v9',
+              route_rationale: 'code_detected',
+              complexity_score: 80,
+              provider: 'google',
+              model: 'gemini-3.8-flash',
+            },
+          ],
+          error: null,
+        },
+      ],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.provenance?.cost?.costStatus).toBe('unknown');
   });
 
   it('degrades gracefully to model_used when cost_logs returns null or empty', async () => {

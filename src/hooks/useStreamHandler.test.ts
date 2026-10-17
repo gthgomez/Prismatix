@@ -141,4 +141,41 @@ describe('useStreamHandler — readRouterStream', () => {
     expect(result.receipt?.settlement.state).toBe('pending');
     expect(result.terminationStatus).toBe('completed');
   });
+
+  it('marks early stream close as interrupted even when a receipt was emitted before [DONE]', async () => {
+    const sse = [
+      'data: {"type":"content_block_delta","delta":{"text":"Tokens before drop"}}\n\n',
+      'data: {"type":"receipt","executionId":"ex-interrupted","status":"started","settlement":{"state":"settled","committedUsd":0.00015,"pendingCalls":0},"calls":[]}\n\n',
+      // socket dropped abruptly without [DONE]
+    ];
+    const stream = createMockStream(sse);
+    const callbacks = makeCallbacks();
+
+    const result = await readRouterStream(stream, 10, callbacks);
+
+    expect(result.assistantContent).toBe('Tokens before drop');
+    expect(result.isDoneReceived).toBe(false);
+    expect(result.receipt).toBeDefined();
+    expect(result.receipt?.executionId).toBe('ex-interrupted');
+    expect(result.receipt?.settlement.committedUsd).toBe(0.00015);
+    // Transport termination is interrupted because [DONE] was never received
+    expect(result.terminationStatus).toBe('interrupted');
+  });
+
+  it('preserves failed and indeterminate execution receipt outcomes independently of transport completion', async () => {
+    const sse = [
+      'data: {"type":"receipt","executionId":"ex-fail","status":"failed","terminalOutcome":"upstream_timeout","settlement":{"state":"released","committedUsd":0,"pendingCalls":0},"calls":[]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const stream = createMockStream(sse);
+    const callbacks = makeCallbacks();
+
+    const result = await readRouterStream(stream, 10, callbacks);
+
+    expect(result.isDoneReceived).toBe(true);
+    expect(result.terminationStatus).toBe('completed');
+    expect(result.receipt?.status).toBe('failed');
+    expect(result.receipt?.terminalOutcome).toBe('upstream_timeout');
+    expect(result.receipt?.settlement.state).toBe('released');
+  });
 });

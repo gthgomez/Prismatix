@@ -132,4 +132,59 @@ describe('KeyboardShortcutsModal', () => {
       root.unmount();
     });
   });
+
+  it('restores focus to trigger element on modal close', async () => {
+    const trigger = document.createElement('button');
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
+    });
+
+    const closeBtn = container?.querySelector('.shortcuts-close-button') as HTMLButtonElement;
+    expect(document.activeElement).toBe(closeBtn);
+
+    await act(async () => {
+      root.unmount();
+    });
+
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+
+  it('traps Tab focus when multiple interactive elements are present', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
+    });
+
+    const modal = container?.querySelector('.shortcuts-modal') as HTMLElement;
+    const closeBtn = container?.querySelector('.shortcuts-close-button') as HTMLButtonElement;
+
+    // Add a second focusable element to test wrapping between first and last
+    const secondBtn = document.createElement('button');
+    secondBtn.textContent = 'Extra Action';
+    modal.appendChild(secondBtn);
+
+    // Focus last element (secondBtn) and press Tab -> should wrap to first element (closeBtn)
+    secondBtn.focus();
+    expect(document.activeElement).toBe(secondBtn);
+
+    const tabEvent = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    window.dispatchEvent(tabEvent);
+    expect(document.activeElement).toBe(closeBtn);
+
+    // Focus first element (closeBtn) and press Shift+Tab -> should wrap to last element (secondBtn)
+    closeBtn.focus();
+    const shiftTabEvent = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(shiftTabEvent);
+    expect(document.activeElement).toBe(secondBtn);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

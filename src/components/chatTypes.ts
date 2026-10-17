@@ -7,6 +7,8 @@ export interface StreamOutcomeState {
   status: 'cancelled' | 'receipt' | 'interrupted' | 'error';
   executionId?: string;
   settlementState?: string;
+  receiptStatus?: import('../../supabase/functions/_shared/execution_receipt').ExecutionReceiptStatus;
+  terminalOutcome?: string | null;
   error?: string;
 }
 

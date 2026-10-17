@@ -36,6 +36,7 @@ const ROLE_LABELS: Record<string, string> = {
 
 const GATEWAY_LABELS: Record<string, string> = {
   opencode: 'OpenCode gateway',
+  openrouter: 'OpenRouter gateway',
   direct_fallback: 'Legacy direct provider',
 };
 
@@ -67,10 +68,12 @@ export function buildRouteExplanationRows(
 
   rows.push({ label: 'Why', value: info.reason });
 
-  rows.push({
-    label: 'Gateway',
-    value: GATEWAY_LABELS[info.gateway] ?? info.gateway,
-  });
+  if (info.gateway) {
+    rows.push({
+      label: 'Gateway',
+      value: GATEWAY_LABELS[info.gateway] ?? info.gateway,
+    });
+  }
 
   if (info.fallbackUsed !== undefined) {
     rows.push({
