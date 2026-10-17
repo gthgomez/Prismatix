@@ -3,7 +3,7 @@ import { getModelPricing, PRICING_VERSION } from './pricing_registry.ts';
 
 const TOKENS_PER_MILLION = 1_000_000;
 
-function roundUsd(value: number): number {
+export function roundUsd(value: number): number {
   return Math.round(value * 1_000_000) / 1_000_000;
 }
 

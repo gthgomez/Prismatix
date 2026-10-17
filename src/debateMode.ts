@@ -16,14 +16,13 @@ export function hasReadyVideoAttachment(attachments: FileUploadPayload[]): boole
 
 export function getDebatePayload(
   selection: DebateSelection,
-): { mode?: 'debate'; debateProfile?: DebateProfile; debateContrarianInstructions?: string } {
+): { mode?: 'debate' | 'off'; debateProfile?: DebateProfile | 'off' } {
   if (selection === 'off') {
-    return {};
+    return { mode: 'off', debateProfile: 'off' };
   }
   return {
     mode: 'debate',
     debateProfile: selection,
-    debateContrarianInstructions: getDebateRoleInstructions(selection, 'contrarian'),
   };
 }
 
@@ -64,6 +63,8 @@ export function getDebateRoleInstructions(profile: DebateProfile, role: DebateRo
         'and any assumptions about user intent that are not supported by the content. ' +
         'Be specific about what a real user would struggle with.'
       );
+    default:
+      return 'Provide your best, well-reasoned critique of the proposal.';
   }
 }
 

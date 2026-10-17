@@ -27,6 +27,7 @@ import {
   admissionDenialStatus,
   commitFromLedger,
   commitReservation,
+  commitEstimated,
   createExecutionOutputBudget,
   deriveOutputTokenCap,
   isAdmissionAllowed,
@@ -455,6 +456,40 @@ describe('commitReservation', () => {
     const result = await commitReservation(client, EXECUTION_ID, 0.5);
     expect(result.ok).toBe(false);
     expect(result.error).toContain('deadlock');
+  });
+});
+
+describe('commitEstimated', () => {
+  it('commits an estimated amount and passes p_estimated_usd', async () => {
+    const { client, calls } = fakeAdmissionClient(() => ({
+      data: { state: 'committed', updated: true, reservation_id: 'r1', committed_usd: '0.045' },
+      error: null,
+    }));
+
+    const result = await commitEstimated(client, EXECUTION_ID, 0.045);
+
+    expect(calls[0]!.fn).toBe('px05_commit_estimated');
+    expect(calls[0]!.params).toEqual({
+      p_execution_id: EXECUTION_ID,
+      p_estimated_usd: 0.045,
+    });
+    expect(result).toMatchObject({ ok: true, state: 'committed', updated: true });
+    expect(result.committedUsd).toBe(0.045);
+  });
+
+  it('clamps nonpositive estimate to 0', async () => {
+    const { client, calls } = fakeAdmissionClient(() => ({
+      data: { state: 'pending_reconcile', updated: true, reservation_id: 'r1' },
+      error: null,
+    }));
+
+    const result = await commitEstimated(client, EXECUTION_ID, -1);
+    expect(calls[0]!.params).toEqual({
+      p_execution_id: EXECUTION_ID,
+      p_estimated_usd: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.state).toBe('pending_reconcile');
   });
 });
 

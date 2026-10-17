@@ -9,12 +9,28 @@ interface DebateViewProps {
 
 const ROLE_LABEL: Record<string, string> = {
   proposer: 'Proposer',
-  contrarian: 'Contrarian',
+  contrarian: 'Adversarial Reviewer',
+  critic: 'Code Critic',
+  implementer: 'Alternative Implementer',
+  skeptic: 'Critical Skeptic',
+  reviewer: 'Reviewer',
+  'alternative architect': 'Alternative Architect',
+  'UI Designer Critic': 'UI Designer Critic',
+  'Product QA / UX Researcher': 'Product QA / UX',
+  'Customer Persona': 'Customer Persona',
 };
 
 const ROLE_COLOR: Record<string, string> = {
   proposer: '#4ECDC4',
   contrarian: '#FF6B6B',
+  critic: '#FF8A65',
+  implementer: '#9575CD',
+  skeptic: '#BA68C8',
+  reviewer: '#4DD0E1',
+  'alternative architect': '#7986CB',
+  'UI Designer Critic': '#F06292',
+  'Product QA / UX Researcher': '#4DB6AC',
+  'Customer Persona': '#FFD54F',
 };
 
 const TRUNCATE_LENGTH = 400;

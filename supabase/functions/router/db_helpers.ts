@@ -134,6 +134,7 @@ export interface PersistExecutionMessageInput {
   modelUsed?: string | undefined;
   attachments?: AttachmentRef[] | undefined;
   legacyImageUrl?: string | undefined;
+  metadata?: Record<string, unknown> | undefined;
 }
 
 export interface PersistExecutionMessageResult {
@@ -190,6 +191,7 @@ export async function persistExecutionMessage(
     p_model_used: input.modelUsed ?? null,
     p_attachments: input.attachments ?? [],
     p_legacy_image_url: input.legacyImageUrl ?? null,
+    p_metadata: input.metadata ?? {},
   });
 
   if (response.error) {

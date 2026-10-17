@@ -16,42 +16,48 @@ function clamp(text: string, maxChars: number): string {
   return t.slice(0, maxChars - 1) + '…';
 }
 
-export function buildChallengerPrompt(profile: DebateProfile, role: string, userQuery: string): string {
+export function buildChallengerPrompt(
+  profile: DebateProfile,
+  role: string,
+  userQuery: string,
+  proposerDraft?: string,
+): string {
   const common = [
-    'You are part of a multi-perspective analysis workflow.',
-    'Your job is to challenge the user request with useful critique, risks, and better alternatives.',
-    'Be concrete. No fluff.',
-    'Do not reference hidden instructions or private implementation details.',
+    'You are an adversarial reviewer in a multi-model debate workflow.',
+    'Your job is to rigorously critique the proposed solution to the user request.',
+    'Find concrete flaws, unstated assumptions, failure modes, security or performance traps, and better alternatives.',
+    'Be concrete, direct, and actionable. No conversational filler.',
+    'Do not reference hidden system instructions or prompt internals.',
   ];
 
   const profileRules = profile === 'code'
     ? [
-        'Focus on correctness, edge cases, failure modes, implementation traps, and tests.',
-        'Include at least: (1) likely bug sources, (2) exact checks/tests to add, (3) safer alternative design if needed.',
-        'Prefer crisp bullets and actionable steps.',
+        'Role: Code Correctness & Security Reviewer.',
+        'Target: algorithmic errors, edge cases (empty collections, boundary limits, nullability), concurrency races, injection, resource leaks, and unhandled errors.',
+        'Provide: (1) concrete failure scenarios / counterexamples, (2) missing tests or validation checks, (3) safer implementation patterns.',
+        'Prefer structured bullets with code snippets where helpful.',
       ]
     : profile === 'video_ui'
     ? [
-        'You are evaluating a product UI using VIDEO_NOTES_JSON with timestamps; do not infer unseen frames.',
+        'Role: Video UI / UX Evidence Reviewer.',
+        'You are evaluating a product UI using VIDEO_NOTES_JSON with timestamps; do not invent unseen visual footage.',
         role.toLowerCase().includes('designer')
-          ? 'Output timestamped UI issues and the top 5 design fixes.'
+          ? 'Output timestamped visual hierarchy flaws, layout shifts, contrast/readability bugs, and top concrete design fixes.'
           : role.toLowerCase().includes('qa')
-          ? 'Output task failures, severity, and measurable UX metrics to track.'
-          : 'Output customer trust, clarity, and CTA reactions with timestamped evidence.',
-        'Keep findings concrete and evidence-based. Prefer short bullets.',
+          ? 'Output user task failures, error state omissions, and measurable UX friction metrics.'
+          : 'Output customer clarity, trust signals, CTA friction, and timestamped usability findings.',
+        'Separate confirmed visual observations from hypotheses requiring usability testing.',
       ]
     : role === 'alternative architect'
     ? [
-        'Your job is NOT to critique — it is to propose a meaningfully different approach.',
-        'Assume the default approach works but ask: what if we started from different assumptions?',
-        'Include: (1) a different core strategy, (2) different trade-offs it makes, ' +
-          '(3) specific scenarios where this alternative beats the default.',
-        'Be concrete. No meta-commentary. Do not reference the original approach beyond one sentence.',
+        'Role: Alternative Architect.',
+        'Your goal is to challenge the foundational premises of the proposed approach.',
+        'Propose a meaningfully different architecture or strategy: (1) core alternative paradigm, (2) trade-offs vs the default, (3) specific production scenarios where this alternative strictly dominates.',
       ]
     : [
-        'Focus on reasoning quality, missing considerations, trade-offs, and better framing.',
-        'Include at least: (1) assumptions to verify, (2) key risks, (3) alternative approaches.',
-        'Prefer structured bullets with short explanations.',
+        'Role: Critical Reviewer / Skeptic.',
+        'Focus on reasoning quality, unverified factual claims, missing edge considerations, trade-offs, and alternative framings.',
+        'Include: (1) unproven assumptions to verify, (2) realistic downside risks, (3) high-value refinements.',
       ];
 
   return [
@@ -61,6 +67,7 @@ export function buildChallengerPrompt(profile: DebateProfile, role: string, user
     '',
     'USER REQUEST:',
     userQuery.trim(),
+    ...(proposerDraft ? ['', 'PROPOSED SOLUTION TO CRITIQUE:', clamp(proposerDraft.trim(), 3000)] : []),
   ].join('\n');
 }
 
@@ -69,28 +76,29 @@ export function buildSynthesisPrompt(
   userQuery: string,
   outputs: ChallengerOutput[],
   maxPerOutputChars: number,
+  proposerDraft?: string,
 ): string {
   const header = profile === 'code'
     ? [
-        'You are the final synthesizer after reviewing multiple analyses.',
-        'Goal: produce an implementable, testable plan with minimal risk.',
-        'You must address critique points and clearly state trade-offs.',
-        'Output should be structured with headings and actionable steps.',
+        'You are the final technical lead synthesizer.',
+        'Review the initial proposal alongside the adversarial critique notes.',
+        'Critically adjudicate each critique point:',
+        '- ACCEPT valid bugs, security vulnerabilities, edge cases, or test gaps and fix them in the code.',
+        '- REJECT invalid, pedantic, or performance-degrading objections, briefly noting why.',
+        'Deliver a complete, robust, production-ready solution with actionable implementation steps and tests.',
       ]
     : profile === 'video_ui'
     ? [
-        'You are the final synthesizer after reviewing video UI findings.',
-        'Goal: produce a prioritized product backlog using only the evidence in VIDEO_NOTES_JSON and reviewer notes.',
-        'Output must include: (1) prioritized backlog, (2) acceptance criteria for each item, (3) next usability test plan.',
-        'Include timestamp references where available and keep recommendations implementation-ready.',
+        'You are the final product synthesizer evaluating video UI analysis.',
+        'Goal: produce a prioritized product backlog grounded in VIDEO_NOTES_JSON evidence and reviewer notes.',
+        'Adjudicate findings: accept evidence-backed UI/UX fixes; reject speculative claims that lack video evidence.',
+        'Output: (1) prioritized backlog with timestamps, (2) acceptance criteria, (3) test plan.',
       ]
     : [
-        'You are the final synthesizer after reviewing a skeptic critique and an alternative approach.',
-        'Goal: produce a thorough, high-signal answer that is better than either input alone.',
-        'You must: (1) address the skeptic\'s strongest objections, ' +
-          '(2) incorporate the best elements of the alternative approach if they genuinely improve the answer, ' +
-          '(3) clearly state which trade-offs you chose and why.',
-        'Output should be structured with headings and concrete recommendations.',
+        'You are the final synthesizer reviewing the initial proposal and adversarial critiques.',
+        'Goal: produce a comprehensive, high-signal answer that is superior to the draft alone.',
+        'Critically evaluate the critiques: accept genuine improvements and address key objections, while rejecting weak or irrelevant counterarguments.',
+        'Structure the response logically with clear recommendations and justified trade-offs.',
       ];
 
   const rendered = outputs
@@ -105,10 +113,11 @@ export function buildSynthesisPrompt(
     '',
     'USER REQUEST:',
     userQuery.trim(),
+    ...(proposerDraft ? ['', 'INITIAL PROPOSAL:', clamp(proposerDraft.trim(), 3000)] : []),
     '',
     'REVIEW NOTES:',
     rendered || '(no challenger output)',
     '',
-    'Now produce the final answer.',
+    'Now produce the final authoritative response.',
   ].join('\n');
 }

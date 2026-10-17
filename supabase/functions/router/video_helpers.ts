@@ -232,6 +232,8 @@ export async function buildVideoUiNotesJson(
     };
   }).filter((a) => a.text.length > 0);
 
+  if (artifacts.length === 0) return null;
+
   const payload = {
     schema_version: 'video_ui_notes_v1',
     video_asset_ids: videoAssetIds,
@@ -242,6 +244,7 @@ export async function buildVideoUiNotesJson(
   let json = JSON.stringify(payload);
   if (json.length <= maxChars) return json;
 
+  // Level 1 compaction: first 12 artifacts with 120-char clamped text
   const compact = {
     schema_version: 'video_ui_notes_v1',
     video_asset_ids: videoAssetIds,
@@ -251,10 +254,28 @@ export async function buildVideoUiNotesJson(
   json = JSON.stringify(compact);
   if (json.length <= maxChars) return json;
 
-  return JSON.stringify({
+  // Level 2 compaction: evenly-spaced representative sample (up to 6 artifacts) across the timeline
+  const step = Math.max(1, Math.floor(artifacts.length / 6));
+  const sampled = artifacts
+    .filter((_, idx) => idx % step === 0)
+    .slice(0, 6)
+    .map((a) => ({ ...a, text: clampText(a.text, 80) }));
+
+  const representative = {
     schema_version: 'video_ui_notes_v1',
     video_asset_ids: videoAssetIds,
-    artifacts: [],
+    artifacts: sampled,
     truncated: true,
-  });
+  };
+  json = JSON.stringify(representative);
+  if (json.length <= maxChars) return json;
+
+  // Tightest bound: top 3 key artifacts with 60-char text (preserves evidence)
+  const minimal = {
+    schema_version: 'video_ui_notes_v1',
+    video_asset_ids: videoAssetIds,
+    artifacts: sampled.slice(0, 3).map((a) => ({ ...a, text: clampText(a.text, 60) })),
+    truncated: true,
+  };
+  return JSON.stringify(minimal);
 }

@@ -23,9 +23,8 @@ const QUERY_SAFETY_MARGIN = 2000;
 const MAX_CLIENT_QUERY_LENGTH = MAX_ROUTER_QUERY_LENGTH - QUERY_SAFETY_MARGIN;
 
 export interface DebateRequestOptions {
-  mode?: 'debate';
+  mode?: 'debate' | 'off';
   debateProfile?: DebateProfile;
-  debateContrarianInstructions?: string;
 }
 
 export interface DebateResponseMetadata {
@@ -50,9 +49,8 @@ interface RouterRequestPayload {
   attachmentRefs?: AttachmentRef[];
   modelOverride?: RouterModel;
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
-  mode?: 'debate';
+  mode?: 'debate' | 'off';
   debateProfile?: DebateProfile;
-  debateContrarianInstructions?: string;
 }
 
 export interface RouterResponseBase {
@@ -403,12 +401,12 @@ export async function askPrismatix(
       devLog('[smartFetch] Manual model override:', modelOverride);
     }
 
-    if (debateOptions?.mode === 'debate' && debateOptions.debateProfile) {
+    if (debateOptions?.mode === 'off') {
+      payload.mode = 'off';
+      payload.debateProfile = 'off';
+    } else if (debateOptions?.mode === 'debate' && debateOptions.debateProfile) {
       payload.mode = 'debate';
       payload.debateProfile = debateOptions.debateProfile;
-      if (debateOptions.debateContrarianInstructions) {
-        payload.debateContrarianInstructions = debateOptions.debateContrarianInstructions;
-      }
     }
 
     devLog('[smartFetch] Request:', {

@@ -20,6 +20,7 @@ import {
   calculateCostBreakdown,
   calculatePreFlightCost,
   evaluateAutoSendSafety,
+  roundUsd,
 } from './cost_engine.ts';
 import {
   DEFAULT_DEBATE_THRESHOLD,
@@ -59,6 +60,7 @@ import {
   buildDebateHeaders,
   buildFallbackSequence,
   computeDebateEligibility,
+  parseDebateRequest,
   runDebateStageWithTimeout,
   selectDebateWorkerMaxTokens,
   serializeMessagesForCost,
@@ -238,6 +240,14 @@ function envFlag(name: string, defaultValue: boolean): boolean {
     return false;
   }
   return defaultValue;
+}
+
+export class BudgetExhaustedError extends Error {
+  readonly code = 'budget_exhausted';
+  constructor(message?: string) {
+    super(message ?? 'budget_exhausted');
+    this.name = 'BudgetExhaustedError';
+  }
 }
 
 const ENABLE_OPENCODE = envFlag('ENABLE_OPENCODE', true);
@@ -491,13 +501,6 @@ async function safeEnqueueReconciliation(
 // DEBATE MODE HELPERS
 // ============================================================================
 
-function normalizeDebateProfile(input?: string): DebateProfile {
-  const v = String(input || '').trim().toLowerCase();
-  if (v === 'video_ui' || v === 'video-ui' || v === 'videoui') return 'video_ui';
-  if (v === 'code' || v === 'coding') return 'code';
-  return 'general';
-}
-
 function parseVideoUiModelLadder(input?: string): RouterModel[] {
   const fallback: RouterModel[] = ['gemini-3.8-flash'];
   const raw = String(input || '')
@@ -522,51 +525,6 @@ function resolveVideoUiDebateModelTier(resolver: ProviderResolver): RouterModel 
     if (isProviderReadyForModelTier(tier, resolver)) return tier;
   }
   return null;
-}
-
-function parseDebateRequest(inputMode?: string, rawModelOverride?: string, profile?: string): {
-  requested: boolean;
-  profile: DebateProfile;
-  trigger: DebateTrigger;
-  // If modelOverride is being used as a "debate toggle", suppress it from normalizeModelOverride()
-  suppressModelOverride: boolean;
-  overrideHeaderValue: string; // used for X-Model-Override when debate is explicit
-} {
-  const p = normalizeDebateProfile(profile);
-  const mode = String(inputMode || '').trim().toLowerCase();
-  const raw = String(rawModelOverride || '').trim().toLowerCase();
-
-  // Explicit via body.mode = "debate"
-  if (mode === 'debate') {
-    return {
-      requested: true,
-      profile: p,
-      trigger: 'explicit',
-      suppressModelOverride: false,
-      overrideHeaderValue: `debate:${p}`,
-    };
-  }
-
-  // Compatibility: allow modelOverride = "debate" or "debate:<profile>"
-  if (raw === 'debate' || raw.startsWith('debate:')) {
-    const maybeProfile = raw.split(':')[1] || '';
-    const pp = normalizeDebateProfile(maybeProfile);
-    return {
-      requested: true,
-      profile: pp,
-      trigger: 'explicit',
-      suppressModelOverride: true,
-      overrideHeaderValue: `debate:${pp}`,
-    };
-  }
-
-  return {
-    requested: false,
-    profile: p,
-    trigger: 'off',
-    suppressModelOverride: false,
-    overrideHeaderValue: '',
-  };
 }
 
 function tryParseJson(input: string): unknown | undefined {
@@ -632,11 +590,20 @@ function isProviderReadyForModelTier(modelTier: RouterModel, resolver: ProviderR
   return resolver.readyForModelTier(modelTier);
 }
 
+export interface DebateParticipant {
+  model: RouterModel;
+  role: string;
+  response: string;
+  keyPoints?: string[];
+}
+
 interface DebateRunResult {
   upstream: UpstreamCallResult;
   synthesisMessages: Message[];
   debateModelTier: RouterModel;
   synthesisDecision: RouteDecision;
+  participants: DebateParticipant[];
+  usagePromises: Promise<NormalizedUsage | null>[];
 }
 
 /**
@@ -714,7 +681,66 @@ async function maybeRunDebateMode(params: {
     if (!sequence.some((tier) => isProviderReadyForModelTier(tier, params.resolver))) return null;
   }
 
-  // Run challengers in parallel (streaming, consumed to text, bounded timeout).
+  const stageUsagePromises: Promise<NormalizedUsage | null>[] = [];
+  const participants: DebateParticipant[] = [];
+
+  const baseUserQuery = params.allMessages.at(-1)?.content || '';
+  const enrichedUserQuery = isVideoUi
+    ? `${baseUserQuery}\n\nVIDEO_NOTES_JSON:\n${params.videoNotesJson}`
+    : baseUserQuery;
+
+  // ── Stage 1: Proposer Draft ──────────────────────────────────────────────
+  // The primary model (or assigned tier) drafts an initial solution to the query.
+  const proposerTier = params.forcedModelTier || primaryTier;
+  const proposerDecision: RouteDecision = {
+    ...decisionFromModel(proposerTier, params.decision.complexityScore, `debate-${params.debateProfile}-proposer`),
+    budgetCap: Math.min(params.workerMaxTokens, 2048),
+  };
+  const proposerMessages: Message[] = [
+    ...params.allMessages.slice(Math.max(0, params.allMessages.length - 6)),
+    { role: 'user', content: enrichedUserQuery },
+  ];
+
+  let proposerDraft = '';
+  const proposerController = new AbortController();
+  const onProposerAbort = () => proposerController.abort();
+  params.signal.addEventListener('abort', onProposerAbort, { once: true });
+  try {
+    const proposerUpstream = await callProviderStream(
+      proposerDecision,
+      proposerMessages,
+      [],
+      proposerController.signal,
+      params.geminiFlashThinkingLevel,
+      params.resolver,
+      params.meter?.(
+        'debate-proposer',
+        'proposer',
+        proposerTier,
+        null,
+      ) ?? undefined,
+    );
+    if (proposerUpstream.usagePromise) {
+      stageUsagePromises.push(proposerUpstream.usagePromise);
+    }
+    proposerDraft = await consumeUpstreamToText(proposerUpstream, proposerController.signal, 3000);
+  } catch (proposerError) {
+    if (proposerError instanceof MeteredCallAccountingError) throw proposerError;
+    return null;
+  } finally {
+    params.signal.removeEventListener('abort', onProposerAbort);
+  }
+
+  if (!proposerDraft) return null;
+
+  participants.push({
+    role: 'proposer',
+    model: proposerTier,
+    response: proposerDraft,
+  });
+
+  // ── Stage 2: Adversarial Reviewers ───────────────────────────────────────
+  // Challengers review the query AND the actual proposer draft.
   const challengerRuns = plan.challengers.map(async (c): Promise<ChallengerOutput | null> => {
     const workerController = new AbortController();
     const timeoutMs = params.debateProfile === 'code'
@@ -726,22 +752,17 @@ async function maybeRunDebateMode(params: {
     const onStageAbort = () => workerController.abort();
     params.signal.addEventListener('abort', onStageAbort, { once: true });
     try {
-      const baseUserQuery = params.allMessages.at(-1)?.content || '';
-      const enrichedUserQuery = isVideoUi
-        ? `${baseUserQuery}\n\nVIDEO_NOTES_JSON:\n${params.videoNotesJson}`
-        : baseUserQuery;
       const workerPrompt = buildChallengerPrompt(
         params.debateProfile,
         c.role,
         enrichedUserQuery,
+        proposerDraft,
       );
       const workerMessages: Message[] = [
-        // Keep context small: last 6 turns + challenger prompt as final user msg.
         ...params.allMessages.slice(Math.max(0, params.allMessages.length - 6)),
         { role: 'user', content: workerPrompt },
       ];
 
-      // Role-aware cascade fallback: try assigned tier first, then role-appropriate alternatives.
       const assignedTier = params.forcedModelTier || c.modelTier;
       const fallbackSequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role);
       for (const workerTier of fallbackSequence) {
@@ -766,6 +787,9 @@ async function maybeRunDebateMode(params: {
               null,
             ) ?? undefined,
           );
+          if (upstream.usagePromise) {
+            stageUsagePromises.push(upstream.usagePromise);
+          }
           const text = await consumeUpstreamToText(
             upstream,
             workerController.signal,
@@ -773,10 +797,7 @@ async function maybeRunDebateMode(params: {
           );
           if (text) return { role: c.role, modelTier: workerTier, text };
         } catch (workerError) {
-          // Accounting failures must fail the request closed, never fall through
-          // to another provider call.
           if (workerError instanceof MeteredCallAccountingError) throw workerError;
-          // try next model in cascade
         }
       }
       return null;
@@ -791,27 +812,32 @@ async function maybeRunDebateMode(params: {
 
   const challengerResults = (await Promise.all(challengerRuns)).filter(Boolean) as ChallengerOutput[];
 
-  // If no challengers succeed, fall back to the normal single-provider path.
   if (challengerResults.length === 0) return null;
 
-  // Redundancy detection: if exactly 2 challengers ran and their outputs are near-identical,
-  // drop the second one. Sending duplicate notes to the synthesizer wastes context and can
-  // cause the synthesis to over-weight a single perspective. Keep index 0 (skeptic/critic).
   const deduplicatedResults = challengerResults.length === 2 &&
     challengersAreRedundant(challengerResults[0]!, challengerResults[1]!)
     ? [challengerResults[0]!]
     : challengerResults;
 
-  // Synthesis: ask the PRIMARY decision model to produce a final answer using debate notes.
-  const baseUserQueryForSynth = params.allMessages.at(-1)?.content || '';
+  for (const c of deduplicatedResults) {
+    participants.push({
+      role: 'contrarian',
+      model: c.modelTier as RouterModel,
+      response: c.text,
+    });
+  }
+
+  // ── Stage 3: Synthesis / Revision ────────────────────────────────────────
+  // Synthesizer evaluates the proposer draft and adversarial critiques to produce the final answer.
   const synthesisUserQuery = isVideoUi
-    ? `${baseUserQueryForSynth}\n\nVIDEO_NOTES_JSON:\n${params.videoNotesJson}`
-    : baseUserQueryForSynth;
+    ? `${baseUserQuery}\n\nVIDEO_NOTES_JSON:\n${params.videoNotesJson}`
+    : baseUserQuery;
   const synthesisPrompt = buildSynthesisPrompt(
     params.debateProfile,
     synthesisUserQuery,
     deduplicatedResults,
     plan.maxChallengerChars,
+    proposerDraft,
   );
 
   const synthesisMessages: Message[] = [
@@ -833,12 +859,17 @@ async function maybeRunDebateMode(params: {
       null,
     ) ?? undefined,
   );
+  if (upstream.usagePromise) {
+    stageUsagePromises.push(upstream.usagePromise);
+  }
 
   return {
     upstream,
     synthesisMessages,
     debateModelTier: synthesisDecision.modelTier,
     synthesisDecision,
+    participants,
+    usagePromises: stageUsagePromises,
   };
 }
 
@@ -1303,8 +1334,11 @@ async function callProviderStream(
       decision.budgetCap,
       getModelPricing(decision.modelTier).outputRatePer1M,
     );
+    if (clampedCap <= 0) {
+      throw new BudgetExhaustedError('execution_output_budget_exhausted');
+    }
     if (clampedCap < decision.budgetCap) {
-      decision = { ...decision, budgetCap: Math.max(1, clampedCap) };
+      decision = { ...decision, budgetCap: clampedCap };
     }
   }
 
@@ -1426,8 +1460,11 @@ async function callGoogleStructured(
       decision.budgetCap,
       getModelPricing(decision.modelTier).outputRatePer1M,
     );
+    if (clampedCap <= 0) {
+      throw new BudgetExhaustedError('execution_output_budget_exhausted');
+    }
     if (clampedCap < decision.budgetCap) {
-      decision = { ...decision, budgetCap: Math.max(1, clampedCap) };
+      decision = { ...decision, budgetCap: clampedCap };
     }
   }
 
@@ -2243,6 +2280,19 @@ Deno.serve(async (req: Request) => {
     const hasImages = imageAttachments.length > 0;
     const hasVideoAssets = videoAssetIds.length > 0;
 
+    if (hasImages && hasVideoAssets) {
+      return new Response(
+        JSON.stringify({
+          error: 'Mixed image and video inputs are not supported in a single request',
+          code: 'mixed_media_not_supported',
+        }),
+        {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
     if (!query && !hasImages && !hasVideoAssets) {
       return new Response(JSON.stringify({ error: 'Bad Request: Missing query, image, or videoAssetIds' }), {
         status: 400,
@@ -2251,9 +2301,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!query && (hasImages || hasVideoAssets)) {
-      if (hasImages && hasVideoAssets) {
-        query = 'Please analyze these images and videos.';
-      } else if (hasVideoAssets) {
+      if (hasVideoAssets) {
         query = videoAssetIds.length === 1
           ? 'Please analyze this video.'
           : `Please analyze these ${videoAssetIds.length} videos.`;
@@ -2490,12 +2538,81 @@ Deno.serve(async (req: Request) => {
       .map((msg) => `${msg.role}: ${msg.content}`)
       .join('\n');
     const estimatedVideoPromptTokens = estimateVideoPromptTokens(videoValidation.ids.length);
-    const preFlightCost = calculatePreFlightCost(
+    let preFlightCost = calculatePreFlightCost(
       decision.modelTier,
       `${historyContext}\nuser: ${effectiveQuery}`,
       imageAttachments.length,
       estimatedVideoPromptTokens,
     );
+
+    const debateEligibility = computeDebateEligibility({
+      profile: debateReq.profile,
+      enableDebateMode: ENABLE_DEBATE_MODE,
+      enableDebateAuto: ENABLE_DEBATE_AUTO,
+      debateRequested: debateReq.requested,
+      debateOptOut: debateReq.optOut,
+      hasImages,
+      hasVideoAssets,
+      complexityScore: decision.complexityScore,
+      threshold: DEBATE_COMPLEXITY_THRESHOLD,
+    });
+
+    if (debateEligibility.doDebate) {
+      const forcedVideoUiTier = debateReq.profile === 'video_ui'
+        ? resolveVideoUiDebateModelTier(providerResolver)
+        : undefined;
+      const challengerCount = resolveDebateChallengerCount(
+        debateReq.profile,
+        decision.complexityScore,
+        effectiveQuery,
+        debateReq.requested,
+      );
+      const plan = getDebatePlan(debateReq.profile, decision.modelTier, challengerCount);
+
+      // Proposer stage
+      const proposerTier = forcedVideoUiTier || decision.modelTier;
+      const proposerCost = calculatePreFlightCost(
+        proposerTier,
+        `${historyContext}\nuser: ${effectiveQuery}`,
+        0,
+        0,
+      );
+
+      // Challenger stages
+      let challengersEstimatedUsd = 0;
+      let challengersTokens = 0;
+      let challengersUnknownRate = false;
+      const draftTokens = proposerCost.projectedOutputTokens;
+      for (const c of plan.challengers) {
+        const cTier = forcedVideoUiTier || c.modelTier;
+        const cCost = calculatePreFlightCost(
+          cTier,
+          `${historyContext}\nuser: ${effectiveQuery}\nproposer draft: ${'x'.repeat(draftTokens * 4)}`,
+          0,
+          0,
+        );
+        challengersEstimatedUsd += cCost.estimatedUsd;
+        challengersTokens += cCost.tokenEstimate;
+        challengersUnknownRate = challengersUnknownRate || cCost.hasUnknownRate;
+      }
+
+      // Synthesis stage
+      const synthesisCost = calculatePreFlightCost(
+        decision.modelTier,
+        `${historyContext}\nuser: ${effectiveQuery}\nproposer draft: ${'x'.repeat(draftTokens * 4)}\ncritique: ${'x'.repeat(draftTokens * 4)}`,
+        imageAttachments.length,
+        estimatedVideoPromptTokens,
+      );
+
+      preFlightCost = {
+        tokenEstimate: proposerCost.tokenEstimate + challengersTokens + synthesisCost.tokenEstimate,
+        promptTokens: proposerCost.promptTokens + synthesisCost.promptTokens,
+        projectedOutputTokens: proposerCost.projectedOutputTokens + synthesisCost.projectedOutputTokens,
+        estimatedUsd: roundUsd(proposerCost.estimatedUsd + challengersEstimatedUsd + synthesisCost.estimatedUsd),
+        pricingVersion: preFlightCost.pricingVersion,
+        hasUnknownRate: preFlightCost.hasUnknownRate || proposerCost.hasUnknownRate || challengersUnknownRate || synthesisCost.hasUnknownRate,
+      };
+    }
 
     // Authoritative cost-safety gate: unknown pricing can never auto-send.
     // This runs before the spend gate so an unpriced model is rejected with a
@@ -2836,6 +2953,8 @@ Deno.serve(async (req: Request) => {
     let debateOverrideHeader = '';
     let debateSynthesisMessages: Message[] | null = null;
     let debateModelTierEffective = '';
+    let debateParticipants: DebateParticipant[] = [];
+    let debateUsagePromises: Promise<NormalizedUsage | null>[] = [];
     let responseDecision: RouteDecision = decision;
 
     // SMD state — declared alongside debate state for the same reason.
@@ -2971,6 +3090,7 @@ Deno.serve(async (req: Request) => {
         enableDebateMode: ENABLE_DEBATE_MODE,
         enableDebateAuto: ENABLE_DEBATE_AUTO,
         debateRequested: debateReq.requested,
+        debateOptOut: debateReq.optOut,
         hasImages,
         hasVideoAssets,
         complexityScore: decision.complexityScore,
@@ -3029,6 +3149,8 @@ Deno.serve(async (req: Request) => {
           debateOverrideHeader = debateReq.requested ? debateReq.overrideHeaderValue : '';
           debateModelTierEffective = debateResult.debateModelTier;
           responseDecision = debateResult.synthesisDecision;
+          debateParticipants = debateResult.participants;
+          debateUsagePromises = debateResult.usagePromises;
         } else {
           upstream = await callProviderStream(
             decision,
@@ -3056,11 +3178,20 @@ Deno.serve(async (req: Request) => {
       } // end: else (not smdEligible)
     } catch (upstreamError) {
       releaseStreamSlot();
+      if (upstreamError instanceof BudgetExhaustedError) {
+        await settleAdmission('ledger');
+        await finalizeLedger('failed', 'budget_exhausted');
+        return new Response(
+          JSON.stringify({ error: 'budget_exhausted', code: 'execution_budget_exhausted' }),
+          {
+            status: 402,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
       if (upstreamError instanceof MeteredCallAccountingError) {
-        // FAIL CLOSED: the provider call was not dispatched because it could not
-        // be accounted for. Surface a retryable 503 with zero provider calls.
-        // The reservation is confirmed-zero work, so it may be released.
-        await settleAdmission('release', { reason: 'pre_dispatch_accounting_failure' });
+        // FAIL CLOSED: if prior stages dispatched work (e.g. proposer in debate), settle from ledger
+        await settleAdmission('ledger');
         await finalizeLedger('failed', 'accounting_unavailable');
         return new Response(
           JSON.stringify({ error: 'accounting_unavailable', code: 'accounting_unavailable' }),
@@ -3132,16 +3263,9 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // When debate ran, synthesis messages are longer than the original prompt.
-    // Recompute the cost estimate so X-Cost-Estimate-USD reflects the actual synthesis call.
-    // Challenger costs remain excluded (noted by X-Debate-Cost-Note: partial).
-    const effectiveCostEstimateUsd = debateSynthesisMessages
-      ? calculatePreFlightCost(
-          responseDecision.modelTier,
-          serializeMessagesForCost(debateSynthesisMessages),
-          0, // synthesis call has no image attachments
-          0,
-        ).estimatedUsd
+    // When debate ran, preFlightCost already accurately covers all planned debate stages.
+    const effectiveCostEstimateUsd = debateActive
+      ? preFlightCost.estimatedUsd
       : preFlightCost.estimatedUsd;
 
     let assistantText = '';
@@ -3152,6 +3276,9 @@ Deno.serve(async (req: Request) => {
     const proxyStream = createNormalizedProxyStream({
       upstreamBody: upstream.response.body,
       extractDeltas: upstream.extractDeltas,
+      initialMeta: debateActive && debateParticipants.length > 0
+        ? { debate_participants: debateParticipants }
+        : undefined,
       onDelta: (delta) => {
         assistantText += delta;
       },
@@ -3261,6 +3388,16 @@ Deno.serve(async (req: Request) => {
                 tokenCount: assistantTokenCount,
                 modelUsed: `${responseDecision.provider}:${effectiveModelId}`,
                 attachments: [],
+                metadata: debateActive
+                  ? {
+                      debate: {
+                        profile: debateProfileEffective,
+                        trigger: debateTriggerEffective,
+                        participants: debateParticipants,
+                        modelTier: debateModelTierEffective,
+                      },
+                    }
+                  : undefined,
               });
               if (assistantPersist.conflict) {
                 // A (execution_id, role) conflict means the durable row already
@@ -3308,10 +3445,13 @@ Deno.serve(async (req: Request) => {
             }
           }
 
-          // PX05: wait for the final streaming call's teed usage parser to settle
-          // its ledger row before computing the authoritative sum.
+          // PX05: wait for all streaming and debate calls to settle their usage
           try {
-            await upstream.usagePromise;
+            const promisesToAwait: Promise<unknown>[] = [...debateUsagePromises];
+            if (upstream.usagePromise) {
+              promisesToAwait.push(upstream.usagePromise);
+            }
+            await Promise.allSettled(promisesToAwait);
           } catch {
             // best-effort; the row stays pending and the estimate path applies.
           }
@@ -3320,7 +3460,10 @@ Deno.serve(async (req: Request) => {
           // authoritatively; if only priced calls remain pending (provider
           // reported no usage) a conservative reservation-capped estimate is
           // committed so the hold does not persist. Unknown price stays pending.
-          await settleAdmission('completion', { estimateUsd: costBreakdown.totalUsd });
+          const fallbackEstimateUsd = debateActive
+            ? Math.max(costBreakdown.totalUsd, preFlightCost.estimatedUsd)
+            : costBreakdown.totalUsd;
+          await settleAdmission('completion', { estimateUsd: fallbackEstimateUsd });
 
           await finalizeLedger(
             receiptOk ? 'completed' : 'indeterminate',
@@ -3397,6 +3540,7 @@ Deno.serve(async (req: Request) => {
           debateProfile: debateProfileEffective,
           debateTrigger: debateTriggerEffective,
           ...(debateModelTierEffective ? { debateModelTier: debateModelTierEffective } : {}),
+          costNote: 'full',
         }),
         // SMD headers: emitted when SMD pipeline ran OR fast-path triggered.
         ...(smdActive && smdRunLog ? {

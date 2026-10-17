@@ -10,6 +10,75 @@ import {
 } from './debate_profiles.ts';
 import type { Message, RouterModel } from './router_logic.ts';
 
+export function normalizeDebateProfile(input?: string): DebateProfile {
+  const v = String(input || '').trim().toLowerCase();
+  if (v === 'video_ui' || v === 'video-ui' || v === 'videoui') return 'video_ui';
+  if (v === 'code' || v === 'coding') return 'code';
+  return 'general';
+}
+
+export function parseDebateRequest(inputMode?: string, rawModelOverride?: string, profile?: string): {
+  requested: boolean;
+  optOut: boolean;
+  profile: DebateProfile;
+  trigger: DebateTrigger;
+  suppressModelOverride: boolean;
+  overrideHeaderValue: string;
+} {
+  const p = normalizeDebateProfile(profile);
+  const mode = String(inputMode || '').trim().toLowerCase();
+  const raw = String(rawModelOverride || '').trim().toLowerCase();
+  const prof = String(profile || '').trim().toLowerCase();
+
+  // Explicit opt-out via mode="off", profile="off", or override="off" / "debate:off"
+  const isOptOut = mode === 'off' || raw === 'off' || raw === 'debate:off' || prof === 'off';
+  if (isOptOut) {
+    return {
+      requested: false,
+      optOut: true,
+      profile: p,
+      trigger: 'off',
+      suppressModelOverride: raw === 'off' || raw === 'debate:off',
+      overrideHeaderValue: '',
+    };
+  }
+
+  // Explicit via body.mode = "debate"
+  if (mode === 'debate') {
+    return {
+      requested: true,
+      optOut: false,
+      profile: p,
+      trigger: 'explicit',
+      suppressModelOverride: false,
+      overrideHeaderValue: `debate:${p}`,
+    };
+  }
+
+  // Compatibility: allow modelOverride = "debate" or "debate:<profile>"
+  if (raw === 'debate' || raw.startsWith('debate:')) {
+    const maybeProfile = raw.split(':')[1] || '';
+    const pp = normalizeDebateProfile(maybeProfile);
+    return {
+      requested: true,
+      optOut: false,
+      profile: pp,
+      trigger: 'explicit',
+      suppressModelOverride: true,
+      overrideHeaderValue: `debate:${pp}`,
+    };
+  }
+
+  return {
+    requested: false,
+    optOut: false,
+    profile: p,
+    trigger: 'off',
+    suppressModelOverride: false,
+    overrideHeaderValue: '',
+  };
+}
+
 export function selectDebateWorkerMaxTokens(
   profile: DebateProfile,
   generalCap: number,
@@ -26,6 +95,7 @@ export function computeDebateEligibility(params: {
   enableDebateMode: boolean;
   enableDebateAuto: boolean;
   debateRequested: boolean;
+  debateOptOut?: boolean;
   hasImages: boolean;
   hasVideoAssets: boolean;
   complexityScore: number;
@@ -36,8 +106,13 @@ export function computeDebateEligibility(params: {
   doDebate: boolean;
   trigger: DebateTrigger;
 } {
+  const hasAnyMedia = params.hasImages || params.hasVideoAssets;
+
+  if (params.debateOptOut) {
+    return { hasAnyMedia, shouldAutoDebate: false, doDebate: false, trigger: 'off' };
+  }
+
   if (params.profile === 'video_ui') {
-    const hasAnyMedia = params.hasImages || params.hasVideoAssets;
     const doDebate = params.enableDebateMode &&
       params.debateRequested &&
       params.hasVideoAssets &&
@@ -46,7 +121,6 @@ export function computeDebateEligibility(params: {
     return { hasAnyMedia, shouldAutoDebate: false, doDebate, trigger };
   }
 
-  const hasAnyMedia = params.hasImages || params.hasVideoAssets;
   const shouldAutoDebate = params.enableDebateMode &&
     params.enableDebateAuto &&
     !params.debateRequested &&
@@ -68,6 +142,7 @@ export function buildDebateHeaders(params: {
   debateProfile: DebateProfile;
   debateTrigger: DebateTrigger;
   debateModelTier?: string;
+  costNote?: 'full' | 'partial';
 }): Record<string, string> {
   if (!params.debateActive) return {};
   return {
@@ -75,8 +150,7 @@ export function buildDebateHeaders(params: {
     'X-Debate-Profile': params.debateProfile,
     'X-Debate-Trigger': params.debateTrigger,
     ...(params.debateModelTier ? { 'X-Debate-Model': params.debateModelTier } : {}),
-    // Challenger costs are not included in the estimate; flag it.
-    'X-Debate-Cost-Note': 'partial',
+    'X-Debate-Cost-Note': params.costNote ?? 'full',
   };
 }
 
