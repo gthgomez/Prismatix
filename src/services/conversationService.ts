@@ -26,6 +26,7 @@ export interface ConversationSummary {
 export interface LoadedMessageCost {
   totalUsd?: number;
   pricingVersion?: string;
+  costStatus?: 'settled' | 'pending' | 'estimated' | 'unknown';
 }
 
 export interface LoadedMessageProvenance {
@@ -234,7 +235,7 @@ export async function loadConversation(
     query,
     client
       .from('cost_logs')
-      .select('idempotency_key, total_cost, pricing_version, route_rationale, complexity_score, provider, model')
+      .select('idempotency_key, total_cost, pricing_version, route_rationale, complexity_score, provider, model, cost_status')
       .eq('conversation_id', conversationId)
       .then(
         (res: { data: unknown; error: unknown }) => res,
@@ -254,12 +255,23 @@ export async function loadConversation(
       complexityScore?: number;
       provider?: string;
       model?: string;
+      costStatus?: 'settled' | 'pending' | 'estimated' | 'unknown';
     }
   >();
 
   if (Array.isArray(costLogsResult?.data)) {
     for (const cl of costLogsResult.data as Array<Record<string, unknown>>) {
       if (typeof cl.idempotency_key === 'string' && cl.idempotency_key) {
+        const rawStatus = typeof cl.cost_status === 'string' ? cl.cost_status : undefined;
+        const costStatus: 'settled' | 'pending' | 'estimated' =
+          rawStatus === 'settled'
+            ? 'settled'
+            : rawStatus === 'pending'
+            ? 'pending'
+            : rawStatus === 'estimated_legacy'
+            ? 'estimated'
+            : 'settled';
+
         costLogsByExecutionId.set(cl.idempotency_key, {
           totalCost: typeof cl.total_cost === 'number' ? cl.total_cost : Number(cl.total_cost ?? 0),
           pricingVersion: typeof cl.pricing_version === 'string' ? cl.pricing_version : undefined,
@@ -267,6 +279,7 @@ export async function loadConversation(
           complexityScore: typeof cl.complexity_score === 'number' ? cl.complexity_score : undefined,
           provider: typeof cl.provider === 'string' ? cl.provider : undefined,
           model: typeof cl.model === 'string' ? cl.model : undefined,
+          costStatus,
         });
       }
     }
@@ -298,6 +311,7 @@ export async function loadConversation(
         ? {
             totalUsd: costLog.totalCost,
             pricingVersion: costLog.pricingVersion,
+            costStatus: costLog.costStatus,
           }
         : undefined;
 

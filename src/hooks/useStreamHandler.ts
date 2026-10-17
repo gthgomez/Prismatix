@@ -6,12 +6,21 @@ import type { DebateParticipant } from '../types';
 import type { TerminalReceipt } from '../../supabase/functions/_shared/execution_receipt';
 import { createSseParser, isDoneData, type SseEvent } from '../sseParser';
 
+export type StreamTerminationStatus =
+  | 'completed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'error';
+
 export interface StreamChunkResult {
   assistantContent: string;
   thinkingLog: string[];
   streamedFinalUsd?: number;
   debateParticipants?: DebateParticipant[];
   receipt?: TerminalReceipt;
+  terminationStatus: StreamTerminationStatus;
+  isDoneReceived: boolean;
+  error?: unknown;
 }
 
 export interface StreamHandlerCallbacks {
@@ -45,6 +54,7 @@ export async function readRouterStream(
   let streamedFinalUsd: number | undefined;
   let debateParticipants: DebateParticipant[] | undefined;
   let receipt: TerminalReceipt | undefined;
+  let isDoneReceived = false;
   let firstTokenReceived = false;
   let lastEmittedCompletion = 0;
   let lastEmittedThinking = 0;
@@ -101,7 +111,11 @@ export async function readRouterStream(
 
   const processEvents = (events: SseEvent[]) => {
     for (const event of events) {
-      if (event.comment || isDoneData(event)) continue;
+      if (event.comment) continue;
+      if (isDoneData(event)) {
+        isDoneReceived = true;
+        continue;
+      }
       if (!event.data) continue;
       try {
         handleJson(JSON.parse(event.data) as Record<string, unknown>);
@@ -111,6 +125,7 @@ export async function readRouterStream(
     }
   };
 
+  let streamError: unknown;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -134,6 +149,8 @@ export async function readRouterStream(
     }
 
     processEvents(parser.flush());
+  } catch (err) {
+    streamError = err;
   } finally {
     if (signal) {
       signal.removeEventListener('abort', onAbort);
@@ -145,5 +162,25 @@ export async function readRouterStream(
     }
   }
 
-  return { assistantContent, thinkingLog, streamedFinalUsd, debateParticipants, receipt };
+  let terminationStatus: StreamTerminationStatus;
+  if (signal?.aborted) {
+    terminationStatus = 'cancelled';
+  } else if (streamError) {
+    terminationStatus = 'error';
+  } else if (isDoneReceived || receipt !== undefined) {
+    terminationStatus = 'completed';
+  } else {
+    terminationStatus = 'interrupted';
+  }
+
+  return {
+    assistantContent,
+    thinkingLog,
+    streamedFinalUsd,
+    debateParticipants,
+    receipt,
+    terminationStatus,
+    isDoneReceived,
+    ...(streamError ? { error: streamError } : {}),
+  };
 }

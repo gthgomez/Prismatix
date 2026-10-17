@@ -3726,6 +3726,18 @@
   border: 1px solid rgba(255, 193, 7, 0.3);
 }
 
+.popover-status-badge.pending {
+  background: rgba(147, 197, 253, 0.15);
+  color: #93c5fd;
+  border: 1px solid rgba(147, 197, 253, 0.3);
+}
+
+.popover-status-badge.unknown {
+  background: rgba(156, 163, 175, 0.15);
+  color: #9ca3af;
+  border: 1px solid rgba(156, 163, 175, 0.3);
+}
+
 .cost-savings-banner {
   background: linear-gradient(135deg, rgba(78, 205, 196, 0.12), rgba(69, 183, 209, 0.08));
   border: 1px solid rgba(78, 205, 196, 0.3);

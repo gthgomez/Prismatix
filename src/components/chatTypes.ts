@@ -4,9 +4,10 @@
 export type SendBlockedReason = 'empty' | 'streaming' | 'video' | 'invalid' | null;
 
 export interface StreamOutcomeState {
-  status: 'cancelled' | 'receipt';
+  status: 'cancelled' | 'receipt' | 'interrupted' | 'error';
   executionId?: string;
   settlementState?: string;
+  error?: string;
 }
 
 export interface PromptStarter {

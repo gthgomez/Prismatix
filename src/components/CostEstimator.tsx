@@ -85,7 +85,9 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
       className={`cost-estimator ${isStreaming ? 'streaming' : 'final'}`}
       aria-live='polite'
     >
-      <div className='cost-estimator-title'>{isStreaming ? 'This message' : 'Final total'}</div>
+      <div className='cost-estimator-title'>
+        {isStreaming ? 'This message' : serverFinalApplied ? 'Settled total' : 'Estimated total'}
+      </div>
       {breakdown.hasUnknownRate ? (
         <p className='cost-estimator-unknown-pricing' role='alert'>
           Pricing for {model} is unknown — no cost estimate shown, and Auto will not send it.

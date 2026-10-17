@@ -76,6 +76,8 @@ export type RouteRole =
 export type RouteGateway = 'opencode' | 'direct_fallback';
 export type RouteSelection = 'auto' | 'override';
 
+export type CostStatus = 'settled' | 'estimated' | 'pending' | 'unknown';
+
 /**
  * Client mirror of the router's explainable route contract (X-Route-Decision).
  * Answers: which role/model/gateway was chosen, why, whether a fallback was
@@ -87,9 +89,9 @@ export interface RouteExplanation {
   modelTier: RouterModel;
   gateway: RouteGateway;
   reason: string;
-  fallbackUsed: boolean;
+  fallbackUsed?: boolean;
   attemptedModels?: string[];
-  priceKnown: boolean;
+  priceKnown?: boolean;
 }
 
 export type GeminiFlashThinkingLevel = 'low' | 'high';
@@ -114,6 +116,7 @@ export type VideoAssetStatus =
 export interface MessageCost {
   estimatedUsd?: number;
   finalUsd?: number;
+  status?: CostStatus;
   pricingVersion?: string;
   promptTokens?: number;
   completionTokens?: number;
