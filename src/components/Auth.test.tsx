@@ -39,7 +39,7 @@ describe('Auth component', () => {
     // Beta notice should be displayed with demo link
     const betaNotice = container?.querySelector('.auth-beta-notice');
     expect(betaNotice).not.toBeNull();
-    expect(betaNotice?.textContent).toContain('Prismatix is currently in invite-only private preview');
+    expect(betaNotice?.textContent).toContain('Public registration is currently unavailable');
     const demoLink = betaNotice?.querySelector('a[href="/demo"]');
     expect(demoLink).not.toBeNull();
 

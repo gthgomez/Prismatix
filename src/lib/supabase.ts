@@ -14,8 +14,8 @@ import { CONFIG } from '../config';
  * L3 ENFORCEMENT: Import this client everywhere, never create new ones.
  */
 export const supabase = createClient(
-  CONFIG.SUPABASE_URL || 'https://placeholder.supabase.co', 
-  CONFIG.SUPABASE_ANON_KEY || 'placeholder-anon-key',
+  CONFIG.SUPABASE_URL, 
+  CONFIG.SUPABASE_ANON_KEY,
   {
     auth: {
       persistSession: true,

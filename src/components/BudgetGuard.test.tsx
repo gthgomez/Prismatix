@@ -158,4 +158,75 @@ describe('BudgetGuard component', () => {
       root.unmount();
     });
   });
+
+  it('restores focus to previously active element upon closing', async () => {
+    const triggerBtn = document.createElement('button');
+    document.body.appendChild(triggerBtn);
+    triggerBtn.focus();
+    expect(document.activeElement).toBe(triggerBtn);
+
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(
+        <BudgetGuard
+          isOpen={true}
+          estimateUsd={0.5}
+          dailyTotalUsd={1.0}
+          dailyLimitUsd={10.0}
+          onCancel={vi.fn()}
+          onConfirm={vi.fn()}
+        />
+      );
+    });
+
+    const cancelBtn = container?.querySelector('.budget-guard-btn-cancel') as HTMLElement;
+    expect(document.activeElement).toBe(cancelBtn);
+
+    // Unmount modal (close)
+    await act(async () => {
+      root.unmount();
+    });
+
+    expect(document.activeElement).toBe(triggerBtn);
+    triggerBtn.remove();
+  });
+
+  it('traps Tab focus within modal bounds in both directions', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(
+        <BudgetGuard
+          isOpen={true}
+          estimateUsd={0.5}
+          dailyTotalUsd={1.0}
+          dailyLimitUsd={10.0}
+          onCancel={vi.fn()}
+          onConfirm={vi.fn()}
+        />
+      );
+    });
+
+    const cancelBtn = container?.querySelector('.budget-guard-btn-cancel') as HTMLElement;
+    const confirmBtn = container?.querySelector('.budget-guard-btn-confirm') as HTMLElement;
+    expect(cancelBtn).not.toBeNull();
+    expect(confirmBtn).not.toBeNull();
+
+    // Focus last button and press Tab -> should wrap to first button (cancel)
+    confirmBtn.focus();
+    expect(document.activeElement).toBe(confirmBtn);
+
+    const tabEvent = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    window.dispatchEvent(tabEvent);
+    expect(document.activeElement).toBe(cancelBtn);
+
+    // Focus first button and press Shift+Tab -> should wrap to last button (confirm)
+    cancelBtn.focus();
+    const shiftTabEvent = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(shiftTabEvent);
+    expect(document.activeElement).toBe(confirmBtn);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

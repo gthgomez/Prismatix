@@ -73,7 +73,7 @@ export type RouteRole =
   | 'code_review'
   | 'cheap_critic';
 
-export type RouteGateway = 'opencode' | 'direct_fallback';
+export type RouteGateway = 'opencode' | 'openrouter' | 'direct_fallback';
 export type RouteSelection = 'auto' | 'override';
 
 export type CostStatus = 'settled' | 'estimated' | 'pending' | 'unknown';
@@ -87,7 +87,7 @@ export interface RouteExplanation {
   selection: RouteSelection;
   role?: RouteRole;
   modelTier: RouterModel;
-  gateway: RouteGateway;
+  gateway?: RouteGateway;
   reason: string;
   fallbackUsed?: boolean;
   attemptedModels?: string[];

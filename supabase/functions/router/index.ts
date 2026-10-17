@@ -208,7 +208,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers':
     'Content-Type, Authorization, x-client-info, apikey, x-client-request-id, x-request-id',
   'Access-Control-Expose-Headers':
-    'X-Prismatix-Protocol, X-Prismatix-Schema, X-Prismatix-Catalog, X-Prismatix-Tariff, X-Prismatix-Release, X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Cost-Note, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path, X-Prismatix-Execution-Id',
+    'X-Prismatix-Protocol, X-Prismatix-Schema, X-Prismatix-Catalog, X-Prismatix-Tariff, X-Prismatix-Release, X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Cost-Note, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path, X-Prismatix-Execution-Id, Retry-After, X-Route-Decision',
 };
 
 const FUNCTION_TIMEOUT_MS = 55000;

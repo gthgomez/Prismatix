@@ -26,7 +26,7 @@ describe('InteractivePublicDemo', () => {
       root.render(<InteractivePublicDemo autoplay={false} />);
     });
 
-    expect(container?.textContent).toContain('Experience Adaptive Routing Live');
+    expect(container?.textContent).toContain('Experience Adaptive Routing Interactive Preview');
     expect(container?.textContent).toContain('Prerecorded Interactive Preview · Synthetic Data');
     expect(container?.textContent).toContain('DeepSeek V4 Pro');
     expect(container?.textContent).toContain('Strong (high reasoning)');

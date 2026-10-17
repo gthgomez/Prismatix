@@ -182,6 +182,7 @@ describe('ChatInterface in-flight conversation load invalidation', () => {
           cost: {
             totalUsd: 0.00012,
             pricingVersion: '2026-10-07-v9',
+            costStatus: 'settled',
           },
           routeRationale: 'fast_path',
         },

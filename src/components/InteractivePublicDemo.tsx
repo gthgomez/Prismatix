@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { FormattedMessage } from './FormattedMessage';
 import '../styles/InteractivePublicDemo.css';
 
 export interface DemoScenario {
@@ -253,7 +254,7 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
       <div className="demo-header">
         <div className="demo-title-group">
           <span className="demo-badge-synthetic">Prerecorded Interactive Preview · Synthetic Data</span>
-          <h2 className="demo-title">Experience Adaptive Routing Live</h2>
+          <h2 className="demo-title">Experience Adaptive Routing Interactive Preview</h2>
           <p className="demo-subtitle">
             See how Prismatix evaluates prompt complexity, selects the optimal model, and provides transparent cost receipts without incurring real API charges.
           </p>
@@ -315,8 +316,15 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
             </div>
 
             <div className="demo-message-content demo-formatted-output">
-              <pre className="demo-stream-pre">{displayedText || '(Click play to stream response...)'}</pre>
-              {isPlaying && <span className="demo-cursor" aria-hidden="true">▍</span>}
+              {displayedText ? (
+                <FormattedMessage
+                  content={displayedText}
+                  isStreaming={isPlaying}
+                  showCursor={isPlaying}
+                />
+              ) : (
+                <pre className="demo-stream-pre">(Click play to stream response...)</pre>
+              )}
             </div>
 
             {/* Performance & Cost Breakdown */}

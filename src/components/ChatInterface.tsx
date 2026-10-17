@@ -180,11 +180,13 @@ export function describeStreamError(error: unknown): string {
       case 'daily_limit_exceeded':
       case 'monthly_limit_exceeded':
         return `Usage allowance reached for this period.${retryNote} Check spend settings or wait for quota reset.`;
+      case 'rate_limited':
       case 'rate_limit_exceeded':
       case 'too_many_requests':
         return `Rate limit exceeded.${retryNote || ' Please wait a moment before sending another message.'}`;
+      case 'active_limit':
       case 'concurrency_limit':
-        return 'Another request is currently processing. Please wait for it to complete.';
+        return `Another request is currently processing.${retryNote} Please wait for it to complete.`;
       case 'no_available_provider':
       case 'provider_unavailable':
         return 'No active provider is currently available for this model. Check Provider Settings to enable a provider.';
@@ -234,6 +236,13 @@ export function describeStreamError(error: unknown): string {
     case 'DuplicateRequestError':
     case 'duplicate_request':
       return 'That exact request was already sent just now. Edit your message slightly and send again.';
+    case 'active_limit':
+    case 'concurrency_limit':
+      return 'Another request is currently processing. Please wait for it to complete.';
+    case 'rate_limited':
+    case 'rate_limit_exceeded':
+    case 'too_many_requests':
+      return 'Rate limit exceeded. Please wait a moment before sending another message.';
     case 'video_not_ready':
       return 'One or more videos are still processing. Please wait and try again.';
     case 'stream_interrupted':
@@ -705,14 +714,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           ? {
               cost: {
                 finalUsd:
-                  provenance.cost.costStatus === 'pending' || provenance.cost.costStatus === 'estimated'
-                    ? undefined
-                    : provenance.cost.totalUsd,
+                  provenance.cost.costStatus === 'settled'
+                    ? provenance.cost.totalUsd
+                    : undefined,
                 estimatedUsd:
                   provenance.cost.costStatus === 'pending' || provenance.cost.costStatus === 'estimated'
                     ? provenance.cost.totalUsd
                     : undefined,
-                status: provenance.cost.costStatus ?? 'settled',
+                status: provenance.cost.costStatus ?? 'unknown',
                 pricingVersion: provenance.cost.pricingVersion,
               },
             }
@@ -722,10 +731,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               routeInfo: {
                 selection: provenance.routeRationale === 'manual_override' ? 'override' : 'auto',
                 modelTier: provenance.model || currentModel,
-                gateway: provenance.provider === 'opencode' ? 'opencode' : 'direct_fallback',
+                gateway:
+                  provenance.provider === 'opencode'
+                    ? 'opencode'
+                    : provenance.provider === 'openrouter'
+                    ? 'openrouter'
+                    : undefined,
                 reason: provenance.routeRationale,
                 fallbackUsed: undefined,
-                priceKnown: true,
+                priceKnown:
+                  provenance.cost && provenance.cost.costStatus !== 'unknown'
+                    ? true
+                    : undefined,
                 role: provenance.routeRole,
               },
             }
@@ -1130,6 +1147,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateParticipants,
         receipt,
         terminationStatus,
+        error: streamError,
       } = await readRouterStream(
         stream,
         promptTokenEstimate,
@@ -1187,11 +1205,45 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
       // Handle premature stream termination without terminal receipt/[DONE]
       if (terminationStatus === 'interrupted' || terminationStatus === 'error') {
+        const errorMsg =
+          terminationStatus === 'interrupted'
+            ? 'Connection closed prematurely before the response completed.'
+            : (streamError ? String(streamError) : 'Stream encountered an error during transmission.');
+
         setStreamOutcome({
-          status: 'error',
-          executionId,
-          error: 'Connection closed prematurely before the response completed.',
+          status: terminationStatus,
+          executionId: receipt?.executionId ?? executionId,
+          settlementState: receipt?.settlement?.state,
+          receiptStatus: receipt?.status,
+          terminalOutcome: receipt?.terminalOutcome ?? null,
+          error: errorMsg,
         });
+
+        const hasReceiptSettled = receipt?.settlement?.state === 'settled';
+        const isPendingSettlement = receipt?.settlement?.state === 'pending';
+        const authoritativeCost = hasReceiptSettled
+          ? receipt!.settlement.committedUsd
+          : undefined;
+
+        // Do not infer no charge from a disconnect if the server already committed/settled
+        const costStatus: CostStatus = hasReceiptSettled
+          ? 'settled'
+          : isPendingSettlement
+          ? 'pending'
+          : 'unknown';
+
+        if (authoritativeCost !== undefined && authoritativeCost > 0) {
+          recordCost({
+            model,
+            cost: authoritativeCost,
+            pricingVersion: costPricingVersion || computedCost.pricingVersion,
+          });
+          setSessionCostTotal((prev) => prev + authoritativeCost);
+          setFinalMessageCost(authoritativeCost);
+        } else {
+          setFinalMessageCost(null);
+        }
+
         if (streamUpdateApplies()) {
           setMessages((prev) => {
             const updated = [...prev];
@@ -1203,8 +1255,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   ? `${assistantContent}\n\n⚠️ _[Response interrupted before completion]_`
                   : '⚠️ _[Connection interrupted before response started]_',
                 cost: {
-                  estimatedUsd: computedCost.finalUsd,
-                  status: 'unknown',
+                  estimatedUsd: authoritativeCost ?? computedCost.finalUsd,
+                  finalUsd: authoritativeCost,
+                  status: costStatus,
                   pricingVersion: costPricingVersion || computedCost.pricingVersion,
                   promptTokens,
                   completionTokens,
@@ -1221,11 +1274,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         return;
       }
 
-      // PX06: surface the terminal receipt (execution id + settlement state).
+      // PX06: surface the terminal receipt (execution id + settlement state + status + outcome).
       setStreamOutcome({
         status: 'receipt',
         executionId: receipt?.executionId ?? executionId,
         settlementState: receipt?.settlement.state,
+        receiptStatus: receipt?.status,
+        terminalOutcome: receipt?.terminalOutcome ?? null,
       });
 
       // Truthful cost settlement logic:
@@ -1307,9 +1362,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         scheduleCostEstimatorHide(1500);
       } else {
         console.error('Stream error:', error);
+        const errorDesc = describeStreamError(error);
+        setStreamOutcome({
+          status: 'error',
+          executionId: executionIdRef.current,
+          error: errorDesc,
+        });
         setMessages((prev) => [...prev, {
           role: 'assistant',
-          content: `⚠️ ${describeStreamError(error)}`,
+          content: `⚠️ ${errorDesc}`,
           timestamp: Date.now(),
         }]);
         scheduleCostEstimatorHide(1500);

@@ -458,12 +458,23 @@ export async function askPrismatix(
       }
       const retryAfterHeader = headers?.get('Retry-After');
       let retryAfterSeconds: number | undefined;
-      if (retryAfterHeader && /^\d+$/.test(retryAfterHeader)) {
-        retryAfterSeconds = parseInt(retryAfterHeader, 10);
-      } else if (typeof parsed?.retry_after === 'number') {
-        retryAfterSeconds = parsed.retry_after;
-      } else if (typeof parsed?.retryAfterSeconds === 'number') {
-        retryAfterSeconds = parsed.retryAfterSeconds;
+      if (retryAfterHeader) {
+        const trimmed = retryAfterHeader.trim();
+        if (/^\d+$/.test(trimmed)) {
+          retryAfterSeconds = parseInt(trimmed, 10);
+        } else {
+          const parsedDate = Date.parse(trimmed);
+          if (!Number.isNaN(parsedDate)) {
+            retryAfterSeconds = Math.max(0, Math.ceil((parsedDate - Date.now()) / 1000));
+          }
+        }
+      }
+      if (retryAfterSeconds === undefined) {
+        if (typeof parsed?.retry_after === 'number' && Number.isFinite(parsed.retry_after)) {
+          retryAfterSeconds = parsed.retry_after;
+        } else if (typeof parsed?.retryAfterSeconds === 'number' && Number.isFinite(parsed.retryAfterSeconds)) {
+          retryAfterSeconds = parsed.retryAfterSeconds;
+        }
       }
       const message = typeof parsed?.error === 'string'
         ? parsed.error

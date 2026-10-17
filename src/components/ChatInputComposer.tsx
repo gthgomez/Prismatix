@@ -203,8 +203,14 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
         {streamOutcome && (
           <div className='stream-outcome' role='status' aria-live='polite'>
             <span>
-              {streamOutcome.status === 'cancelled'
+              {streamOutcome.status === 'cancelled' || streamOutcome.receiptStatus === 'cancelled'
                 ? 'Response stopped'
+                : streamOutcome.status === 'interrupted'
+                ? (streamOutcome.error || 'Response interrupted')
+                : streamOutcome.status === 'error' || streamOutcome.receiptStatus === 'failed'
+                ? (streamOutcome.error || 'Execution failed')
+                : streamOutcome.receiptStatus === 'indeterminate'
+                ? 'Execution indeterminate'
                 : streamOutcome.settlementState === 'settled'
                 ? 'Usage recorded'
                 : streamOutcome.settlementState === 'released'
@@ -215,7 +221,9 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
               <summary>Receipt details</summary>
               <div>
                 Settlement: {streamOutcome.settlementState ?? 'pending'}
-                {streamOutcome.executionId && <span>Execution: {streamOutcome.executionId}</span>}
+                {streamOutcome.receiptStatus && <span> · Status: {streamOutcome.receiptStatus}</span>}
+                {streamOutcome.terminalOutcome && <span> · Outcome: {streamOutcome.terminalOutcome}</span>}
+                {streamOutcome.executionId && <span> · Execution: {streamOutcome.executionId}</span>}
               </div>
             </details>
           </div>
