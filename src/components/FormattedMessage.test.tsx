@@ -73,6 +73,48 @@ describe('FormattedMessage', () => {
     expect(em?.textContent).toBe('info');
   });
 
+  it('does not treat letters around asterisks as emphasis', () => {
+    root = render(<FormattedMessage content={'Keep a*b*c and é*b*é and ü*info*ü literal, emphasize *info* and café *au* lait.'} />);
+    const emphasis = [...container.querySelectorAll('em')].map((node) => node.textContent);
+    expect(emphasis).toEqual(['info', 'au']);
+    expect(container.textContent).toContain('a*b*c');
+    expect(container.textContent).toContain('é*b*é');
+    expect(container.textContent).toContain('ü*info*ü');
+  });
+
+  it('nests indented lists and keeps mixed markers as separate lists', () => {
+    const content = [
+      '- Parent',
+      '  - Child',
+      '  - Child two',
+      '- Sibling',
+      '1. Number',
+      '  1. Nested number',
+    ].join('\n');
+    root = render(<FormattedMessage content={content} />);
+
+    const topBullet = container.querySelector('ul.formatted-list');
+    expect(topBullet).not.toBeNull();
+    const topBulletItems = [...topBullet!.children].filter((node) => node.tagName === 'LI');
+    expect(topBulletItems).toHaveLength(2);
+    expect(topBulletItems[0]?.textContent).toContain('Parent');
+    const nestedBullets = topBulletItems[0]?.querySelectorAll(':scope > ul.formatted-list > li');
+    expect(nestedBullets).toHaveLength(2);
+    expect(nestedBullets?.[0]?.textContent).toBe('Child');
+    expect(nestedBullets?.[1]?.textContent).toBe('Child two');
+    expect(topBulletItems[1]?.querySelector('ul')).toBeNull();
+    expect(topBulletItems[1]?.textContent).toBe('Sibling');
+
+    const numbered = container.querySelector('ol.formatted-list');
+    expect(numbered).not.toBeNull();
+    const numberedItems = [...numbered!.children].filter((node) => node.tagName === 'LI');
+    expect(numberedItems).toHaveLength(1);
+    expect(numberedItems[0]?.textContent).toContain('Number');
+    const nestedNumber = numberedItems[0]?.querySelector(':scope > ol.formatted-list > li');
+    expect(nestedNumber?.textContent).toBe('Nested number');
+    expect(container.querySelector('ul.formatted-list ol')).toBeNull();
+  });
+
   it('renders headers and bullet lists', () => {
     const content = '### Features\n- First feature\n- Second feature\n1. Numbered item';
     root = render(<FormattedMessage content={content} />);

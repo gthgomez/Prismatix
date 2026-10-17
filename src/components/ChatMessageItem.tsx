@@ -11,6 +11,7 @@ import { PrismatixPulse } from './PrismatixPulse';
 import { getCatalogEntry } from '../modelCatalog';
 import { MessageActionToolbar } from './MessageActionToolbar';
 import { extractTextContent } from '../utils';
+import { chatMessageItemRenderLog } from './chatMessageItemRenderLog';
 
 export interface ChatMessageItemProps {
   message: Message;
@@ -41,6 +42,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   onEditPrompt,
   onFeedback,
 }) => {
+  if (import.meta.env.MODE === 'test') chatMessageItemRenderLog.push(index);
   const modelPillMeta = message.model ? assistantModelPillDisplay(message) : null;
   const isStreamingAssistant = isStreaming && message.role === 'assistant';
   const textContent = extractTextContent(message.content);
