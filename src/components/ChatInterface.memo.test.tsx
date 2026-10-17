@@ -195,4 +195,80 @@ describe('ChatInterface message memo', () => {
     });
     expect(host.querySelector('.message-assistant')?.textContent).toContain('Done');
   });
+
+  it('does not rerender an earlier assistant while a later one streams, and regenerates that earlier turn', async () => {
+    const setComposer = (value: string) => {
+      const input = host.querySelector<HTMLTextAreaElement>('textarea')!;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      act(() => {
+        setter.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+    const send = async () => {
+      const button = host.querySelector<HTMLButtonElement>('.send-button')!;
+      await act(async () => {
+        button.click();
+        await flushPromises();
+        await flushPromises();
+      });
+    };
+
+    const first = openStream();
+    (askPrismatix as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(routeResult(first.stream));
+    root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);
+    await act(async () => { await flushPromises(); });
+    setComposer('First question');
+    await send();
+    await act(async () => {
+      first.push('Answer one');
+      first.finish();
+      await flushPromises();
+    });
+    expect(host.querySelector('.message-assistant')?.textContent).toContain('Answer one');
+
+    const second = openStream();
+    (askPrismatix as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(routeResult(second.stream));
+    setComposer('Second question');
+    await send();
+    await act(async () => {
+      second.push('Two');
+      await flushPromises();
+    });
+    const assistants = () => host.querySelectorAll('.message-assistant');
+    expect(assistants()).toHaveLength(2);
+    expect(assistants()[1]?.textContent).toContain('Two');
+    const earlierAssistantRenders = rendersOf(1);
+
+    await act(async () => {
+      second.push(' more');
+      await flushPromises();
+    });
+    expect(assistants()[1]?.textContent).toContain('Two more');
+    expect(rendersOf(1)).toBe(earlierAssistantRenders);
+    expect(assistants()[0]?.textContent).toContain('Answer one');
+
+    const regenerated = openStream();
+    (askPrismatix as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(routeResult(regenerated.stream));
+    await act(async () => {
+      second.finish();
+      await flushPromises();
+    });
+    const regenerate = assistants()[0]!.querySelector<HTMLButtonElement>('.message-regenerate-btn')!;
+    await act(async () => {
+      regenerate.click();
+      await flushPromises();
+      await flushPromises();
+    });
+    const calls = (askPrismatix as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[calls.length - 1]?.[0]).toBe('First question');
+    expect(host.textContent).toContain('First question');
+    expect(host.textContent).not.toContain('Second question');
+    await act(async () => {
+      regenerated.push('Regenerated');
+      regenerated.finish();
+      await flushPromises();
+    });
+    expect(host.querySelector('.message-assistant')?.textContent).toContain('Regenerated');
+  });
 });

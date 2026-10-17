@@ -118,29 +118,38 @@ function parseBlocks(markdown: string): Block[] {
  * Parses inline formatting (inline `code`, **bold**, *italic*) within a text string.
  * Completely immune to HTML injection as output is React nodes only.
  */
-function parseInline(text: string): React.ReactNode[] {
-  // Regex matches: `inline code`, **bold**, or *italic*
-  // Emphasis cannot start or end inside a word, including non-ASCII letters and digits.
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|(?<![\p{L}\p{N}_*])\*[^*\s][^*]*\*(?![\p{L}\p{N}_*]))/gu;
-  const parts = text.split(pattern);
+function formatMatchedToken(token: string, key: number): React.ReactNode {
+  if (token.startsWith('`') && token.endsWith('`') && token.length > 1) {
+    return (
+      <code key={key} className='inline-code'>
+        {token.slice(1, -1)}
+      </code>
+    );
+  }
+  if (token.startsWith('**') && token.endsWith('**') && token.length > 3) {
+    return <strong key={key}>{token.slice(2, -2)}</strong>;
+  }
+  if (token.startsWith('*') && token.endsWith('*') && token.length > 2) {
+    return <em key={key}>{token.slice(1, -1)}</em>;
+  }
+  return token;
+}
 
-  return parts.map((part, index) => {
-    if (!part) return null;
-    if (part.startsWith('`') && part.endsWith('`') && part.length > 1) {
-      return (
-        <code key={index} className='inline-code'>
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    if (part.startsWith('**') && part.endsWith('**') && part.length > 3) {
-      return <strong key={index}>{part.slice(2, -2)}</strong>;
-    }
-    if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
-      return <em key={index}>{part.slice(1, -1)}</em>;
-    }
-    return part;
-  });
+function parseInline(text: string): React.ReactNode[] {
+  // Only captured matches are formatted. Unmatched text is literal, even when
+  // it starts and ends with an asterisk, as in "*one*word and word*two*".
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|(?<![\p{L}\p{N}_*])\*[^*\s][^*]*\*(?![\p{L}\p{N}_*]))/gu;
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start > cursor) nodes.push(text.slice(cursor, start));
+    const token = match[0];
+    nodes.push(formatMatchedToken(token, nodes.length));
+    cursor = start + token.length;
+  }
+  if (cursor < text.length || nodes.length === 0) nodes.push(text.slice(cursor));
+  return nodes;
 }
 
 /**
@@ -196,12 +205,6 @@ function renderProse(text: string): React.ReactNode {
     }
     const top = listStack[listStack.length - 1]!;
 
-    if (listStack.length === 1 && indent < top.indent) {
-      closeLists();
-      listStack.push({ indent, ordered, items: [item] });
-      return;
-    }
-
     if (indent >= top.indent + 2 && top.items.length > 0) {
       const owner = top.items[top.items.length - 1]!;
       const frame: ListFrame = { indent, ordered, items: [item] };
@@ -210,7 +213,8 @@ function renderProse(text: string): React.ReactNode {
       return;
     }
 
-    if (top.ordered === ordered && indent <= top.indent) {
+    // One space either way is still the same list. Only a two-space increase nests.
+    if (top.ordered === ordered && indent < top.indent + 2) {
       top.items.push(item);
       return;
     }
