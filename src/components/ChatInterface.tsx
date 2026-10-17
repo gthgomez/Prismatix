@@ -747,6 +747,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               },
             }
           : {}),
+        ...(item.debateParticipants && item.debateParticipants.length > 0
+          ? { debateParticipants: item.debateParticipants, debateActive: true }
+          : {}),
+        ...(item.debateProfile ? { debateProfile: item.debateProfile as any } : {}),
+        ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
       });
     }
     return mapped;
@@ -1374,6 +1379,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           timestamp: Date.now(),
         }]);
         scheduleCostEstimatorHide(1500);
+
+        // Priority F1: Restore user prompt and attachments if failure occurred before first token was delivered
+        if (waitingFirstTokenRef.current) {
+          if (queryText) setInput(queryText);
+          if (attachmentsToProcess.length > 0) {
+            setDraftAttachments(attachmentsToProcess);
+          }
+        }
       }
     } finally {
       abortControllerRef.current = null;

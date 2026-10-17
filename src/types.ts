@@ -95,8 +95,16 @@ export interface RouteExplanation {
 }
 
 export type GeminiFlashThinkingLevel = 'low' | 'high';
-export type DebateProfile = 'general' | 'code' | 'video_ui';
-export type DebateRole = 'proposer' | 'contrarian';
+export type DebateProfile = 'general' | 'code' | 'video_ui' | 'off';
+export type DebateRole =
+  | 'proposer'
+  | 'contrarian'
+  | 'critic'
+  | 'implementer'
+  | 'skeptic'
+  | 'reviewer'
+  | 'alternative architect'
+  | (string & Record<never, never>);
 
 export interface DebateParticipant {
   model: RouterModel;

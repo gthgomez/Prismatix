@@ -9,7 +9,7 @@
 // bounded context selector, so ChatInterface does not accumulate more state.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { RouterModel, RouterProvider, RouteRole } from '../types';
+import type { DebateParticipant, RouterModel, RouterProvider, RouteRole } from '../types';
 import { isKnownModel } from '../modelCatalog';
 import {
   parseStorageReference,
@@ -49,6 +49,10 @@ export interface LoadedMessage {
   executionId?: string | null;
   tokenCount?: number | null;
   provenance?: LoadedMessageProvenance;
+  metadata?: Record<string, unknown>;
+  debateParticipants?: DebateParticipant[];
+  debateProfile?: string;
+  debateTrigger?: string;
 }
 
 export interface ConversationListCursor {
@@ -146,6 +150,7 @@ interface RawMessageRow {
   model_used?: unknown;
   token_count?: unknown;
   execution_id?: unknown;
+  metadata?: unknown;
 }
 
 function adaptLegacyImageUrl(row: RawMessageRow, attachments: AttachmentRef[]): AttachmentRef[] {
@@ -220,7 +225,7 @@ export async function loadConversation(
   const limit = options.limit ?? DEFAULT_MESSAGE_LIMIT;
   let query = client
     .from('messages')
-    .select('id, role, content, created_at, attachments, image_url, model_used, token_count, execution_id')
+    .select('id, role, content, created_at, attachments, image_url, model_used, token_count, execution_id, metadata')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
@@ -292,6 +297,18 @@ export async function loadConversation(
     const modelUsed = typeof row.model_used === 'string' ? row.model_used : null;
     const tokenCount = typeof row.token_count === 'number' ? row.token_count : null;
 
+    const rawMetadata = typeof row.metadata === 'object' && row.metadata !== null
+      ? row.metadata as Record<string, unknown>
+      : undefined;
+    const debateMeta = typeof rawMetadata?.debate === 'object' && rawMetadata.debate !== null
+      ? rawMetadata.debate as Record<string, unknown>
+      : undefined;
+    const debateParticipants = Array.isArray(debateMeta?.participants)
+      ? debateMeta.participants as DebateParticipant[]
+      : undefined;
+    const debateProfile = typeof debateMeta?.profile === 'string' ? debateMeta.profile : undefined;
+    const debateTrigger = typeof debateMeta?.trigger === 'string' ? debateMeta.trigger : undefined;
+
     let provenance: LoadedMessageProvenance | undefined;
     if (role === 'assistant') {
       const parsedModel = parseModelUsed(modelUsed);
@@ -337,6 +354,10 @@ export async function loadConversation(
       executionId,
       tokenCount,
       provenance,
+      ...(rawMetadata ? { metadata: rawMetadata } : {}),
+      ...(debateParticipants ? { debateParticipants } : {}),
+      ...(debateProfile ? { debateProfile } : {}),
+      ...(debateTrigger ? { debateTrigger } : {}),
     };
   });
 
