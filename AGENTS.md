@@ -97,3 +97,12 @@ deno lint .\supabase\functions\router\
 - Name the exact files inspected.
 - If the task touches auth, routing, streaming, costs, or migrations, call out the risk before editing.
 - Do not call work complete without naming the checks actually run.
+
+## Cursor Cloud specific instructions
+
+- This VM is Linux. Use bash. The PowerShell snippets in Quick Commands are for Windows workstations; the same npm scripts and `deno check supabase/functions/router/index.ts` apply here.
+- Tool versions below are observations from one Cloud Agent image, rechecked on 2026-10-17. They are not repository pins. That image's login shell resolved `node` to v22.14.0 at `/exec-daemon/node` and `npm` to 10.9.9. `deno` 2.9.7 was at `/usr/local/bin/deno` because the environment install script placed it there. `package.json` `engines` accept Node `^20.19.0 || >=22.12.0`. `.nvmrc` pins 22.12.0 for local development. CI uses Node 20.
+- `vite.config.ts` sets the dev server port to 3000. `server.open` is true; a missing display does not stop the server.
+- `/demo` and `/about` render without Supabase env vars. `src/main.tsx` skips its anon-key check on those routes, and those pages do not load the Supabase client.
+- Every other route lazy-loads `AuthenticatedApp`, which constructs the shared client before auth state is known. That includes the signed-out screens on `/` and `/reset-password`, not only a signed-in session. Those screens need a resolved Supabase URL and `VITE_SUPABASE_ANON_KEY`. `src/config.ts` uses `VITE_SUPABASE_URL` when it is set. Otherwise it derives the project URL by stripping a trailing `/functions/v1/router` from `VITE_ROUTER_ENDPOINT`. When a URL resolves and `VITE_ROUTER_ENDPOINT` is unset or its host differs, the router URL becomes `${SUPABASE_URL}/functions/v1/router`. `VITE_ROUTER_ENDPOINT` is not a third mandatory variable. `createClient` throws `supabaseUrl is required.` when the resolved URL is empty. When that URL is present and the anon key is empty, it throws `supabaseKey is required.` `src/main.tsx` also logs a missing `VITE_SUPABASE_ANON_KEY` on non-public routes and still mounts React; the client throw is the failure that stops those screens.
+- On that same image, `deno check supabase/functions/router/index.ts` exited 0, and `deno lint supabase/functions/router/` reported existing `no-explicit-any` findings in router sources. Re-run both after router edits. That lint output is repository code, not a missing toolchain. Unit tests, `npm run type-check`, `npm run lint`, and `npm run build` do not need Supabase env vars.
