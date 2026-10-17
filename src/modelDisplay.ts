@@ -72,14 +72,16 @@ export function buildRouteExplanationRows(
     value: GATEWAY_LABELS[info.gateway] ?? info.gateway,
   });
 
-  rows.push({
-    label: 'Fallback',
-    value: info.fallbackUsed ? 'Yes (see why above)' : 'No — first choice worked',
-  });
+  if (info.fallbackUsed !== undefined) {
+    rows.push({
+      label: 'Fallback',
+      value: info.fallbackUsed ? 'Yes (see why above)' : 'No — first choice worked',
+    });
+  }
 
   // Never present a numeric cost basis when the price is unknown; the
   // fail-closed policy surfaces priceWarning instead.
-  if (info.priceKnown && msg.cost?.estimatedUsd !== undefined) {
+  if (info.priceKnown !== false && msg.cost?.estimatedUsd !== undefined) {
     const versionSuffix = msg.cost.pricingVersion ? ` · prices ${msg.cost.pricingVersion}` : '';
     rows.push({
       label: 'Est. cost basis',
@@ -87,9 +89,9 @@ export function buildRouteExplanationRows(
     });
   }
 
-  const priceWarning = info.priceKnown
-    ? undefined
-    : 'Pricing for this model is unknown — Auto blocked the send (fail-closed cost safety).';
+  const priceWarning = info.priceKnown === false
+    ? 'Pricing for this model is unknown — Auto blocked the send (fail-closed cost safety).'
+    : undefined;
 
   return { rows, priceWarning };
 }

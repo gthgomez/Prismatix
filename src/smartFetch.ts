@@ -96,6 +96,30 @@ export class DuplicateRequestError extends Error {
 }
 
 /**
+ * Typed router error carrying HTTP status, structured code, and optional retry-after.
+ */
+export class RouterApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly retryAfterSeconds?: number;
+  readonly executionId?: string;
+
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    options?: { retryAfterSeconds?: number; executionId?: string },
+  ) {
+    super(message);
+    this.name = 'RouterApiError';
+    this.status = status;
+    this.code = code;
+    this.retryAfterSeconds = options?.retryAfterSeconds;
+    this.executionId = options?.executionId;
+  }
+}
+
+/**
  * Parses the router's X-Route-Decision header (URI-encoded compact JSON).
  * Returns undefined when absent or malformed — the route explanation is
  * additive metadata and must never break the stream.
@@ -416,23 +440,40 @@ export async function askPrismatix(
     // PX07: 409 disambiguation. `duplicate_request` is surfaced as a typed error
     // so the client can load the existing turn; `request_key_conflict` and every
     // other error are ordinary failures (never a silent reload).
-    const throwRouterError = (status: number, text: string): never => {
+    const throwRouterError = (status: number, text: string, headers?: Headers): never => {
       let parsed: Record<string, unknown> | undefined;
       try {
         parsed = JSON.parse(text) as Record<string, unknown>;
       } catch {
-        throw new Error(`Router returned ${status}: ${text}`);
+        throw new RouterApiError(status, `http_${status}`, `Router returned ${status}: ${text}`);
       }
-      const code = String(parsed?.code ?? parsed?.error ?? '');
+      const code = String(parsed?.code ?? parsed?.error ?? `http_${status}`);
       if (status === 409 && code === 'duplicate_request') {
         throw new DuplicateRequestError(
           typeof parsed?.executionId === 'string' ? parsed.executionId : undefined,
         );
       }
       if (parsed?.error === 'video_not_ready') {
-        throw new Error('One or more videos are still processing. Please wait and try again.');
+        throw new RouterApiError(status, 'video_not_ready', 'One or more videos are still processing. Please wait and try again.');
       }
-      throw new Error(typeof parsed?.error === 'string' ? parsed.error : `Router returned ${status}`);
+      const retryAfterHeader = headers?.get('Retry-After');
+      let retryAfterSeconds: number | undefined;
+      if (retryAfterHeader && /^\d+$/.test(retryAfterHeader)) {
+        retryAfterSeconds = parseInt(retryAfterHeader, 10);
+      } else if (typeof parsed?.retry_after === 'number') {
+        retryAfterSeconds = parsed.retry_after;
+      } else if (typeof parsed?.retryAfterSeconds === 'number') {
+        retryAfterSeconds = parsed.retryAfterSeconds;
+      }
+      const message = typeof parsed?.error === 'string'
+        ? parsed.error
+        : typeof parsed?.message === 'string'
+        ? parsed.message
+        : `Router returned ${status}`;
+      throw new RouterApiError(status, code, message, {
+        retryAfterSeconds,
+        executionId: typeof parsed?.executionId === 'string' ? parsed.executionId : undefined,
+      });
     };
 
     let response = await doFetch(accessToken);
@@ -453,10 +494,10 @@ export async function askPrismatix(
             await signOutLocal('router-401-after-retry');
             throw new Error('Session expired. Please sign in again.');
           }
-          throwRouterError(response.status, retryText);
+          throwRouterError(response.status, retryText, response.headers);
         }
       } else {
-        throwRouterError(response.status, errorText);
+        throwRouterError(response.status, errorText, response.headers);
       }
     }
 

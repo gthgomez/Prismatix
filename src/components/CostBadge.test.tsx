@@ -104,4 +104,100 @@ describe('CostBadge', () => {
       root.unmount();
     });
   });
+
+  it('renders pending settlement status with accessible pending badge', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(
+        <CostBadge
+          cost={{
+            status: 'pending',
+            estimatedUsd: 0.0005,
+            pricingVersion: 'test-v1',
+          }}
+          model='gemini-3.8-flash'
+        />,
+      );
+    });
+
+    const badge = container?.querySelector('.cost-badge-interactive') as HTMLButtonElement;
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain('pending');
+
+    await act(async () => {
+      badge.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const statusBadge = container?.querySelector('.popover-status-badge');
+    expect(statusBadge?.textContent).toBe('Pending Settlement');
+    expect(statusBadge?.classList.contains('pending')).toBe(true);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('renders unknown cost status truthfully without fabricating amounts', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(
+        <CostBadge
+          cost={{
+            status: 'unknown',
+          }}
+          model='gemini-3.8-flash'
+        />,
+      );
+    });
+
+    const badge = container?.querySelector('.cost-badge-interactive') as HTMLButtonElement;
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain('unknown');
+
+    await act(async () => {
+      badge.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const statusBadge = container?.querySelector('.popover-status-badge');
+    expect(statusBadge?.textContent).toBe('Unknown Cost');
+    expect(statusBadge?.classList.contains('unknown')).toBe(true);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('displays truthful price illustration vs frontier baseline without misleading savings claims', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(
+        <CostBadge
+          cost={{
+            finalUsd: 0.0001,
+            status: 'settled',
+            promptTokens: 1000,
+            completionTokens: 200,
+          }}
+          model='gemini-3.8-flash'
+        />,
+      );
+    });
+
+    const badge = container?.querySelector('.cost-badge-interactive') as HTMLButtonElement;
+    await act(async () => {
+      badge.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const banner = container?.querySelector('.cost-savings-banner');
+    expect(banner).not.toBeNull();
+    // Must NOT claim "Auto-Route Savings" or "saved" percentage without qualification
+    expect(banner?.textContent).not.toContain('Auto-Route Savings');
+    expect(banner?.textContent).toContain('Price Illustration');
+    expect(banner?.textContent).toContain('Same tokens on frontier baseline (gpt-6-sol)');
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
+

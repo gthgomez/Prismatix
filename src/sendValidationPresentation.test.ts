@@ -27,5 +27,15 @@ describe('getComposerSendValidationView', () => {
   it('omits routing CTA for unrelated messages', () => {
     const v = getComposerSendValidationView('Network timeout.');
     expect(v!.showRoutingCta).toBe(false);
+    expect(v!.showProviderCta).toBe(false);
+  });
+
+  it('shows provider CTA for provider-related or API key messages', () => {
+    const v = getComposerSendValidationView('No providers are currently enabled. Open Provider Settings to configure.');
+    expect(v!.showProviderCta).toBe(true);
+    expect(v!.showRoutingCta).toBe(false);
+
+    const v2 = getComposerSendValidationView('Missing OpenAI API key for BYOK mode.');
+    expect(v2!.showProviderCta).toBe(true);
   });
 });

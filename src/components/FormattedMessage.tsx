@@ -42,7 +42,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ language, code }) => {
           {copied ? '✓ Copied' : 'Copy'}
         </button>
       </div>
-      <pre className='code-block-pre'>
+      <pre className='code-block-pre' tabIndex={0} aria-label={`${displayLang} code block`}>
         <code className={`code-block-content language-${displayLang}`}>{code}</code>
       </pre>
     </div>

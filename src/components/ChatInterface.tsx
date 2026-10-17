@@ -41,27 +41,27 @@ interface CapabilityPillar {
 const CAPABILITY_PILLARS: CapabilityPillar[] = [
   {
     icon: '⚡',
-    title: 'Auto-Routed Development',
-    description: 'Architect an efficient solution. Prismatix auto-routes code generation to top-tier reasoning.',
+    title: 'Code & Architecture',
+    description: 'Auto-routes complex logic to deep-reasoning models.',
     prompt: 'Design a high-throughput event processing architecture in TypeScript with backpressure handling.',
   },
   {
     icon: '⚖️',
-    title: 'Multi-Model Debate',
-    description: 'Have frontier models cross-examine an architectural decision or technical tradeoff.',
+    title: 'Tradeoff Debate',
+    description: 'Compares perspectives across two models in parallel.',
     prompt: 'Debate the tradeoffs between event-sourcing vs. traditional relational schemas for financial auditing.',
     isDebate: true,
   },
   {
     icon: '🔍',
-    title: 'Deep Research & Analysis',
-    description: 'Deconstruct complex documentation, research papers, or distributed systems concepts.',
+    title: 'Systems Analysis',
+    description: 'Examines distributed consensus protocols and failure recovery.',
     prompt: 'Analyze the consensus algorithms Raft vs. Paxos, highlighting edge cases in network partition recovery.',
   },
   {
     icon: '💡',
-    title: 'Ideation & Build Planning',
-    description: 'Turn a raw product idea into an actionable, prioritized engineering roadmap.',
+    title: 'Technical Roadmap',
+    description: 'Drafts phased milestones with concrete deliverables and risks.',
     prompt: 'Create a 3-phase technical roadmap for building a real-time collaborative whiteboard.',
   },
 ];
@@ -107,6 +107,7 @@ import {
 } from '../services/storageService';
 import { fetchServerDailyTotal, recordCost } from '../services/financeTracker';
 import type {
+  CostStatus,
   FileUploadPayload,
   GeminiFlashThinkingLevel,
   Message,
@@ -161,9 +162,68 @@ function shouldTreatAsVideoAttachment(file: FileUploadPayload): boolean {
   return VIDEO_NAME_PATTERN.test(file.name || '');
 }
 
-// Router/edge error codes arrive as terse message strings; map the known ones
-// to user-actionable text instead of surfacing raw codes like "not_entitled".
-function describeStreamError(error: unknown): string {
+// Router/edge error codes arrive as terse message strings or structured RouterApiError;
+// map known codes to user-actionable text with concrete next permitted steps.
+export function describeStreamError(error: unknown): string {
+  if (error && typeof error === 'object' && 'name' in error && error.name === 'RouterApiError') {
+    const apiErr = error as { status?: number; code?: string; message?: string; retryAfterSeconds?: number };
+    const retryNote = apiErr.retryAfterSeconds ? ` Please wait ${apiErr.retryAfterSeconds} seconds before trying again.` : '';
+    switch (apiErr.code) {
+      case 'not_entitled':
+        return 'Your account doesn\u2019t have access to this feature yet. If you just signed up, sign out and back in once \u2014 if it still fails, contact support.';
+      case 'entitlement_unavailable':
+        return 'We couldn\u2019t verify your account access right now. Please try again in a moment.';
+      case 'duplicate_request':
+        return 'That exact request was already sent just now. Edit your message slightly and send again.';
+      case 'budget_exhausted':
+      case 'balance_exhausted':
+      case 'daily_limit_exceeded':
+      case 'monthly_limit_exceeded':
+        return `Usage allowance reached for this period.${retryNote} Check spend settings or wait for quota reset.`;
+      case 'rate_limit_exceeded':
+      case 'too_many_requests':
+        return `Rate limit exceeded.${retryNote || ' Please wait a moment before sending another message.'}`;
+      case 'concurrency_limit':
+        return 'Another request is currently processing. Please wait for it to complete.';
+      case 'no_available_provider':
+      case 'provider_unavailable':
+        return 'No active provider is currently available for this model. Check Provider Settings to enable a provider.';
+      case 'provider_disabled':
+        return 'The provider required for this model is currently disabled in your Provider Settings.';
+      case 'unknown_pricing':
+      case 'pricing_unknown':
+        return 'Pricing for this model is unknown \u2014 send was blocked for cost safety. Please select a calibrated model.';
+      case 'admission_unavailable':
+      case 'accounting_unavailable':
+      case 'transcript_unavailable':
+        return `Service temporarily unavailable (${apiErr.code}).${retryNote || ' Please try again in a moment.'}`;
+      case 'upstream_error':
+      case 'provider_error':
+        return 'The upstream AI provider returned an error. Please try again or switch to an alternate model.';
+      case 'upstream_timeout':
+        return 'The model provider timed out while generating a response. Please try again.';
+      case 'video_not_ready':
+        return 'One or more video attachments are still processing. Please wait for processing to complete.';
+      case 'interrupted':
+      case 'stream_interrupted':
+        return 'The connection closed prematurely before the response completed. Partial output preserved.';
+      default:
+        if (apiErr.status === 401) {
+          return 'Session expired. Please sign in again.';
+        }
+        if (apiErr.status === 402) {
+          return `Usage allowance or budget reached.${retryNote}`;
+        }
+        if (apiErr.status === 429) {
+          return `Rate limit exceeded.${retryNote || ' Please try again in a moment.'}`;
+        }
+        if (apiErr.status && apiErr.status >= 500) {
+          return `The router or provider encountered a temporary error (${apiErr.status}). Please try again.`;
+        }
+        return apiErr.message || `Error (${apiErr.code})`;
+    }
+  }
+
   const raw = error instanceof Error ? error.message : String(error ?? '');
   const code = raw.replace(/^Error:\s*/i, '').trim();
   switch (code) {
@@ -174,6 +234,10 @@ function describeStreamError(error: unknown): string {
     case 'DuplicateRequestError':
     case 'duplicate_request':
       return 'That exact request was already sent just now. Edit your message slightly and send again.';
+    case 'video_not_ready':
+      return 'One or more videos are still processing. Please wait and try again.';
+    case 'stream_interrupted':
+      return 'The connection closed prematurely before the response completed. Partial output preserved.';
     default:
       return raw ? `Error: ${raw}` : 'Unknown error occurred';
   }
@@ -640,7 +704,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         ...(provenance?.cost
           ? {
               cost: {
-                finalUsd: provenance.cost.totalUsd,
+                finalUsd:
+                  provenance.cost.costStatus === 'pending' || provenance.cost.costStatus === 'estimated'
+                    ? undefined
+                    : provenance.cost.totalUsd,
+                estimatedUsd:
+                  provenance.cost.costStatus === 'pending' || provenance.cost.costStatus === 'estimated'
+                    ? provenance.cost.totalUsd
+                    : undefined,
+                status: provenance.cost.costStatus ?? 'settled',
                 pricingVersion: provenance.cost.pricingVersion,
               },
             }
@@ -652,7 +724,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 modelTier: provenance.model || currentModel,
                 gateway: provenance.provider === 'opencode' ? 'opencode' : 'direct_fallback',
                 reason: provenance.routeRationale,
-                fallbackUsed: false,
+                fallbackUsed: undefined,
                 priceKnown: true,
                 role: provenance.routeRole,
               },
@@ -773,9 +845,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const handleDeleteConversation = async (conversationId: string) => {
     if (isStreaming) return;
-    if (!confirm('Delete this chat? Its messages and any images used only here will be removed.')) {
-      return;
-    }
     try {
       await deleteConversation(supabase, conversationId);
     } catch (error) {
@@ -1054,7 +1123,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         timestamp: Date.now(),
       }]);
 
-      const { assistantContent, thinkingLog, streamedFinalUsd, debateParticipants, receipt } = await readRouterStream(
+      const {
+        assistantContent,
+        thinkingLog,
+        streamedFinalUsd,
+        debateParticipants,
+        receipt,
+        terminationStatus,
+      } = await readRouterStream(
         stream,
         promptTokenEstimate,
         {
@@ -1096,8 +1172,51 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
       // PX06: an abort mid-stream makes readRouterStream resolve with the
       // partial content; surface the cancellation instead of a completion.
-      if (abortController.signal.aborted) {
+      if (abortController.signal.aborted || terminationStatus === 'cancelled') {
         setStreamOutcome({ status: 'cancelled', executionId });
+        scheduleCostEstimatorHide(1500);
+        return;
+      }
+
+      const promptTokens =
+        calculateHistoryTokens(historyMessages) +
+        estimateTokenCount(queryText) +
+        attachmentsToProcess.filter((file) => file.isImage).length * 1600;
+      const completionTokens = estimateTokenCount(assistantContent);
+      const computedCost = calculateFinalCost(model, { promptTokens, completionTokens });
+
+      // Handle premature stream termination without terminal receipt/[DONE]
+      if (terminationStatus === 'interrupted' || terminationStatus === 'error') {
+        setStreamOutcome({
+          status: 'error',
+          executionId,
+          error: 'Connection closed prematurely before the response completed.',
+        });
+        if (streamUpdateApplies()) {
+          setMessages((prev) => {
+            const updated = [...prev];
+            const lastMessage = updated[updated.length - 1];
+            if (lastMessage?.role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...lastMessage,
+                content: assistantContent
+                  ? `${assistantContent}\n\n⚠️ _[Response interrupted before completion]_`
+                  : '⚠️ _[Connection interrupted before response started]_',
+                cost: {
+                  estimatedUsd: computedCost.finalUsd,
+                  status: 'unknown',
+                  pricingVersion: costPricingVersion || computedCost.pricingVersion,
+                  promptTokens,
+                  completionTokens,
+                  durationMs: Date.now() - streamStartMs,
+                },
+                thinkingLog: [...thinkingLog],
+                thinkingDurationMs: Date.now() - streamStartMs,
+              };
+            }
+            return updated;
+          });
+        }
         scheduleCostEstimatorHide(1500);
         return;
       }
@@ -1109,21 +1228,33 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         settlementState: receipt?.settlement.state,
       });
 
-      const promptTokens = calculateHistoryTokens(historyMessages) +
-        estimateTokenCount(queryText) +
-        attachmentsToProcess.filter((file) => file.isImage).length * 1600;
-      const completionTokens = estimateTokenCount(assistantContent);
-      const computedCost = calculateFinalCost(model, { promptTokens, completionTokens });
-      const finalUsd = streamedFinalUsd ?? computedCost.finalUsd;
-      setFinalMessageCost(finalUsd);
+      // Truthful cost settlement logic:
+      // Authoritative settled cost requires either a settled receipt committedUsd OR a server streamedFinalUsd.
+      const hasReceiptSettled = receipt?.settlement.state === 'settled';
+      const isPendingSettlement = receipt?.settlement.state === 'pending';
+      const authoritativeFinalUsd = hasReceiptSettled
+        ? receipt!.settlement.committedUsd
+        : typeof streamedFinalUsd === 'number' && Number.isFinite(streamedFinalUsd)
+        ? streamedFinalUsd
+        : undefined;
 
-      if (finalUsd > 0) {
+      const costStatus: CostStatus = hasReceiptSettled
+        ? 'settled'
+        : isPendingSettlement
+        ? 'pending'
+        : authoritativeFinalUsd !== undefined
+        ? 'settled'
+        : 'estimated';
+
+      setFinalMessageCost(authoritativeFinalUsd ?? null);
+
+      if (authoritativeFinalUsd !== undefined && authoritativeFinalUsd > 0) {
         recordCost({
           model,
-          cost: finalUsd,
+          cost: authoritativeFinalUsd,
           pricingVersion: costPricingVersion || computedCost.pricingVersion,
         });
-        setSessionCostTotal((prev) => prev + finalUsd);
+        setSessionCostTotal((prev) => prev + authoritativeFinalUsd);
       }
       setSpendRefreshKey((prev) => prev + 1);
 
@@ -1135,8 +1266,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             updated[updated.length - 1] = {
               ...lastMessage,
               cost: {
-                estimatedUsd: costEstimateUsd,
-                finalUsd,
+                estimatedUsd: costEstimateUsd ?? computedCost.finalUsd,
+                finalUsd: authoritativeFinalUsd,
+                status: costStatus,
                 pricingVersion: costPricingVersion || computedCost.pricingVersion,
                 promptTokens,
                 completionTokens,
@@ -1194,7 +1326,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const handleSend = async (skipBudgetCheck = false) => {
     // Allow send if there's text OR attachments
     const hasContent = input.trim() || draftAttachments.length > 0;
-    if (!hasContent || isStreaming || hasPendingVideoUploads) return;
+    if (!hasContent || isStreaming) return;
+    if (hasPendingVideoUploads) {
+      setSendValidationError('Attachments are still processing. Please wait for completion before sending.');
+      return;
+    }
+    if (enabledProviders.size === 0) {
+      setSendValidationError('No providers are currently enabled. Open Provider Settings to configure OpenCode or BYOK keys.');
+      return;
+    }
     if (debateSelection === 'video_ui' && !hasReadyVideo) {
       setSendValidationError(VIDEO_UI_DEBATE_SEND_ERROR);
       return;
@@ -1968,10 +2108,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         {messages.length === 0
           ? (
             <div className='empty-state'>
-              <div className='empty-state-badge'>Intelligent Orchestration</div>
-              <h2>Intelligent Orchestration<br />for <span>Every Turn</span></h2>
+              <div className='empty-state-badge'>Adaptive AI Router</div>
+              <h2>What would you like to<br /><span>build or explore?</span></h2>
               <p>
-                Bring your ideas. Prismatix dynamically routes to the optimal model for speed, cost, and reasoning power.
+                Type a prompt below and let Auto select the best model, or click a starter prompt:
               </p>
 
               <div className='empty-state-capabilities'>
@@ -1987,7 +2127,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                       <span className='capability-card-title'>{card.title}</span>
                     </div>
                     <p className='capability-card-desc'>{card.description}</p>
-                    <span className='capability-card-action'>Use this workflow →</span>
+                    <span className='capability-card-action'>Try this prompt →</span>
                   </button>
                 ))}
               </div>

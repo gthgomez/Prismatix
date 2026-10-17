@@ -302,13 +302,23 @@ export const Auth: React.FC<AuthProps> = ({
         )}
 
         {/* Footer */}
-        {ALLOW_SIGNUP && (
+        {ALLOW_SIGNUP ? (
           <div className="auth-footer">
             <p>
               {mode === 'signin' ? "Don't have an account? " : "Already have an account? "}
               <button type="button" onClick={toggleMode} className="auth-link">
                 {mode === 'signin' ? 'Sign Up' : 'Sign In'}
               </button>
+            </p>
+          </div>
+        ) : (
+          <div className="auth-footer auth-beta-notice">
+            <p>Prismatix is currently in invite-only private preview.</p>
+            <p className="auth-beta-subtext">
+              Want to see how adaptive routing and cost transparency work?{' '}
+              <a href="/demo" className="auth-link">
+                Explore the public demo →
+              </a>
             </p>
           </div>
         )}

@@ -1,4 +1,5 @@
 import '../styles/ResumeDemo.css';
+import { InteractivePublicDemo } from './InteractivePublicDemo';
 
 const featureBullets = [
   'Routes every request through the OpenCode model hub by default, with OpenRouter and opt-in provider plug-ins (BYOK) as fallbacks.',
@@ -53,6 +54,8 @@ export function ResumeDemo() {
           </a>
         </div>
       </section>
+
+      <InteractivePublicDemo />
 
       <section className="resume-demo-grid" aria-label="Prismatix highlights">
         <article className="resume-demo-panel">

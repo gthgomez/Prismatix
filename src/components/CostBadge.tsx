@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { MessageCost, RouterModel } from '../types';
+import type { CostStatus, MessageCost, RouterModel } from '../types';
 import { computeCostSavings } from '../utils/costSavingsCalculator';
 
 export interface CostBadgeProps {
@@ -44,15 +44,30 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
 
   if (!cost) return null;
 
-  const value = cost.finalUsd ?? cost.estimatedUsd;
-  if (value === undefined) return null;
+  const status: CostStatus =
+    cost.status ??
+    (cost.finalUsd !== undefined
+      ? 'settled'
+      : cost.estimatedUsd !== undefined
+      ? 'estimated'
+      : 'unknown');
 
-  const isFinal = cost.finalUsd !== undefined;
-  const label = isFinal ? 'final' : 'est';
+  const value = status === 'settled' ? cost.finalUsd : cost.estimatedUsd;
+  if (value === undefined && status !== 'pending' && status !== 'unknown') return null;
+
+  const label =
+    status === 'settled'
+      ? 'final'
+      : status === 'pending'
+      ? 'pending'
+      : status === 'unknown'
+      ? 'unknown'
+      : 'est';
+  const displayCost = value !== undefined ? `$${value.toFixed(4)} ${label}` : label;
 
   const analysis = computeCostSavings({
     model,
-    costUsd: value,
+    costUsd: value ?? 0,
     promptTokens: promptTokens ?? cost.promptTokens,
     completionTokens: completionTokens ?? cost.completionTokens,
     durationMs: durationMs ?? cost.durationMs,
@@ -64,6 +79,15 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
     setIsOpen((prev) => !prev);
   };
 
+  const statusBadgeText =
+    status === 'settled'
+      ? 'Final Ledger'
+      : status === 'pending'
+      ? 'Pending Settlement'
+      : status === 'unknown'
+      ? 'Unknown Cost'
+      : 'Pre-flight Estimate';
+
   return (
     <span ref={containerRef} className='cost-badge-container'>
       <button
@@ -72,11 +96,11 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
         title={cost.pricingVersion || 'cost'}
         aria-haspopup='dialog'
         aria-expanded={isOpen}
-        aria-label={`Cost: $${value.toFixed(4)} ${label}. Click for details`}
+        aria-label={`Cost: ${displayCost}. Click for details`}
         onClick={togglePopover}
       >
         <span className='cost-badge-label'>
-          ${value.toFixed(4)} {label}
+          {displayCost}
         </span>
       </button>
 
@@ -92,16 +116,16 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
               <span className='popover-icon' aria-hidden='true'>⚡</span>
               <span>Cost & Performance</span>
             </div>
-            <span className={`popover-status-badge ${isFinal ? 'settled' : 'estimated'}`}>
-              {isFinal ? 'Final Ledger' : 'Pre-flight Estimate'}
+            <span className={`popover-status-badge ${status}`}>
+              {statusBadgeText}
             </span>
           </div>
 
-          {analysis.savingsPercent > 0 && (
+          {analysis.baselineCostUsd > 0 && analysis.baselineCostUsd !== analysis.actualCostUsd && (
             <div className='cost-savings-banner'>
-              <span className='savings-tag'>Auto-Route Savings</span>
+              <span className='savings-tag'>Price Illustration</span>
               <div className='savings-metric'>
-                <strong>{analysis.savingsPercent}% saved</strong> (${analysis.savingsUsd.toFixed(4)}) vs {analysis.baselineModel}
+                Same tokens on frontier baseline (<code>{analysis.baselineModel}</code>): <strong>${analysis.baselineCostUsd.toFixed(4)}</strong>
               </div>
             </div>
           )}
