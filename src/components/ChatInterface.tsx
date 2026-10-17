@@ -1,7 +1,7 @@
 // src/components/ChatInterface.tsx
 // Main chat interface with multi-file upload support and model selector
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
 import { useContextManager } from '../hooks/useContextManager';
 import {
@@ -12,20 +12,59 @@ import {
 } from '../catalogSkew';
 import { ContextWarning } from './ContextWarning';
 import { ContextStatus } from './ContextStatus';
-import { FileUpload } from './FileUpload';
-import { BudgetGuard, evaluateBudget } from './BudgetGuard';
+import { BudgetGuard } from './BudgetGuard';
+import { evaluateBudget } from '../utils/budgetEvaluator';
 import { CostEstimator } from './CostEstimator';
-import { CostBadge } from './CostBadge';
-import { PrismatixPulse } from './PrismatixPulse';
 import { SpendTracker } from './SpendTracker';
-import { ThinkingProcess } from './ThinkingProcess';
-import { DebateView } from './DebateView';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
-import { AttachmentPreview } from './AttachmentPreview';
 import { ConversationSidebar } from './ConversationSidebar';
-import { FormattedMessage } from './FormattedMessage';
 import { ChatBackdrop } from './ChatBackdrop';
+import { ChatMessageItem } from './ChatMessageItem';
+import { ScrollToBottomButton } from './ScrollToBottomButton';
+import { ChatInputComposer } from './ChatInputComposer';
+import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
+import {
+  type StreamOutcomeState,
+  type PromptStarter,
+  SEND_BLOCKED_TITLES,
+} from './chatTypes';
 import '../styles/ChatInterface.css';
+
+interface CapabilityPillar {
+  icon: string;
+  title: string;
+  description: string;
+  prompt: string;
+  isDebate?: boolean;
+}
+
+const CAPABILITY_PILLARS: CapabilityPillar[] = [
+  {
+    icon: '⚡',
+    title: 'Auto-Routed Development',
+    description: 'Architect an efficient solution. Prismatix auto-routes code generation to top-tier reasoning.',
+    prompt: 'Design a high-throughput event processing architecture in TypeScript with backpressure handling.',
+  },
+  {
+    icon: '⚖️',
+    title: 'Multi-Model Debate',
+    description: 'Have frontier models cross-examine an architectural decision or technical tradeoff.',
+    prompt: 'Debate the tradeoffs between event-sourcing vs. traditional relational schemas for financial auditing.',
+    isDebate: true,
+  },
+  {
+    icon: '🔍',
+    title: 'Deep Research & Analysis',
+    description: 'Deconstruct complex documentation, research papers, or distributed systems concepts.',
+    prompt: 'Analyze the consensus algorithms Raft vs. Paxos, highlighting edge cases in network partition recovery.',
+  },
+  {
+    icon: '💡',
+    title: 'Ideation & Build Planning',
+    description: 'Turn a raw product idea into an actionable, prioritized engineering roadmap.',
+    prompt: 'Create a 3-phase technical roadmap for building a real-time collaborative whiteboard.',
+  },
+];
 import {
   askPrismatix,
   DuplicateRequestError,
@@ -60,7 +99,7 @@ import {
   estimateTokenCount,
   type UsageEstimate,
 } from '../costEngine';
-import { calculateHistoryTokens } from '../utils';
+import { calculateHistoryTokens, extractTextContent } from '../utils';
 import {
   uploadAttachment,
   uploadVideoAttachment,
@@ -76,10 +115,9 @@ import type {
 import { MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog';
 import { filterVisibleModels, isModelVisible } from '../providerRegistry';
 import { useProviderPlugins } from '../hooks/useProviderPlugins';
+import { useModelPickerPreferences } from '../hooks/useModelPickerPreferences';
 import { ProviderSettings } from './ProviderSettings';
 import { MemorySettings } from './MemorySettings';
-import { assistantModelPillDisplay, buildRouteExplanationRows } from '../modelDisplay';
-import { RouteExplanationList } from './RouteExplanationList';
 import {
   getComposerSendValidationView,
   VIDEO_UI_DEBATE_SEND_ERROR,
@@ -89,7 +127,6 @@ import {
   getDebatePayload,
   hasReadyVideoAttachment,
   type DebateSelection,
-  shouldShowDebateBadges,
 } from '../debateMode';
 
 interface ChatInterfaceProps {
@@ -100,11 +137,6 @@ interface ChatInterfaceProps {
 const DAILY_BUDGET_LIMIT_USD = 2.0;
 const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
 const CHATS_HIDDEN_KEY = 'prismatix.sidebar.chatsHidden';
-
-interface PromptStarter {
-  title: string;
-  prompt: string;
-}
 
 const PROMPT_STARTERS: PromptStarter[] = [
   {
@@ -128,6 +160,25 @@ function shouldTreatAsVideoAttachment(file: FileUploadPayload): boolean {
   }
   return VIDEO_NAME_PATTERN.test(file.name || '');
 }
+
+// Router/edge error codes arrive as terse message strings; map the known ones
+// to user-actionable text instead of surfacing raw codes like "not_entitled".
+function describeStreamError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const code = raw.replace(/^Error:\s*/i, '').trim();
+  switch (code) {
+    case 'not_entitled':
+      return 'Your account doesn\u2019t have access to this feature yet. If you just signed up, sign out and back in once \u2014 if it still fails, contact support.';
+    case 'entitlement_unavailable':
+      return 'We couldn\u2019t verify your account access right now. Please try again in a moment.';
+    case 'DuplicateRequestError':
+    case 'duplicate_request':
+      return 'That exact request was already sent just now. Edit your message slightly and send again.';
+    default:
+      return raw ? `Error: ${raw}` : 'Unknown error occurred';
+  }
+}
+
 
 function normalizeAttachmentKind(file: FileUploadPayload): FileUploadPayload {
   if (!shouldTreatAsVideoAttachment(file)) {
@@ -181,18 +232,36 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const providerPlugins = useProviderPlugins(user?.id);
   const enabledProviders = providerPlugins.enabledProviders;
 
-  // If the active model's provider is turned off, fall back to Auto with a
-  // visible default so we never send to a hidden/disabled provider.
+  // Single authoritative model preferences store (favorites, hidden models, provider tabs)
+  const modelPreferences = useModelPickerPreferences(user?.id);
+
+  // If the active model's provider is turned off OR the manual override model was hidden by the user,
+  // fall back to Auto with a visible default so we never send to a hidden/disabled provider or model.
   useEffect(() => {
     if (providerPlugins.loading) return;
-    if (isModelVisible(currentModel, { enabledProviders }) &&
-      (manualModelOverride !== null || !isHistoricModel(currentModel))) return;
-    const fallback =
-      filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders })[0] ??
-      filterVisibleModels(MODEL_ORDER, { enabledProviders }).find((id) => !isHistoricModel(id));
+
+    const isCurrentVisible = isModelVisible(currentModel, { enabledProviders });
+    const isOverrideHidden = manualModelOverride !== null && modelPreferences.hiddenModels.includes(manualModelOverride);
+
+    if (isCurrentVisible && !isOverrideHidden && (manualModelOverride !== null || !isHistoricModel(currentModel))) {
+      return;
+    }
+
+    const unhiddenHighlights = filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders })
+      .filter((id) => !modelPreferences.hiddenModels.includes(id));
+    const unhiddenOrder = filterVisibleModels(MODEL_ORDER, { enabledProviders })
+      .filter((id) => !isHistoricModel(id) && !modelPreferences.hiddenModels.includes(id));
+
+    const fallback = unhiddenHighlights[0] ?? unhiddenOrder[0];
     setManualModelOverride(null);
     if (fallback) setCurrentModel(fallback);
-  }, [providerPlugins.loading, enabledProviders, currentModel, manualModelOverride]);
+  }, [
+    providerPlugins.loading,
+    enabledProviders,
+    currentModel,
+    manualModelOverride,
+    modelPreferences.hiddenModels,
+  ]);
 
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
   const hasPendingVideoUploads = draftAttachments.some(
@@ -216,6 +285,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   });
   const [contextExcludedCount, setContextExcludedCount] = useState(0);
   const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const selectedConversationIdRef = useRef<string | null>(null);
   // Monotonic token so a stale conversation load can never overwrite the
   // messages of a newer selection (rapid A→B switching).
@@ -237,10 +307,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const chatMessagesRef = useRef<HTMLElement | null>(null);
   const {
     shouldStickToBottomRef,
+    showScrollButton,
     updateStickyScrollState,
     markUserInterruption,
     resetAutoScroll,
   } = useAutoScroll(32);
+  const pendingActionRef = useRef<(() => void) | null>(null);
+
+  const handleScrollToBottom = useCallback(() => {
+    resetAutoScroll();
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [resetAutoScroll]);
   const waitingFirstTokenRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -257,11 +334,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // terminal outcome surfaced to the user (cancelled, or the receipt state).
   const abortControllerRef = useRef<AbortController | null>(null);
   const executionIdRef = useRef<string | undefined>(undefined);
-  const [streamOutcome, setStreamOutcome] = useState<{
-    status: 'cancelled' | 'receipt';
-    executionId?: string;
-    settlementState?: string;
-  } | null>(null);
+  const [streamOutcome, setStreamOutcome] = useState<StreamOutcomeState | null>(null);
 
   // Scroll only when a new message bubble is created, and only if user is near bottom.
   useEffect(() => {
@@ -746,59 +819,35 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     });
   };
 
-  const handleSend = async (skipBudgetCheck = false) => {
-    // Allow send if there's text OR attachments
-    const hasContent = input.trim() || draftAttachments.length > 0;
-    if (!hasContent || isStreaming || hasPendingVideoUploads) return;
-    if (debateSelection === 'video_ui' && !hasReadyVideo) {
-      setSendValidationError(VIDEO_UI_DEBATE_SEND_ERROR);
-      return;
-    }
-    setSendValidationError(null);
-    resetAutoScroll();
-
-    // Build query text
-    const hasImages = draftAttachments.some((f) => f.isImage);
-    const hasTextFiles = draftAttachments.some((f) => !f.isImage && f.kind !== 'video');
-
-    let queryText = input.trim();
-
-    // If no text but has attachments, use default prompts
-    if (!queryText) {
-      const hasVideos = draftAttachments.some((f) => f.kind === 'video');
-      if (hasImages && hasTextFiles && hasVideos) {
-        queryText = 'Analyze these videos, files, and images.';
-      } else if (hasVideos && hasImages) {
-        queryText = 'Analyze this video and related images.';
-      } else if (hasVideos && hasTextFiles) {
-        queryText = 'Analyze this video with the attached text files.';
-      } else if (hasVideos) {
-        queryText = draftAttachments.length === 1 ? 'Analyze this video.' : 'Analyze these videos.';
-      } else if (hasImages && hasTextFiles) {
-        queryText = 'Analyze these files and images.';
-      } else if (hasImages) {
-        queryText = draftAttachments.length === 1 ? 'Analyze this image.' : 'Analyze these images.';
-      } else if (hasTextFiles) {
-        queryText = 'Process these files.';
-      }
-    }
-
-    const estimatedModel = manualModelOverride || currentModel;
-    const historyText = messages.map((msg) => {
-      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+  const executeTurn = async ({
+    queryText,
+    attachmentsToProcess,
+    historyMessages,
+    overrideModel,
+    promptTokenEstimate: passedPromptTokenEstimate,
+    skipBudgetCheck = false,
+  }: {
+    queryText: string;
+    attachmentsToProcess: FileUploadPayload[];
+    historyMessages: Message[];
+    overrideModel?: RouterModel | null;
+    promptTokenEstimate?: number;
+    skipBudgetCheck?: boolean;
+  }) => {
+    const estimatedModel = overrideModel || manualModelOverride || currentModel;
+    const historyText = historyMessages.map((msg) => {
+      const content = extractTextContent(msg.content);
       return `${msg.role}: ${content}`;
     }).join('\n');
-    const imageCount = draftAttachments.filter((file) => file.isImage).length;
+    const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
     const preflight = calculatePreFlightCost(
       estimatedModel,
       `${historyText}\nuser: ${queryText}`,
       imageCount,
     );
-    const promptTokenEstimate = preflight.promptTokens;
+    const promptTokenEstimate = passedPromptTokenEstimate ?? preflight.promptTokens;
 
     if (!skipBudgetCheck) {
-      // Fetch from server first so budget cannot be bypassed by clearing localStorage or opening a new tab.
-      // Falls back to localStorage total if the server is unreachable.
       const dailyTotalUsd = await fetchServerDailyTotal();
       const budgetDecision = evaluateBudget({
         estimateUsd: preflight.estimatedUsd,
@@ -819,6 +868,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
 
       if (budgetDecision.requiresConfirm) {
+        pendingActionRef.current = () => void executeTurn({
+          queryText,
+          attachmentsToProcess,
+          historyMessages,
+          overrideModel,
+          promptTokenEstimate,
+          skipBudgetCheck: true,
+        });
         setBudgetConfirm({
           estimateUsd: preflight.estimatedUsd,
           dailyTotalUsd,
@@ -826,31 +883,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         return;
       }
     }
-
-    // Build display content for user message
-    const attachmentSummary = draftAttachments.length > 0
-      ? `[${draftAttachments.length} file${draftAttachments.length > 1 ? 's' : ''} attached]`
-      : '';
-
-    const firstImage = draftAttachments.find((f) => f.isImage);
-    const userMessage: Message = {
-      role: 'user',
-      content: input.trim() || attachmentSummary,
-      timestamp: Date.now(),
-      ...(firstImage?.imageData && {
-        imageData: firstImage.imageData,
-        mediaType: firstImage.mediaType,
-      }),
-      attachments: draftAttachments.length > 0 ? [...draftAttachments] : undefined,
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-
-    // Clear inputs
-    setInput('');
-    const attachmentsToProcess = [...draftAttachments];
-    setDraftAttachments([]);
-    if (inputRef.current) inputRef.current.style.height = 'auto';
 
     // PX07: pin the active conversation for this logical send (the selected
     // conversation, or the deterministic New Chat id).
@@ -862,7 +894,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
     // PX07 bounded context (group 3): send only the sanctioned recent window,
     // and surface how many older messages fall outside it.
-    const contextSelection = selectContextHistory(messages);
+    const contextSelection = selectContextHistory(historyMessages);
     setContextExcludedCount(contextSelection.excludedCount);
     const historyForRequest = contextSelection.history.map((item) => ({
       role: item.role,
@@ -943,7 +975,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         queryText,
         historyForRequest,
         attachmentsToProcess,
-        manualModelOverride,
+        overrideModel || manualModelOverride,
         geminiFlashThinkingLevel,
         getDebatePayload(debateSelection),
         firstImageStorageRef,
@@ -989,7 +1021,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         writeSelectedConversation(user?.id ?? null, sendConversationId);
       }
 
-      if (!manualModelOverride) {
+      if (!manualModelOverride && !overrideModel) {
         setCurrentModel(model);
       }
       setCostModel(model);
@@ -1077,7 +1109,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         settlementState: receipt?.settlement.state,
       });
 
-      const promptTokens = calculateHistoryTokens(messages) +
+      const promptTokens = calculateHistoryTokens(historyMessages) +
         estimateTokenCount(queryText) +
         attachmentsToProcess.filter((file) => file.isImage).length * 1600;
       const completionTokens = estimateTokenCount(assistantContent);
@@ -1106,6 +1138,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 estimatedUsd: costEstimateUsd,
                 finalUsd,
                 pricingVersion: costPricingVersion || computedCost.pricingVersion,
+                promptTokens,
+                completionTokens,
+                durationMs: Date.now() - streamStartMs,
               },
               thinkingLog: [...thinkingLog],
               thinkingDurationMs: Date.now() - streamStartMs,
@@ -1142,7 +1177,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         console.error('Stream error:', error);
         setMessages((prev) => [...prev, {
           role: 'assistant',
-          content: `⚠️ Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+          content: `⚠️ ${describeStreamError(error)}`,
           timestamp: Date.now(),
         }]);
         scheduleCostEstimatorHide(1500);
@@ -1156,6 +1191,281 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     }
   };
 
+  const handleSend = async (skipBudgetCheck = false) => {
+    // Allow send if there's text OR attachments
+    const hasContent = input.trim() || draftAttachments.length > 0;
+    if (!hasContent || isStreaming || hasPendingVideoUploads) return;
+    if (debateSelection === 'video_ui' && !hasReadyVideo) {
+      setSendValidationError(VIDEO_UI_DEBATE_SEND_ERROR);
+      return;
+    }
+    setSendValidationError(null);
+    resetAutoScroll();
+
+    // Build query text
+    const hasImages = draftAttachments.some((f) => f.isImage);
+    const hasTextFiles = draftAttachments.some((f) => !f.isImage && f.kind !== 'video');
+
+    let queryText = input.trim();
+
+    // If no text but has attachments, use default prompts
+    if (!queryText) {
+      const hasVideos = draftAttachments.some((f) => f.kind === 'video');
+      if (hasImages && hasTextFiles && hasVideos) {
+        queryText = 'Analyze these videos, files, and images.';
+      } else if (hasVideos && hasImages) {
+        queryText = 'Analyze this video and related images.';
+      } else if (hasVideos && hasTextFiles) {
+        queryText = 'Analyze this video with the attached text files.';
+      } else if (hasVideos) {
+        queryText = draftAttachments.length === 1 ? 'Analyze this video.' : 'Analyze these videos.';
+      } else if (hasImages && hasTextFiles) {
+        queryText = 'Analyze these files and images.';
+      } else if (hasImages) {
+        queryText = draftAttachments.length === 1 ? 'Analyze this image.' : 'Analyze these images.';
+      } else if (hasTextFiles) {
+        queryText = 'Process these files.';
+      }
+    }
+
+    const estimatedModel = manualModelOverride || currentModel;
+    const historyText = messages.map((msg) => {
+      const content = extractTextContent(msg.content);
+      return `${msg.role}: ${content}`;
+    }).join('\n');
+    const imageCount = draftAttachments.filter((file) => file.isImage).length;
+    const preflight = calculatePreFlightCost(
+      estimatedModel,
+      `${historyText}\nuser: ${queryText}`,
+      imageCount,
+    );
+    const promptTokenEstimate = preflight.promptTokens;
+
+    if (!skipBudgetCheck) {
+      // Fetch from server first so budget cannot be bypassed by clearing localStorage or opening a new tab.
+      // Falls back to localStorage total if the server is unreachable.
+      const dailyTotalUsd = await fetchServerDailyTotal();
+      const budgetDecision = evaluateBudget({
+        estimateUsd: preflight.estimatedUsd,
+        dailyTotalUsd,
+        dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
+      });
+
+      if (budgetDecision.blocked) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
+            timestamp: Date.now(),
+          },
+        ]);
+        return;
+      }
+
+      if (budgetDecision.requiresConfirm) {
+        pendingActionRef.current = () => void handleSend(true);
+        setBudgetConfirm({
+          estimateUsd: preflight.estimatedUsd,
+          dailyTotalUsd,
+        });
+        return;
+      }
+    }
+
+    // Build display content for user message
+    const attachmentSummary = draftAttachments.length > 0
+      ? `[${draftAttachments.length} file${draftAttachments.length > 1 ? 's' : ''} attached]`
+      : '';
+
+    const firstImage = draftAttachments.find((f) => f.isImage);
+    const userMessage: Message = {
+      role: 'user',
+      content: input.trim() || attachmentSummary,
+      timestamp: Date.now(),
+      ...(firstImage?.imageData && {
+        imageData: firstImage.imageData,
+        mediaType: firstImage.mediaType,
+      }),
+      attachments: draftAttachments.length > 0 ? [...draftAttachments] : undefined,
+    };
+
+    const historyForRequest = [...messages];
+    setMessages((prev) => [...prev, userMessage]);
+
+    // Clear inputs
+    setInput('');
+    const attachmentsToProcess = [...draftAttachments];
+    setDraftAttachments([]);
+    if (inputRef.current) inputRef.current.style.height = 'auto';
+
+    await executeTurn({
+      queryText,
+      attachmentsToProcess,
+      historyMessages: historyForRequest,
+      overrideModel: manualModelOverride,
+      promptTokenEstimate,
+      skipBudgetCheck: true,
+    });
+  };
+
+  const handleRegenerate = async (index: number, modelOverride?: RouterModel) => {
+    if (isStreaming) return;
+    let userIndex = -1;
+    for (let i = index - 1; i >= 0; i--) {
+      if (messages[i]?.role === 'user') {
+        userIndex = i;
+        break;
+      }
+    }
+    if (userIndex === -1) return;
+
+    const userMessage = messages[userIndex];
+    if (!userMessage) return;
+    const userPrompt = extractTextContent(userMessage.content);
+    const attachmentsToProcess = userMessage.attachments ? [...userMessage.attachments] : [];
+    const historyBeforeUser = messages.slice(0, userIndex);
+
+    const targetModel = modelOverride !== undefined ? modelOverride : (manualModelOverride || currentModel);
+    const historyText = historyBeforeUser.map((msg) => {
+      const content = extractTextContent(msg.content);
+      return `${msg.role}: ${content}`;
+    }).join('\n');
+    const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
+    const preflight = calculatePreFlightCost(
+      targetModel,
+      `${historyText}\nuser: ${userPrompt}`,
+      imageCount,
+    );
+
+    const dailyTotalUsd = await fetchServerDailyTotal();
+    const budgetDecision = evaluateBudget({
+      estimateUsd: preflight.estimatedUsd,
+      dailyTotalUsd,
+      dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
+    });
+
+    if (budgetDecision.blocked) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
+          timestamp: Date.now(),
+        },
+      ]);
+      return;
+    }
+
+    const executeRegenerateAction = () => {
+      setMessages(messages.slice(0, userIndex + 1));
+      resetAutoScroll();
+      void executeTurn({
+        queryText: userPrompt,
+        attachmentsToProcess,
+        historyMessages: historyBeforeUser,
+        overrideModel: modelOverride !== undefined ? modelOverride : manualModelOverride,
+        promptTokenEstimate: preflight.promptTokens,
+        skipBudgetCheck: true,
+      });
+    };
+
+    if (budgetDecision.requiresConfirm) {
+      pendingActionRef.current = executeRegenerateAction;
+      setBudgetConfirm({
+        estimateUsd: preflight.estimatedUsd,
+        dailyTotalUsd,
+      });
+      return;
+    }
+
+    executeRegenerateAction();
+  };
+
+  const handleEditPrompt = async (index: number, newPrompt: string) => {
+    if (isStreaming) return;
+    const targetUserMessage = messages[index];
+    if (!targetUserMessage || targetUserMessage.role !== 'user') return;
+
+    const attachmentsToProcess = targetUserMessage.attachments ? [...targetUserMessage.attachments] : [];
+    const historyBeforeUser = messages.slice(0, index);
+
+    const updatedUserMessage: Message = {
+      ...targetUserMessage,
+      content: newPrompt,
+      timestamp: Date.now(),
+    };
+
+    const targetModel = manualModelOverride || currentModel;
+    const historyText = historyBeforeUser.map((msg) => {
+      const content = extractTextContent(msg.content);
+      return `${msg.role}: ${content}`;
+    }).join('\n');
+    const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
+    const preflight = calculatePreFlightCost(
+      targetModel,
+      `${historyText}\nuser: ${newPrompt}`,
+      imageCount,
+    );
+
+    const dailyTotalUsd = await fetchServerDailyTotal();
+    const budgetDecision = evaluateBudget({
+      estimateUsd: preflight.estimatedUsd,
+      dailyTotalUsd,
+      dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
+    });
+
+    if (budgetDecision.blocked) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
+          timestamp: Date.now(),
+        },
+      ]);
+      return;
+    }
+
+    const executeEditAction = () => {
+      setMessages([...historyBeforeUser, updatedUserMessage]);
+      resetAutoScroll();
+      void executeTurn({
+        queryText: newPrompt,
+        attachmentsToProcess,
+        historyMessages: historyBeforeUser,
+        overrideModel: manualModelOverride,
+        promptTokenEstimate: preflight.promptTokens,
+        skipBudgetCheck: true,
+      });
+    };
+
+    if (budgetDecision.requiresConfirm) {
+      pendingActionRef.current = executeEditAction;
+      setBudgetConfirm({
+        estimateUsd: preflight.estimatedUsd,
+        dailyTotalUsd,
+      });
+      return;
+    }
+
+    executeEditAction();
+  };
+
+  const handleFeedback = (index: number, type: 'up' | 'down') => {
+    setMessages((prev) => {
+      const updated = [...prev];
+      const target = updated[index];
+      if (target) {
+        updated[index] = {
+          ...target,
+          feedback: target.feedback === type ? undefined : type,
+        };
+      }
+      return updated;
+    });
+  };
+
   const handleStop = () => {
     abortControllerRef.current?.abort();
   };
@@ -1164,16 +1474,104 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
+    } else if (e.key === 'ArrowUp' && !input.trim() && messages.length > 0) {
+      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+      if (lastUserMsg) {
+        const promptText = extractTextContent(lastUserMsg.content);
+        if (promptText) {
+          e.preventDefault();
+          setInput(promptText);
+          queueMicrotask(() => {
+            if (inputRef.current) {
+              inputRef.current.selectionStart = inputRef.current.value.length;
+              inputRef.current.selectionEnd = inputRef.current.value.length;
+            }
+          });
+        }
+      }
     }
   };
 
+  const handleCapabilityCardClick = (card: CapabilityPillar) => {
+    setInput(card.prompt);
+    if (card.isDebate) {
+      setDebateSelection('general');
+    }
+    inputRef.current?.focus();
+  };
+
+  const handleNewChatRef = useRef(handleNewChat);
+  handleNewChatRef.current = handleNewChat;
+
+  useEffect(() => {
+    const handleGlobalShortcuts = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      const isInputFocused =
+        activeTag === 'input' ||
+        activeTag === 'textarea' ||
+        activeTag === 'select' ||
+        (document.activeElement as HTMLElement)?.isContentEditable;
+
+      if (e.key === 'Escape') {
+        if (isShortcutsOpen) {
+          setIsShortcutsOpen(false);
+          return;
+        }
+        if (isStreaming) {
+          handleStop();
+          return;
+        }
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault();
+        handleNewChatRef.current();
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        setSidebarOpen((prev) => !prev);
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setShowModelSelector((prev) => !prev);
+        return;
+      }
+
+      if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey && !isInputFocused) {
+        e.preventDefault();
+        setIsShortcutsOpen((prev) => !prev);
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalShortcuts);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalShortcuts);
+    };
+  }, [isShortcutsOpen, isStreaming]);
+
+  const handleCloseShortcuts = useCallback(() => {
+    setIsShortcutsOpen(false);
+  }, []);
+
   const handleBudgetCancel = () => {
+    pendingActionRef.current = null;
     setBudgetConfirm(null);
   };
 
   const handleBudgetConfirmSend = () => {
     setBudgetConfirm(null);
-    void handleSend(true);
+    if (pendingActionRef.current) {
+      const action = pendingActionRef.current;
+      pendingActionRef.current = null;
+      action();
+    } else {
+      void handleSend(true);
+    }
   };
 
   const handleReset = () => {
@@ -1210,9 +1608,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
   };
 
+  const handleToggleMetadata = useCallback((idx: number) => {
+    setExpandedMetadataIdx((prev) => (prev === idx ? null : idx));
+  }, []);
+
+  const registerMessageRef = useCallback((idx: number, el: HTMLDivElement | null) => {
+    messageRefs.current[idx] = el;
+  }, []);
+
   // Server-selected IDs can be ahead of the deployed catalog; degrade, never crash.
   const modelConfig = getCatalogEntry(currentModel);
   const composerValidationView = getComposerSendValidationView(sendValidationError);
+  // Why the composer cannot send right now, surfaced on the send control itself
+  // so its disabled state is self-explanatory and never looks actionable.
+  const sendBlockedReason = isStreaming
+    ? 'streaming'
+    : hasPendingVideoUploads
+      ? 'video'
+      : sendValidationError
+        ? 'invalid'
+        : !input.trim() && draftAttachments.length === 0
+          ? 'empty'
+          : null;
 
   const openRoutingDebateMenu = () => {
     setShowUserMenu(false);
@@ -1223,6 +1640,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     <div className='app-with-sidebar'>
       {!chatsHidden && (
         <ConversationSidebar
+          preferenceScope={user?.id ?? null}
           conversations={conversations}
           selectedId={selectedConversationId}
           isLoading={conversationsLoading}
@@ -1255,6 +1673,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               className='header-button chats-toggle-button'
               onClick={toggleChatsHidden}
               aria-pressed={!chatsHidden}
+              aria-label={chatsHidden ? 'Show past chats' : 'Hide past chats'}
+              data-tooltip={chatsHidden ? 'Show past chats' : 'Hide past chats'}
               title={chatsHidden ? 'Show past chats' : 'Hide past chats'}
             >
               <svg
@@ -1286,6 +1706,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <h1>Prismatix</h1>
             </div>
           </div>
+          <div className='header-actions'>
           {contextStatus && (
             <details className='context-disclosure'>
               <summary title='View conversation context usage' aria-label='Conversation context usage'>
@@ -1295,7 +1716,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <div className='context-popover'><ContextStatus contextStatus={contextStatus} /></div>
             </details>
           )}
-          <div className='header-actions'>
             {catalogSkewed && (
               <span
                 className='catalog-skew-hint'
@@ -1305,6 +1725,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </span>
             )}
             <SpendTracker refreshKey={spendRefreshKey} />
+            <button
+              type='button'
+              className='header-button shortcuts-toggle-button'
+              onClick={() => setIsShortcutsOpen((prev) => !prev)}
+              aria-label='Keyboard shortcuts'
+              title='Keyboard shortcuts (?)'
+            >
+              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'>
+                <rect x='2' y='4' width='20' height='16' rx='2' />
+                <path d='M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8' />
+              </svg>
+            </button>
 
             {/* Model Selector - CLICKABLE */}
             <div className='model-selector-container' ref={modelSelectorRef}>
@@ -1350,6 +1782,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   debateSelection={debateSelection}
                   sendValidationError={sendValidationError}
                   enabledProviders={enabledProviders}
+                  preferences={modelPreferences}
                   onModelSelect={handleModelSelect}
                   onClearOverride={clearModelOverride}
                   onGeminiThinkingChange={setGeminiFlashThinkingLevel}
@@ -1367,17 +1800,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               )}
             </div>
 
-            <button type='button' className='header-button memory-button' aria-label={lastRecall?.conversationId === selectedConversationId ? `Memory · ${lastRecall.hits} recalled` : 'Memory'} title='Manage saved memories' aria-haspopup='dialog' aria-expanded={showMemorySettings} onClick={() => setShowMemorySettings(true)}>
+            <button type='button' className='header-button memory-trigger' aria-label={lastRecall?.conversationId === selectedConversationId ? `Memory: ${lastRecall.hits} recalled` : 'Memory'} aria-haspopup='dialog' aria-expanded={showMemorySettings} onClick={() => setShowMemorySettings(true)}>
               <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'><rect x='5' y='5' width='14' height='14' rx='3' /><path d='M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4' /></svg>
-              <span className='memory-button-label'>Memory</span>
+              <span className='memory-trigger-label'>Memory</span>
               {lastRecall?.conversationId === selectedConversationId && <span className='memory-recall-count' aria-hidden='true'>{lastRecall.hits}</span>}
             </button>
             <button
               type='button'
               onClick={() => setShowProviderSettings(true)}
-              className='header-button'
+              className='header-button provider-plugins-button'
               title='Provider plug-ins'
               aria-label='Provider plug-ins'
+              data-tooltip='Provider plug-ins'
               aria-haspopup='dialog'
               aria-expanded={showProviderSettings}
             >
@@ -1474,6 +1908,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             {showProviderSettings && (
               <ProviderSettings
                 plugins={providerPlugins}
+                preferences={modelPreferences}
                 onClose={() => setShowProviderSettings(false)}
               />
             )}
@@ -1516,353 +1951,102 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         {messages.length === 0
           ? (
             <div className='empty-state'>
-              <div className='empty-state-badge'>A spectrum of possibilities</div>
-              <h2>What would you like<br />to <span>explore?</span></h2>
+              <div className='empty-state-badge'>Intelligent Orchestration</div>
+              <h2>Intelligent Orchestration<br />for <span>Every Turn</span></h2>
               <p>
-                Bring your ideas. Prismatix finds the right model for every turn.
+                Bring your ideas. Prismatix dynamically routes to the optimal model for speed, cost, and reasoning power.
               </p>
+
+              <div className='empty-state-capabilities'>
+                {CAPABILITY_PILLARS.map((card) => (
+                  <button
+                    key={card.title}
+                    type='button'
+                    className='capability-card'
+                    onClick={() => handleCapabilityCardClick(card)}
+                  >
+                    <div className='capability-card-header'>
+                      <span className='capability-card-icon' aria-hidden='true'>{card.icon}</span>
+                      <span className='capability-card-title'>{card.title}</span>
+                    </div>
+                    <p className='capability-card-desc'>{card.description}</p>
+                    <span className='capability-card-action'>Use this workflow →</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )
           : (
             <div className='messages-list'>
               {messages.map((msg, idx) => {
-                const modelPillMeta = msg.model ? assistantModelPillDisplay(msg) : null;
+                const isLast = idx === messages.length - 1;
                 return (
-                <div
-                  key={idx}
-                  className={`message message-${msg.role}`}
-                  ref={(el) => {
-                    messageRefs.current[idx] = el;
-                  }}
-                >
-                  <div className='message-avatar'>
-                    {msg.role === 'user' ? '👤' : '🤖'}
-                  </div>
-                  <div className='message-content'>
-                    <div className='message-header'>
-                      <span className='message-role'>
-                        {msg.role === 'user' ? 'You' : 'Assistant'}
-                      </span>
-                      {msg.model && (
-                        <div className='message-metadata-container'>
-                          <button
-                            type='button'
-                            className={`message-model-pill ${expandedMetadataIdx === idx ? 'expanded' : ''}`}
-                            onClick={() => setExpandedMetadataIdx(expandedMetadataIdx === idx ? null : idx)}
-                            title={modelPillMeta?.title}
-                          >
-                            <span className='pill-text'>{modelPillMeta?.label}</span>
-                            <span className='info-icon'>
-                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                                <circle cx="12" cy="12" r="10" />
-                                <line x1="12" y1="16" x2="12" y2="12" />
-                                <line x1="12" y1="8" x2="12.01" y2="8" />
-                              </svg>
-                            </span>
-                          </button>
-                          
-                          {expandedMetadataIdx === idx && (
-                            <div className='metadata-popover'>
-                              {msg.provider && (
-                                <div className='metadata-item'>
-                                  <span className='item-label'>Provider</span>
-                                  <span className='item-value'>{msg.provider}</span>
-                                </div>
-                              )}
-                              {msg.modelId && (
-                                <div className='metadata-item'>
-                                  <span className='item-label'>API ID</span>
-                                  <span className='item-value metadata-value-break'>{msg.modelId}</span>
-                                </div>
-                              )}
-                              {msg.modelOverride && msg.modelOverride !== 'auto' && (
-                                <div className='metadata-item'>
-                                  <span className='item-label'>Override</span>
-                                  <span className='item-value'>Manual</span>
-                                </div>
-                              )}
-                              {msg.geminiFlashThinkingLevel && (
-                                <div className='metadata-item'>
-                                  <span className='item-label'>Thinking</span>
-                                  <span className='item-value'>{msg.geminiFlashThinkingLevel}</span>
-                                </div>
-                              )}
-                              {msg.role === 'assistant' && (
-                                <RouteExplanationList {...buildRouteExplanationRows(msg)} />
-                              )}
-                              {msg.role === 'assistant' && shouldShowDebateBadges(msg) && (
-                                <div className='metadata-debate-details'>
-                                  <div className='metadata-divider' />
-                                  {msg.debateProfile && (
-                                    <div className='metadata-item'>
-                                      <span className='item-label'>Debate</span>
-                                      <span className='item-value'>{msg.debateProfile}</span>
-                                    </div>
-                                  )}
-                                  {msg.debateTrigger && (
-                                    <div className='metadata-item'>
-                                      <span className='item-label'>Trigger</span>
-                                      <span className='item-value'>{msg.debateTrigger}</span>
-                                    </div>
-                                  )}
-                                  {msg.debateModel && (
-                                    <div className='metadata-item'>
-                                      <span className='item-label'>Synth</span>
-                                      <span className='item-value'>{msg.debateModel}</span>
-                                    </div>
-                                  )}
-                                  {msg.debateCostNote && (
-                                    <div className='metadata-item'>
-                                      <span className='item-label'>Cost Note</span>
-                                      <span className='item-value'>{msg.debateCostNote}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      <CostBadge cost={msg.cost} />
-                      <span className='message-time'>
-                        {new Date(msg.timestamp).toLocaleTimeString()}
-                      </span>
-                    </div>
-                    {/* Render images if present */}
-                    {msg.imageData && (
-                      <div className='message-image-container'>
-                        <img
-                          src={`data:${msg.mediaType || 'image/png'};base64,${msg.imageData}`}
-                          alt='Uploaded content'
-                          className='message-image'
-                        />
-                      </div>
-                    )}
-                    {/* PX07: render restored image attachments from signed URLs
-                        (never persisted) and video attachments as a safe
-                        placeholder. Live base64 images keep the imageData path. */}
-                    {!msg.imageData && msg.attachments && (
-                      <div className='message-attachments-row'>
-                        {msg.attachments.map((attachment, attachmentIndex) => {
-                          if (attachment.isImage && attachment.storageUrl) {
-                            return (
-                              <div className='message-image-container' key={attachmentIndex}>
-                                <img
-                                  src={attachment.storageUrl}
-                                  alt={attachment.name || 'Uploaded content'}
-                                  className='message-image'
-                                />
-                              </div>
-                            );
-                          }
-                          if (attachment.isImage) {
-                            // Signed-URL failure: never render the raw storage
-                            // reference; show an unavailable placeholder.
-                            return (
-                              <div className='message-image-placeholder' key={attachmentIndex}>
-                                🖼 image unavailable
-                              </div>
-                            );
-                          }
-                          if (attachment.kind === 'video') {
-                            return (
-                              <div className='message-video-placeholder' key={attachmentIndex}>
-                                🎞 video attachment
-                              </div>
-                            );
-                          }
-                          if (attachment.kind === 'text') {
-                            const size = attachment.size ?? attachment.sizeBytes;
-                            return (
-                              <div className='message-file-chip' key={attachmentIndex}>
-                                📄 {attachment.name}
-                                {typeof size === 'number'
-                                  ? ` · ${size < 1024 ? `${size} B` : `${Math.round(size / 1024)} KB`}`
-                                  : ''}
-                              </div>
-                            );
-                          }
-                          return null;
-                        })}
-                      </div>
-                    )}
-                    {/* Show attachment count if multiple */}
-                    {msg.attachments && msg.attachments.length > 1 && (
-                      <div className='message-attachments-badge'>
-                        📎 {msg.attachments.length} files attached
-                      </div>
-                    )}
-                    {msg.role === 'assistant' && (
-                      <ThinkingProcess
-                        thoughts={msg.thinkingLog}
-                        elapsedMs={msg.thinkingDurationMs}
-                      />
-                    )}
-                    <div className='message-text'>
-                      <FormattedMessage
-                        content={typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
-                        isStreaming={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
-                        showCursor={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
-                      />
-                    </div>
-                    {msg.role === 'assistant' && msg.debateParticipants && msg.debateParticipants.length > 0 && (
-                      <DebateView participants={msg.debateParticipants} />
-                    )}
-                    {isWaitingFirstToken && isStreaming && idx === messages.length - 1 &&
-                      msg.role === 'assistant' && (
-                      <div className='message-thinking-loader'>
-                        <PrismatixPulse
-                          color={msg.model ? getCatalogEntry(msg.model).color : modelConfig.color}
-                          showLogo
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
+                  <ChatMessageItem
+                    key={idx}
+                    message={msg}
+                    index={idx}
+                    isStreaming={isStreaming && isLast}
+                    isWaitingFirstToken={isWaitingFirstToken && isLast}
+                    defaultModelColor={modelConfig.color}
+                    isMetadataExpanded={expandedMetadataIdx === idx}
+                    onToggleMetadata={handleToggleMetadata}
+                    registerRef={registerMessageRef}
+                    onRegenerate={handleRegenerate}
+                    onEditPrompt={handleEditPrompt}
+                    onFeedback={handleFeedback}
+                  />
+                );
               })}
               <div ref={messagesEndRef} />
             </div>
           )}
+        <ScrollToBottomButton
+          visible={showScrollButton && messages.length > 0}
+          isStreaming={isStreaming}
+          onClick={handleScrollToBottom}
+        />
       </main>
 
       {/* Input Area */}
-      <div className='chat-input-container'>
-        <div className='input-wrapper'>
-          <AttachmentPreview
-            attachments={draftAttachments}
-            onRemove={removeAttachment}
-            onClearAll={clearAllAttachments}
-          />
-
-          {/* Input Row */}
-          <div className='input-row glass-surface' data-glass-variant='floating' data-glass-mode='glass'>
-            <FileUpload
-              onFileContent={handleFileSelect}
-              onMultipleFiles={handleMultipleFiles}
-              disabled={isStreaming}
-              maxFiles={10}
-            />
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
-              placeholder={draftAttachments.length > 0
-                ? hasPendingVideoUploads
-                  ? 'Video is processing... sending is disabled until ready.'
-                  : 'Add a message (optional)...'
-                : 'Ask anything…'}
-              aria-label='Message Prismatix'
-              className='chat-input'
-              disabled={isStreaming}
-              rows={1}
-            />
-            <button
-              type='button'
-              onClick={() => {
-                void handleSend();
-              }}
-              disabled={(!input.trim() && draftAttachments.length === 0) || isStreaming || hasPendingVideoUploads}
-              className='send-button'
-              aria-label='Send message'
-              title={hasPendingVideoUploads ? 'Video processing in progress' : 'Send message'}
-            >
-              {isWaitingFirstToken ? <div className='loading-spinner' /> : (
-                <svg
-                  width='20'
-                  height='20'
-                  viewBox='0 0 24 24'
-                  fill='none'
-                  stroke='currentColor'
-                  strokeWidth='2'
-                >
-                  <line x1='22' y1='2' x2='11' y2='13' />
-                  <polygon points='22 2 15 22 11 13 2 9 22 2' />
-                </svg>
-              )}
-            </button>
-            {isStreaming && (
-              <button
-                type='button'
-                onClick={handleStop}
-                className='stop-button'
-                title='Stop generating'
-                aria-label='Stop generating'
-              >
-                <svg
-                  width='18'
-                  height='18'
-                  viewBox='0 0 24 24'
-                  fill='currentColor'
-                  stroke='currentColor'
-                  strokeWidth='2'
-                >
-                  <rect x='6' y='6' width='12' height='12' rx='2' />
-                </svg>
-              </button>
-            )}
-          </div>
-
-          {messages.length === 0 && (
-            <div className='prompt-starters-section' aria-label='Suggested starting points'>
-              <div className='prompt-starters-grid'>
-                {PROMPT_STARTERS.map((starter) => (
-                  <button
-                    key={starter.title}
-                    type='button'
-                    className='prompt-starter-chip'
-                    onClick={() => {
-                      setInput(starter.prompt);
-                      inputRef.current?.focus();
-                    }}
-                  >
-                    <span className='starter-chip-title'>{starter.title}</span>
-                    <span aria-hidden='true'>↗</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {streamOutcome && (
-            <div className='stream-outcome' role='status' aria-live='polite'>
-              {streamOutcome.status === 'cancelled'
-                ? `Cancelled${streamOutcome.executionId ? ` · execution ${streamOutcome.executionId.slice(0, 8)}` : ''}`
-                : `Receipt · ${streamOutcome.settlementState ?? 'pending'}${streamOutcome.executionId ? ` · execution ${streamOutcome.executionId.slice(0, 8)}` : ''}`}
-            </div>
-          )}
-          {/* PX07: bounded-context indicator — older messages are excluded. */}
-          {contextExcludedCount > 0 && (
-            <div className='context-out-of-window-indicator' role='status'>
-              {contextExcludedCount} older message
-              {contextExcludedCount === 1 ? ' is' : 's are'} outside the current context.
-            </div>
-          )}
-          {/* PX07: duplicate_request — the turn already exists; no re-dispatch. */}
-          {duplicateNotice && (
-            <div className='duplicate-request-notice' role='status' aria-live='polite'>
-              {duplicateNotice}
-            </div>
-          )}
-          {composerValidationView && (
-            <div className='send-validation-error' role='alert' aria-live='polite'>
-              <p className='send-validation-summary'>{composerValidationView.summary}</p>
-              {composerValidationView.detail && (
-                <p className='send-validation-detail'>{composerValidationView.detail}</p>
-              )}
-              {composerValidationView.showRoutingCta && (
-                <button
-                  type='button'
-                  className='send-validation-routing-cta'
-                  onClick={openRoutingDebateMenu}
-                >
-                  Open routing & debate
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+      <ChatInputComposer
+        input={input}
+        inputRef={inputRef}
+        onChange={handleInputChange}
+        onKeyDown={handleKeyDown}
+        onSend={() => void handleSend()}
+        onStop={handleStop}
+        isStreaming={isStreaming}
+        isWaitingFirstToken={isWaitingFirstToken}
+        sendBlockedReason={sendBlockedReason}
+        sendBlockedTitles={SEND_BLOCKED_TITLES}
+        hasPendingVideoUploads={hasPendingVideoUploads}
+        draftAttachments={draftAttachments}
+        onRemoveAttachment={removeAttachment}
+        onClearAllAttachments={clearAllAttachments}
+        onFileSelect={handleFileSelect}
+        onMultipleFiles={handleMultipleFiles}
+        manualModelOverride={manualModelOverride}
+        currentModel={currentModel}
+        debateSelection={debateSelection}
+        enabledProviders={enabledProviders}
+        preferences={modelPreferences}
+        geminiFlashThinkingLevel={geminiFlashThinkingLevel}
+        onModelSelect={handleModelSelect}
+        onClearOverride={clearModelOverride}
+        onGeminiThinkingChange={setGeminiFlashThinkingLevel}
+        onOpenProviderSettings={() => setShowProviderSettings(true)}
+        openRoutingDebateMenu={openRoutingDebateMenu}
+        showPromptStarters={messages.length === 0}
+        promptStarters={PROMPT_STARTERS}
+        onSelectPromptStarter={(prompt) => {
+          setInput(prompt);
+          inputRef.current?.focus();
+        }}
+        streamOutcome={streamOutcome}
+        contextExcludedCount={contextExcludedCount}
+        duplicateNotice={duplicateNotice}
+        composerValidationView={composerValidationView}
+      />
 
       <BudgetGuard
         isOpen={!!budgetConfirm}
@@ -1881,6 +2065,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         totalCost={sessionCostTotal}
         finalCostUsd={finalMessageCost}
         routerPricingVersion={routerPricingVersion}
+      />
+
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsOpen}
+        onClose={handleCloseShortcuts}
       />
       </div>
     </div>

@@ -15,6 +15,7 @@ interface UseAuthReturn extends AuthState {
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
+  resetPassword: (email: string) => Promise<{ error: Error | null }>;
   signInWithProvider: (provider: 'google' | 'github') => Promise<{ error: Error | null }>;
 }
 
@@ -141,6 +142,24 @@ export const useAuth = (): UseAuthReturn => {
     }
   }, []);
 
+  const resetPassword = useCallback(async (email: string) => {
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+
+      if (error) {
+        console.error('[useAuth] Reset password error:', error);
+        return { error };
+      }
+
+      return { error: null };
+    } catch (err) {
+      console.error('[useAuth] Unexpected reset password error:', err);
+      return { error: err instanceof Error ? err : new Error('Reset password failed') };
+    }
+  }, []);
+
   const signOut = useCallback(async () => {
     try {
       await supabase.auth.signOut();
@@ -175,6 +194,7 @@ export const useAuth = (): UseAuthReturn => {
     signIn,
     signUp,
     signOut,
+    resetPassword,
     signInWithProvider,
   };
 };

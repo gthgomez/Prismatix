@@ -108,17 +108,19 @@ export function MemorySettings({ onClose, onOpenConversation }: {
           <h2 id="memory-heading">Memory</h2>
           <button className="provider-settings-close" onClick={onClose} aria-label="Close memory">Close</button>
         </header>
-        <p>
+        <p className="provider-settings-intro">
           Saved information can be recalled across your chats and models.
           Memories are evidence from your messages; they may need correction.
         </p>
-        {error && <p role="alert">{error}</p>}
+        {error && <p className="provider-settings-error" role="alert">{error}</p>}
         {busy && <p role="status">Updating memory…</p>}
         {status && (
           <>
-            <label>
+            <label className="memory-preference">
               <input
                 type="checkbox"
+                className="provider-switch"
+                role="switch"
                 checked={status.setting_enabled}
                 disabled={busy || !status.entitled}
                 onChange={(e) =>
@@ -131,9 +133,11 @@ export function MemorySettings({ onClose, onOpenConversation }: {
             {!status.enabled && status.entitled && (
               <p>Memory is paused. Your saved records remain available here.</p>
             )}
-            <label>
+            <label className="memory-preference">
               <input
                 type="checkbox"
+                className="provider-switch"
+                role="switch"
                 checked={status.forget_on_chat_delete}
                 disabled={busy}
                 onChange={(e) =>
@@ -194,7 +198,7 @@ export function MemorySettings({ onClose, onOpenConversation }: {
               onChange={(e) => setQuery(e.target.value)}
             />
           </label>
-          <button type="submit" className="memory-primary" disabled={busy}>Search</button>
+          <button className="settings-primary" disabled={busy}>Search</button>
           <button
             type="button"
             disabled={busy}
@@ -233,8 +237,7 @@ export function MemorySettings({ onClose, onOpenConversation }: {
             />
           </label>
           <button
-            type="submit"
-            className="memory-primary"
+            className="settings-primary"
             disabled={busy || !status?.enabled || draft.trim().length < 3}
           >
             {editing ? "Save correction" : "Remember"}
@@ -290,6 +293,7 @@ export function MemorySettings({ onClose, onOpenConversation }: {
                   Correct
                 </button>
                 <button
+                  className="settings-danger"
                   disabled={busy}
                   onClick={() => void change("forget", { id: item.id })}
                 >
@@ -299,7 +303,9 @@ export function MemorySettings({ onClose, onOpenConversation }: {
             </li>
           ))}
         </ul>
-        {!busy && !error && items.length === 0 && <p role="status" className="memory-empty">{searched ? "No matching memories. Try another search or show all." : "No saved memories yet. Add something above or share a preference in chat."}</p>}
+        {!busy && items.length === 0 && (
+          <p>{searched ? "No matching memories." : "No saved memories yet."}</p>
+        )}
         {more && (
           <button
             disabled={busy}

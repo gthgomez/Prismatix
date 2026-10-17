@@ -62,10 +62,7 @@ export function estimateTokens(text: string): number {
  */
 export function calculateHistoryTokens(messages: Message[]): number {
   return messages.reduce((total, msg) => {
-    const contentText = typeof msg.content === 'string' 
-      ? msg.content 
-      : JSON.stringify(msg.content);
-      
+    const contentText = extractTextContent(msg.content);
     return total + estimateTokens(contentText);
   }, 0);
 }
@@ -244,4 +241,27 @@ export function calculateReadingTime(text: string): number {
 export function truncate(text: string, maxLength: number, suffix: string = '...'): string {
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength - suffix.length) + suffix;
+}
+
+/**
+ * Extracts plain text content from a message's content property,
+ * whether it is a string or a multimodal content array.
+ */
+export function extractTextContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (typeof part === 'object' && part !== null) {
+          if ('text' in part && typeof (part as { text: unknown }).text === 'string') {
+            return (part as { text: string }).text;
+          }
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
 }

@@ -29,6 +29,17 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof ModelSelectorD
     debateSelection: 'off' as const,
     sendValidationError: null,
     enabledProviders: new Set<ProviderId>(PROVIDER_PLUGIN_ORDER),
+    preferences: {
+      favoriteModels: ['claude-haiku-5-5' as const, 'gemini-3.8-flash' as const],
+      hiddenModels: [],
+      activeProviderFilter: 'all' as const,
+      toggleFavorite: vi.fn(),
+      toggleModelVisibility: vi.fn(),
+      setModelVisible: vi.fn(),
+      setProviderFilter: vi.fn(),
+      isFavorite: vi.fn(() => true),
+      isModelHidden: vi.fn(() => false),
+    },
     onModelSelect: vi.fn(),
     onClearOverride: vi.fn(),
     onGeminiThinkingChange: vi.fn(),
@@ -59,6 +70,12 @@ describe('ModelSelectorDropdown', () => {
     const close = container.querySelector<HTMLButtonElement>('[aria-label="Close model menu"]');
     expect(close).not.toBeNull();
     act(() => close!.click());
+    expect(onClose).toHaveBeenCalledOnce();
+    act(() => tabs[1]!.click());
+    const search = container.querySelector<HTMLInputElement>('.model-search-input')!;
+    setInputValue(search, 'luna');
+    act(() => search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+    expect(search.value).toBe('');
     expect(onClose).toHaveBeenCalledOnce();
     container.remove();
   });

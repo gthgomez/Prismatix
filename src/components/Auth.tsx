@@ -3,6 +3,7 @@
 
 import React, { useState } from 'react';
 import { CONFIG } from '../config';
+import '../styles/Auth.css';
 
 // PX01: signup UI is gated behind VITE_ALLOW_SIGNUP (default off). Server-side
 // signup is disabled independently; this only hides the client path.
@@ -12,6 +13,7 @@ interface AuthProps {
   onSignIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   onSignUp: (email: string, password: string) => Promise<{ error: Error | null }>;
   onSignInWithProvider?: (provider: 'google' | 'github') => Promise<{ error: Error | null }>;
+  onResetPassword?: (email: string) => Promise<{ error: Error | null }>;
 }
 
 type AuthMode = 'signin' | 'signup';
@@ -19,7 +21,8 @@ type AuthMode = 'signin' | 'signup';
 export const Auth: React.FC<AuthProps> = ({ 
   onSignIn, 
   onSignUp, 
-  onSignInWithProvider 
+  onSignInWithProvider,
+  onResetPassword
 }) => {
   const [mode, setMode] = useState<AuthMode>('signin');
   const [email, setEmail] = useState('');
@@ -28,6 +31,7 @@ export const Auth: React.FC<AuthProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,6 +116,32 @@ export const Auth: React.FC<AuthProps> = ({
     setConfirmPassword('');
   };
 
+  const handleForgotPassword = async () => {
+    if (!onResetPassword) return;
+
+    setError(null);
+    setSuccessMessage(null);
+
+    if (!email.trim()) {
+      setError('Enter your email above first, then click "Forgot password?"');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const result = await onResetPassword(email);
+      if (result.error) {
+        setError(result.error.message);
+      } else {
+        setSuccessMessage('Password reset email sent — check your inbox.');
+      }
+    } catch (err) {
+      setError('An unexpected error occurred');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="auth-container">
       <div className="auth-card">
@@ -122,29 +152,34 @@ export const Auth: React.FC<AuthProps> = ({
           <p>Adaptive Model Selection</p>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="auth-tabs">
-          <button 
-            type="button"
-            className={`auth-tab ${mode === 'signin' ? 'active' : ''}`}
-            onClick={() => setMode('signin')}
-          >
-            Sign In
-          </button>
-          {ALLOW_SIGNUP && (
+        {/* Tab Switcher — hidden entirely when signup is disabled (PX01):
+            a single-tab pill is a dead control and reads as a rendering bug */}
+        {ALLOW_SIGNUP && (
+          <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
             <button 
               type="button"
+              role="tab"
+              aria-selected={mode === 'signin'}
+              className={`auth-tab ${mode === 'signin' ? 'active' : ''}`}
+              onClick={() => setMode('signin')}
+            >
+              Sign In
+            </button>
+            <button 
+              type="button"
+              role="tab"
+              aria-selected={mode === 'signup'}
               className={`auth-tab ${mode === 'signup' ? 'active' : ''}`}
               onClick={() => setMode('signup')}
             >
               Sign Up
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Messages */}
         {error && (
-          <div className="auth-message error">
+          <div className="auth-message error" role="alert">
             <span>⚠️</span> {error}
           </div>
         )}
@@ -171,15 +206,26 @@ export const Auth: React.FC<AuthProps> = ({
 
           <div className="form-group">
             <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              disabled={isLoading}
-              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
-            />
+            <div className="password-wrap">
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                disabled={isLoading}
+                autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
           </div>
 
           {mode === 'signup' && (
@@ -201,6 +247,7 @@ export const Auth: React.FC<AuthProps> = ({
             type="submit" 
             className="auth-submit"
             disabled={isLoading}
+            aria-label={mode === 'signin' ? 'Sign in to Prismatix' : 'Create Prismatix account'}
           >
             {isLoading ? (
               <div className="loading-spinner" />
@@ -208,6 +255,12 @@ export const Auth: React.FC<AuthProps> = ({
               mode === 'signin' ? 'Sign In' : 'Create Account'
             )}
           </button>
+
+          {mode === 'signin' && onResetPassword && (
+            <button type="button" className="auth-link forgot-link" onClick={handleForgotPassword}>
+              Forgot password?
+            </button>
+          )}
         </form>
 
         {/* OAuth Providers */}
@@ -260,286 +313,6 @@ export const Auth: React.FC<AuthProps> = ({
           </div>
         )}
       </div>
-
-      <style>{`
-        .auth-container {
-          min-height: 100vh;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          background: var(--color-bg);
-          padding: 2rem;
-          font-family: var(--font-sans);
-          overflow-y: auto;
-        }
-
-        .auth-card {
-          margin: auto 0;
-          width: 100%;
-          max-width: 420px;
-          background: var(--color-surface);
-          border: 1px solid var(--color-border);
-          border-radius: 1rem;
-          padding: 2rem;
-          backdrop-filter: none;
-          animation: fadeIn 0.5s ease;
-        }
-
-        .auth-header {
-          text-align: center;
-          margin-bottom: 2rem;
-        }
-
-        .auth-logo {
-          font-size: 3rem;
-          margin-bottom: 1rem;
-          animation: float 3s ease-in-out infinite;
-        }
-
-        .auth-header h1 {
-          font-size: 1.75rem;
-          font-weight: 700;
-          background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-          margin: 0 0 0.5rem 0;
-        }
-
-        .auth-header p {
-          color: var(--color-text-muted);
-          font-size: 0.875rem;
-          margin: 0;
-          text-transform: uppercase;
-          letter-spacing: 0.1em;
-        }
-
-        .auth-tabs {
-          display: flex;
-          gap: 0.5rem;
-          margin-bottom: 1.5rem;
-          background: var(--color-surface-elevated);
-          border-radius: 0.5rem;
-          padding: 0.25rem;
-        }
-
-        .auth-tab {
-          flex: 1;
-          padding: 0.75rem;
-          background: transparent;
-          border: none;
-          border-radius: 0.375rem;
-          color: var(--color-text-muted);
-          font-family: inherit;
-          font-size: 0.875rem;
-          font-weight: 500;
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-
-        .auth-tab:hover {
-          color: var(--color-text);
-        }
-
-        .auth-tab.active {
-          background: var(--color-primary-dim);
-          color: var(--color-primary);
-        }
-
-        .auth-message {
-          padding: 0.75rem 1rem;
-          border-radius: 0.5rem;
-          margin-bottom: 1rem;
-          font-size: 0.875rem;
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-        }
-
-        .auth-message.error {
-          background: var(--color-surface-error);
-          border: 1px solid var(--color-danger);
-          color: var(--color-content-on-error);
-        }
-
-        .auth-message.success {
-          background: var(--color-surface-success);
-          border: 1px solid var(--color-success);
-          color: var(--color-content-on-success);
-        }
-
-        .auth-form {
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-        }
-
-        .form-group {
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .form-group label {
-          font-size: 0.8rem;
-          color: var(--color-text-dim);
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-
-        .form-group input {
-          background: var(--color-surface);
-          border: 1px solid var(--color-border);
-          border-radius: 0.5rem;
-          padding: 0.875rem 1rem;
-          color: var(--color-text);
-          font-family: inherit;
-          font-size: 0.95rem;
-          transition: all 0.2s;
-        }
-
-        .form-group input:focus {
-          outline: none;
-          background: var(--color-surface-hover);
-          border-color: var(--color-primary);
-          box-shadow: 0 0 0 3px rgba(78, 205, 196, 0.1);
-        }
-
-        .form-group input::placeholder {
-          color: rgba(255, 255, 255, 0.3);
-        }
-
-        .form-group input:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-
-        .auth-submit {
-          margin-top: 0.5rem;
-          padding: 1rem;
-          background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
-          border: none;
-          border-radius: 0.5rem;
-          color: var(--color-content-on-primary);
-          font-family: inherit;
-          font-size: 1rem;
-          font-weight: 600;
-          cursor: pointer;
-          transition: all 0.2s;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 52px;
-        }
-
-        .auth-submit:hover:not(:disabled) {
-          transform: translateY(-2px);
-          box-shadow: 0 8px 20px rgba(78, 205, 196, 0.3);
-        }
-
-        .auth-submit:disabled {
-          opacity: 0.7;
-          cursor: not-allowed;
-        }
-
-        .auth-divider {
-          display: flex;
-          align-items: center;
-          gap: 1rem;
-          margin: 1.5rem 0;
-          color: rgba(255, 255, 255, 0.3);
-          font-size: 0.8rem;
-        }
-
-        .auth-divider::before,
-        .auth-divider::after {
-          content: '';
-          flex: 1;
-          height: 1px;
-          background: var(--color-border-subtle);
-        }
-
-        .auth-providers {
-          display: flex;
-          gap: 0.75rem;
-        }
-
-        .provider-button {
-          flex: 1;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 0.5rem;
-          padding: 0.875rem;
-          background: var(--color-surface);
-          border: 1px solid var(--color-border);
-          border-radius: 0.5rem;
-          color: var(--color-text);
-          font-family: inherit;
-          font-size: 0.875rem;
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-
-        .provider-button:hover:not(:disabled) {
-          background: var(--color-border-subtle);
-          border-color: var(--color-border-strong);
-        }
-
-        .provider-button:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-
-        .auth-footer {
-          margin-top: 1.5rem;
-          text-align: center;
-        }
-
-        .auth-footer p {
-          color: var(--color-text-muted);
-          font-size: 0.875rem;
-          margin: 0;
-        }
-
-        .auth-link {
-          background: none;
-          border: none;
-          color: var(--color-primary);
-          font-family: inherit;
-          font-size: inherit;
-          cursor: pointer;
-          text-decoration: underline;
-        }
-
-        .auth-link:hover {
-          color: var(--color-primary);
-        }
-
-        .loading-spinner {
-          width: 20px;
-          height: 20px;
-          border: 2px solid rgba(255, 255, 255, 0.3);
-          border-top-color: var(--color-text);
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        }
-
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(20px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-
-        @keyframes float {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-10px); }
-        }
-
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 };

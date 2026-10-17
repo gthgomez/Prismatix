@@ -47,6 +47,8 @@ function readStoredTab(): SelectorTab {
   }
 }
 
+import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
+
 interface ModelSelectorDropdownProps {
   currentModel: RouterModel;
   currentComplexity: number;
@@ -55,6 +57,7 @@ interface ModelSelectorDropdownProps {
   debateSelection: DebateSelection;
   sendValidationError: string | null;
   enabledProviders: ReadonlySet<ProviderId>;
+  preferences: ModelPickerPreferencesHook;
   onModelSelect: (model: RouterModel) => void;
   onClearOverride: () => void;
   onGeminiThinkingChange: (level: GeminiFlashThinkingLevel) => void;
@@ -72,6 +75,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   debateSelection,
   sendValidationError,
   enabledProviders,
+  preferences,
   onModelSelect,
   onClearOverride,
   onGeminiThinkingChange,
@@ -97,7 +101,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && onClose) {
+      if (e.key === 'Escape' && onClose && !e.defaultPrevented) {
         onClose();
       }
     };
@@ -132,14 +136,21 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
     }
   };
 
-  // Only models whose provider is enabled for this user are selectable.
+  const { hiddenModels } = preferences;
+
+  // Only models whose provider is enabled and not hidden by user (unless searched) are selectable.
   const visibleOrder = useMemo(
-    () => filterVisibleModels(MODEL_ORDER, { enabledProviders }).filter((id) => !isHistoricModel(id)),
-    [enabledProviders],
+    () =>
+      filterVisibleModels(MODEL_ORDER, { enabledProviders })
+        .filter((id) => !isHistoricModel(id))
+        .filter((id) => modelSearch.trim() || !hiddenModels.includes(id)),
+    [enabledProviders, hiddenModels, modelSearch],
   );
   const visibleHighlights = useMemo(
-    () => filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders }),
-    [enabledProviders],
+    () =>
+      filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders })
+        .filter((id) => modelSearch.trim() || !hiddenModels.includes(id)),
+    [enabledProviders, hiddenModels, modelSearch],
   );
   const historicModels = useMemo(
     () => filterVisibleModels(MODEL_ORDER, { enabledProviders }).filter(isHistoricModel),
@@ -383,6 +394,13 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
               type='search'
               value={modelSearch}
               onChange={(event) => setModelSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && modelSearch) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setModelSearch('');
+                }
+              }}
               placeholder='Name, provider, or capability'
               autoComplete='off'
             />

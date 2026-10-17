@@ -6,21 +6,50 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { ProviderPlugins } from '../hooks/useProviderPlugins';
 import { getProviderPlugin, isProviderId, type ProviderId } from '../providerRegistry';
+import { MODEL_ORDER, formatModelPriceLabel, getCatalogEntry } from '../modelCatalog';
+import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
+import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
+import { hasOpenRouterRoute, providerForModel } from '../providerRegistry';
 
 interface ProviderSettingsProps {
   plugins: ProviderPlugins;
+  preferences: ModelPickerPreferencesHook;
   onClose: () => void;
 }
 
 const FOCUSABLE_SELECTOR =
   'button:not(:disabled), input:not(:disabled), [href], select, textarea, [tabindex]:not([tabindex="-1"])';
 
-export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onClose }) => {
+export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, preferences, onClose }) => {
   const { providers, defaultProvider, loading, error, refresh } = plugins;
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [expandedModelsProvider, setExpandedModelsProvider] = useState<string | null>(null);
+  const [showHistoricByProvider, setShowHistoricByProvider] = useState<Record<string, boolean>>({});
   const panelRef = useRef<HTMLDivElement | null>(null);
+
+  const {
+    toggleFavorite,
+    setModelVisible,
+    isFavorite,
+    isModelHidden,
+  } = preferences;
+
+  // Resolve models associated with each provider:
+  // - For direct providers: catalog models whose owner matches
+  // - For openrouter: models that have an openrouter route
+  const getModelsForProvider = (providerId: string, includeHistoric: boolean) => {
+    return MODEL_ORDER.filter((modelId) => {
+      const isHistoric = isHistoricModel(modelId);
+      if (isHistoric && !includeHistoric) return false;
+
+      if (providerId === 'openrouter') {
+        return hasOpenRouterRoute(modelId);
+      }
+      return providerForModel(modelId) === providerId;
+    });
+  };
 
   // Modal lifecycle: lock background scroll, move focus into the dialog, and
   // restore it when the dialog unmounts.
@@ -52,7 +81,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
       const first = focusable[0]!;
       const last = focusable[focusable.length - 1]!;
       const active = document.activeElement;
-      if (e.shiftKey && (active === first || !panelRef.current.contains(active))) {
+      if (e.shiftKey && (active === first || active === panelRef.current || !panelRef.current.contains(active))) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && active === last) {
@@ -190,10 +219,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
                       aria-live='polite'
                     >
                       {!provider.hasKey
-                        ? 'No key saved'
-                        : provider.enabled
-                          ? 'Key saved · On'
-                          : 'Key saved · Off'}
+                        ? 'Key required'
+                        : 'Key saved'}
                     </div>
                     <div className='provider-key-row'>
                       <input
@@ -251,6 +278,106 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, onC
                     {provider.defaultProvider ? 'Default gateway' : 'Set as default'}
                   </button>
                 )}
+
+                {/* Per-provider Model Management & Visibility */}
+                {(() => {
+                  const showHistoric = !!showHistoricByProvider[provider.id];
+                  const providerModels = getModelsForProvider(provider.id, showHistoric);
+                  const allProviderModels = getModelsForProvider(provider.id, true);
+                  const hasHistoric = allProviderModels.length > getModelsForProvider(provider.id, false).length;
+
+                  if (allProviderModels.length === 0) return null;
+                  const isExpanded = expandedModelsProvider === provider.id;
+                  const activeCount = allProviderModels.filter((m) => !isModelHidden(m)).length;
+
+                  return (
+                    <div className='provider-models-section'>
+                      <button
+                        type='button'
+                        className='provider-models-toggle'
+                        aria-expanded={isExpanded}
+                        onClick={() =>
+                          setExpandedModelsProvider((curr) =>
+                            curr === provider.id ? null : provider.id,
+                          )
+                        }
+                      >
+                        <span className='provider-models-toggle-title'>
+                          Models ({activeCount} active / {allProviderModels.length} available)
+                        </span>
+                        <span className='provider-models-toggle-chevron' aria-hidden='true'>
+                          {isExpanded ? '▴' : '▾'}
+                        </span>
+                      </button>
+
+                      {isExpanded && (
+                        <div className='provider-models-list' role='region' aria-label={`${provider.label} models`}>
+                          <p className='provider-models-help'>
+                            Unchecking a model removes it from quick model pickers. Intelligent Auto Routing can still select it when ideal.
+                          </p>
+
+                          {providerModels.map((modelId) => {
+                            const config = getCatalogEntry(modelId);
+                            const visible = !isModelHidden(modelId);
+                            const fav = isFavorite(modelId);
+                            const historic = isHistoricModel(modelId);
+
+                            return (
+                              <div key={modelId} className='provider-model-item'>
+                                <label className='provider-model-checkbox-label'>
+                                  <input
+                                    type='checkbox'
+                                    className='provider-model-checkbox'
+                                    checked={visible}
+                                    onChange={(e) => setModelVisible(modelId, e.target.checked)}
+                                    aria-label={`Enable ${config.shortName}`}
+                                  />
+                                  <span className='provider-model-icon' aria-hidden='true'>
+                                    {config.icon}
+                                  </span>
+                                  <div className='provider-model-item-info'>
+                                    <span className='provider-model-name'>
+                                      {config.shortName}
+                                      {historic && <span className='provider-model-historic-badge'>Historic</span>}
+                                    </span>
+                                    <span className='provider-model-price'>
+                                      {formatModelPriceLabel(modelId)}
+                                    </span>
+                                  </div>
+                                </label>
+
+                                <button
+                                  type='button'
+                                  className={`provider-model-star ${fav ? 'is-favorite' : ''}`}
+                                  title={fav ? 'Remove from pinned models' : 'Pin model to quick access'}
+                                  aria-label={fav ? `Unpin ${config.shortName}` : `Pin ${config.shortName}`}
+                                  onClick={() => toggleFavorite(modelId)}
+                                >
+                                  {fav ? '★' : '☆'}
+                                </button>
+                              </div>
+                            );
+                          })}
+
+                          {hasHistoric && (
+                            <button
+                              type='button'
+                              className='provider-models-historic-toggle'
+                              onClick={() =>
+                                setShowHistoricByProvider((prev) => ({
+                                  ...prev,
+                                  [provider.id]: !prev[provider.id],
+                                }))
+                              }
+                            >
+                              {showHistoric ? 'Hide older models' : `Show older models (${allProviderModels.length - getModelsForProvider(provider.id, false).length})`}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}

@@ -437,8 +437,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           color: #4ECDC4;
         }
 
-        .file-upload-button:focus {
-          outline: none;
+        .file-upload-button:focus-visible {
+          outline: 2px solid var(--color-focus, #65e8ff);
+          outline-offset: 2px;
           box-shadow: 0 0 0 3px rgba(78, 205, 196, 0.2);
         }
 

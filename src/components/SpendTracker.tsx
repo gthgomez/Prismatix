@@ -26,7 +26,10 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
   const refreshTimersRef = useRef<number[]>([]);
   const widgetRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const close = () => { setIsOpen(false); triggerRef.current?.focus(); };
+  const close = () => {
+    setIsOpen(false);
+    triggerRef.current?.focus();
+  };
 
   const fetchServerStats = async (): Promise<SpendStats | null> => {
     const {
@@ -121,17 +124,28 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const stateLabel =
+    syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : 'Live';
+  const popoverStatus =
+    syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : 'Connected';
+  // Zero spend is secondary information: keep it readable but visually quiet so
+  // the routing mode (the thing that actually changes behaviour) leads.
+  const isQuiet = stats.today === 0 && syncState !== 'error';
+
   return (
-    <div className='spend-widget' ref={widgetRef} onKeyDown={(e) => {
-      if (e.key === 'Escape' && isOpen) { e.stopPropagation(); close(); }
+    <div className='spend-widget' ref={widgetRef} onKeyDown={(event) => {
+      if (event.key === 'Escape' && isOpen && !event.defaultPrevented) {
+        event.stopPropagation();
+        close();
+      }
     }}>
       <button
         type='button'
-        className='spend-pill'
+        className={`spend-pill${isQuiet ? ' is-quiet' : ''}`}
         ref={triggerRef}
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
-        aria-label={`Spend analytics: USD ${stats.today.toFixed(2)} today · ${syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : lastSyncAt ? 'Live' : 'Not synced'}`}
+        aria-label={`Spend analytics — $${stats.today.toFixed(2)} today, ${stateLabel.toLowerCase()}`}
         title='View spend analytics'
       >
         <span className='spend-pill-value'>${stats.today.toFixed(2)}</span>
@@ -141,17 +155,17 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
             syncState === 'syncing' ? 'syncing' : syncState === 'error' ? 'error' : 'idle'
           }`}
         >
-          {syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : lastSyncAt ? 'Live' : 'Not synced'}
+          {stateLabel}
         </span>
       </button>
 
       {isOpen && (
-        <aside className='spend-popover' aria-label='Spend analytics'>
+        <aside className='spend-popover'>
           <div className="spend-popover-header">
             <h3>Spend Analytics</h3>
             <div className={`sync-indicator ${syncState}`}>
               {syncState === 'syncing' && <div className="sync-spinner" />}
-              <span>{syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : lastSyncAt ? 'Connected' : 'Not synced'}</span>
+              <span>{popoverStatus}</span>
             </div>
             <button type='button' className='popover-close' aria-label='Close spend analytics' onClick={close}>×</button>
           </div>
@@ -207,42 +221,47 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
         .spend-pill {
           display: flex;
           align-items: center;
-          gap: 0.75rem;
-          padding: 0.45rem 0.75rem;
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 0.625rem;
-          color: #fff;
+          gap: 0.55rem;
+          padding: 0.4rem 0.65rem;
+          background: var(--color-border-subtle);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+          color: var(--color-text);
           cursor: pointer;
-          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          transition: background 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+            border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .spend-pill:hover {
-          background: rgba(255, 255, 255, 0.06);
-          border-color: #4ECDC4;
-          box-shadow: 0 4px 12px rgba(78, 205, 196, 0.1);
-          transform: translateY(-1px);
+          background: var(--color-border);
+          border-color: var(--color-primary);
         }
 
         .spend-pill-value {
           font-weight: 700;
-          color: #4ECDC4;
+          color: var(--color-primary);
           font-size: 0.85rem;
+        }
+
+        /* Zero-value status is secondary: muted tokens, no accent fill. */
+        .spend-pill.is-quiet .spend-pill-value {
+          color: var(--color-text-dim);
         }
 
         .spend-pill-label {
           font-size: 0.65rem;
-          color: rgba(255, 255, 255, 0.4);
+          color: var(--color-text-muted);
           text-transform: uppercase;
           letter-spacing: 0.05em;
         }
 
         .spend-pill-state {
           font-size: 0.6rem;
-          padding: 2px 6px;
+          padding: 1px 5px;
           border-radius: 4px;
-          background: rgba(78, 205, 196, 0.1);
-          color: #4ECDC4;
+          background: transparent;
+          border: 1px solid var(--color-border);
+          color: var(--color-text-muted);
           font-weight: 700;
           text-transform: uppercase;
           letter-spacing: 0.02em;
@@ -250,13 +269,19 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
 
         .spend-pill-state.syncing {
           background: rgba(255, 196, 70, 0.1);
-          color: #FFC446;
+          border-color: rgba(255, 196, 70, 0.45);
+          color: var(--color-warning);
           animation: pulse 1.5s infinite;
         }
 
         .spend-pill-state.error {
           background: rgba(255, 107, 107, 0.1);
-          color: #FF6B6B;
+          border-color: rgba(255, 107, 107, 0.45);
+          color: var(--color-danger);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .spend-pill-state.syncing { animation: none; }
         }
 
         .spend-popover {
@@ -278,8 +303,24 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
           display: flex;
           justify-content: space-between;
           align-items: center;
+          gap: 0.5rem;
+          flex-wrap: wrap;
           margin-bottom: 1.25rem;
         }
+
+        .spend-popover .popover-close {
+          flex-shrink: 0;
+          width: 44px;
+          height: 44px;
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+          background: transparent;
+          color: var(--color-text-dim);
+          cursor: pointer;
+          font-size: 1.2rem;
+        }
+
+        .sync-indicator.error { color: var(--color-danger); }
 
         .spend-popover h3 {
           margin: 0;

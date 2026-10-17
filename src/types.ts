@@ -115,6 +115,9 @@ export interface MessageCost {
   estimatedUsd?: number;
   finalUsd?: number;
   pricingVersion?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  durationMs?: number;
 }
 
 export interface Message {
@@ -141,6 +144,7 @@ export interface Message {
   thinkingLog?: string[];
   thinkingDurationMs?: number;
   cost?: MessageCost;
+  feedback?: 'up' | 'down';
 }
 
 export interface FileUploadPayload {
