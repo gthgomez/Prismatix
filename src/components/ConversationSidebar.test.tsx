@@ -33,6 +33,76 @@ function noop() {}
 describe('ConversationSidebar', () => {
   afterEach(() => { vi.useRealTimers(); localStorage.clear(); });
 
+  it('moves focus into a mobile drawer and restores the trigger on close', () => {
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+    const container = document.createElement('div');
+    const trigger = document.createElement('button');
+    document.body.append(trigger, container);
+    trigger.focus();
+    const props = { conversations: CONVERSATIONS, selectedId: null, isLoading: false, onClose: noop, onSelect: noop, onNewChat: noop, onDelete: noop };
+    const root = renderInto(container, <ConversationSidebar {...props} isOpen />);
+    expect(container.querySelector('aside')?.contains(document.activeElement)).toBe(true);
+    act(() => root.render(<ConversationSidebar {...props} isOpen={false} />));
+    expect(document.activeElement).toBe(trigger);
+    act(() => root.unmount());
+    container.remove();
+    trigger.remove();
+    Object.defineProperty(window, 'innerWidth', { value: previousWidth, configurable: true });
+  });
+
+  it('wraps mobile Tab around row density when the width control parent is hidden', () => {
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { value: 320, configurable: true });
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = renderInto(container, <ConversationSidebar conversations={[]} selectedId={null} isLoading={false} isOpen onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-display-toggle')!.click());
+    const widthOption = container.querySelector<HTMLElement>('.conversation-width-option')!;
+    const width = widthOption.querySelector<HTMLInputElement>('[aria-label="Sidebar width"]')!;
+    widthOption.style.display = 'none';
+    expect(window.getComputedStyle(width).display).not.toBe('none');
+    const density = container.querySelector<HTMLSelectElement>('[aria-label="Chat row density"]')!;
+    const toggle = container.querySelector<HTMLButtonElement>('.conversation-display-toggle')!;
+    density.focus();
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    act(() => density.dispatchEvent(tab));
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(toggle);
+    expect(document.activeElement).not.toBe(width);
+    toggle.focus();
+    const shiftTab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true, shiftKey: true });
+    act(() => toggle.dispatchEvent(shiftTab));
+    expect(shiftTab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(density);
+    expect(document.activeElement).not.toBe(width);
+    act(() => root.unmount());
+    container.remove();
+    Object.defineProperty(window, 'innerWidth', { value: previousWidth, configurable: true });
+  });
+
+  it('closes the drawer on Escape without cancelling rename or an open actions menu', () => {
+    const onClose = vi.fn();
+    const onRename = vi.fn();
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = renderInto(container, <ConversationSidebar conversations={CONVERSATIONS} selectedId={null} isLoading={false} isOpen onClose={onClose} onRename={onRename} onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    act(() => container.querySelector('aside')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+    expect(onClose).toHaveBeenCalledOnce();
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    act(() => container.querySelector('[role="menu"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-actions-trigger')!.click());
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-item-rename')!.click());
+    const input = container.querySelector<HTMLInputElement>('.conversation-rename-input')!;
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+    act(() => root.unmount());
+    container.remove();
+  });
+
   it('does not label a chat from two calendar days ago as Yesterday', () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 9, 13, 10));
     const container = document.createElement('div');

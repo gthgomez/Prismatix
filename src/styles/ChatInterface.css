@@ -582,6 +582,25 @@
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.6);
   z-index: 1000;
   animation: dropdownIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  max-height: min(88dvh, calc(100dvh - var(--prismatix-model-dropdown-top, 5.25rem) - 1rem));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+.model-dropdown > .dropdown-header,
+.model-dropdown-nav { flex-shrink: 0; }
+.model-dropdown .model-dropdown-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.model-dropdown .model-options-scroll { max-height: none; overflow: visible; }
+.model-dropdown .popover-close {
+  flex-shrink: 0; width: 44px; height: 44px;
+  border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  background: var(--color-surface); color: var(--color-text-dim); cursor: pointer; font-size: 1.2rem;
 }
 
 .model-dropdown-nav {
@@ -2399,8 +2418,7 @@
       88dvh,
       calc(100dvh - env(safe-area-inset-bottom, 0px) - var(--prismatix-model-dropdown-top, 5.5rem) - 0.75rem)
     );
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden;
     -webkit-overflow-scrolling: touch;
     z-index: 2500;
     animation: none;
@@ -2408,7 +2426,8 @@
   }
 
   .model-options-scroll {
-    max-height: min(32vh, 11rem);
+    max-height: none;
+    overflow: visible;
   }
 
   .cost-estimator {
@@ -2542,8 +2561,9 @@
     min-width: 0;
     width: auto;
     max-height: calc(100% - var(--prismatix-model-dropdown-top, 7rem) - 1rem);
-    overflow-y: auto;
   }
+  .model-dropdown { overflow: hidden; }
+  .chat-header .spend-popover { overflow-y: auto; }
 }
 
 @container chat (max-width: 520px) {

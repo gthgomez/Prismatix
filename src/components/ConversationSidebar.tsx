@@ -6,6 +6,19 @@ import {
 } from '../services/conversationHistory';
 import '../styles/ConversationSidebar.css';
 
+// `display` is not inherited. A parent with `display: none` (mobile hides
+// `.conversation-width-option`) still leaves the child input's own computed
+// display as a normal value, so the focus trap must walk ancestors. `visibility`
+// is inherited, so the element's own computed value already reflects a hidden ancestor.
+function isRenderedForFocus(element: HTMLElement): boolean {
+  const visibility = window.getComputedStyle(element).visibility;
+  if (visibility === 'hidden' || visibility === 'collapse') return false;
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+    if (node.hidden || window.getComputedStyle(node).display === 'none') return false;
+  }
+  return true;
+}
+
 export interface ConversationSidebarProps {
   conversations: ConversationSummary[];
   selectedId: string | null;
@@ -39,8 +52,18 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
   preferencesRef.current = preferences;
   const [resizeStart, setResizeStart] = useState<{ x: number; width: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
   const titleButtons = useRef(new Map<string, HTMLButtonElement>());
   const actionButtons = useRef(new Map<string, HTMLButtonElement>());
+  useEffect(() => {
+    if (!isOpen || window.innerWidth > 768) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    drawerRef.current?.querySelector<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)')?.focus();
+    return () => {
+      if (previous?.isConnected) previous.focus();
+    };
+  }, [isOpen]);
+
   const trimmedQuery = query.trim().toLowerCase();
   const visible = useMemo(() => conversations.filter(c => !trimmedQuery || (c.title ?? 'Untitled conversation').toLowerCase().includes(trimmedQuery)), [conversations, trimmedQuery]);
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
@@ -215,6 +238,7 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === 'Escape') {
                 event.preventDefault();
+                event.stopPropagation();
                 finishRename(event.key === 'Enter');
               }
             }}
@@ -287,6 +311,7 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 event.preventDefault();
+                event.stopPropagation();
                 dismissMenu(true);
               }
               const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
@@ -360,9 +385,28 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
 
   return <>
     {isOpen && <div className='conversation-sidebar-backdrop' onClick={onClose} aria-hidden='true' />}
-    <aside className={`conversation-sidebar ${isOpen ? 'open' : ''} ${resizeStart ? 'is-resizing' : ''}`}
+    <aside ref={drawerRef} className={`conversation-sidebar ${isOpen ? 'open' : ''} ${resizeStart ? 'is-resizing' : ''}`}
       data-density={preferences.density} aria-label='Conversations'
-      style={{ '--chat-list-width': `${preferences.width}px` } as React.CSSProperties}>
+      style={{ '--chat-list-width': `${preferences.width}px` } as React.CSSProperties}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && isOpen && !event.defaultPrevented) {
+          event.stopPropagation();
+          onClose?.();
+        }
+        if (event.key !== 'Tab' || !isOpen || window.innerWidth > 768 || !drawerRef.current) return;
+        const nodes = Array.from(drawerRef.current.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+        )).filter(isRenderedForFocus);
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }}>
       <div className='conversation-sidebar-controls'>
         <div className='conversation-sidebar-heading'>
           <h2>Chats</h2>
@@ -376,7 +420,13 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
         <div className='conversation-search-wrap'>
           <svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'><circle cx='10' cy='10' r='6' /><path d='m15 15 6 6' /></svg>
           <input type='search' className='conversation-search' placeholder='Search chats…' aria-label='Search chats' value={query}
-            onChange={event => { setQuery(event.target.value); setMenuId(null); }} onKeyDown={event => { if (event.key === 'Escape') setQuery(''); }} />
+            onChange={event => { setQuery(event.target.value); setMenuId(null); }} onKeyDown={event => {
+              if (event.key === 'Escape' && query) {
+                event.preventDefault();
+                event.stopPropagation();
+                setQuery('');
+              }
+            }} />
         </div>
         {showPreferences && <div className='conversation-display-options'>
           <label>Row density<select aria-label='Chat row density' value={preferences.density}

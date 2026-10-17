@@ -261,6 +261,8 @@ body:has(.app--chat) {
     min-height: 44px !important;
   }
 
+  .code-copy-btn, .message-model-pill { min-height: 44px; min-width: 44px; }
+
   .header-button,
   .user-button,
   .draft-remove-btn,

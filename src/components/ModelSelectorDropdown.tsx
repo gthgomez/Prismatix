@@ -1,6 +1,6 @@
 // ModelSelectorDropdown.tsx — Routing / debate vs model override (tabbed), layout prefs persisted
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
 import type { GeminiFlashThinkingLevel, RouterModel } from '../types';
 import {
@@ -91,10 +91,17 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   const [groupByProvider, setGroupByProvider] = useState(readStoredGroupByProvider);
   const [modelSearch, setModelSearch] = useState('');
   const [showHistoric, setShowHistoric] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    menuRef.current?.querySelector<HTMLElement>('[role=tab][aria-selected=true]')?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && onClose) {
+      if (e.key === 'Escape' && onClose && !e.defaultPrevented) {
         onClose();
       }
     };
@@ -220,9 +227,10 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   const routingHint = complexityScoreRoutingHint(currentComplexity);
 
   return (
-    <div className='model-dropdown'>
+    <div className='model-dropdown' ref={menuRef}>
       <div className='dropdown-header'>
         <span>Model &amp; routing</span>
+        {onClose && <button type='button' className='popover-close' aria-label='Close model menu' onClick={onClose}>×</button>}
         {manualModelOverride && (
           <button
             type='button'
@@ -234,10 +242,20 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
         )}
       </div>
 
-      <div className='model-dropdown-nav' role='tablist' aria-label='Model menu sections'>
+      <div className='model-dropdown-nav' role='tablist' aria-label='Model menu sections' onKeyDown={(e) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+        e.preventDefault();
+        const next = e.key === 'Home' ? 'routing' : e.key === 'End' ? 'models' : activeTab === 'routing' ? 'models' : 'routing';
+        setTab(next);
+        menuRef.current?.querySelector<HTMLElement>(`[data-selector-tab="${next}"]`)?.focus();
+      }}>
         <button
           type='button'
           role='tab'
+          id={`${menuId}-routing`}
+          data-selector-tab='routing'
+          aria-controls={`${menuId}-panel`}
+          tabIndex={activeTab === 'routing' ? 0 : -1}
           aria-selected={activeTab === 'routing'}
           className={`model-dropdown-tab ${activeTab === 'routing' ? 'active' : ''}`}
           onClick={() => setTab('routing')}
@@ -247,6 +265,10 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
         <button
           type='button'
           role='tab'
+          id={`${menuId}-models`}
+          data-selector-tab='models'
+          aria-controls={`${menuId}-panel`}
+          tabIndex={activeTab === 'models' ? 0 : -1}
           aria-selected={activeTab === 'models'}
           className={`model-dropdown-tab ${activeTab === 'models' ? 'active' : ''}`}
           onClick={() => setTab('models')}
@@ -256,7 +278,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
       </div>
 
       {activeTab === 'routing' && (
-        <div className='model-dropdown-panel' role='tabpanel'>
+        <div className='model-dropdown-panel' role='tabpanel' id={`${menuId}-panel`} aria-labelledby={`${menuId}-routing`}>
           <div className='dropdown-section-title'>Routing intelligence</div>
           <div className='dropdown-options-grid'>
             <div className='complexity-status-item'>
@@ -338,7 +360,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
       )}
 
       {activeTab === 'models' && (
-        <div className='model-dropdown-panel' role='tabpanel'>
+        <div className='model-dropdown-panel' role='tabpanel' id={`${menuId}-panel`} aria-labelledby={`${menuId}-models`}>
           <div className='dropdown-section-title model-override-section-head'>
             <span>Choose a model</span>
             <div
@@ -372,6 +394,13 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
               type='search'
               value={modelSearch}
               onChange={(event) => setModelSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && modelSearch) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setModelSearch('');
+                }
+              }}
               placeholder='Name, provider, or capability'
               autoComplete='off'
             />

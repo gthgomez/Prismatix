@@ -25,6 +25,11 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
   const refreshCycleRef = useRef(0);
   const refreshTimersRef = useRef<number[]>([]);
   const widgetRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const close = () => {
+    setIsOpen(false);
+    triggerRef.current?.focus();
+  };
 
   const fetchServerStats = async (): Promise<SpendStats | null> => {
     const {
@@ -121,15 +126,23 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
 
   const stateLabel =
     syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : 'Live';
+  const popoverStatus =
+    syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : 'Connected';
   // Zero spend is secondary information: keep it readable but visually quiet so
   // the routing mode (the thing that actually changes behaviour) leads.
   const isQuiet = stats.today === 0 && syncState !== 'error';
 
   return (
-    <div className='spend-widget' ref={widgetRef}>
+    <div className='spend-widget' ref={widgetRef} onKeyDown={(event) => {
+      if (event.key === 'Escape' && isOpen && !event.defaultPrevented) {
+        event.stopPropagation();
+        close();
+      }
+    }}>
       <button
         type='button'
         className={`spend-pill${isQuiet ? ' is-quiet' : ''}`}
+        ref={triggerRef}
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
         aria-label={`Spend analytics — $${stats.today.toFixed(2)} today, ${stateLabel.toLowerCase()}`}
@@ -152,8 +165,9 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
             <h3>Spend Analytics</h3>
             <div className={`sync-indicator ${syncState}`}>
               {syncState === 'syncing' && <div className="sync-spinner" />}
-              <span>{syncState === 'syncing' ? 'Syncing' : 'Connected'}</span>
+              <span>{popoverStatus}</span>
             </div>
+            <button type='button' className='popover-close' aria-label='Close spend analytics' onClick={close}>×</button>
           </div>
           
           <div className='spend-grid'>
@@ -289,8 +303,24 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
           display: flex;
           justify-content: space-between;
           align-items: center;
+          gap: 0.5rem;
+          flex-wrap: wrap;
           margin-bottom: 1.25rem;
         }
+
+        .spend-popover .popover-close {
+          flex-shrink: 0;
+          width: 44px;
+          height: 44px;
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+          background: transparent;
+          color: var(--color-text-dim);
+          cursor: pointer;
+          font-size: 1.2rem;
+        }
+
+        .sync-indicator.error { color: var(--color-danger); }
 
         .spend-popover h3 {
           margin: 0;

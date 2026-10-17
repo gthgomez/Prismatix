@@ -18,7 +18,9 @@ export function MemorySettings({ onClose, onOpenConversation }: {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [more, setMore] = useState(false);
+  const [searched, setSearched] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
+  const editor = useRef<HTMLTextAreaElement>(null);
   const alive = useRef(true);
   const refresh = async () => {
     const nextStatus = await memoryRequest<MemoryStatus>("status");
@@ -27,6 +29,8 @@ export function MemorySettings({ onClose, onOpenConversation }: {
     setStatus(nextStatus);
     setItems(nextItems);
     setMore(nextItems.length === 50);
+    setQuery("");
+    setSearched(false);
   };
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -58,6 +62,9 @@ export function MemorySettings({ onClose, onOpenConversation }: {
     // Load once per dialog; actions explicitly refresh the server state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    if (editing) editor.current?.focus();
+  }, [editing]);
   const change = (action: string, args: Record<string, unknown> = {}) =>
     run(async () => {
       await memoryRequest(action, args);
@@ -178,6 +185,7 @@ export function MemorySettings({ onClose, onOpenConversation }: {
               if (alive.current) {
                 setItems(found);
                 setMore(false);
+                setSearched(true);
               }
             });
           }}
@@ -221,6 +229,7 @@ export function MemorySettings({ onClose, onOpenConversation }: {
           <label>
             {editing ? "Correct memory" : "Remember something"}
             <textarea
+              ref={editor}
               value={draft}
               maxLength={500}
               disabled={busy || !status?.enabled}
@@ -294,7 +303,9 @@ export function MemorySettings({ onClose, onOpenConversation }: {
             </li>
           ))}
         </ul>
-        {!busy && items.length === 0 && <p>No matching memories.</p>}
+        {!busy && items.length === 0 && (
+          <p>{searched ? "No matching memories." : "No saved memories yet."}</p>
+        )}
         {more && (
           <button
             disabled={busy}

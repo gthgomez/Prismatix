@@ -1,0 +1,24 @@
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { afterEach, expect, it, vi } from 'vitest';
+import { SpendTracker } from './SpendTracker';
+vi.mock('../lib/supabase', () => ({ supabase: { auth: { getSession: async () => ({ data: { session: null }, error: null }) } } }));
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+afterEach(() => vi.useRealTimers());
+it('reports a failed sync truthfully and closes with Escape', async () => {
+  vi.useFakeTimers();
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<SpendTracker refreshKey={0} />));
+  await act(async () => vi.advanceTimersByTimeAsync(0));
+  act(() => container.querySelector<HTMLButtonElement>('.spend-pill')!.click());
+  expect(container.querySelector('.sync-indicator')?.textContent).toContain('Sync issue');
+  expect(container.querySelector('.sync-indicator')?.textContent).not.toContain('Connected');
+  expect(container.querySelector('[aria-label="Close spend analytics"]')).not.toBeNull();
+  act(() => container.querySelector('.spend-widget')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  expect(container.querySelector('.spend-popover')).toBeNull();
+  expect(document.activeElement).toBe(container.querySelector('.spend-pill'));
+  act(() => root.unmount());
+  container.remove();
+});
