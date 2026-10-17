@@ -1,4 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../src/lib/supabase', () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn().mockResolvedValue({ data: { session: null }, error: null }),
+      signOut: vi.fn(),
+    },
+  },
+}));
+
 import { RouterApiError, DuplicateRequestError } from '../../src/smartFetch';
 import { describeStreamError } from '../../src/components/ChatInterface';
 import { buildRouteExplanationRows } from '../../src/modelDisplay';
