@@ -6,6 +6,19 @@ import {
 } from '../services/conversationHistory';
 import '../styles/ConversationSidebar.css';
 
+// `display` is not inherited. A parent with `display: none` (mobile hides
+// `.conversation-width-option`) still leaves the child input's own computed
+// display as a normal value, so the focus trap must walk ancestors. `visibility`
+// is inherited, so the element's own computed value already reflects a hidden ancestor.
+function isRenderedForFocus(element: HTMLElement): boolean {
+  const visibility = window.getComputedStyle(element).visibility;
+  if (visibility === 'hidden' || visibility === 'collapse') return false;
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+    if (node.hidden || window.getComputedStyle(node).display === 'none') return false;
+  }
+  return true;
+}
+
 export interface ConversationSidebarProps {
   conversations: ConversationSummary[];
   selectedId: string | null;
@@ -383,10 +396,7 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
         if (event.key !== 'Tab' || !isOpen || window.innerWidth > 768 || !drawerRef.current) return;
         const nodes = Array.from(drawerRef.current.querySelectorAll<HTMLElement>(
           'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
-        )).filter((el) => {
-          const style = window.getComputedStyle(el);
-          return style.display !== 'none' && style.visibility !== 'hidden';
-        });
+        )).filter(isRenderedForFocus);
         const first = nodes[0];
         const last = nodes[nodes.length - 1];
         if (event.shiftKey && document.activeElement === first) {

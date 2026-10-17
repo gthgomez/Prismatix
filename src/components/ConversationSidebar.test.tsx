@@ -51,19 +51,31 @@ describe('ConversationSidebar', () => {
     Object.defineProperty(window, 'innerWidth', { value: previousWidth, configurable: true });
   });
 
-  it('keeps the row-density select inside the mobile tab cycle', () => {
+  it('wraps mobile Tab around row density when the width control parent is hidden', () => {
     const previousWidth = window.innerWidth;
     Object.defineProperty(window, 'innerWidth', { value: 320, configurable: true });
     const container = document.createElement('div');
     document.body.append(container);
     const root = renderInto(container, <ConversationSidebar conversations={[]} selectedId={null} isLoading={false} isOpen onSelect={noop} onNewChat={noop} onDelete={noop} />);
     act(() => container.querySelector<HTMLButtonElement>('.conversation-display-toggle')!.click());
-    const width = container.querySelector<HTMLInputElement>('[aria-label="Sidebar width"]')!;
-    width.style.display = 'none';
+    const widthOption = container.querySelector<HTMLElement>('.conversation-width-option')!;
+    const width = widthOption.querySelector<HTMLInputElement>('[aria-label="Sidebar width"]')!;
+    widthOption.style.display = 'none';
+    expect(window.getComputedStyle(width).display).not.toBe('none');
     const density = container.querySelector<HTMLSelectElement>('[aria-label="Chat row density"]')!;
+    const toggle = container.querySelector<HTMLButtonElement>('.conversation-display-toggle')!;
     density.focus();
-    act(() => density.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })));
-    expect(document.activeElement).toBe(container.querySelector('.conversation-display-toggle'));
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    act(() => density.dispatchEvent(tab));
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(toggle);
+    expect(document.activeElement).not.toBe(width);
+    toggle.focus();
+    const shiftTab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true, shiftKey: true });
+    act(() => toggle.dispatchEvent(shiftTab));
+    expect(shiftTab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(density);
+    expect(document.activeElement).not.toBe(width);
     act(() => root.unmount());
     container.remove();
     Object.defineProperty(window, 'innerWidth', { value: previousWidth, configurable: true });
