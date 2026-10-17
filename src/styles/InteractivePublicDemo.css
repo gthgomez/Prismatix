@@ -69,14 +69,29 @@
   font-size: 0.8rem;
   font-weight: 600;
   padding: 0.5rem 0.85rem;
+  min-height: 40px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 150ms ease,
+              border-color 150ms ease,
+              color 150ms ease;
 }
 
 .demo-tab:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--color-text);
   border-color: var(--color-border-strong);
+  transform: translateY(-1px);
+}
+
+.demo-tab:active {
+  transform: scale(0.97);
+  transition-duration: 75ms;
+}
+
+.demo-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus);
 }
 
 .demo-tab.active {
@@ -256,29 +271,53 @@
   border: 1px solid var(--color-border);
   color: var(--color-text);
   border-radius: var(--radius-sm);
-  padding: 0.5rem 0.9rem;
+  padding: 0.5rem 1rem;
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   font-weight: 600;
   cursor: pointer;
-  min-height: 38px;
-  transition: all 0.15s ease;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 150ms ease,
+              background-color 150ms ease,
+              border-color 150ms ease;
 }
 
 .demo-control-btn:hover:not(:disabled) {
   border-color: var(--color-border-strong);
   background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.demo-control-btn:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: 75ms;
+}
+
+.demo-control-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus);
 }
 
 .demo-control-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  pointer-events: none;
 }
 
 .demo-control-btn.primary {
   background: rgba(78, 205, 196, 0.18);
   border-color: var(--color-primary);
   color: var(--color-primary);
+}
+
+.demo-control-btn.primary:hover:not(:disabled) {
+  background: rgba(78, 205, 196, 0.28);
+  box-shadow: 0 4px 16px rgba(78, 205, 196, 0.25);
 }
 
 @media (max-width: 640px) {
