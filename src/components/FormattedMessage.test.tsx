@@ -73,6 +73,86 @@ describe('FormattedMessage', () => {
     expect(em?.textContent).toBe('info');
   });
 
+  it('does not treat letters around asterisks as emphasis', () => {
+    root = render(<FormattedMessage content={'Keep a*b*c and é*b*é and ü*info*ü literal, emphasize *info* and café *au* lait.'} />);
+    const emphasis = [...container.querySelectorAll('em')].map((node) => node.textContent);
+    expect(emphasis).toEqual(['info', 'au']);
+    expect(container.textContent).toContain('a*b*c');
+    expect(container.textContent).toContain('é*b*é');
+    expect(container.textContent).toContain('ü*info*ü');
+  });
+
+  it('leaves unmatched asterisk fragments literal beside valid emphasis', () => {
+    root = render(<FormattedMessage content={'*one*word and word*two*'} />);
+    expect(container.querySelector('em')).toBeNull();
+    expect(container.textContent).toContain('*one*word and word*two*');
+
+    act(() => {
+      root!.render(<FormattedMessage content={'*one*word and word*two* still has *yes* and **bold**'} />);
+    });
+    const emphasis = [...container.querySelectorAll('em')].map((node) => node.textContent);
+    expect(emphasis).toEqual(['yes']);
+    expect(container.querySelector('strong')?.textContent).toBe('bold');
+    expect(container.textContent).toContain('*one*word and word*two*');
+  });
+
+  it('nests indented lists and keeps mixed markers as separate lists', () => {
+    const content = [
+      '- Parent',
+      '  - Child',
+      '  - Child two',
+      '- Sibling',
+      '1. Number',
+      '  1. Nested number',
+    ].join('\n');
+    root = render(<FormattedMessage content={content} />);
+
+    const topBullet = container.querySelector('ul.formatted-list');
+    expect(topBullet).not.toBeNull();
+    const topBulletItems = [...topBullet!.children].filter((node) => node.tagName === 'LI');
+    expect(topBulletItems).toHaveLength(2);
+    expect(topBulletItems[0]?.textContent).toContain('Parent');
+    const nestedBullets = topBulletItems[0]?.querySelectorAll(':scope > ul.formatted-list > li');
+    expect(nestedBullets).toHaveLength(2);
+    expect(nestedBullets?.[0]?.textContent).toBe('Child');
+    expect(nestedBullets?.[1]?.textContent).toBe('Child two');
+    expect(topBulletItems[1]?.querySelector('ul')).toBeNull();
+    expect(topBulletItems[1]?.textContent).toBe('Sibling');
+
+    const numbered = container.querySelector('ol.formatted-list');
+    expect(numbered).not.toBeNull();
+    const numberedItems = [...numbered!.children].filter((node) => node.tagName === 'LI');
+    expect(numberedItems).toHaveLength(1);
+    expect(numberedItems[0]?.textContent).toContain('Number');
+    const nestedNumber = numberedItems[0]?.querySelector(':scope > ol.formatted-list > li');
+    expect(nestedNumber?.textContent).toBe('Nested number');
+    expect(container.querySelector('ul.formatted-list ol')).toBeNull();
+  });
+
+  it('treats one-space indent variation as siblings and two spaces as nesting', () => {
+    root = render(<FormattedMessage content={'1. First\n 2. Second\n3. Third'} />);
+    const ordered = [...container.querySelectorAll('ol.formatted-list')];
+    expect(ordered).toHaveLength(1);
+    const orderedItems = [...ordered[0]!.children].filter((node) => node.tagName === 'LI');
+    expect(orderedItems.map((node) => node.textContent)).toEqual(['First', 'Second', 'Third']);
+    expect(ordered[0]!.querySelector('ol')).toBeNull();
+
+    act(() => root!.render(<FormattedMessage content={' 1. Leading\n1. Dedented\n- Bullet\n - Also bullet\n- Last\n  - Nested bullet'} />));
+    const afterDedent = container.querySelector('ol.formatted-list');
+    const dedentedItems = [...afterDedent!.children].filter((node) => node.tagName === 'LI');
+    expect(dedentedItems.map((node) => node.textContent)).toEqual(['Leading', 'Dedented']);
+    const bullets = container.querySelector('ul.formatted-list');
+    const bulletItems = [...bullets!.children].filter((node) => node.tagName === 'LI');
+    expect(bulletItems).toHaveLength(3);
+    expect(bulletItems[0]?.textContent).toBe('Bullet');
+    expect(bulletItems[1]?.textContent).toBe('Also bullet');
+    expect(bulletItems[2]?.textContent).toContain('Last');
+    const nested = bulletItems[2]?.querySelector(':scope > ul.formatted-list > li');
+    expect(nested?.textContent).toBe('Nested bullet');
+    expect(container.querySelectorAll('ol.formatted-list')).toHaveLength(1);
+    expect(container.querySelectorAll('ul.formatted-list')).toHaveLength(2);
+  });
+
   it('renders headers and bullet lists', () => {
     const content = '### Features\n- First feature\n- Second feature\n1. Numbered item';
     root = render(<FormattedMessage content={content} />);

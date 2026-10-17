@@ -118,28 +118,38 @@ function parseBlocks(markdown: string): Block[] {
  * Parses inline formatting (inline `code`, **bold**, *italic*) within a text string.
  * Completely immune to HTML injection as output is React nodes only.
  */
-function parseInline(text: string): React.ReactNode[] {
-  // Regex matches: `inline code`, **bold**, or *italic*
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
-  const parts = text.split(pattern);
+function formatMatchedToken(token: string, key: number): React.ReactNode {
+  if (token.startsWith('`') && token.endsWith('`') && token.length > 1) {
+    return (
+      <code key={key} className='inline-code'>
+        {token.slice(1, -1)}
+      </code>
+    );
+  }
+  if (token.startsWith('**') && token.endsWith('**') && token.length > 3) {
+    return <strong key={key}>{token.slice(2, -2)}</strong>;
+  }
+  if (token.startsWith('*') && token.endsWith('*') && token.length > 2) {
+    return <em key={key}>{token.slice(1, -1)}</em>;
+  }
+  return token;
+}
 
-  return parts.map((part, index) => {
-    if (!part) return null;
-    if (part.startsWith('`') && part.endsWith('`') && part.length > 1) {
-      return (
-        <code key={index} className='inline-code'>
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    if (part.startsWith('**') && part.endsWith('**') && part.length > 3) {
-      return <strong key={index}>{part.slice(2, -2)}</strong>;
-    }
-    if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
-      return <em key={index}>{part.slice(1, -1)}</em>;
-    }
-    return part;
-  });
+function parseInline(text: string): React.ReactNode[] {
+  // Only captured matches are formatted. Unmatched text is literal, even when
+  // it starts and ends with an asterisk, as in "*one*word and word*two*".
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|(?<![\p{L}\p{N}_*])\*[^*\s][^*]*\*(?![\p{L}\p{N}_*]))/gu;
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start > cursor) nodes.push(text.slice(cursor, start));
+    const token = match[0];
+    nodes.push(formatMatchedToken(token, nodes.length));
+    cursor = start + token.length;
+  }
+  if (cursor < text.length || nodes.length === 0) nodes.push(text.slice(cursor));
+  return nodes;
 }
 
 /**
@@ -148,9 +158,84 @@ function parseInline(text: string): React.ReactNode[] {
 function renderProse(text: string): React.ReactNode {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
-  let currentList: React.ReactNode[] = [];
-  let isNumberedList = false;
   let currentQuoteLines: string[] = [];
+
+  interface ListItemNode {
+    key: string;
+    content: React.ReactNode;
+    children: ListFrame[];
+  }
+  interface ListFrame {
+    indent: number;
+    ordered: boolean;
+    items: ListItemNode[];
+  }
+  const listStack: ListFrame[] = [];
+
+  const renderListFrame = (frame: ListFrame, key: string): React.ReactElement => {
+    const Tag = frame.ordered ? 'ol' : 'ul';
+    return (
+      <Tag key={key} className='formatted-list'>
+        {frame.items.map((item) => (
+          <li key={item.key}>
+            {item.content}
+            {item.children.map((child, childIndex) => renderListFrame(child, `${item.key}-nested-${childIndex}`))}
+          </li>
+        ))}
+      </Tag>
+    );
+  };
+
+  const closeLists = () => {
+    const root = listStack[0];
+    if (!root) return;
+    elements.push(renderListFrame(root, `list-${elements.length}`));
+    listStack.length = 0;
+  };
+
+  const addListItem = (indent: number, ordered: boolean, itemText: string, key: string) => {
+    const item: ListItemNode = { key, content: parseInline(itemText), children: [] };
+    if (listStack.length === 0) {
+      listStack.push({ indent, ordered, items: [item] });
+      return;
+    }
+
+    while (listStack.length > 1 && indent < listStack[listStack.length - 1]!.indent) {
+      listStack.pop();
+    }
+    const top = listStack[listStack.length - 1]!;
+
+    if (indent >= top.indent + 2 && top.items.length > 0) {
+      const owner = top.items[top.items.length - 1]!;
+      const frame: ListFrame = { indent, ordered, items: [item] };
+      owner.children.push(frame);
+      listStack.push(frame);
+      return;
+    }
+
+    // One space either way is still the same list. Only a two-space increase nests.
+    if (top.ordered === ordered && indent < top.indent + 2) {
+      top.items.push(item);
+      return;
+    }
+
+    if (listStack.length === 1) {
+      closeLists();
+      listStack.push({ indent, ordered, items: [item] });
+      return;
+    }
+
+    listStack.pop();
+    const parent = listStack[listStack.length - 1]!;
+    const owner = parent.items[parent.items.length - 1];
+    if (owner && indent >= parent.indent + 2) {
+      const frame: ListFrame = { indent, ordered, items: [item] };
+      owner.children.push(frame);
+      listStack.push(frame);
+      return;
+    }
+    addListItem(indent, ordered, itemText, key);
+  };
 
   const flushQuote = () => {
     if (currentQuoteLines.length > 0) {
@@ -168,28 +253,8 @@ function renderProse(text: string): React.ReactNode {
     }
   };
 
-  const flushList = () => {
-    if (currentList.length > 0) {
-      if (isNumberedList) {
-        elements.push(
-          <ol key={`list-${elements.length}`} className='formatted-list'>
-            {currentList}
-          </ol>,
-        );
-      } else {
-        elements.push(
-          <ul key={`list-${elements.length}`} className='formatted-list'>
-            {currentList}
-          </ul>,
-        );
-      }
-      currentList = [];
-      isNumberedList = false;
-    }
-  };
-
   const flushAll = () => {
-    flushList();
+    closeLists();
     flushQuote();
   };
 
@@ -199,7 +264,7 @@ function renderProse(text: string): React.ReactNode {
 
     // Multi-line Blockquotes (> or > text)
     if (trimmed.startsWith('>')) {
-      flushList();
+      closeLists();
       const quoteText = trimmed.startsWith('> ') ? trimmed.slice(2) : trimmed.slice(1);
       currentQuoteLines.push(quoteText);
       continue;
@@ -285,20 +350,16 @@ function renderProse(text: string): React.ReactNode {
       continue;
     }
 
-    // Bullet lists (- or *)
+    // Bullet lists (- or *). Indent is measured before trim so nested items stay nested.
     const bulletMatch = /^[*-]\s+(.+)/.exec(trimmed);
     if (bulletMatch) {
-      if (isNumberedList) flushList();
-      currentList.push(<li key={`item-${i}`}>{parseInline(bulletMatch[1]!)}</li>);
+      addListItem(line.length - line.trimStart().length, false, bulletMatch[1]!, `item-${i}`);
       continue;
     }
 
-    // Numbered lists (1. or 2.)
     const numberMatch = /^\d+\.\s+(.+)/.exec(trimmed);
     if (numberMatch) {
-      if (!isNumberedList && currentList.length > 0) flushList();
-      isNumberedList = true;
-      currentList.push(<li key={`item-${i}`}>{parseInline(numberMatch[1]!)}</li>);
+      addListItem(line.length - line.trimStart().length, true, numberMatch[1]!, `item-${i}`);
       continue;
     }
 

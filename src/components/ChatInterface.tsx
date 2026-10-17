@@ -1309,24 +1309,38 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     });
   };
 
-  const handleRegenerate = async (index: number, modelOverride?: RouterModel) => {
-    if (isStreaming) return;
+  const messagesRef = useRef(messages);
+  const isStreamingRef = useRef(isStreaming);
+  const manualModelOverrideRef = useRef(manualModelOverride);
+  const currentModelRef = useRef(currentModel);
+  const executeTurnRef = useRef(executeTurn);
+  messagesRef.current = messages;
+  isStreamingRef.current = isStreaming;
+  manualModelOverrideRef.current = manualModelOverride;
+  currentModelRef.current = currentModel;
+  executeTurnRef.current = executeTurn;
+
+  const handleRegenerate = useCallback(async (index: number, modelOverride?: RouterModel) => {
+    if (isStreamingRef.current) return;
+    const snapshot = messagesRef.current;
     let userIndex = -1;
     for (let i = index - 1; i >= 0; i--) {
-      if (messages[i]?.role === 'user') {
+      if (snapshot[i]?.role === 'user') {
         userIndex = i;
         break;
       }
     }
     if (userIndex === -1) return;
 
-    const userMessage = messages[userIndex];
+    const userMessage = snapshot[userIndex];
     if (!userMessage) return;
     const userPrompt = extractTextContent(userMessage.content);
     const attachmentsToProcess = userMessage.attachments ? [...userMessage.attachments] : [];
-    const historyBeforeUser = messages.slice(0, userIndex);
+    const historyBeforeUser = snapshot.slice(0, userIndex);
+    const selectedOverride = manualModelOverrideRef.current;
+    const selectedModel = currentModelRef.current;
 
-    const targetModel = modelOverride !== undefined ? modelOverride : (manualModelOverride || currentModel);
+    const targetModel = modelOverride !== undefined ? modelOverride : (selectedOverride || selectedModel);
     const historyText = historyBeforeUser.map((msg) => {
       const content = extractTextContent(msg.content);
       return `${msg.role}: ${content}`;
@@ -1358,13 +1372,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     }
 
     const executeRegenerateAction = () => {
-      setMessages(messages.slice(0, userIndex + 1));
+      setMessages(snapshot.slice(0, userIndex + 1));
       resetAutoScroll();
-      void executeTurn({
+      void executeTurnRef.current({
         queryText: userPrompt,
         attachmentsToProcess,
         historyMessages: historyBeforeUser,
-        overrideModel: modelOverride !== undefined ? modelOverride : manualModelOverride,
+        overrideModel: modelOverride !== undefined ? modelOverride : selectedOverride,
         promptTokenEstimate: preflight.promptTokens,
         skipBudgetCheck: true,
       });
@@ -1380,15 +1394,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     }
 
     executeRegenerateAction();
-  };
+  }, [resetAutoScroll]);
 
-  const handleEditPrompt = async (index: number, newPrompt: string) => {
-    if (isStreaming) return;
-    const targetUserMessage = messages[index];
+  const handleEditPrompt = useCallback(async (index: number, newPrompt: string) => {
+    if (isStreamingRef.current) return;
+    const snapshot = messagesRef.current;
+    const targetUserMessage = snapshot[index];
     if (!targetUserMessage || targetUserMessage.role !== 'user') return;
 
     const attachmentsToProcess = targetUserMessage.attachments ? [...targetUserMessage.attachments] : [];
-    const historyBeforeUser = messages.slice(0, index);
+    const historyBeforeUser = snapshot.slice(0, index);
+    const selectedOverride = manualModelOverrideRef.current;
+    const selectedModel = currentModelRef.current;
 
     const updatedUserMessage: Message = {
       ...targetUserMessage,
@@ -1396,7 +1413,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       timestamp: Date.now(),
     };
 
-    const targetModel = manualModelOverride || currentModel;
+    const targetModel = selectedOverride || selectedModel;
     const historyText = historyBeforeUser.map((msg) => {
       const content = extractTextContent(msg.content);
       return `${msg.role}: ${content}`;
@@ -1430,11 +1447,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     const executeEditAction = () => {
       setMessages([...historyBeforeUser, updatedUserMessage]);
       resetAutoScroll();
-      void executeTurn({
+      void executeTurnRef.current({
         queryText: newPrompt,
         attachmentsToProcess,
         historyMessages: historyBeforeUser,
-        overrideModel: manualModelOverride,
+        overrideModel: selectedOverride,
         promptTokenEstimate: preflight.promptTokens,
         skipBudgetCheck: true,
       });
@@ -1450,9 +1467,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     }
 
     executeEditAction();
-  };
+  }, [resetAutoScroll]);
 
-  const handleFeedback = (index: number, type: 'up' | 'down') => {
+  const handleFeedback = useCallback((index: number, type: 'up' | 'down') => {
     setMessages((prev) => {
       const updated = [...prev];
       const target = updated[index];
@@ -1464,7 +1481,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
       return updated;
     });
-  };
+  }, []);
 
   const handleStop = () => {
     abortControllerRef.current?.abort();
