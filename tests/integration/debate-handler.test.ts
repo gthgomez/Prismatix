@@ -375,7 +375,7 @@ function createSupabaseAndProviderRoutes(options?: {
           { id: 'deepseek-v4-flash' },
           { id: 'deepseek-v4-pro' },
           { id: 'gpt-6-luna' },
-          { id: 'claude-sonnet-5-5' },
+          { id: 'gpt-6-sol' },
           { id: 'claude-haiku-5-5' },
           { id: 'gemini-3.8-flash' },
         ],
