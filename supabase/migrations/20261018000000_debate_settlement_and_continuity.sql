@@ -737,6 +737,8 @@ set search_path = public, prismatix_internal
 as $$
 declare
   v_row prismatix_internal.model_calls;
+  v_exec_status text;
+  v_terminal_outcome text;
 begin
   if p_cost_status not in ('settled','pending','estimated_legacy') then
     raise exception 'invalid_cost_status' using errcode = '22023';
@@ -746,20 +748,24 @@ begin
   end if;
 
   -- Guard against late dispatches after terminal settlement:
+  -- Lock the execution row for share to serialize against concurrent finalization.
   -- Updates to existing rows (e.g. settling late usage) are allowed,
   -- but new dispatches on a finalized execution are rejected.
-  if p_status = 'dispatched' and exists (
-    select 1 from prismatix_internal.executions
+  if p_status = 'dispatched' then
+    select status, terminal_outcome into v_exec_status, v_terminal_outcome
+      from prismatix_internal.executions
      where id = p_execution_id
-       and terminal_outcome is not null
-  ) and not exists (
-    select 1 from prismatix_internal.model_calls
-     where execution_id = p_execution_id
-       and stage = p_stage
-       and participant = p_participant
-       and attempt_number = p_attempt_number
-  ) then
-    raise exception 'execution_already_finalized' using errcode = '22023';
+       for share;
+
+    if (v_terminal_outcome is not null or (v_exec_status is not null and v_exec_status != 'started')) and not exists (
+      select 1 from prismatix_internal.model_calls
+       where execution_id = p_execution_id
+         and stage = p_stage
+         and participant = p_participant
+         and attempt_number = p_attempt_number
+    ) then
+      raise exception 'execution_already_finalized' using errcode = '22023';
+    end if;
   end if;
 
   insert into prismatix_internal.model_calls (
@@ -801,3 +807,139 @@ revoke all on function public.px03_record_model_call(uuid, text, text, integer, 
 revoke all on function public.px03_record_model_call(uuid, text, text, integer, text, text, text, text, text, integer, integer, integer, numeric, numeric, numeric, numeric, jsonb, text) from anon;
 revoke all on function public.px03_record_model_call(uuid, text, text, integer, text, text, text, text, text, integer, integer, integer, numeric, numeric, numeric, numeric, jsonb, text) from authenticated;
 grant execute on function public.px03_record_model_call(uuid, text, text, integer, text, text, text, text, text, integer, integer, integer, numeric, numeric, numeric, numeric, jsonb, text) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 6) Service-role-only reconciliation worker primitives
+-- ---------------------------------------------------------------------------
+create or replace function public.px03_get_pending_reconciliation_jobs(p_limit integer default 50)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, prismatix_internal
+as $$
+declare
+  v_res jsonb;
+begin
+  select coalesce(jsonb_agg(to_jsonb(j) order by j.created_at asc), '[]'::jsonb)
+    into v_res
+    from (
+      select id, execution_id, kind, payload, attempts, status, created_at, updated_at
+        from prismatix_internal.reconciliation_jobs
+       where status = 'pending'
+       order by created_at asc
+       limit coalesce(p_limit, 50)
+    ) j;
+  return v_res;
+end;
+$$;
+
+revoke all on function public.px03_get_pending_reconciliation_jobs(integer) from public;
+revoke all on function public.px03_get_pending_reconciliation_jobs(integer) from anon;
+revoke all on function public.px03_get_pending_reconciliation_jobs(integer) from authenticated;
+grant execute on function public.px03_get_pending_reconciliation_jobs(integer) to service_role;
+
+create or replace function public.px03_update_reconciliation_job(
+  p_job_id uuid,
+  p_status text,
+  p_attempts integer default 1,
+  p_error text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, prismatix_internal
+as $$
+declare
+  v_row prismatix_internal.reconciliation_jobs;
+begin
+  if p_status not in ('pending', 'done', 'failed') then
+    raise exception 'invalid_job_status' using errcode = '22023';
+  end if;
+
+  update prismatix_internal.reconciliation_jobs
+     set status = p_status,
+         attempts = coalesce(p_attempts, attempts + 1),
+         payload = case
+           when p_error is not null then jsonb_set(coalesce(payload, '{}'::jsonb), '{last_error}', to_jsonb(p_error))
+           else payload
+         end,
+         updated_at = now()
+   where id = p_job_id
+  returning * into v_row;
+
+  return to_jsonb(v_row);
+end;
+$$;
+
+revoke all on function public.px03_update_reconciliation_job(uuid, text, integer, text) from public;
+revoke all on function public.px03_update_reconciliation_job(uuid, text, integer, text) from anon;
+revoke all on function public.px03_update_reconciliation_job(uuid, text, integer, text) from authenticated;
+grant execute on function public.px03_update_reconciliation_job(uuid, text, integer, text) to service_role;
+
+create or replace function public.px03_inspect_reconciliation_target(p_execution_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, prismatix_internal
+as $$
+declare
+  v_exec prismatix_internal.executions;
+  v_res prismatix_internal.budget_reservations;
+  v_total_calls int;
+  v_pending_calls int;
+  v_settled_calls int;
+  v_settled_cost numeric;
+begin
+  select * into v_exec from prismatix_internal.executions where id = p_execution_id;
+  if not found then return null; end if;
+
+  select * into v_res from prismatix_internal.budget_reservations where execution_id = p_execution_id;
+  select count(*),
+         count(*) filter (where cost_status = 'pending'),
+         count(*) filter (where cost_status = 'settled'),
+         coalesce(sum(total_cost) filter (where cost_status = 'settled'), 0)
+    into v_total_calls, v_pending_calls, v_settled_calls, v_settled_cost
+    from prismatix_internal.model_calls
+   where execution_id = p_execution_id;
+
+  return jsonb_build_object(
+    'execution', to_jsonb(v_exec),
+    'reservation', case when v_res.id is null then null else to_jsonb(v_res) end,
+    'total_calls', coalesce(v_total_calls, 0),
+    'pending_calls', coalesce(v_pending_calls, 0),
+    'settled_calls', coalesce(v_settled_calls, 0),
+    'settled_cost', coalesce(v_settled_cost, 0)
+  );
+end;
+$$;
+
+revoke all on function public.px03_inspect_reconciliation_target(uuid) from public;
+revoke all on function public.px03_inspect_reconciliation_target(uuid) from anon;
+revoke all on function public.px03_inspect_reconciliation_target(uuid) from authenticated;
+grant execute on function public.px03_inspect_reconciliation_target(uuid) to service_role;
+
+create or replace function public.px03_purge_reconciliation_jobs(p_purge_days integer default 30)
+returns integer
+language plpgsql
+security definer
+set search_path = public, prismatix_internal
+as $$
+declare
+  v_count int;
+begin
+  if p_purge_days is null or p_purge_days <= 0 then
+    return 0;
+  end if;
+  delete from prismatix_internal.reconciliation_jobs
+   where status in ('done', 'failed')
+     and updated_at < now() - (p_purge_days || ' days')::interval;
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+revoke all on function public.px03_purge_reconciliation_jobs(integer) from public;
+revoke all on function public.px03_purge_reconciliation_jobs(integer) from anon;
+revoke all on function public.px03_purge_reconciliation_jobs(integer) from authenticated;
+grant execute on function public.px03_purge_reconciliation_jobs(integer) to service_role;
+

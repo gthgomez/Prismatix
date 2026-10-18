@@ -1306,17 +1306,29 @@ async function callOpenCode(
   };
 }
 
-async function callProviderStream(
+export async function callProviderStream(
   decision: RouteDecision,
   allMessages: Message[],
   images: ImageAttachment[],
   signal: AbortSignal,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel,
   resolver: ProviderResolver,
-  meter?: MeteredCallContext,
+  meter?: MeteredCallContext | 'unmetered',
   memoryTools?: MemoryToolContext,
 ): Promise<UpstreamCallResult> {
-  if (memoryTools && meter && supportsMemoryTools(decision)) {
+  // Fail-closed dispatch decision: Paid provider calls must never be dispatched
+  // without a durable execution and metering context, unless explicitly marked 'unmetered'.
+  if (meter !== 'unmetered') {
+    if (!meter || typeof meter !== 'object' || !meter.store || !meter.execution) {
+      throw new MeteredCallAccountingError(
+        (meter as any)?.execution?.id ?? 'unallocated',
+        'meter_required_for_dispatch',
+        'Cannot dispatch paid provider call without durable metering context',
+      );
+    }
+  }
+
+  if (memoryTools && meter && meter !== 'unmetered' && supportsMemoryTools(decision)) {
     const gateway = decision.provider as 'opencode' | 'openrouter';
     return await dispatchMemoryToolStream({
       gateway, model: decision.model,
@@ -1328,11 +1340,15 @@ async function callProviderStream(
     });
   }
   // PX05 (a): clamp this stage's output cap through the shared execution budget
-  // so the SUM of all stage maxima cannot exceed the admitted reservation.
-  if (meter?.outputBudget) {
+  // so the SUM of all stage input and output maxima cannot exceed the admitted reservation.
+  if (meter !== 'unmetered' && meter?.outputBudget) {
+    const stagePricing = getModelPricing(decision.modelTier);
+    const promptTokens = promptTokensForCost(allMessages, images, 0);
     const clampedCap = meter.outputBudget.clampTokenCap(
       decision.budgetCap,
-      getModelPricing(decision.modelTier).outputRatePer1M,
+      stagePricing.outputRatePer1M,
+      promptTokens,
+      stagePricing.inputRatePer1M,
     );
     if (clampedCap <= 0) {
       throw new BudgetExhaustedError('execution_output_budget_exhausted');
@@ -1359,7 +1375,7 @@ async function callProviderStream(
   const dispatch = async (): Promise<UpstreamCallResult> => {
     switch (decision.provider) {
       case 'opencode':
-        return await callOpenCode(decision, allMessages, images, signal, apiKey, meter?.execution.conversation_id ?? undefined);
+        return await callOpenCode(decision, allMessages, images, signal, apiKey, meter !== 'unmetered' ? meter?.execution.conversation_id ?? undefined : undefined);
       case 'openrouter':
         return await callOpenRouter(decision, allMessages, images, signal, apiKey);
       case 'anthropic':
@@ -1375,7 +1391,7 @@ async function callProviderStream(
     }
   };
 
-  if (!meter) return await dispatch();
+  if (meter === 'unmetered') return await dispatch();
 
   const meteredInput: RunMeteredCallInput = {
     store: meter.store,
@@ -1389,6 +1405,7 @@ async function callProviderStream(
     // Streaming: the pre-dispatch row is written now, and the teed usage stream
     // settles it after the body is consumed.
     deferSettlement: true,
+    isFinalized: meter.isFinalized,
   };
 
   return await runMeteredCall(
@@ -1460,9 +1477,13 @@ async function callGoogleStructured(
 ): Promise<{ responseText: string; ok: boolean; status: number }> {
   // PX05 (a): clamp through the shared execution budget (same as streaming).
   if (meter?.outputBudget) {
+    const stagePricing = getModelPricing(decision.modelTier);
+    const promptTokens = promptTokensForCost(allMessages, [], 0);
     const clampedCap = meter.outputBudget.clampTokenCap(
       decision.budgetCap,
-      getModelPricing(decision.modelTier).outputRatePer1M,
+      stagePricing.outputRatePer1M,
+      promptTokens,
+      stagePricing.inputRatePer1M,
     );
     if (clampedCap <= 0) {
       throw new BudgetExhaustedError('execution_output_budget_exhausted');
@@ -2536,6 +2557,7 @@ Deno.serve(async (req: Request) => {
       estimatedVideoPromptTokens,
     );
 
+    let debateDisabledByBudget = false;
     const debateEligibility = computeDebateEligibility({
       profile: debateReq.profile,
       enableDebateMode: ENABLE_DEBATE_MODE,
@@ -2791,6 +2813,37 @@ Deno.serve(async (req: Request) => {
         },
       );
     }
+
+    if (preFlightCost.estimatedUsd > effectiveLimits.maxPerExecutionUsd) {
+      if (debateEligibility.doDebate && !debateReq.requested) {
+        // Auto-debate estimated cost exceeds max allowed per execution: degrade to baseline chat
+        const baselineCost = calculatePreFlightCost(
+          decision.modelTier,
+          `${historyContext}\nuser: ${effectiveQuery}`,
+          imageAttachments.length,
+          estimatedVideoPromptTokens,
+        );
+        if (baselineCost.estimatedUsd > effectiveLimits.maxPerExecutionUsd) {
+          return new Response(
+            JSON.stringify({ error: 'budget_exhausted', code: 'budget_exhausted' }),
+            {
+              status: 402,
+              headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+            },
+          );
+        }
+        preFlightCost = baselineCost;
+        debateDisabledByBudget = true;
+      } else {
+        return new Response(
+          JSON.stringify({ error: 'budget_exhausted', code: 'budget_exhausted' }),
+          {
+            status: 402,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+    }
     const admissionResult: AdmissionResult = await admitExecution(storeClient, {
       subjectId: userId,
       executionId: activeExecution.id,
@@ -2838,17 +2891,22 @@ Deno.serve(async (req: Request) => {
       ? { client: storeClient, subject: userId, maxInputUsd: toolInputUsd }
       : undefined;
 
-    // Per-dispatch attempt allocation: distinct dispatches get distinct ledger
-    // identities even when their token counts are identical.
     const attemptCounters = new Map<string, number>();
     const allDispatchedUsagePromises: Promise<unknown>[] = [];
+    let finalizationConfirmed = false;
     const makeMeter: MeteredCallFactory = (
       stage,
       participant,
       requestedModel,
       priceSnapshot = null,
     ) => {
-      if (!activeExecution || executionFinalized) return null;
+      if (!activeExecution || executionFinalized) {
+        throw new MeteredCallAccountingError(
+          activeExecution?.id ?? 'unallocated',
+          'execution_already_finalized',
+          'Cannot allocate meter for finalized execution',
+        );
+      }
       const key = `${stage}::${participant}`;
       const attemptNumber = (attemptCounters.get(key) ?? 0) + 1;
       attemptCounters.set(key, attemptNumber);
@@ -2862,24 +2920,33 @@ Deno.serve(async (req: Request) => {
         priceSnapshot: priceSnapshot ?? priceSnapshotForTier(requestedModel),
         outputBudget: executionOutputBudget,
         usagePromises: allDispatchedUsagePromises,
+        isFinalized: () => executionFinalized,
       };
     };
     const finalizeLedger = async (
       status: ExecutionStatus,
       terminalOutcome: string,
       servedModel?: string,
-    ): Promise<void> => {
-      if (!activeExecution) return;
+    ): Promise<boolean> => {
+      if (!activeExecution) return false;
       // PX06: the first terminal finalize wins; a later exit path is a no-op.
-      if (executionFinalized) return;
+      if (executionFinalized) return finalizationConfirmed;
       executionFinalized = true;
+      activeExecution.status = status;
+      activeExecution.terminal_outcome = terminalOutcome;
+      if (servedModel) {
+        activeExecution.served_model = servedModel;
+      }
       try {
         await finalizeExecution(storeClient, activeExecution.id, {
           status,
           terminalOutcome,
           ...(servedModel ? { servedModel } : {}),
         });
+        finalizationConfirmed = true;
+        return true;
       } catch (finalizeError) {
+        finalizationConfirmed = false;
         console.error('[PX03] execution finalize failed:', {
           error: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
         });
@@ -2889,6 +2956,7 @@ Deno.serve(async (req: Request) => {
           'execution_finalize_failed',
           { status, terminalOutcome },
         );
+        return false;
       }
     };
     // PX05: settle the reservation from the AUTHORITATIVE ledger. `commitFromLedger`
@@ -3130,7 +3198,7 @@ Deno.serve(async (req: Request) => {
         DEBATE_WORKER_MAX_TOKENS_VIDEO_UI,
       );
 
-      if (debateEligibility.doDebate) {
+      if (debateEligibility.doDebate && !debateDisabledByBudget) {
         const forcedVideoUiTier = debateReq.profile === 'video_ui'
           ? resolveVideoUiDebateModelTier(providerResolver)
           : undefined;
@@ -3525,7 +3593,7 @@ Deno.serve(async (req: Request) => {
 
           // PX06: finalize ledger FIRST so the database row transitions to terminal
           // ('completed' or 'indeterminate') with a non-null terminal_outcome.
-          await finalizeLedger(
+          const finalizeOk = await finalizeLedger(
             receiptOk ? 'completed' : 'indeterminate',
             receiptOk ? 'ok' : 'receipt_write_failed',
             effectiveModelId,
@@ -3550,15 +3618,18 @@ Deno.serve(async (req: Request) => {
                 'receipt_projection_failed',
                 {},
               );
-              if (interimReceipt) {
-                receipt = {
-                  ...interimReceipt,
-                  status: receiptOk ? 'completed' : 'indeterminate',
-                  terminalOutcome: receiptOk ? 'ok' : 'receipt_write_failed',
-                  finalizedAt: new Date().toISOString(),
-                };
-              }
             }
+          }
+
+          // NEVER fabricate terminal receipt facts:
+          // If finalization failed to confirm or the receipt is not authoritatively completed,
+          // do not allow a successful terminal receipt (completed/ok) to be sent to the client.
+          if (receipt && (!finalizeOk || receipt.status !== 'completed' || receipt.terminalOutcome !== 'ok')) {
+            receipt = {
+              ...receipt,
+              status: 'indeterminate',
+              terminalOutcome: receipt.terminalOutcome ?? (finalizeOk ? 'unconfirmed' : 'execution_finalize_failed'),
+            };
           }
 
           // PX07: attach the transcript durability marker (omit when the

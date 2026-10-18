@@ -168,10 +168,44 @@ begin
   exception
     when sqlstate '22023' then
       null; -- Expected: fail closed on late dispatch
-    when others then
-      raise exception 'TEST 6: expected 22023 on late dispatch, got % (%)', sqlstate, sqlerrm;
   end;
 
+  -- =========================================================================
+  -- 7. Service-Role Reconciliation Worker Primitives
+  --    - Enqueue reconciliation job, query via RPC, inspect target, update job, purge
+  -- =========================================================================
+  perform public.px03_enqueue_reconciliation(e2, 'budget_estimated', jsonb_build_object('estimated_usd', 0.05));
+
+  declare
+    v_jobs jsonb;
+    v_target jsonb;
+    v_updated jsonb;
+    v_job_id uuid;
+    v_purged int;
+  begin
+    v_jobs := public.px03_get_pending_reconciliation_jobs(10);
+    if jsonb_array_length(v_jobs) < 1 then
+      raise exception 'TEST 7: expected at least 1 pending reconciliation job!';
+    end if;
+
+    v_job_id := (v_jobs -> 0 ->> 'id')::uuid;
+
+    v_target := public.px03_inspect_reconciliation_target(e2);
+    if v_target is null or (v_target -> 'execution' ->> 'id')::uuid != e2 then
+      raise exception 'TEST 7: target execution inspection failed!';
+    end if;
+
+    v_updated := public.px03_update_reconciliation_job(v_job_id, 'done', 1, null);
+    if (v_updated ->> 'status') != 'done' then
+      raise exception 'TEST 7: updating job to done failed!';
+    end if;
+
+    -- Verify purge RPC executes without error
+    v_purged := public.px03_purge_reconciliation_jobs(30);
+  end;
+
+  raise notice 'All migrations and upgrade verification tests passed successfully!';
 end $$;
 
 rollback;
+

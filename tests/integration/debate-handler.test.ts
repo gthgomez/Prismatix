@@ -103,6 +103,14 @@ function opencodeResponsesSseResponse(text: string): Response {
   });
 }
 
+function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const item = arr[i];
+    if (item !== undefined && predicate(item)) return i;
+  }
+  return -1;
+}
+
 function fetchCallInfo(input: RequestInfo | URL, init?: RequestInit): FetchCall {
   let url: string;
   let method: string;
@@ -204,10 +212,16 @@ function routerRequest(body: unknown, token = 'test-user-token'): Request {
 
 const EXECUTION_ID = 'e0000000-0000-4000-8000-000000000099';
 
-function createSupabaseAndProviderRoutes(options?: {
+interface RouteOptions {
   challengerFails?: boolean;
-}) {
+  finalizeFails?: boolean;
+  receiptLookupFails?: boolean;
+  maxPerExecutionUsd?: string;
+}
+
+function createSupabaseAndProviderRoutes(options?: RouteOptions) {
   let callCount = 0;
+  let finalizedExecutionState: { status: string; terminalOutcome: string } | null = null;
   return (call: FetchCall): Response | null => {
     // Auth endpoint
     if (call.url.includes('/auth/v1/user')) {
@@ -226,7 +240,7 @@ function createSupabaseAndProviderRoutes(options?: {
         enabled: true,
         allowed_features: ['chat'],
         max_daily_usd: '10.000000',
-        max_per_execution_usd: '2.000000',
+        max_per_execution_usd: options?.maxPerExecutionUsd ?? '2.000000',
       });
     }
     // Provider config
@@ -308,11 +322,23 @@ function createSupabaseAndProviderRoutes(options?: {
 
     // PX03 finalize execution
     if (call.url.includes('/rest/v1/rpc/px03_finalize_execution')) {
+      if (options?.finalizeFails) {
+        return new Response('Database error on finalize', { status: 500 });
+      }
+      try {
+        const body = typeof call.body === 'string' && call.body ? JSON.parse(call.body) : {};
+        finalizedExecutionState = {
+          status: body.p_status ?? 'completed',
+          terminalOutcome: body.p_terminal_outcome ?? 'ok',
+        };
+      } catch {
+        finalizedExecutionState = { status: 'completed', terminalOutcome: 'ok' };
+      }
       return jsonResponse({
         execution: {
           id: EXECUTION_ID,
-          status: 'completed',
-          terminal_outcome: 'ok',
+          status: finalizedExecutionState.status,
+          terminal_outcome: finalizedExecutionState.terminalOutcome,
           finalized_at: new Date().toISOString(),
         },
         finalized: true,
@@ -321,11 +347,14 @@ function createSupabaseAndProviderRoutes(options?: {
 
     // PX03 get execution receipt
     if (call.url.includes('/rest/v1/rpc/px03_get_execution_receipt')) {
+      if (options?.receiptLookupFails) {
+        return new Response('Database error on receipt lookup', { status: 500 });
+      }
       return jsonResponse({
         execution: {
           id: EXECUTION_ID,
-          status: 'completed',
-          terminal_outcome: 'ok',
+          status: finalizedExecutionState?.status ?? 'started',
+          terminal_outcome: finalizedExecutionState?.terminalOutcome ?? null,
           created_at: '2026-10-18T00:00:00.000Z',
           updated_at: '2026-10-18T00:00:05.000Z',
         },
@@ -356,6 +385,14 @@ function createSupabaseAndProviderRoutes(options?: {
           state: 'committed',
           committed_usd: 0.006,
         },
+      });
+    }
+
+    // PX03 enqueue reconciliation
+    if (call.url.includes('/rest/v1/rpc/px03_enqueue_reconciliation')) {
+      return jsonResponse({
+        id: 'rec-00000000-0000-4000-8000-000000000099',
+        enqueued: true,
       });
     }
 
@@ -484,6 +521,13 @@ describe('Deterministic Enabled-Debate Handler Integration', () => {
     expect(assistantBody.p_metadata?.debate?.active).toBe(true);
     expect(assistantBody.p_metadata?.debate?.profile).toBe('general');
     expect(Array.isArray(assistantBody.p_metadata?.debate?.participants)).toBe(true);
+
+    // 4. Assert actual RPC ordering: px03_finalize_execution must be called before final px03_get_execution_receipt
+    const finalizeCallIndex = calls.findIndex((c) => c.url.includes('/rest/v1/rpc/px03_finalize_execution'));
+    const finalReceiptCallIndex = findLastIndex(calls, (c) => c.url.includes('/rest/v1/rpc/px03_get_execution_receipt'));
+    expect(finalizeCallIndex).toBeGreaterThan(-1);
+    expect(finalReceiptCallIndex).toBeGreaterThan(-1);
+    expect(finalizeCallIndex).toBeLessThan(finalReceiptCallIndex);
   });
 
   it('handles challenger upstream failure by degrading gracefully to single-model response while preserving receipt ordering', async () => {
@@ -535,6 +579,153 @@ describe('Deterministic Enabled-Debate Handler Integration', () => {
     expect(assistantBody.p_metadata?.debate?.degradedReason).toBe('debate_pipeline_failed_or_timed_out');
   });
 
+  it('handles finalization failure by never fabricating a completed receipt and enqueuing execution_finalize_failed', async () => {
+    const calls = installFetchRecorder(createSupabaseAndProviderRoutes({ finalizeFails: true }));
+    const handler = await loadServeHandler(ROUTER_ENTRY, BASE_ROUTER_ENV);
+
+    const req = routerRequest({
+      conversationId: CONVERSATION_ID,
+      query: 'Debate consensus when finalization fails.',
+      history: [],
+      mode: 'debate',
+      debateProfile: 'general',
+      platform: 'web',
+    });
+
+    const res = await handler(req);
+    expect(res.status).toBe(200);
+
+    const events = await readAllSseEvents(res);
+    const doneIndex = events.findIndex((e) => e.data.trim() === '[DONE]');
+    expect(doneIndex).toBeGreaterThan(-1);
+
+    const receiptIndex = events.findIndex((e) => {
+      try {
+        return JSON.parse(e.data)?.type === 'receipt';
+      } catch {
+        return false;
+      }
+    });
+    // In-stream receipt must reflect indeterminate status, never completed/ok!
+    expect(receiptIndex).toBeGreaterThan(-1);
+    expect(receiptIndex).toBeLessThan(doneIndex);
+
+    const receiptPayload = JSON.parse(events[receiptIndex]!.data);
+    expect(receiptPayload.status).toBe('indeterminate');
+    expect(receiptPayload.terminalOutcome).toBe('execution_finalize_failed');
+
+    // Reconciliation job must be enqueued
+    const enqueueCalls = calls.filter((c) => c.url.includes('/rest/v1/rpc/px03_enqueue_reconciliation'));
+    const finalizeReconcile = enqueueCalls.find((c) => {
+      const b = JSON.parse(c.body);
+      return b.p_kind === 'execution_finalize_failed';
+    });
+    expect(finalizeReconcile).toBeTruthy();
+  });
+
+  it('handles receipt lookup failure by emitting zero synthetic receipts and enqueuing receipt_projection_failed', async () => {
+    const calls = installFetchRecorder(createSupabaseAndProviderRoutes({ receiptLookupFails: true }));
+    const handler = await loadServeHandler(ROUTER_ENTRY, BASE_ROUTER_ENV);
+
+    const req = routerRequest({
+      conversationId: CONVERSATION_ID,
+      query: 'Debate consensus when receipt lookup fails.',
+      history: [],
+      mode: 'debate',
+      debateProfile: 'general',
+      platform: 'web',
+    });
+
+    const res = await handler(req);
+    expect(res.status).toBe(200);
+
+    const events = await readAllSseEvents(res);
+    const doneIndex = events.findIndex((e) => e.data.trim() === '[DONE]');
+    expect(doneIndex).toBeGreaterThan(-1);
+
+    // ZERO synthetic receipt events must be emitted!
+    const receiptIndex = events.findIndex((e) => {
+      try {
+        return JSON.parse(e.data)?.type === 'receipt';
+      } catch {
+        return false;
+      }
+    });
+    expect(receiptIndex).toBe(-1);
+
+    // Normal [DONE] is preserved
+    expect(events.some((e) => e.data.trim() === '[DONE]')).toBe(true);
+
+    // Reconciliation job must be enqueued
+    const enqueueCalls = calls.filter((c) => c.url.includes('/rest/v1/rpc/px03_enqueue_reconciliation'));
+    const receiptReconcile = enqueueCalls.find((c) => {
+      const b = JSON.parse(c.body);
+      return b.p_kind === 'receipt_projection_failed';
+    });
+    expect(receiptReconcile).toBeTruthy();
+  });
+
+  it('handles both finalization and receipt lookup failure gracefully with zero synthetic receipts and preserved [DONE]', async () => {
+    const calls = installFetchRecorder(createSupabaseAndProviderRoutes({ finalizeFails: true, receiptLookupFails: true }));
+    const handler = await loadServeHandler(ROUTER_ENTRY, BASE_ROUTER_ENV);
+
+    const req = routerRequest({
+      conversationId: CONVERSATION_ID,
+      query: 'Debate consensus when both DB calls fail.',
+      history: [],
+      mode: 'debate',
+      debateProfile: 'general',
+      platform: 'web',
+    });
+
+    const res = await handler(req);
+    expect(res.status).toBe(200);
+
+    const events = await readAllSseEvents(res);
+    const receiptIndex = events.findIndex((e) => {
+      try {
+        return JSON.parse(e.data)?.type === 'receipt';
+      } catch {
+        return false;
+      }
+    });
+    expect(receiptIndex).toBe(-1);
+    expect(events.some((e) => e.data.trim() === '[DONE]')).toBe(true);
+
+    const enqueueCalls = calls.filter((c) => c.url.includes('/rest/v1/rpc/px03_enqueue_reconciliation'));
+    expect(enqueueCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('rejects upfront with 402 budget_exhausted when debate preflight estimate exceeds maxPerExecutionUsd', async () => {
+    const calls = installFetchRecorder(createSupabaseAndProviderRoutes({ maxPerExecutionUsd: '0.0001' }));
+    const handler = await loadServeHandler(ROUTER_ENTRY, BASE_ROUTER_ENV);
+
+    const req = routerRequest({
+      conversationId: CONVERSATION_ID,
+      query: 'Debate complex architecture requiring multi-model evaluation.',
+      history: [],
+      mode: 'debate',
+      debateProfile: 'general',
+      platform: 'web',
+    });
+
+    const res = await handler(req);
+    expect(res.status).toBe(402);
+    const data = await res.json();
+    expect(data.error).toBe('budget_exhausted');
+
+    // Invariant: ZERO provider inference calls dispatched
+    const providerDispatchCalls = calls.filter(
+      (c) =>
+        c.method === 'POST' &&
+        (c.url.includes('chat/completions') ||
+          c.url.includes('/responses') ||
+          c.url.includes('/messages') ||
+          c.url.includes(':generateContent')),
+    );
+    expect(providerDispatchCalls.length).toBe(0);
+  });
+
   it('guards against late model call dispatch on already finalized execution', async () => {
     const { runMeteredCall, MeteredCallAccountingError } = await import('../../supabase/functions/router/metered_call.ts');
     const dummyStoreClient = {
@@ -561,5 +752,81 @@ describe('Deterministic Enabled-Debate Handler Integration', () => {
         }),
       ),
     ).rejects.toThrow(MeteredCallAccountingError);
+  });
+
+  it('fails closed when callProviderStream is called without a valid meter or after finalization', async () => {
+    const routerModule = (await import(/* @vite-ignore */ ROUTER_ENTRY)) as {
+      callProviderStream: (...args: unknown[]) => Promise<unknown>;
+    };
+    const callProviderStream = routerModule.callProviderStream;
+    const { MeteredCallAccountingError, runMeteredCall } = await import('../../supabase/functions/router/metered_call.ts');
+
+    const decision: any = {
+      provider: 'opencode',
+      model: 'deepseek-v4-1-flash',
+      modelTier: 'standard',
+      budgetCap: 1000,
+      complexityScore: 50,
+      rationaleTag: 'test',
+      routingDebug: {},
+    };
+    const mockResolver = {
+      resolveKey: vi.fn().mockResolvedValue('test-key'),
+      isReady: vi.fn().mockReturnValue(true),
+      getAvailableProviders: vi.fn().mockReturnValue(['opencode']),
+      resolveProviderForModel: vi.fn(),
+    };
+
+    // 1. Missing meter (undefined / invalid) fails closed
+    await expect(
+      callProviderStream(
+        decision,
+        [{ role: 'user', content: 'test' }],
+        [],
+        new AbortController().signal,
+        undefined,
+        mockResolver as any,
+        undefined, // missing meter!
+      ),
+    ).rejects.toThrow(MeteredCallAccountingError);
+
+    // 2. Meter for already finalized execution fails closed
+    let finalized = false;
+    const context = {
+      store: { rpc: vi.fn() } as any,
+      execution: { id: EXECUTION_ID, status: 'started' as const, terminal_outcome: null } as any,
+      stage: 'debate-challenger',
+      participant: 'opencode',
+      isFinalized: () => finalized,
+    };
+
+    finalized = true; // execution completed
+    await expect(
+      runMeteredCall(context, async () => ({
+        result: new Response('dummy'),
+        servedModel: 'deepseek-v4-1-flash',
+        usagePromise: Promise.resolve(null),
+      })),
+    ).rejects.toThrow(MeteredCallAccountingError);
+  });
+
+  it('deducts prompt token input cost and blocks dispatch when output budget is exhausted', async () => {
+    const { createExecutionOutputBudget } = await import('../../supabase/functions/router/admission.ts');
+
+    // Budget of $0.001
+    const budget = createExecutionOutputBudget(0.001);
+
+    // Stage 1: prompt tokens 2000 @ $0.20/1M = $0.0004 input cost
+    // Output tokens 1000 @ $0.40/1M = $0.0004 output cost
+    // Total stage 1 cost = $0.0008, remaining = $0.0002
+    const stage1Cap = budget.clampTokenCap(1000, 0.40, 2000, 0.20);
+    expect(stage1Cap).toBe(1000);
+    expect(budget.remainingUsd()).toBeLessThan(0.0003);
+
+    // Stage 2: prompt tokens 3000 @ $0.20/1M = $0.0006 input cost
+    // Since remaining ($0.0002) < input cost ($0.0006), clampTokenCap must return 0!
+    const stage2Cap = budget.clampTokenCap(1000, 0.40, 3000, 0.20);
+    expect(stage2Cap).toBe(0);
+    expect(budget.remainingUsd()).toBe(0);
   });
 });
