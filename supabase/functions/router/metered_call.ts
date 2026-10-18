@@ -98,6 +98,8 @@ export interface MeteredCallContext {
   // PX05: shared per-execution output budget. Every dispatch clamps its output
   // cap through this so the SUM of stage maxima cannot exceed the reservation.
   outputBudget?: ExecutionOutputBudget;
+  // Execution-wide usage promise accumulator to track all dispatched streaming calls
+  usagePromises?: Promise<unknown>[];
 }
 
 export type MeteredCallFactory = (

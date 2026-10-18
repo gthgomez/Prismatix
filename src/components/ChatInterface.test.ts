@@ -41,6 +41,7 @@ describe('ChatInterface debate mode helpers', () => {
       mode: 'debate',
       debateProfile: 'video_ui',
     });
+    expect(getDebatePayload('auto')).toEqual({});
   });
 
   it('shows debate badges only when debate metadata exists', () => {

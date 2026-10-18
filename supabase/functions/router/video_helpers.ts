@@ -244,38 +244,67 @@ export async function buildVideoUiNotesJson(
   let json = JSON.stringify(payload);
   if (json.length <= maxChars) return json;
 
-  // Level 1 compaction: first 12 artifacts with 120-char clamped text
+  // Helper: evenly sample across the entire timeline array
+  const sampleEvenly = <T>(items: T[], targetCount: number): T[] => {
+    if (items.length <= targetCount) return items;
+    if (targetCount <= 1) return [items[0]!];
+    const step = (items.length - 1) / (targetCount - 1);
+    const result: T[] = [];
+    const seenIndices = new Set<number>();
+    for (let i = 0; i < targetCount; i++) {
+      const idx = Math.min(items.length - 1, Math.round(i * step));
+      if (!seenIndices.has(idx)) {
+        seenIndices.add(idx);
+        result.push(items[idx]!);
+      }
+    }
+    return result;
+  };
+
+  // Level 1 compaction: evenly sampled across timeline (up to 12 artifacts) with 120-char text
+  const sampledL1 = sampleEvenly(artifacts, 12);
   const compact = {
     schema_version: 'video_ui_notes_v1',
     video_asset_ids: videoAssetIds,
-    artifacts: artifacts.slice(0, 12).map((a) => ({ ...a, text: clampText(a.text, 120) })),
+    artifacts: sampledL1.map((a) => ({ ...a, text: clampText(a.text, 120) })),
     truncated: true,
+    incomplete_evidence: true,
+    sampled_range: {
+      total_artifacts: artifacts.length,
+      sampled_count: sampledL1.length,
+    },
   };
   json = JSON.stringify(compact);
   if (json.length <= maxChars) return json;
 
-  // Level 2 compaction: evenly-spaced representative sample (up to 6 artifacts) across the timeline
-  const step = Math.max(1, Math.floor(artifacts.length / 6));
-  const sampled = artifacts
-    .filter((_, idx) => idx % step === 0)
-    .slice(0, 6)
-    .map((a) => ({ ...a, text: clampText(a.text, 80) }));
-
+  // Level 2 compaction: evenly sampled across timeline (up to 6 artifacts) with 80-char text
+  const sampledL2 = sampleEvenly(artifacts, 6);
   const representative = {
     schema_version: 'video_ui_notes_v1',
     video_asset_ids: videoAssetIds,
-    artifacts: sampled,
+    artifacts: sampledL2.map((a) => ({ ...a, text: clampText(a.text, 80) })),
     truncated: true,
+    incomplete_evidence: true,
+    sampled_range: {
+      total_artifacts: artifacts.length,
+      sampled_count: sampledL2.length,
+    },
   };
   json = JSON.stringify(representative);
   if (json.length <= maxChars) return json;
 
-  // Tightest bound: top 3 key artifacts with 60-char text (preserves evidence)
+  // Tightest bound: top 3 key artifacts evenly sampled with 60-char text (preserves complete timeline evidence)
+  const sampledL3 = sampleEvenly(artifacts, 3);
   const minimal = {
     schema_version: 'video_ui_notes_v1',
     video_asset_ids: videoAssetIds,
-    artifacts: sampled.slice(0, 3).map((a) => ({ ...a, text: clampText(a.text, 60) })),
+    artifacts: sampledL3.map((a) => ({ ...a, text: clampText(a.text, 60) })),
     truncated: true,
+    incomplete_evidence: true,
+    sampled_range: {
+      total_artifacts: artifacts.length,
+      sampled_count: sampledL3.length,
+    },
   };
   return JSON.stringify(minimal);
 }

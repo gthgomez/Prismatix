@@ -1,10 +1,11 @@
 import type { DebateProfile, DebateRole, FileUploadPayload, Message } from './types';
 
 export type { DebateParticipant } from './types';
-export type DebateSelection = 'off' | DebateProfile;
+export type DebateSelection = 'off' | 'auto' | DebateProfile;
 
 export const DEBATE_SELECTIONS: Array<{ value: DebateSelection; label: string }> = [
   { value: 'off', label: 'Debate Off' },
+  { value: 'auto', label: 'Auto (High Complexity)' },
   { value: 'general', label: 'General' },
   { value: 'code', label: 'Code' },
   { value: 'video_ui', label: 'Video UI' },
@@ -19,6 +20,9 @@ export function getDebatePayload(
 ): { mode?: 'debate' | 'off'; debateProfile?: DebateProfile | 'off' } {
   if (selection === 'off') {
     return { mode: 'off', debateProfile: 'off' };
+  }
+  if (selection === 'auto') {
+    return {};
   }
   return {
     mode: 'debate',

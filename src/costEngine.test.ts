@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PRICING_REGISTRY, PRICING_VERSION } from './pricingRegistry';
 import {
   calculateCostBreakdown,
+  calculateDebatePreFlightCost,
   calculateFinalCost,
   calculatePreFlightCost,
   estimateTokenCount,
@@ -161,5 +162,27 @@ describe('calculateCostBreakdown', () => {
   it('returns the correct pricing version', () => {
     const result = calculateCostBreakdown('opus-4.6', { promptTokens: 100, completionTokens: 50 });
     expect(result.pricingVersion).toBe(PRICING_VERSION);
+  });
+});
+
+describe('calculateDebatePreFlightCost', () => {
+  it('aggregates multi-stage expense covering proposer, challengers, and synthesis', () => {
+    const context = 'Explain consensus algorithms in distributed systems.';
+    const singleStage = calculatePreFlightCost('deepseek-v4-pro', context);
+    const debate = calculateDebatePreFlightCost('general', 'deepseek-v4-pro', context);
+
+    expect(debate.estimatedUsd).toBeGreaterThan(singleStage.estimatedUsd);
+    expect(debate.promptTokens).toBeGreaterThan(singleStage.promptTokens);
+    expect(debate.hasUnknownRate).toBe(false);
+    expect(debate.pricingVersion).toBe(PRICING_VERSION);
+  });
+
+  it('handles code and video_ui profiles with appropriate cascades', () => {
+    const context = 'Review this code implementation';
+    const codeDebate = calculateDebatePreFlightCost('code', 'deepseek-v4-pro', context);
+    const videoDebate = calculateDebatePreFlightCost('video_ui', 'gemini-3.8-flash', context);
+
+    expect(codeDebate.estimatedUsd).toBeGreaterThan(0);
+    expect(videoDebate.estimatedUsd).toBeGreaterThan(0);
   });
 });

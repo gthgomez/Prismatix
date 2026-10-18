@@ -33,6 +33,8 @@ export interface DebateResponseMetadata {
   debateTrigger?: string;
   debateModel?: string;
   debateCostNote?: string;
+  debateDegraded?: boolean;
+  debateDegradedReason?: string;
 }
 
 interface RouterRequestPayload {
@@ -536,6 +538,8 @@ export async function askPrismatix(
     const debateTriggerHeader = response.headers.get('X-Debate-Trigger');
     const debateModelHeader = response.headers.get('X-Debate-Model');
     const debateCostNoteHeader = response.headers.get('X-Debate-Cost-Note');
+    const debateDegradedHeader = response.headers.get('X-Debate-Degraded');
+    const debateDegradedReasonHeader = response.headers.get('X-Debate-Degraded-Reason');
     const complexityScore = complexityHeader ? parseInt(complexityHeader, 10) : 50;
     const parsedCostEstimate = costEstimateHeader ? Number(costEstimateHeader) : Number.NaN;
     const costEstimateUsd = Number.isFinite(parsedCostEstimate) ? parsedCostEstimate : undefined;
@@ -554,6 +558,8 @@ export async function askPrismatix(
       debateTrigger: debateTriggerHeader || undefined,
       debateModel: debateModelHeader || undefined,
       debateCostNote: debateCostNoteHeader || undefined,
+      debateDegraded: debateDegradedHeader === 'true' ? true : undefined,
+      debateDegradedReason: debateDegradedReasonHeader || undefined,
     };
 
     devLog('[smartFetch] Response:', {

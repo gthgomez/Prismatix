@@ -106,6 +106,16 @@ describe('Debate Mode Orchestration & End-to-End Safety', () => {
       expect(challengerPrompt).toContain('concrete failure scenarios');
     });
 
+    it('provides distinct production and error recovery instructions for code implementer', () => {
+      const userQuery = 'How should we implement atomic ledger commits?';
+      const proposerDraft = 'Draft: Just run UPDATE px05_budget_reservations without checks.';
+      const implementerPrompt = buildChallengerPrompt('code', 'implementer', userQuery, proposerDraft);
+
+      expect(implementerPrompt).toContain('Role: Code Production & Implementation Specialist');
+      expect(implementerPrompt).toContain('production viability');
+      expect(implementerPrompt).toContain('error handling and failure recovery');
+    });
+
     it('supplies both proposer draft and challenger critique to synthesizer for adjudication', () => {
       const userQuery = 'How should we implement atomic ledger commits?';
       const proposerDraft = 'Draft proposal: single UPDATE statement.';

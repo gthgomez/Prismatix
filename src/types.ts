@@ -147,6 +147,8 @@ export interface Message {
   debateTrigger?: string;
   debateModel?: string;
   debateCostNote?: string;
+  debateDegraded?: boolean;
+  debateDegradedReason?: string;
   debateParticipants?: DebateParticipant[];
   imageData?: string;            // Base64 image data (first image for display)
   mediaType?: string;            // MIME type

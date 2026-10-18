@@ -142,15 +142,23 @@ export function buildDebateHeaders(params: {
   debateProfile: DebateProfile;
   debateTrigger: DebateTrigger;
   debateModelTier?: string;
-  costNote?: 'full' | 'partial';
+  costNote?: 'settled' | 'estimated' | 'pending_reconcile' | 'full' | 'partial';
+  degraded?: boolean;
+  degradedReason?: string;
 }): Record<string, string> {
+  if (params.degraded) {
+    return {
+      'X-Debate-Degraded': 'true',
+      ...(params.degradedReason ? { 'X-Debate-Degraded-Reason': params.degradedReason } : {}),
+    };
+  }
   if (!params.debateActive) return {};
   return {
     'X-Debate-Mode': 'true',
     'X-Debate-Profile': params.debateProfile,
     'X-Debate-Trigger': params.debateTrigger,
     ...(params.debateModelTier ? { 'X-Debate-Model': params.debateModelTier } : {}),
-    'X-Debate-Cost-Note': params.costNote ?? 'full',
+    'X-Debate-Cost-Note': params.costNote ?? 'settled',
   };
 }
 

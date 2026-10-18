@@ -80,6 +80,48 @@ export function calculatePreFlightCost(
   };
 }
 
+export function calculateDebatePreFlightCost(
+  profile: 'general' | 'code' | 'video_ui',
+  primaryModel: RouterModel,
+  contextText: string,
+  imageCount = 0,
+): PreFlightCostResult {
+  const proposerCost = calculatePreFlightCost(primaryModel, contextText, 0);
+  const challengerTiers: RouterModel[] = profile === 'code'
+    ? ['deepseek-v4-1-flash', 'deepseek-v4-pro']
+    : profile === 'video_ui'
+    ? ['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.8-flash']
+    : ['deepseek-v4-1-flash', 'gpt-6-luna'];
+
+  let challengersEstimatedUsd = 0;
+  let hasUnknownRate = proposerCost.hasUnknownRate;
+
+  for (const cTier of challengerTiers) {
+    const cCost = calculatePreFlightCost(
+      cTier,
+      `${contextText}\nproposer draft: ${'x'.repeat(proposerCost.projectedOutputTokens * 4)}`,
+      0,
+    );
+    challengersEstimatedUsd += cCost.estimatedUsd;
+    hasUnknownRate = hasUnknownRate || cCost.hasUnknownRate;
+  }
+
+  const synthesisCost = calculatePreFlightCost(
+    primaryModel,
+    `${contextText}\nproposer draft: ${'x'.repeat(proposerCost.projectedOutputTokens * 4)}\ncritique: ${'x'.repeat(proposerCost.projectedOutputTokens * 4)}`,
+    imageCount,
+  );
+  hasUnknownRate = hasUnknownRate || synthesisCost.hasUnknownRate;
+
+  return {
+    promptTokens: proposerCost.promptTokens + synthesisCost.promptTokens,
+    projectedOutputTokens: proposerCost.projectedOutputTokens + synthesisCost.projectedOutputTokens,
+    estimatedUsd: roundUsd(proposerCost.estimatedUsd + challengersEstimatedUsd + synthesisCost.estimatedUsd),
+    pricingVersion: PRICING_VERSION,
+    hasUnknownRate,
+  };
+}
+
 export function calculateFinalCost(
   model: RouterModel,
   usage: { promptTokens: number; completionTokens: number; reasoningTokens?: number },

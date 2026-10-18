@@ -31,12 +31,19 @@ export function buildChallengerPrompt(
   ];
 
   const profileRules = profile === 'code'
-    ? [
-        'Role: Code Correctness & Security Reviewer.',
-        'Target: algorithmic errors, edge cases (empty collections, boundary limits, nullability), concurrency races, injection, resource leaks, and unhandled errors.',
-        'Provide: (1) concrete failure scenarios / counterexamples, (2) missing tests or validation checks, (3) safer implementation patterns.',
-        'Prefer structured bullets with code snippets where helpful.',
-      ]
+    ? role.toLowerCase().includes('implementer')
+      ? [
+          'Role: Code Production & Implementation Specialist.',
+          'Target: production viability, maintainability, architectural clarity, robust error handling & recovery pathways, and concrete API/contract compatibility.',
+          'Provide: (1) practical implementation refinements and refactorings, (2) operational error handling and failure recovery mechanisms, (3) concrete code diffs or replacement snippets demonstrating how to implement the proposal reliably in production.',
+          'Prefer structured bullets with complete, well-typed code snippets where helpful.',
+        ]
+      : [
+          'Role: Code Correctness & Security Reviewer (Critic).',
+          'Target: algorithmic errors, security vulnerabilities, edge cases (empty collections, boundary limits, nullability), concurrency races, injection/memory safety, resource leaks, and unhandled failure modes.',
+          'Provide: (1) concrete failure scenarios / counterexamples that break the proposed code, (2) missing tests or validation checks, (3) security vulnerabilities and exploit vectors.',
+          'Prefer structured bullets with counterexample snippets demonstrating the exact flaw.',
+        ]
     : profile === 'video_ui'
     ? [
         'Role: Video UI / UX Evidence Reviewer.',

@@ -1,15 +1,17 @@
 -- 20261018000000_debate_settlement_and_continuity.sql
 -- Forward migration for Debate Mode end-to-end repair:
 -- 1. A1: Repair premature settlement in px05_commit_estimated and px05_commit_from_ledger.
---    - When other calls remain pending, do not commit as settled or drop pending work.
+--    - Enforce whole-execution estimate contract (p_estimated_usd is whole execution, never added to settled sum).
 --    - Provide explicit 'estimated' basis with provenance audit row in reconciliation_jobs.
---    - Allow px05_commit_from_ledger to true up commitments when late-settling calls complete.
+--    - Allow px05_commit_from_ledger to true up commitments when late-settling calls complete (both up and down).
+--    - Truthfully record and audit budget breaches (never silently clamp actual charges).
 -- 2. A2: Repair reservation release safety in px05_release_reservation.
 --    - Disallow releasing reservations when model_calls rows exist (uncertain paid work).
 --    - Keep hold and mark pending_reconcile.
--- 3. D3: Persist debate metadata and participant state in public.messages.
+-- 3. PX07 & D3: Persist debate metadata while preserving exact PX07 attachment validation contract.
 --    - Add metadata jsonb column to public.messages.
---    - Update public.px07_persist_message to accept and persist p_metadata jsonb.
+--    - Implement canonical 10-argument public.px07_persist_message with strict attachment validation.
+--    - Implement backward-compatible 9-argument public.px07_persist_message wrapper with default params.
 
 -- ---------------------------------------------------------------------------
 -- 1) Messages table: add metadata column
@@ -19,7 +21,7 @@ alter table public.messages
     check (jsonb_typeof(metadata) = 'object');
 
 -- ---------------------------------------------------------------------------
--- 2) Update public.px07_persist_message with metadata support
+-- 2) Canonical 10-arg public.px07_persist_message with metadata support
 -- ---------------------------------------------------------------------------
 create or replace function public.px07_persist_message(
   p_subject_id uuid,
@@ -29,9 +31,9 @@ create or replace function public.px07_persist_message(
   p_content text,
   p_token_count integer,
   p_model_used text,
-  p_attachments jsonb default '[]'::jsonb,
-  p_legacy_image_url text default null,
-  p_metadata jsonb default '{}'::jsonb
+  p_attachments jsonb,
+  p_legacy_image_url text,
+  p_metadata jsonb
 )
 returns jsonb
 language plpgsql
@@ -111,31 +113,37 @@ begin
     raise exception 'message_conflict' using errcode = 'PT409';
   end if;
 
-  -- validate every attachment element.
+  -- validate every attachment element (preserves exact PX07 contract)
   for v_att in select value from jsonb_array_elements(v_attachments) loop
     v_kind := v_att->>'kind';
-    if v_kind not in ('image', 'file', 'video') then
+    if v_kind is null or v_kind not in ('image', 'video', 'file') then
       raise exception 'invalid_attachment' using errcode = '22023';
+    end if;
+
+    -- `file` entries are text/code metadata only (name/size); their content is
+    -- never persisted and there is no object to validate.
+    if v_kind = 'file' then
+      if coalesce(v_att->>'name', '') = ''
+         or length(v_att->>'name') > 512 then
+        raise exception 'invalid_attachment' using errcode = '22023';
+      end if;
+      continue;
     end if;
 
     if v_kind = 'image' then
       v_storage_ref := v_att->>'storageRef';
-      if v_storage_ref is not null then
-        if v_storage_ref not like 'supabase://attachments/' || p_subject_id::text || '/%' then
-          raise exception 'invalid_attachment' using errcode = '22023';
-        end if;
-        v_path := substr(v_storage_ref, length('supabase://attachments/') + 1);
-        if not exists (
-          select 1
-            from storage.objects
-           where bucket_id = 'attachments'
-             and name = v_path
-             and owner = p_subject_id
-        ) then
-          raise exception 'attachment_not_found' using errcode = '22023';
-        end if;
+      if v_storage_ref is not null and length(v_storage_ref) > 2048 then
+        raise exception 'invalid_attachment' using errcode = '22023';
       end if;
-    elsif v_kind = 'video' then
+      if v_storage_ref is null
+         or v_storage_ref not like 'supabase://chat-uploads/%' then
+        raise exception 'invalid_attachment' using errcode = '22023';
+      end if;
+      v_path := substring(v_storage_ref from '^supabase://chat-uploads/(.+)$');
+      if v_path is null or not starts_with(v_path, p_subject_id::text || '/') then
+        raise exception 'invalid_attachment' using errcode = '22023';
+      end if;
+    else
       begin
         v_video_id := (v_att->>'videoAssetId')::uuid;
       exception
@@ -184,16 +192,53 @@ begin
   update public.conversations
      set last_activity_at = now(),
          title = case
-           when p_role = 'user' and (title is null or title = 'New Chat') then
-             substr(trim(regexp_replace(p_content, '\s+', ' ', 'g')), 1, 60)
-           else title
-         end,
+                   when p_role = 'user' then coalesce(title, left(p_content, 120))
+                   else title
+                 end,
          total_tokens = total_tokens + greatest(coalesce(p_token_count, 0), 0)
    where id = p_conversation_id;
 
   return jsonb_build_object('message_id', v_message.id, 'inserted', true);
 end;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- 2b) Backward-compatible 9-arg wrapper for existing callers
+-- ---------------------------------------------------------------------------
+create or replace function public.px07_persist_message(
+  p_subject_id uuid,
+  p_conversation_id uuid,
+  p_execution_id uuid,
+  p_role text,
+  p_content text,
+  p_token_count integer,
+  p_model_used text,
+  p_attachments jsonb default '[]'::jsonb,
+  p_legacy_image_url text default null
+)
+returns jsonb
+language sql
+security definer
+set search_path = public, prismatix_internal
+as $$
+  select public.px07_persist_message(
+    p_subject_id,
+    p_conversation_id,
+    p_execution_id,
+    p_role,
+    p_content,
+    p_token_count,
+    p_model_used,
+    coalesce(p_attachments, '[]'::jsonb),
+    p_legacy_image_url,
+    '{}'::jsonb
+  );
+$$;
+
+revoke all on function public.px07_persist_message(uuid, uuid, uuid, text, text, integer, text, jsonb, text) from public;
+revoke all on function public.px07_persist_message(uuid, uuid, uuid, text, text, integer, text, jsonb, text) from anon;
+revoke all on function public.px07_persist_message(uuid, uuid, uuid, text, text, integer, text, jsonb, text) from authenticated;
+grant execute on function public.px07_persist_message(uuid, uuid, uuid, text, text, integer, text, jsonb, text) to service_role;
 
 revoke all on function public.px07_persist_message(uuid, uuid, uuid, text, text, integer, text, jsonb, text, jsonb) from public;
 revoke all on function public.px07_persist_message(uuid, uuid, uuid, text, text, integer, text, jsonb, text, jsonb) from anon;
@@ -305,7 +350,7 @@ revoke all on function public.px05_release_reservation(uuid, text) from authenti
 grant execute on function public.px05_release_reservation(uuid, text) to service_role;
 
 -- ---------------------------------------------------------------------------
--- 4) A1: px05_commit_estimated and px05_commit_from_ledger true-up
+-- 4) A1: px05_commit_estimated with whole-execution estimate contract
 -- ---------------------------------------------------------------------------
 create or replace function public.px05_commit_estimated(
   p_execution_id uuid,
@@ -420,8 +465,9 @@ begin
   end if;
 
   -- 4) Pending calls exist, but all pending calls are priced.
-  -- Commit a conservative, reservation-capped estimate covering settled calls
-  -- plus the estimated pending cost. Provenance is explicitly 'estimated'.
+  -- WHOLE-EXECUTION ESTIMATE CONTRACT:
+  -- p_estimated_usd represents the total modeled cost for the entire execution.
+  -- v_committed is at least the already settled calls, at most the reservation ceiling.
   if v_pending > 0 then
     if p_estimated_usd is null or p_estimated_usd <= 0 then
       -- Without a positive estimate, keep the hold as pending_reconcile.
@@ -435,7 +481,7 @@ begin
         'basis', 'pending_priced_calls');
     end if;
 
-    v_committed := round(least(v_settled_sum + p_estimated_usd, v_res.amount_usd), 6);
+    v_committed := round(least(v_res.amount_usd, greatest(v_settled_sum, p_estimated_usd)), 6);
     update prismatix_internal.budget_windows
        set held_usd = greatest(0, held_usd - v_res.amount_usd),
            committed_usd = committed_usd + v_committed
@@ -452,7 +498,7 @@ begin
       'budget_estimated',
       jsonb_build_object(
         'provenance', case when v_settled > 0 then 'estimated_partial_provider_usage' else 'estimated_no_provider_usage' end,
-        'estimated_usd', p_estimated_usd,
+        'whole_execution_estimate_usd', p_estimated_usd,
         'settled_sum', v_settled_sum,
         'committed_usd', v_committed,
         'pending_calls', v_pending,
@@ -501,8 +547,8 @@ declare
   v_calls integer := 0;
   v_pending integer := 0;
   v_total numeric(12,6) := 0;
-  v_committed numeric(12,6);
-  v_additional numeric(12,6) := 0;
+  v_diff numeric(12,6) := 0;
+  v_breached boolean := false;
 begin
   if p_execution_id is null then
     raise exception 'invalid_reservation_identity' using errcode = '22023';
@@ -525,6 +571,7 @@ begin
   from prismatix_internal.model_calls
   where execution_id = p_execution_id;
 
+  v_total := round(v_total, 6);
   v_window_start := date_trunc('day', v_res.created_at);
 
   -- Fixed lock order: project window THEN user window.
@@ -538,35 +585,44 @@ begin
   where scope = 'user' and subject_id = v_res.subject_id and window_start = v_window_start
   for update;
 
-  -- Handle already-committed reservation with late-settling calls:
+  -- 1) Handle already-committed reservation with late-settling calls:
   if v_res.state = 'committed' then
-    if v_pending = 0 and round(v_total, 6) > v_res.committed_usd then
-      v_additional := least(round(v_total, 6), v_res.amount_usd) - v_res.committed_usd;
-      if v_additional > 0 then
-        update prismatix_internal.budget_windows
-           set committed_usd = committed_usd + v_additional
-         where id in (v_project.id, v_user.id);
+    if v_pending = 0 and v_total <> v_res.committed_usd then
+      v_diff := v_total - v_res.committed_usd;
+      v_breached := v_total > v_res.amount_usd;
 
-        update prismatix_internal.budget_reservations
-           set committed_usd = v_res.committed_usd + v_additional,
-               updated_at = v_now
-         where id = v_res.id
-        returning * into v_res;
+      -- Update budget windows by the delta (adjusted up or down)
+      update prismatix_internal.budget_windows
+         set committed_usd = greatest(0, committed_usd + v_diff)
+       where id in (v_project.id, v_user.id);
 
-        insert into prismatix_internal.reconciliation_jobs (execution_id, kind, payload)
-        values (
-          p_execution_id,
-          'budget_reconciled',
-          jsonb_build_object('actual_usd', v_res.committed_usd, 'additional_usd', v_additional, 'reason', 'late_call_settlement')
-        );
+      update prismatix_internal.budget_reservations
+         set committed_usd = v_total,
+             updated_at = v_now
+       where id = v_res.id
+      returning * into v_res;
 
-        return jsonb_build_object(
-          'state', 'committed', 'updated', true,
-          'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd,
-          'reason', 'late_settlement_reconciled');
-      end if;
+      insert into prismatix_internal.reconciliation_jobs (execution_id, kind, payload)
+      values (
+        p_execution_id,
+        'budget_reconciled',
+        jsonb_build_object(
+          'actual_usd', v_total,
+          'diff_usd', v_diff,
+          'reservation_amount_usd', v_res.amount_usd,
+          'budget_breached', v_breached,
+          'reason', case when v_diff > 0 then 'late_call_settlement_up' else 'late_call_settlement_down' end
+        )
+      );
+
+      return jsonb_build_object(
+        'state', 'committed', 'updated', true,
+        'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd,
+        'budget_breached', v_breached,
+        'reason', 'late_settlement_reconciled');
     end if;
 
+    -- Already reconciled and matching actuals => idempotent no-op
     return jsonb_build_object(
       'state', v_res.state, 'updated', false,
       'reservation_id', v_res.id, 'committed_usd', v_res.committed_usd);
@@ -609,21 +665,36 @@ begin
       'reason', 'confirmed_zero_calls');
   end if;
 
-  -- All calls settled authoritatively: commit the total.
-  v_committed := round(least(v_total, v_res.amount_usd), 6);
+  -- All calls settled authoritatively: commit actual total (truthful, not silently clamped).
+  v_breached := v_total > v_res.amount_usd;
   update prismatix_internal.budget_windows
      set held_usd = greatest(0, held_usd - v_res.amount_usd),
-         committed_usd = committed_usd + v_committed
+         committed_usd = committed_usd + v_total
    where id in (v_project.id, v_user.id);
 
   update prismatix_internal.budget_reservations
-     set state = 'committed', committed_usd = v_committed, updated_at = v_now
+     set state = 'committed', committed_usd = v_total, updated_at = v_now
    where id = v_res.id
   returning * into v_res;
 
+  if v_breached then
+    insert into prismatix_internal.reconciliation_jobs (execution_id, kind, payload)
+    values (
+      p_execution_id,
+      'budget_breached',
+      jsonb_build_object(
+        'actual_usd', v_total,
+        'reservation_amount_usd', v_res.amount_usd,
+        'excess_usd', v_total - v_res.amount_usd
+      )
+    );
+  end if;
+
   return jsonb_build_object(
     'state', 'committed', 'updated', true,
-    'reservation_id', v_res.id, 'committed_usd', v_committed,
+    'reservation_id', v_res.id, 'committed_usd', v_total,
+    'budget_breached', v_breached,
+    'basis', 'settled',
     'calls', v_calls);
 end;
 $$;

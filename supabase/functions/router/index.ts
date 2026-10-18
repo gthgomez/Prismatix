@@ -210,7 +210,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers':
     'Content-Type, Authorization, x-client-info, apikey, x-client-request-id, x-request-id',
   'Access-Control-Expose-Headers':
-    'X-Prismatix-Protocol, X-Prismatix-Schema, X-Prismatix-Catalog, X-Prismatix-Tariff, X-Prismatix-Release, X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Cost-Note, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path, X-Prismatix-Execution-Id, Retry-After, X-Route-Decision',
+    'X-Prismatix-Protocol, X-Prismatix-Schema, X-Prismatix-Catalog, X-Prismatix-Tariff, X-Prismatix-Release, X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Cost-Note, X-Debate-Degraded, X-Debate-Degraded-Reason, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path, X-Prismatix-Execution-Id, Retry-After, X-Route-Decision',
 };
 
 const FUNCTION_TIMEOUT_MS = 55000;
@@ -821,7 +821,7 @@ async function maybeRunDebateMode(params: {
 
   for (const c of deduplicatedResults) {
     participants.push({
-      role: 'contrarian',
+      role: c.role,
       model: c.modelTier as RouterModel,
       response: c.text,
     });
@@ -1408,10 +1408,14 @@ async function callProviderStream(
           headers: result.response.headers,
         });
         const tracker = createUsageTracker(decision.provider);
-        result.usagePromise = consumeStreamUsage(usageBody, tracker).then(async (usage) => {
+        const p = consumeStreamUsage(usageBody, tracker).then(async (usage) => {
           await settleMeteredCallFromUsage(meteredInput, usage, servedModel);
           return usage;
         });
+        result.usagePromise = p;
+        if (meter.usagePromises) {
+          meter.usagePromises.push(p);
+        }
       }
       return { result, servedModel, status: 'completed' };
     },
@@ -2280,19 +2284,6 @@ Deno.serve(async (req: Request) => {
     const hasImages = imageAttachments.length > 0;
     const hasVideoAssets = videoAssetIds.length > 0;
 
-    if (hasImages && hasVideoAssets) {
-      return new Response(
-        JSON.stringify({
-          error: 'Mixed image and video inputs are not supported in a single request',
-          code: 'mixed_media_not_supported',
-        }),
-        {
-          status: 400,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-
     if (!query && !hasImages && !hasVideoAssets) {
       return new Response(JSON.stringify({ error: 'Bad Request: Missing query, image, or videoAssetIds' }), {
         status: 400,
@@ -2834,6 +2825,7 @@ Deno.serve(async (req: Request) => {
     // Per-dispatch attempt allocation: distinct dispatches get distinct ledger
     // identities even when their token counts are identical.
     const attemptCounters = new Map<string, number>();
+    const allDispatchedUsagePromises: Promise<unknown>[] = [];
     const makeMeter: MeteredCallFactory = (
       stage,
       participant,
@@ -2853,6 +2845,7 @@ Deno.serve(async (req: Request) => {
         requestedModel,
         priceSnapshot: priceSnapshot ?? priceSnapshotForTier(requestedModel),
         outputBudget: executionOutputBudget,
+        usagePromises: allDispatchedUsagePromises,
       };
     };
     const finalizeLedger = async (
@@ -2895,6 +2888,21 @@ Deno.serve(async (req: Request) => {
       if (admissionSettled || !admissionResult.admitted || !activeExecution) return;
       admissionSettled = true;
       try {
+        // Collect and await all dispatched usage promises before terminal settlement
+        if (allDispatchedUsagePromises.length > 0) {
+          try {
+            await Promise.allSettled(allDispatchedUsagePromises);
+          } catch {
+            // best-effort; unpriced/unsettled rows stay pending_reconcile
+          }
+        }
+
+        // GUARD: If calls were attempted or dispatched, work is NOT confirmed-zero.
+        // Never release uncertain paid work. Settle via ledger instead.
+        if (mode === 'release' && (attemptCounters.size > 0 || allDispatchedUsagePromises.length > 0)) {
+          mode = 'ledger';
+        }
+
         if (mode === 'release') {
           const result = await releaseReservation(
             storeClient,
@@ -2955,6 +2963,7 @@ Deno.serve(async (req: Request) => {
     let debateModelTierEffective = '';
     let debateParticipants: DebateParticipant[] = [];
     let debateUsagePromises: Promise<NormalizedUsage | null>[] = [];
+    let debateDegradedReason: string | undefined;
     let responseDecision: RouteDecision = decision;
 
     // SMD state — declared alongside debate state for the same reason.
@@ -3139,7 +3148,7 @@ Deno.serve(async (req: Request) => {
             meter: makeMeter,
           }),
         });
-        // On failure (no challengers succeeded), fall through silently to the normal path.
+        // On failure (no challengers succeeded), fall through to normal path with degraded reason.
         if (debateResult) {
           upstream = debateResult.upstream;
           debateSynthesisMessages = debateResult.synthesisMessages;
@@ -3152,6 +3161,9 @@ Deno.serve(async (req: Request) => {
           debateParticipants = debateResult.participants;
           debateUsagePromises = debateResult.usagePromises;
         } else {
+          if (debateReq.requested) {
+            debateDegradedReason = 'debate_pipeline_failed_or_timed_out';
+          }
           upstream = await callProviderStream(
             decision,
             allMessages,
@@ -3164,6 +3176,15 @@ Deno.serve(async (req: Request) => {
           );
         }
       } else {
+        if (debateReq.requested) {
+          debateDegradedReason = hasImages && debateReq.profile !== 'video_ui'
+            ? 'media_not_supported'
+            : debateReq.profile === 'video_ui' && !hasVideoAssets
+            ? 'video_required'
+            : !ENABLE_DEBATE_MODE
+            ? 'debate_mode_disabled'
+            : 'ineligible_request';
+        }
         upstream = await callProviderStream(
           decision,
           allMessages,
@@ -3323,54 +3344,6 @@ Deno.serve(async (req: Request) => {
             reasoningTokens: 0,
           });
 
-          const costLogRecord = {
-            user_id: userId,
-            conversation_id: conversationId,
-            model: responseDecision.modelTier,
-            provider: responseDecision.provider,
-            input_tokens: costBreakdown.promptTokens,
-            output_tokens: costBreakdown.completionTokens,
-            thinking_tokens: costBreakdown.reasoningTokens,
-            input_cost: costBreakdown.inputCostUsd,
-            output_cost: costBreakdown.outputCostUsd,
-            thinking_cost: costBreakdown.reasoningCostUsd,
-            total_cost: costBreakdown.totalUsd,
-            pricing_version: costBreakdown.pricingVersion,
-            complexity_score: responseDecision.complexityScore,
-            route_rationale: responseDecision.rationaleTag,
-            // PX03: the authoritative identity is the execution id, never a
-            // content hash. cost_logs stays a server-written projection and the
-            // projection is pending until the ledger settles.
-            idempotency_key: activeExecution?.id,
-            cost_status: 'pending' as const,
-          };
-          let receiptOk = true;
-          try {
-            await persistCostLog(
-              supabaseClient as unknown as ReturnType<typeof createClient>,
-              costLogRecord,
-            );
-          } catch (costLogError) {
-            // Accounting authority fails closed for the receipt: the stream
-            // already completed, so we cannot fail the response — but we never
-            // pretend the receipt succeeded. Record it durably instead of a
-            // console dead-letter, and mark the execution indeterminate below.
-            receiptOk = false;
-            console.error('[DB] Cost log receipt failed:', {
-              conversationId,
-              userId,
-              error: costLogError instanceof Error ? costLogError.message : String(costLogError),
-            });
-            if (activeExecution) {
-              await safeEnqueueReconciliation(
-                storeClient,
-                activeExecution.id,
-                'cost_projection_failed',
-                { conversationId, userId, model: responseDecision.modelTier },
-              );
-            }
-          }
-
           // PX07: persist the assistant turn durably. A failure here does NOT
           // abort the (already completed) response; it marks the terminal
           // receipt `transcript.saved=false` and records a durable
@@ -3447,7 +3420,10 @@ Deno.serve(async (req: Request) => {
 
           // PX05: wait for all streaming and debate calls to settle their usage
           try {
-            const promisesToAwait: Promise<unknown>[] = [...debateUsagePromises];
+            const promisesToAwait: Promise<unknown>[] = [
+              ...debateUsagePromises,
+              ...allDispatchedUsagePromises,
+            ];
             if (upstream.usagePromise) {
               promisesToAwait.push(upstream.usagePromise);
             }
@@ -3464,14 +3440,6 @@ Deno.serve(async (req: Request) => {
             ? Math.max(costBreakdown.totalUsd, preFlightCost.estimatedUsd)
             : costBreakdown.totalUsd;
           await settleAdmission('completion', { estimateUsd: fallbackEstimateUsd });
-
-          await finalizeLedger(
-            receiptOk ? 'completed' : 'indeterminate',
-            receiptOk ? 'ok' : 'receipt_write_failed',
-            effectiveModelId,
-          );
-          // Auxiliary admission starts after the chat lease is settled.
-          if (memoryQueued) keepAlive(runMemoryJobs(storeClient, userId));
 
           // PX06: project the terminal receipt for the in-stream event. This is
           // a read of the authority ledger; a failure is recorded durably and
@@ -3493,6 +3461,65 @@ Deno.serve(async (req: Request) => {
               );
             }
           }
+
+          // Authoritative execution cost for user-facing cost logs:
+          // In Debate Mode, historical conversation costs derive from authoritative
+          // execution accounting rather than synthesis-only estimates.
+          const authoritativeTotalCost = (debateActive && receipt?.settlement?.committedUsd && receipt.settlement.committedUsd > 0)
+            ? receipt.settlement.committedUsd
+            : debateActive
+            ? fallbackEstimateUsd
+            : costBreakdown.totalUsd;
+
+          const costLogRecord = {
+            user_id: userId,
+            conversation_id: conversationId,
+            model: responseDecision.modelTier,
+            provider: responseDecision.provider,
+            input_tokens: costBreakdown.promptTokens,
+            output_tokens: costBreakdown.completionTokens,
+            thinking_tokens: costBreakdown.reasoningTokens,
+            input_cost: costBreakdown.inputCostUsd,
+            output_cost: costBreakdown.outputCostUsd,
+            thinking_cost: costBreakdown.reasoningCostUsd,
+            total_cost: authoritativeTotalCost,
+            pricing_version: costBreakdown.pricingVersion,
+            complexity_score: responseDecision.complexityScore,
+            route_rationale: responseDecision.rationaleTag,
+            idempotency_key: activeExecution?.id,
+            cost_status: (receipt?.settlement?.state === 'settled' ? 'settled' : 'pending') as 'settled' | 'pending',
+          };
+          let receiptOk = true;
+          try {
+            await persistCostLog(
+              supabaseClient as unknown as ReturnType<typeof createClient>,
+              costLogRecord,
+            );
+          } catch (costLogError) {
+            receiptOk = false;
+            console.error('[DB] Cost log receipt failed:', {
+              conversationId,
+              userId,
+              error: costLogError instanceof Error ? costLogError.message : String(costLogError),
+            });
+            if (activeExecution) {
+              await safeEnqueueReconciliation(
+                storeClient,
+                activeExecution.id,
+                'cost_projection_failed',
+                { conversationId, userId, model: responseDecision.modelTier },
+              );
+            }
+          }
+
+          await finalizeLedger(
+            receiptOk ? 'completed' : 'indeterminate',
+            receiptOk ? 'ok' : 'receipt_write_failed',
+            effectiveModelId,
+          );
+          // Auxiliary admission starts after the chat lease is settled.
+          if (memoryQueued) keepAlive(runMemoryJobs(storeClient, userId));
+
           // PX07: attach the transcript durability marker (omit when the
           // assistant turn was not persisted). Never a false durable claim.
           if (transcript && receipt) {
@@ -3534,13 +3561,15 @@ Deno.serve(async (req: Request) => {
         // PX06: the execution identity for the client to correlate the terminal
         // receipt (and the authenticated lookup after a disconnect).
         'X-Prismatix-Execution-Id': activeExecution?.id ?? '',
-        // Debate headers are emitted ONLY when debate ran (absent = debate did not run).
+        // Debate headers are emitted ONLY when debate ran (or degraded headers when requested).
         ...buildDebateHeaders({
           debateActive,
           debateProfile: debateProfileEffective,
           debateTrigger: debateTriggerEffective,
           ...(debateModelTierEffective ? { debateModelTier: debateModelTierEffective } : {}),
-          costNote: 'full',
+          costNote: 'estimated',
+          degraded: debateReq.requested && !debateActive,
+          degradedReason: debateDegradedReason,
         }),
         // SMD headers: emitted when SMD pipeline ran OR fast-path triggered.
         ...(smdActive && smdRunLog ? {
