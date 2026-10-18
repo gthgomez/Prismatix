@@ -78,6 +78,7 @@ export function shouldShowDebateBadges(msg: Message): boolean {
     msg.debateProfile ||
     msg.debateTrigger ||
     msg.debateModel ||
-    msg.debateCostNote,
+    msg.debateCostNote ||
+    msg.debateDegraded,
   );
 }

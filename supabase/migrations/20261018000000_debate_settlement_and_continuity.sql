@@ -194,9 +194,12 @@ begin
          title = case
                    when p_role = 'user' then coalesce(title, left(p_content, 120))
                    else title
-                 end,
-         total_tokens = total_tokens + greatest(coalesce(p_token_count, 0), 0)
+                 end
    where id = p_conversation_id;
+
+  perform public.increment_token_count_for_user(
+    p_conversation_id, p_subject_id, greatest(coalesce(p_token_count, 0), 0)
+  );
 
   return jsonb_build_object('message_id', v_message.id, 'inserted', true);
 end;
@@ -703,3 +706,98 @@ revoke all on function public.px05_commit_from_ledger(uuid) from public;
 revoke all on function public.px05_commit_from_ledger(uuid) from anon;
 revoke all on function public.px05_commit_from_ledger(uuid) from authenticated;
 grant execute on function public.px05_commit_from_ledger(uuid) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 5) px03_record_model_call: guard against late dispatches after finalization
+-- ---------------------------------------------------------------------------
+create or replace function public.px03_record_model_call(
+  p_execution_id uuid,
+  p_stage text,
+  p_participant text,
+  p_attempt_number integer default 1,
+  p_requested_model text default null,
+  p_resolved_model text default null,
+  p_served_model text default null,
+  p_upstream_request_id text default null,
+  p_status text default null,
+  p_input_tokens integer default 0,
+  p_output_tokens integer default 0,
+  p_thinking_tokens integer default 0,
+  p_input_cost numeric default 0,
+  p_output_cost numeric default 0,
+  p_thinking_cost numeric default 0,
+  p_total_cost numeric default 0,
+  p_price_snapshot jsonb default null,
+  p_cost_status text default 'pending'
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, prismatix_internal
+as $$
+declare
+  v_row prismatix_internal.model_calls;
+begin
+  if p_cost_status not in ('settled','pending','estimated_legacy') then
+    raise exception 'invalid_cost_status' using errcode = '22023';
+  end if;
+  if p_attempt_number is null or p_attempt_number < 1 then
+    raise exception 'invalid_attempt_number' using errcode = '22023';
+  end if;
+
+  -- Guard against late dispatches after terminal settlement:
+  -- Updates to existing rows (e.g. settling late usage) are allowed,
+  -- but new dispatches on a finalized execution are rejected.
+  if p_status = 'dispatched' and exists (
+    select 1 from prismatix_internal.executions
+     where id = p_execution_id
+       and terminal_outcome is not null
+  ) and not exists (
+    select 1 from prismatix_internal.model_calls
+     where execution_id = p_execution_id
+       and stage = p_stage
+       and participant = p_participant
+       and attempt_number = p_attempt_number
+  ) then
+    raise exception 'execution_already_finalized' using errcode = '22023';
+  end if;
+
+  insert into prismatix_internal.model_calls (
+    execution_id, stage, participant, attempt_number,
+    requested_model, resolved_model, served_model, upstream_request_id, status,
+    input_tokens, output_tokens, thinking_tokens,
+    input_cost, output_cost, thinking_cost, total_cost,
+    price_snapshot, cost_status
+  ) values (
+    p_execution_id, p_stage, p_participant, p_attempt_number,
+    p_requested_model, p_resolved_model, p_served_model, p_upstream_request_id, p_status,
+    coalesce(p_input_tokens, 0), coalesce(p_output_tokens, 0), coalesce(p_thinking_tokens, 0),
+    coalesce(p_input_cost, 0), coalesce(p_output_cost, 0), coalesce(p_thinking_cost, 0),
+    coalesce(p_total_cost, 0),
+    p_price_snapshot, p_cost_status
+  )
+  on conflict (execution_id, stage, participant, attempt_number) do update set
+    requested_model = excluded.requested_model,
+    resolved_model = excluded.resolved_model,
+    served_model = excluded.served_model,
+    upstream_request_id = excluded.upstream_request_id,
+    status = excluded.status,
+    input_tokens = excluded.input_tokens,
+    output_tokens = excluded.output_tokens,
+    thinking_tokens = excluded.thinking_tokens,
+    input_cost = excluded.input_cost,
+    output_cost = excluded.output_cost,
+    thinking_cost = excluded.thinking_cost,
+    total_cost = excluded.total_cost,
+    price_snapshot = excluded.price_snapshot,
+    cost_status = excluded.cost_status
+  returning * into v_row;
+
+  return to_jsonb(v_row);
+end;
+$$;
+
+revoke all on function public.px03_record_model_call(uuid, text, text, integer, text, text, text, text, text, integer, integer, integer, numeric, numeric, numeric, numeric, jsonb, text) from public;
+revoke all on function public.px03_record_model_call(uuid, text, text, integer, text, text, text, text, text, integer, integer, integer, numeric, numeric, numeric, numeric, jsonb, text) from anon;
+revoke all on function public.px03_record_model_call(uuid, text, text, integer, text, text, text, text, text, integer, integer, integer, numeric, numeric, numeric, numeric, jsonb, text) from authenticated;
+grant execute on function public.px03_record_model_call(uuid, text, text, integer, text, text, text, text, text, integer, integer, integer, numeric, numeric, numeric, numeric, jsonb, text) to service_role;

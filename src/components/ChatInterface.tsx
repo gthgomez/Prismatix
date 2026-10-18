@@ -1022,6 +1022,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     executionIdRef.current = undefined;
     setStreamOutcome(null);
 
+    const restoreComposerSafely = () => {
+      if (queryText) {
+        setInput((current) => {
+          // Only restore if user hasn't typed a newer distinct draft
+          if (!current.trim() || current === queryText) {
+            return queryText;
+          }
+          return current;
+        });
+      }
+      if (attachmentsToProcess.length > 0) {
+        setDraftAttachments((current) => {
+          // Only restore if user hasn't added new draft attachments
+          if (current.length === 0) {
+            return attachmentsToProcess;
+          }
+          return current;
+        });
+      }
+    };
+
     try {
       // PX07: upload every draft image, preserving its ORIGINAL ordinal. A
       // failed upload stays an unavailable entry so later ordinals do not shift.
@@ -1101,6 +1122,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateTrigger,
         debateModel,
         debateCostNote,
+        debateDegraded,
+        debateDegradedReason,
         executionId,
         clientRequestId,
       } = result;
@@ -1144,6 +1167,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateTrigger,
         debateModel,
         debateCostNote,
+        debateDegraded,
+        debateDegradedReason,
         thinkingLog: [],
         cost: costEstimateUsd !== undefined
           ? {
@@ -1205,6 +1230,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       // PX06: an abort mid-stream makes readRouterStream resolve with the
       // partial content; surface the cancellation instead of a completion.
       if (abortController.signal.aborted || terminationStatus === 'cancelled') {
+        if (!assistantContent || waitingFirstTokenRef.current) {
+          restoreComposerSafely();
+        }
         setStreamOutcome({ status: 'cancelled', executionId });
         scheduleCostEstimatorHide(1500);
         return;
@@ -1219,6 +1247,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
       // Handle premature stream termination without terminal receipt/[DONE]
       if (terminationStatus === 'interrupted' || terminationStatus === 'error') {
+        if (!assistantContent || waitingFirstTokenRef.current) {
+          restoreComposerSafely();
+        }
         const errorMsg =
           terminationStatus === 'interrupted'
             ? 'Connection closed prematurely before the response completed.'
@@ -1357,28 +1388,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       // PX07: the list/title changed server-side; refresh in the background.
       void refreshConversations();
     } catch (error) {
-      const restoreComposerSafely = () => {
-        if (!waitingFirstTokenRef.current) return;
-        if (queryText) {
-          setInput((current) => {
-            // Only restore if user hasn't typed a newer distinct draft
-            if (!current.trim() || current === queryText) {
-              return queryText;
-            }
-            return current;
-          });
-        }
-        if (attachmentsToProcess.length > 0) {
-          setDraftAttachments((current) => {
-            // Only restore if user hasn't added new draft attachments
-            if (current.length === 0) {
-              return attachmentsToProcess;
-            }
-            return current;
-          });
-        }
-      };
-
       if (error instanceof DuplicateRequestError) {
         // PX07: the same logical send already created an execution. Load/show
         // the existing turn; never auto-dispatch a new paid request.
@@ -1395,7 +1404,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       } else if (abortController.signal.aborted) {
         // PX06: a user Stop is a cancellation, not an error. Surface it and the
         // execution identity (the server finalizes the execution `cancelled`).
-        restoreComposerSafely();
+        if (waitingFirstTokenRef.current) {
+          restoreComposerSafely();
+        }
         setStreamOutcome({ status: 'cancelled', executionId: executionIdRef.current });
         scheduleCostEstimatorHide(1500);
       } else {
@@ -1414,7 +1425,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         scheduleCostEstimatorHide(1500);
 
         // Priority F1: Restore user prompt and attachments safely if failure occurred before first token was delivered
-        restoreComposerSafely();
+        if (waitingFirstTokenRef.current) {
+          restoreComposerSafely();
+        }
       }
     } finally {
       abortControllerRef.current = null;
@@ -2041,7 +2054,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   )}
                 </span>
                 {manualModelOverride && <span className='manual-badge'>Manual</span>}
-                {debateSelection !== 'off' && <span className='debate-badge'>Debate</span>}
+                {debateSelection !== 'off' && (
+                  <span className='debate-badge'>
+                    {debateSelection === 'auto' ? 'Debate (Auto)' : 'Debate'}
+                  </span>
+                )}
                 <svg
                   className={`dropdown-chevron ${showModelSelector ? 'open' : ''}`}
                   width='12'

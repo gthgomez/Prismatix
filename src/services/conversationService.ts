@@ -308,6 +308,8 @@ export async function loadConversation(
       : undefined;
     const debateProfile = typeof debateMeta?.profile === 'string' ? debateMeta.profile : undefined;
     const debateTrigger = typeof debateMeta?.trigger === 'string' ? debateMeta.trigger : undefined;
+    const debateDegraded = typeof debateMeta?.degraded === 'boolean' ? debateMeta.degraded : undefined;
+    const debateDegradedReason = typeof debateMeta?.degradedReason === 'string' ? debateMeta.degradedReason : undefined;
 
     let provenance: LoadedMessageProvenance | undefined;
     if (role === 'assistant') {
@@ -358,6 +360,8 @@ export async function loadConversation(
       ...(debateParticipants ? { debateParticipants } : {}),
       ...(debateProfile ? { debateProfile } : {}),
       ...(debateTrigger ? { debateTrigger } : {}),
+      ...(debateDegraded !== undefined ? { debateDegraded } : {}),
+      ...(debateDegradedReason ? { debateDegradedReason } : {}),
     };
   });
 

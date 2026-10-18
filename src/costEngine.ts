@@ -94,6 +94,7 @@ export function calculateDebatePreFlightCost(
     : ['deepseek-v4-1-flash', 'gpt-6-luna'];
 
   let challengersEstimatedUsd = 0;
+  let challengersPromptTokens = 0;
   let hasUnknownRate = proposerCost.hasUnknownRate;
 
   for (const cTier of challengerTiers) {
@@ -103,6 +104,7 @@ export function calculateDebatePreFlightCost(
       0,
     );
     challengersEstimatedUsd += cCost.estimatedUsd;
+    challengersPromptTokens += cCost.promptTokens;
     hasUnknownRate = hasUnknownRate || cCost.hasUnknownRate;
   }
 
@@ -114,7 +116,7 @@ export function calculateDebatePreFlightCost(
   hasUnknownRate = hasUnknownRate || synthesisCost.hasUnknownRate;
 
   return {
-    promptTokens: proposerCost.promptTokens + synthesisCost.promptTokens,
+    promptTokens: proposerCost.promptTokens + challengersPromptTokens + synthesisCost.promptTokens,
     projectedOutputTokens: proposerCost.projectedOutputTokens + synthesisCost.projectedOutputTokens,
     estimatedUsd: roundUsd(proposerCost.estimatedUsd + challengersEstimatedUsd + synthesisCost.estimatedUsd),
     pricingVersion: PRICING_VERSION,

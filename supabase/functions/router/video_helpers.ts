@@ -214,8 +214,24 @@ export async function buildVideoUiNotesJson(
     return null;
   }
 
+  const sampleEvenly = <T>(items: T[], targetCount: number): T[] => {
+    if (items.length <= targetCount) return items;
+    if (targetCount <= 1) return [items[0]!];
+    const step = (items.length - 1) / (targetCount - 1);
+    const result: T[] = [];
+    const seenIndices = new Set<number>();
+    for (let i = 0; i < targetCount; i++) {
+      const idx = Math.min(items.length - 1, Math.round(i * step));
+      if (!seenIndices.has(idx)) {
+        seenIndices.add(idx);
+        result.push(items[idx]!);
+      }
+    }
+    return result;
+  };
+
   const rows = (data || []) as VideoArtifactRecord[];
-  const artifacts = rows.slice(0, 48).map((row) => {
+  const allEligibleArtifacts = rows.map((row) => {
     const textFromMetadata = typeof row.metadata?.caption === 'string'
       ? row.metadata.caption
       : typeof row.metadata?.summary === 'string'
@@ -232,7 +248,10 @@ export async function buildVideoUiNotesJson(
     };
   }).filter((a) => a.text.length > 0);
 
-  if (artifacts.length === 0) return null;
+  if (allEligibleArtifacts.length === 0) return null;
+
+  // Sample evenly across all eligible artifacts up to 48 without early truncation
+  const artifacts = sampleEvenly(allEligibleArtifacts, 48);
 
   const payload = {
     schema_version: 'video_ui_notes_v1',
@@ -243,23 +262,6 @@ export async function buildVideoUiNotesJson(
 
   let json = JSON.stringify(payload);
   if (json.length <= maxChars) return json;
-
-  // Helper: evenly sample across the entire timeline array
-  const sampleEvenly = <T>(items: T[], targetCount: number): T[] => {
-    if (items.length <= targetCount) return items;
-    if (targetCount <= 1) return [items[0]!];
-    const step = (items.length - 1) / (targetCount - 1);
-    const result: T[] = [];
-    const seenIndices = new Set<number>();
-    for (let i = 0; i < targetCount; i++) {
-      const idx = Math.min(items.length - 1, Math.round(i * step));
-      if (!seenIndices.has(idx)) {
-        seenIndices.add(idx);
-        result.push(items[idx]!);
-      }
-    }
-    return result;
-  };
 
   // Level 1 compaction: evenly sampled across timeline (up to 12 artifacts) with 120-char text
   const sampledL1 = sampleEvenly(artifacts, 12);

@@ -72,6 +72,8 @@ export interface RouterResponseBase {
   debateTrigger?: string;
   debateModel?: string;
   debateCostNote?: string;
+  debateDegraded?: boolean;
+  debateDegradedReason?: string;
   debateParticipants?: DebateParticipant[];
   /** PX06: server-issued execution identity (correlates the terminal receipt). */
   executionId?: string;
@@ -601,6 +603,8 @@ export async function askPrismatix(
       debateTrigger: debateMetadata.debateTrigger,
       debateModel: debateMetadata.debateModel,
       debateCostNote: debateMetadata.debateCostNote,
+      debateDegraded: debateMetadata.debateDegraded,
+      debateDegradedReason: debateMetadata.debateDegradedReason,
       executionId,
       clientRequestId,
       memoryHits,

@@ -2565,26 +2565,42 @@ Deno.serve(async (req: Request) => {
       const proposerCost = calculatePreFlightCost(
         proposerTier,
         `${historyContext}\nuser: ${effectiveQuery}`,
-        0,
-        0,
+        imageAttachments.length,
+        estimatedVideoPromptTokens,
       );
 
-      // Challenger stages
+      // Challenger stages: bound spend across the role-aware fallback cascade
       let challengersEstimatedUsd = 0;
       let challengersTokens = 0;
+      let challengersPromptTokens = 0;
       let challengersUnknownRate = false;
       const draftTokens = proposerCost.projectedOutputTokens;
       for (const c of plan.challengers) {
-        const cTier = forcedVideoUiTier || c.modelTier;
-        const cCost = calculatePreFlightCost(
-          cTier,
-          `${historyContext}\nuser: ${effectiveQuery}\nproposer draft: ${'x'.repeat(draftTokens * 4)}`,
-          0,
-          0,
-        );
-        challengersEstimatedUsd += cCost.estimatedUsd;
-        challengersTokens += cCost.tokenEstimate;
-        challengersUnknownRate = challengersUnknownRate || cCost.hasUnknownRate;
+        const assignedTier = forcedVideoUiTier || c.modelTier;
+        const candidateTiers = buildFallbackSequence(assignedTier, debateReq.profile, c.role);
+        let maxCandidateCostUsd = 0;
+        let cTokens = 0;
+        let cPromptTokens = 0;
+        let cUnknown = false;
+        const candidateQuery = `${historyContext}\nuser: ${effectiveQuery}\nproposer draft: ${'x'.repeat(draftTokens * 4)}`;
+
+        for (const tier of candidateTiers) {
+          const cost = calculatePreFlightCost(tier, candidateQuery, 0, 0);
+          if (cost.estimatedUsd > maxCandidateCostUsd) {
+            maxCandidateCostUsd = cost.estimatedUsd;
+          }
+          if (cTokens === 0) {
+            cTokens = cost.tokenEstimate;
+            cPromptTokens = cost.promptTokens;
+          }
+          if (cost.hasUnknownRate) {
+            cUnknown = true;
+          }
+        }
+        challengersEstimatedUsd += maxCandidateCostUsd;
+        challengersTokens += cTokens;
+        challengersPromptTokens += cPromptTokens;
+        challengersUnknownRate = challengersUnknownRate || cUnknown;
       }
 
       // Synthesis stage
@@ -2597,7 +2613,7 @@ Deno.serve(async (req: Request) => {
 
       preFlightCost = {
         tokenEstimate: proposerCost.tokenEstimate + challengersTokens + synthesisCost.tokenEstimate,
-        promptTokens: proposerCost.promptTokens + synthesisCost.promptTokens,
+        promptTokens: proposerCost.promptTokens + challengersPromptTokens + synthesisCost.promptTokens,
         projectedOutputTokens: proposerCost.projectedOutputTokens + synthesisCost.projectedOutputTokens,
         estimatedUsd: roundUsd(proposerCost.estimatedUsd + challengersEstimatedUsd + synthesisCost.estimatedUsd),
         pricingVersion: preFlightCost.pricingVersion,
@@ -2832,7 +2848,7 @@ Deno.serve(async (req: Request) => {
       requestedModel,
       priceSnapshot = null,
     ) => {
-      if (!activeExecution) return null;
+      if (!activeExecution || executionFinalized) return null;
       const key = `${stage}::${participant}`;
       const attemptNumber = (attemptCounters.get(key) ?? 0) + 1;
       attemptCounters.set(key, attemptNumber);
@@ -3361,13 +3377,16 @@ Deno.serve(async (req: Request) => {
                 tokenCount: assistantTokenCount,
                 modelUsed: `${responseDecision.provider}:${effectiveModelId}`,
                 attachments: [],
-                metadata: debateActive
+                metadata: debateActive || (debateReq.requested && Boolean(debateDegradedReason))
                   ? {
                       debate: {
+                        active: debateActive,
                         profile: debateProfileEffective,
                         trigger: debateTriggerEffective,
                         participants: debateParticipants,
                         modelTier: debateModelTierEffective,
+                        degraded: debateReq.requested && !debateActive,
+                        degradedReason: debateDegradedReason,
                       },
                     }
                   : undefined,
@@ -3441,32 +3460,24 @@ Deno.serve(async (req: Request) => {
             : costBreakdown.totalUsd;
           await settleAdmission('completion', { estimateUsd: fallbackEstimateUsd });
 
-          // PX06: project the terminal receipt for the in-stream event. This is
-          // a read of the authority ledger; a failure is recorded durably and
-          // the stream still terminates normally ([DONE] is always emitted).
-          let receipt: TerminalReceipt | undefined;
+          // Preliminary receipt projection to derive authoritative execution cost for cost_logs
+          let interimReceipt: TerminalReceipt | undefined;
           if (activeExecution) {
             try {
-              receipt =
+              interimReceipt =
                 (await loadExecutionReceipt(storeClient, userId, activeExecution.id)) ?? undefined;
             } catch (receiptError) {
-              console.error('[PX06] receipt projection failed:', {
+              console.error('[PX06] interim receipt projection failed:', {
                 error: receiptError instanceof Error ? receiptError.message : String(receiptError),
               });
-              await safeEnqueueReconciliation(
-                storeClient,
-                activeExecution.id,
-                'receipt_projection_failed',
-                {},
-              );
             }
           }
 
           // Authoritative execution cost for user-facing cost logs:
           // In Debate Mode, historical conversation costs derive from authoritative
           // execution accounting rather than synthesis-only estimates.
-          const authoritativeTotalCost = (debateActive && receipt?.settlement?.committedUsd && receipt.settlement.committedUsd > 0)
-            ? receipt.settlement.committedUsd
+          const authoritativeTotalCost = (debateActive && interimReceipt?.settlement?.committedUsd && interimReceipt.settlement.committedUsd > 0)
+            ? interimReceipt.settlement.committedUsd
             : debateActive
             ? fallbackEstimateUsd
             : costBreakdown.totalUsd;
@@ -3487,7 +3498,7 @@ Deno.serve(async (req: Request) => {
             complexity_score: responseDecision.complexityScore,
             route_rationale: responseDecision.rationaleTag,
             idempotency_key: activeExecution?.id,
-            cost_status: (receipt?.settlement?.state === 'settled' ? 'settled' : 'pending') as 'settled' | 'pending',
+            cost_status: (interimReceipt?.settlement?.state === 'settled' ? 'settled' : 'pending') as 'settled' | 'pending',
           };
           let receiptOk = true;
           try {
@@ -3512,6 +3523,8 @@ Deno.serve(async (req: Request) => {
             }
           }
 
+          // PX06: finalize ledger FIRST so the database row transitions to terminal
+          // ('completed' or 'indeterminate') with a non-null terminal_outcome.
           await finalizeLedger(
             receiptOk ? 'completed' : 'indeterminate',
             receiptOk ? 'ok' : 'receipt_write_failed',
@@ -3519,6 +3532,34 @@ Deno.serve(async (req: Request) => {
           );
           // Auxiliary admission starts after the chat lease is settled.
           if (memoryQueued) keepAlive(runMemoryJobs(storeClient, userId));
+
+          // Project the finalized terminal receipt for the in-stream event.
+          // This read now captures the finalized execution status, outcome, and timestamp.
+          let receipt: TerminalReceipt | undefined;
+          if (activeExecution) {
+            try {
+              receipt =
+                (await loadExecutionReceipt(storeClient, userId, activeExecution.id)) ?? undefined;
+            } catch (receiptError) {
+              console.error('[PX06] final receipt projection failed:', {
+                error: receiptError instanceof Error ? receiptError.message : String(receiptError),
+              });
+              await safeEnqueueReconciliation(
+                storeClient,
+                activeExecution.id,
+                'receipt_projection_failed',
+                {},
+              );
+              if (interimReceipt) {
+                receipt = {
+                  ...interimReceipt,
+                  status: receiptOk ? 'completed' : 'indeterminate',
+                  terminalOutcome: receiptOk ? 'ok' : 'receipt_write_failed',
+                  finalizedAt: new Date().toISOString(),
+                };
+              }
+            }
+          }
 
           // PX07: attach the transcript durability marker (omit when the
           // assistant turn was not persisted). Never a false durable claim.

@@ -51,18 +51,21 @@ export async function processReconciliationBatch(supabase, options = {}) {
     }
 
     try {
+      // Valid terminal execution statuses per PX03 / PX06 contracts:
+      // 'completed' | 'cancelled' | 'failed' | 'indeterminate' (never 'settled')
+      const isTerminalExecution = (status) =>
+        status === 'completed' || status === 'cancelled' || status === 'failed' || status === 'indeterminate';
+
       // Reconcile according to kind
       if (job.kind === 'receipt_projection_failed') {
-        // Check execution state in ledger
         const { data: exec } = await supabase
           .schema('prismatix_internal')
           .from('executions')
-          .select('id, status, settled_cost_usd')
+          .select('id, status')
           .eq('id', job.execution_id)
           .maybeSingle();
 
-        if (exec && (exec.status === 'settled' || exec.status === 'cancelled')) {
-          // Execution reached terminal state, receipt job is complete
+        if (exec && isTerminalExecution(exec.status)) {
           await supabase
             .schema('prismatix_internal')
             .from('reconciliation_jobs')
@@ -74,7 +77,6 @@ export async function processReconciliationBatch(supabase, options = {}) {
             .eq('id', job.id);
           summary.processed++;
         } else {
-          // Execution still open or missing; record attempt
           const status = attempts >= maxAttempts ? 'failed' : 'pending';
           await supabase
             .schema('prismatix_internal')
@@ -88,6 +90,99 @@ export async function processReconciliationBatch(supabase, options = {}) {
             .eq('id', job.id);
           if (status === 'failed') summary.failed++;
         }
+      } else if (job.kind === 'budget_estimated' || job.kind === 'admission_settlement_failed') {
+        // True-up the execution's reservation from settled model calls in the ledger
+        let commitResult = null;
+        if (typeof supabase.rpc === 'function') {
+          const { data: rpcData, error: rpcErr } = await supabase.rpc('px05_commit_from_ledger', {
+            p_execution_id: job.execution_id,
+          });
+          if (rpcErr) {
+            logger.warn?.(`[reconcile-jobs] px05_commit_from_ledger RPC failed for ${job.execution_id}:`, rpcErr.message);
+          } else {
+            commitResult = rpcData;
+          }
+        }
+
+        // If RPC didn't return (or in unit mock without rpc), check reservation table directly
+        let committedUsd = commitResult?.committed_usd;
+        let reservationState = commitResult?.state;
+        if (committedUsd === undefined) {
+          const { data: res } = await supabase
+            .schema('prismatix_internal')
+            .from('budget_reservations')
+            .select('state, committed_usd')
+            .eq('execution_id', job.execution_id)
+            .maybeSingle();
+          committedUsd = res?.committed_usd ?? job.payload?.committed_usd;
+          reservationState = res?.state;
+        }
+
+        // Ensure upward or downward corrections update the historical cost_logs projection
+        if (committedUsd !== undefined && committedUsd !== null) {
+          const parsedUsd = Number(committedUsd);
+          const safeCost = Number.isFinite(parsedUsd) ? parsedUsd : 0;
+          const costStatus = reservationState === 'committed' ? 'settled' : 'pending';
+
+          await supabase
+            .from('cost_logs')
+            .update({
+              total_cost: safeCost,
+              cost_status: costStatus,
+            })
+            .eq('idempotency_key', job.execution_id);
+        }
+
+        await supabase
+          .schema('prismatix_internal')
+          .from('reconciliation_jobs')
+          .update({
+            status: 'done',
+            attempts,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id);
+        summary.processed++;
+      } else if (job.kind === 'cost_projection_failed') {
+        // Re-attempt or project missing cost log entry from ledger and reservation
+        const { data: res } = await supabase
+          .schema('prismatix_internal')
+          .from('budget_reservations')
+          .select('committed_usd')
+          .eq('execution_id', job.execution_id)
+          .maybeSingle();
+
+        const costUsd = Number(res?.committed_usd ?? job.payload?.total_cost ?? 0);
+        await supabase
+          .from('cost_logs')
+          .update({
+            total_cost: Number.isFinite(costUsd) ? costUsd : 0,
+            cost_status: 'settled',
+          })
+          .eq('idempotency_key', job.execution_id);
+
+        await supabase
+          .schema('prismatix_internal')
+          .from('reconciliation_jobs')
+          .update({
+            status: 'done',
+            attempts,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id);
+        summary.processed++;
+      } else if (job.kind === 'budget_breached') {
+        // Audit acknowledgment: record audited and marked done
+        await supabase
+          .schema('prismatix_internal')
+          .from('reconciliation_jobs')
+          .update({
+            status: 'done',
+            attempts,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id);
+        summary.processed++;
       } else if (job.kind === 'refund_lease') {
         // Acknowledge lease reconciliation
         await supabase

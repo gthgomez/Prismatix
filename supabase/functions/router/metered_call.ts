@@ -222,6 +222,15 @@ export async function runMeteredCall<T>(
   input: RunMeteredCallInput,
   dispatch: () => Promise<MeteredDispatchResult<T>>,
 ): Promise<T> {
+  const terminalStatuses = new Set(['completed', 'cancelled', 'failed', 'indeterminate']);
+  if (input.execution?.status && terminalStatuses.has(input.execution.status)) {
+    throw new MeteredCallAccountingError(
+      input.execution.id,
+      'execution_already_finalized',
+      `Cannot dispatch metered call for finalized execution (${input.execution.status})`,
+    );
+  }
+
   const attemptNumber = input.attemptNumber ?? 1;
   const base: RecordModelCallInput = {
     execution_id: input.execution.id,
