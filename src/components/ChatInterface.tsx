@@ -753,6 +753,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           : {}),
         ...(item.debateProfile ? { debateProfile: item.debateProfile as any } : {}),
         ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
+        ...(item.debateExecutionMode ? { debateExecutionMode: item.debateExecutionMode } : {}),
       });
     }
     return mapped;
@@ -1121,6 +1122,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateProfile,
         debateTrigger,
         debateModel,
+        debateExecutionMode,
         debateCostNote,
         debateDegraded,
         debateDegradedReason,
@@ -1166,6 +1168,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateProfile,
         debateTrigger,
         debateModel,
+        debateExecutionMode,
         debateCostNote,
         debateDegraded,
         debateDegradedReason,

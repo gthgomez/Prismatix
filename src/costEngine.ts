@@ -1,5 +1,6 @@
 import type { RouterModel } from './types';
 import { getPricingForModel, PRICING_VERSION } from './pricingRegistry';
+import { resolvePeerChallengers } from './modelBenchmarks';
 
 const TOKENS_PER_MILLION = 1_000_000;
 
@@ -87,11 +88,9 @@ export function calculateDebatePreFlightCost(
   imageCount = 0,
 ): PreFlightCostResult {
   const proposerCost = calculatePreFlightCost(primaryModel, contextText, 0);
-  const challengerTiers: RouterModel[] = profile === 'code'
-    ? ['deepseek-v4-1-flash', 'deepseek-v4-pro']
-    : profile === 'video_ui'
+  const challengerTiers: RouterModel[] = profile === 'video_ui'
     ? ['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.8-flash']
-    : ['deepseek-v4-1-flash', 'gpt-6-luna'];
+    : (resolvePeerChallengers({ primaryModel, count: 2 }).challengers as RouterModel[]);
 
   let challengersEstimatedUsd = 0;
   let challengersPromptTokens = 0;

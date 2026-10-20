@@ -158,6 +158,14 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                           <span className='item-value'>{message.debateProfile}</span>
                         </div>
                       )}
+                      {message.debateExecutionMode && (
+                        <div className='metadata-item'>
+                          <span className='item-label'>Mode</span>
+                          <span className='item-value'>
+                            {message.debateExecutionMode === 'manual' ? 'Manual Peer Pairing' : 'Optimal Auto Pairing'}
+                          </span>
+                        </div>
+                      )}
                       {message.debateTrigger && (
                         <div className='metadata-item'>
                           <span className='item-label'>Trigger</span>
@@ -341,7 +349,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
             )}
 
             {message.role === 'assistant' && message.debateParticipants && message.debateParticipants.length > 0 && (
-              <DebateView participants={message.debateParticipants} />
+              <DebateView
+                participants={message.debateParticipants}
+                executionMode={message.debateExecutionMode}
+                profile={message.debateProfile}
+              />
             )}
 
             {isWaitingFirstToken && isStreamingAssistant && (

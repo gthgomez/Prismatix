@@ -4,6 +4,14 @@ import {
   computeDebateEligibility,
   buildDebateHeaders,
 } from '../../supabase/functions/router/debate_runtime.ts';
+import {
+  getDebatePlan,
+} from '../../supabase/functions/router/debate_profiles.ts';
+import {
+  getModelBenchmark,
+  getModelIntelligenceBand,
+  resolvePeerChallengers,
+} from '../../supabase/functions/_shared/model_benchmarks.ts';
 import { buildChallengerPrompt, buildSynthesisPrompt } from '../../supabase/functions/router/debate_prompts.ts';
 import { createExecutionOutputBudget } from '../../supabase/functions/router/admission.ts';
 import { createNormalizedProxyStream } from '../../supabase/functions/router/sse_normalizer.ts';
@@ -193,12 +201,12 @@ describe('Debate Mode Orchestration & End-to-End Safety', () => {
       const participants = [
         {
           role: 'proposer',
-          model: 'deepseek-v4-pro' as any,
+          model: 'deepseek-v4-pro',
           response: 'Initial draft',
         },
         {
           role: 'critic',
-          model: 'deepseek-v4-1-flash' as any,
+          model: 'deepseek-v4-1-flash',
           response: 'Critical feedback',
         },
       ];
@@ -206,7 +214,10 @@ describe('Debate Mode Orchestration & End-to-End Safety', () => {
       const proxyStream = createNormalizedProxyStream({
         upstreamBody,
         initialMeta: { debate_participants: participants },
-        extractDeltas: (p: any) => [p?.choices?.[0]?.delta?.content || ''],
+        extractDeltas: (payload: unknown) => {
+          const p = payload as { choices?: Array<{ delta?: { content?: string } }> } | null;
+          return [p?.choices?.[0]?.delta?.content || ''];
+        },
         onDelta: () => {},
         onComplete: async () => ({}),
       });
@@ -228,6 +239,106 @@ describe('Debate Mode Orchestration & End-to-End Safety', () => {
       // Followed by standard text deltas
       expect(fullOutput).toContain('Final ');
       expect(fullOutput).toContain('Answer');
+    });
+
+    it('emits X-Debate-Execution-Mode header for auto and manual debate modes', () => {
+      const autoHeaders = buildDebateHeaders({
+        debateActive: true,
+        debateProfile: 'general',
+        debateTrigger: 'explicit',
+        debateExecutionMode: 'auto',
+      });
+      expect(autoHeaders['X-Debate-Execution-Mode']).toBe('auto');
+
+      const manualHeaders = buildDebateHeaders({
+        debateActive: true,
+        debateProfile: 'code',
+        debateTrigger: 'explicit',
+        debateExecutionMode: 'manual',
+      });
+      expect(manualHeaders['X-Debate-Execution-Mode']).toBe('manual');
+    });
+  });
+
+  describe('Benchmark Intelligence Ranking & Peer Challenger Pairing', () => {
+    it('correctly categorizes models into standardized intelligence bands', () => {
+      expect(getModelIntelligenceBand('claude-opus-5-5')).toBe('frontier');
+      expect(getModelIntelligenceBand('gpt-6.1-sol')).toBe('frontier');
+      expect(getModelIntelligenceBand('claude-sonnet-5-5')).toBe('high');
+      expect(getModelIntelligenceBand('deepseek-v4-pro')).toBe('high');
+      expect(getModelIntelligenceBand('deepseek-v4-1-flash')).toBe('balanced');
+      expect(getModelIntelligenceBand('gpt-6-luna')).toBe('balanced');
+      expect(getModelIntelligenceBand('gemini-3.8-flash')).toBe('balanced');
+      expect(getModelIntelligenceBand('claude-haiku-4-5')).toBe('economy');
+    });
+
+    it('resolves diverse peer challengers from distinct provider families for DeepSeek Flash 4.1', () => {
+      const selection = resolvePeerChallengers({
+        primaryModel: 'deepseek-v4-1-flash',
+        count: 2,
+      });
+
+      expect(selection.primaryBand).toBe('balanced');
+      expect(selection.challengers.length).toBe(2);
+      // Primary is deepseek family; challengers must NOT be deepseek
+      for (const challenger of selection.challengers) {
+        expect(challenger).not.toBe('deepseek-v4-1-flash');
+        expect(challenger).not.toBe('deepseek-v4-flash');
+      }
+
+      // Challengers must come from two distinct provider families
+      const families = selection.challengers.map((c) => getModelBenchmark(c).family);
+      expect(new Set(families).size).toBe(2);
+    });
+
+    it('resolves peer challengers in the high-end reasoning band for Claude Sonnet 5.5', () => {
+      const selection = resolvePeerChallengers({
+        primaryModel: 'claude-sonnet-5-5',
+        count: 2,
+      });
+
+      expect(selection.primaryBand).toBe('high');
+      expect(selection.challengers.length).toBe(2);
+      // Primary is anthropic family; challengers must NOT be anthropic
+      for (const challenger of selection.challengers) {
+        expect(getModelBenchmark(challenger).family).not.toBe('anthropic');
+      }
+
+      const families = selection.challengers.map((c) => getModelBenchmark(c).family);
+      expect(new Set(families).size).toBe(2);
+    });
+
+    it('expands to nearest score neighbor if an intelligence band lacks sufficient distinct families', () => {
+      // Artificially filter isReady to simulate only OpenAI models available in balanced band
+      const selection = resolvePeerChallengers({
+        primaryModel: 'deepseek-v4-1-flash',
+        count: 2,
+        isReady: (tier) => {
+          const meta = getModelBenchmark(tier);
+          // Only OpenAI in balanced, but Anthropic in high/economy
+          if (meta.intelligenceBand === 'balanced') return meta.family === 'openai';
+          return meta.family === 'anthropic' || meta.family === 'openai';
+        },
+      });
+
+      expect(selection.challengers.length).toBe(2);
+      const families = selection.challengers.map((c) => getModelBenchmark(c).family);
+      expect(new Set(families).size).toBe(2);
+    });
+
+    it('builds debate plan matched to primary model benchmark band and assigns distinct roles', () => {
+      const codePlan = getDebatePlan('code', 'deepseek-v4-1-flash', 2);
+      expect(codePlan.primaryBand).toBe('balanced');
+      expect(codePlan.challengers.length).toBe(2);
+      expect(codePlan.challengers[0]!.role).toBe('critic');
+      expect(codePlan.challengers[1]!.role).toBe('implementer');
+      expect(codePlan.challengers[0]!.modelTier).not.toBe('deepseek-v4-1-flash');
+      expect(codePlan.challengers[1]!.modelTier).not.toBe('deepseek-v4-1-flash');
+
+      const highCodePlan = getDebatePlan('code', 'claude-sonnet-5-5', 2);
+      expect(highCodePlan.primaryBand).toBe('high');
+      expect(highCodePlan.challengers[0]!.modelTier).not.toBe('claude-sonnet-5-5');
+      expect(highCodePlan.challengers[1]!.modelTier).not.toBe('claude-sonnet-5-5');
     });
   });
 });

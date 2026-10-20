@@ -8,6 +8,7 @@ import {
   type DebateProfile,
   type DebateTrigger,
 } from './debate_profiles.ts';
+import { resolvePeerChallengers } from '../_shared/model_benchmarks.ts';
 import type { Message, RouterModel } from './router_logic.ts';
 
 export function normalizeDebateProfile(input?: string): DebateProfile {
@@ -142,6 +143,7 @@ export function buildDebateHeaders(params: {
   debateProfile: DebateProfile;
   debateTrigger: DebateTrigger;
   debateModelTier?: string;
+  debateExecutionMode?: 'auto' | 'manual';
   costNote?: 'settled' | 'estimated' | 'pending_reconcile' | 'full' | 'partial';
   degraded?: boolean;
   degradedReason?: string;
@@ -150,6 +152,7 @@ export function buildDebateHeaders(params: {
     return {
       'X-Debate-Degraded': 'true',
       ...(params.degradedReason ? { 'X-Debate-Degraded-Reason': params.degradedReason } : {}),
+      ...(params.debateExecutionMode ? { 'X-Debate-Execution-Mode': params.debateExecutionMode } : {}),
     };
   }
   if (!params.debateActive) return {};
@@ -158,6 +161,7 @@ export function buildDebateHeaders(params: {
     'X-Debate-Profile': params.debateProfile,
     'X-Debate-Trigger': params.debateTrigger,
     ...(params.debateModelTier ? { 'X-Debate-Model': params.debateModelTier } : {}),
+    ...(params.debateExecutionMode ? { 'X-Debate-Execution-Mode': params.debateExecutionMode } : {}),
     'X-Debate-Cost-Note': params.costNote ?? 'settled',
   };
 }
@@ -168,17 +172,32 @@ export function serializeMessagesForCost(messages: Message[]): string {
 
 /**
  * Returns the ordered fallback sequence for a challenger.
- * Uses a role-aware cascade:
- *   - code critic role  → CODE_CRITIC_FALLBACKS
- *   - code implementer  → CODE_IMPLEMENTER_FALLBACKS
- *   - everything else   → GENERAL_CHALLENGER_FALLBACKS
+ * Uses a benchmark intelligence-aware cascade when primary model is known,
+ * or role-aware cascade fallbacks.
  * Assigned tier is tried first; remaining cascade models follow in cost order.
  */
 export function buildFallbackSequence(
   assignedTier: RouterModel,
   profile: DebateProfile = 'general',
   role = '',
+  primaryModel?: RouterModel,
 ): RouterModel[] {
+  if (profile === 'video_ui') {
+    return [assignedTier];
+  }
+
+  if (primaryModel) {
+    const peerSelection = resolvePeerChallengers({
+      primaryModel,
+      count: 2,
+    });
+    const candidateSequence = peerSelection.fallbackSequences[assignedTier];
+    if (candidateSequence && candidateSequence.length > 0) {
+      return [...new Set(candidateSequence)] as RouterModel[];
+    }
+  }
+
+  // Fallback to role-aware static cascades
   let cascade: RouterModel[];
   if (profile === 'code') {
     cascade = role === 'implementer' ? CODE_IMPLEMENTER_FALLBACKS : CODE_CRITIC_FALLBACKS;
