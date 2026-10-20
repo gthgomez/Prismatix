@@ -2,9 +2,12 @@
 
 import React, { useState } from 'react';
 import type { DebateParticipant } from '../types';
+import { getModelBenchmark } from '../modelBenchmarks';
 
 interface DebateViewProps {
   participants: DebateParticipant[];
+  executionMode?: 'auto' | 'manual';
+  profile?: string;
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -35,7 +38,7 @@ const ROLE_COLOR: Record<string, string> = {
 
 const TRUNCATE_LENGTH = 400;
 
-export const DebateView: React.FC<DebateViewProps> = ({ participants }) => {
+export const DebateView: React.FC<DebateViewProps> = ({ participants, executionMode, profile }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedPanels, setExpandedPanels] = useState<Record<number, boolean>>({});
 
@@ -70,6 +73,16 @@ export const DebateView: React.FC<DebateViewProps> = ({ participants }) => {
         <span className='debate-view-count'>
           {participants.length} participants
         </span>
+        {executionMode && (
+          <span className={`debate-view-mode-tag ${executionMode}`}>
+            {executionMode === 'manual' ? 'Manual Peer Pairing' : 'Optimal Auto Pairing'}
+          </span>
+        )}
+        {profile && (
+          <span className='debate-view-profile-tag'>
+            {profile}
+          </span>
+        )}
       </button>
 
       {isExpanded && (
@@ -82,6 +95,7 @@ export const DebateView: React.FC<DebateViewProps> = ({ participants }) => {
               : participant.response;
             const color = ROLE_COLOR[participant.role] ?? '#aaa';
             const label = ROLE_LABEL[participant.role] ?? participant.role;
+            const benchmark = getModelBenchmark(participant.model);
 
             return (
               <div
@@ -90,10 +104,20 @@ export const DebateView: React.FC<DebateViewProps> = ({ participants }) => {
                 style={{ '--panel-color': color } as React.CSSProperties}
               >
                 <div className='debate-panel-header'>
-                  <span className='debate-role-badge' style={{ background: color }}>
-                    {label}
-                  </span>
-                  <span className='debate-panel-model'>{participant.model}</span>
+                  <div className='debate-panel-role-group'>
+                    <span className='debate-role-badge' style={{ background: color }}>
+                      {label}
+                    </span>
+                    <span className='debate-panel-model'>{participant.model}</span>
+                  </div>
+                  {benchmark.benchmarkScore > 0 && (
+                    <span
+                      className='debate-benchmark-badge'
+                      title={`AI Benchmark Composite Score: ${benchmark.benchmarkScore} (${benchmark.intelligenceBand} tier)`}
+                    >
+                      AI Score: {benchmark.benchmarkScore}
+                    </span>
+                  )}
                 </div>
 
                 {participant.keyPoints && participant.keyPoints.length > 0 && (

@@ -32,6 +32,7 @@ export interface DebateResponseMetadata {
   debateProfile?: DebateProfile;
   debateTrigger?: string;
   debateModel?: string;
+  debateExecutionMode?: 'auto' | 'manual';
   debateCostNote?: string;
   debateDegraded?: boolean;
   debateDegradedReason?: string;
@@ -71,6 +72,7 @@ export interface RouterResponseBase {
   debateProfile?: DebateProfile;
   debateTrigger?: string;
   debateModel?: string;
+  debateExecutionMode?: 'auto' | 'manual';
   debateCostNote?: string;
   debateDegraded?: boolean;
   debateDegradedReason?: string;
@@ -542,6 +544,7 @@ export async function askPrismatix(
     const debateCostNoteHeader = response.headers.get('X-Debate-Cost-Note');
     const debateDegradedHeader = response.headers.get('X-Debate-Degraded');
     const debateDegradedReasonHeader = response.headers.get('X-Debate-Degraded-Reason');
+    const debateExecutionModeHeader = response.headers.get('X-Debate-Execution-Mode');
     const complexityScore = complexityHeader ? parseInt(complexityHeader, 10) : 50;
     const parsedCostEstimate = costEstimateHeader ? Number(costEstimateHeader) : Number.NaN;
     const costEstimateUsd = Number.isFinite(parsedCostEstimate) ? parsedCostEstimate : undefined;
@@ -559,6 +562,9 @@ export async function askPrismatix(
       debateProfile: normalizedDebateProfile,
       debateTrigger: debateTriggerHeader || undefined,
       debateModel: debateModelHeader || undefined,
+      debateExecutionMode: debateExecutionModeHeader === 'manual' || debateExecutionModeHeader === 'auto'
+        ? debateExecutionModeHeader
+        : undefined,
       debateCostNote: debateCostNoteHeader || undefined,
       debateDegraded: debateDegradedHeader === 'true' ? true : undefined,
       debateDegradedReason: debateDegradedReasonHeader || undefined,
@@ -576,6 +582,7 @@ export async function askPrismatix(
       debateProfile: debateMetadata.debateProfile,
       debateTrigger: debateMetadata.debateTrigger,
       debateModel: debateMetadata.debateModel,
+      debateExecutionMode: debateMetadata.debateExecutionMode,
       debateCostNote: debateMetadata.debateCostNote,
       complexity: complexityScore,
       rationale: rationaleHeader,
@@ -602,6 +609,7 @@ export async function askPrismatix(
       debateProfile: debateMetadata.debateProfile,
       debateTrigger: debateMetadata.debateTrigger,
       debateModel: debateMetadata.debateModel,
+      debateExecutionMode: debateMetadata.debateExecutionMode,
       debateCostNote: debateMetadata.debateCostNote,
       debateDegraded: debateMetadata.debateDegraded,
       debateDegradedReason: debateMetadata.debateDegradedReason,

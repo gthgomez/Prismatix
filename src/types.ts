@@ -146,6 +146,7 @@ export interface Message {
   debateProfile?: DebateProfile;
   debateTrigger?: string;
   debateModel?: string;
+  debateExecutionMode?: 'auto' | 'manual';
   debateCostNote?: string;
   debateDegraded?: boolean;
   debateDegradedReason?: string;

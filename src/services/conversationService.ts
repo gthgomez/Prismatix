@@ -53,6 +53,7 @@ export interface LoadedMessage {
   debateParticipants?: DebateParticipant[];
   debateProfile?: string;
   debateTrigger?: string;
+  debateExecutionMode?: 'auto' | 'manual';
 }
 
 export interface ConversationListCursor {
@@ -310,6 +311,9 @@ export async function loadConversation(
     const debateTrigger = typeof debateMeta?.trigger === 'string' ? debateMeta.trigger : undefined;
     const debateDegraded = typeof debateMeta?.degraded === 'boolean' ? debateMeta.degraded : undefined;
     const debateDegradedReason = typeof debateMeta?.degradedReason === 'string' ? debateMeta.degradedReason : undefined;
+    const debateExecutionMode = typeof debateMeta?.executionMode === 'string'
+      ? (debateMeta.executionMode as 'auto' | 'manual')
+      : undefined;
 
     let provenance: LoadedMessageProvenance | undefined;
     if (role === 'assistant') {
@@ -362,6 +366,7 @@ export async function loadConversation(
       ...(debateTrigger ? { debateTrigger } : {}),
       ...(debateDegraded !== undefined ? { debateDegraded } : {}),
       ...(debateDegradedReason ? { debateDegradedReason } : {}),
+      ...(debateExecutionMode ? { debateExecutionMode } : {}),
     };
   });
 

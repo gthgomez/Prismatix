@@ -420,7 +420,7 @@ function createSupabaseAndProviderRoutes(options?: RouteOptions) {
     }
 
     if (call.url.includes('opencode.ai')) {
-      if (options?.challengerFails && call.body.includes('skeptic')) {
+      if (options?.challengerFails && (call.body.includes('adversarial reviewer') || call.body.includes('skeptic'))) {
         return new Response('OpenCode challenger upstream error', { status: 500 });
       }
       if (call.url.includes('/responses')) {

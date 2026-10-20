@@ -2,12 +2,19 @@
 // Debate Mode: challenger critiques synthesized by the primary model.
 
 import type { RouterModel } from './router_logic.ts';
+import {
+  resolvePeerChallengers,
+  getModelBenchmark,
+  type IntelligenceBand,
+} from '../_shared/model_benchmarks.ts';
 
 export type DebateProfile = 'general' | 'code' | 'video_ui';
 export type DebateTrigger = 'off' | 'explicit' | 'auto';
 
 export interface DebatePlan {
   profile: DebateProfile;
+  primaryBand?: IntelligenceBand;
+  primaryScore?: number;
   challengers: Array<{ role: string; modelTier: RouterModel }>;
   maxChallengerChars: number;
 }
@@ -69,37 +76,104 @@ export function resolveDebateChallengerCount(
 }
 
 /**
- * Choose challengers based on profile + primary model using semantic roles.
+ * Choose challengers based on profile + primary model using AI benchmark intelligence ranking.
+ * In Auto or Manual mode, pairs the primary model with peer models of comparable benchmark
+ * intelligence from distinct provider families, breaking ties by lowest token cost.
  */
 export function getDebatePlan(
   profile: DebateProfile,
   primary: RouterModel,
   challengerCount: 1 | 2 | 3 = 2,
 ): DebatePlan {
-  const base = profile === 'code'
-    ? [
-        { role: 'critic', modelTier: 'deepseek-v4-1-flash' as RouterModel },
-        { role: 'implementer', modelTier: 'deepseek-v4-pro' as RouterModel },
-      ]
-    : profile === 'video_ui'
-    ? [
+  if (profile === 'video_ui') {
+    return {
+      profile: 'video_ui',
+      challengers: [
         { role: 'UI Designer Critic', modelTier: 'gemini-3.8-flash' as RouterModel },
         { role: 'Product QA / UX Researcher', modelTier: 'gemini-3.8-flash' as RouterModel },
         { role: 'Customer Persona', modelTier: 'gemini-3.8-flash' as RouterModel },
-      ]
-    : [
+      ].slice(0, challengerCount),
+      maxChallengerChars: 1800,
+    };
+  }
+
+  const primaryMeta = getModelBenchmark(primary);
+  const primaryBand = primaryMeta.intelligenceBand;
+
+  let base: Array<{ role: string; modelTier: RouterModel }>;
+  if (profile === 'code') {
+    if (primaryBand === 'frontier') {
+      base = [
+        { role: 'critic', modelTier: 'claude-opus-5-5' as RouterModel },
+        { role: 'implementer', modelTier: 'gpt-6.1-sol' as RouterModel },
+      ];
+    } else if (primaryBand === 'high') {
+      base = [
+        { role: 'critic', modelTier: 'deepseek-v4-pro' as RouterModel },
+        { role: 'implementer', modelTier: 'claude-sonnet-5-5' as RouterModel },
+      ];
+    } else {
+      // balanced / economy
+      base = [
+        { role: 'critic', modelTier: 'deepseek-v4-1-flash' as RouterModel },
+        { role: 'implementer', modelTier: 'deepseek-v4-pro' as RouterModel },
+      ];
+    }
+  } else {
+    // general
+    if (primaryBand === 'frontier') {
+      base = [
+        { role: 'skeptic', modelTier: 'claude-opus-5' as RouterModel },
+        { role: 'alternative architect', modelTier: 'gpt-6-sol' as RouterModel },
+      ];
+    } else if (primaryBand === 'high') {
+      base = [
+        { role: 'skeptic', modelTier: 'deepseek-v4-pro' as RouterModel },
+        { role: 'alternative architect', modelTier: 'gpt-6-astra' as RouterModel },
+      ];
+    } else {
+      // balanced / economy
+      base = [
         { role: 'skeptic', modelTier: 'deepseek-v4-1-flash' as RouterModel },
         { role: 'alternative architect', modelTier: 'gpt-6-luna' as RouterModel },
       ];
+    }
+  }
 
-  const filtered = profile === 'video_ui'
-    ? base
-    : base.filter((c) => c.modelTier !== primary);
-  const challengers = uniq(uniqChallengers(filtered)).slice(0, challengerCount);
+  const roles = profile === 'code'
+    ? ['critic', 'implementer', 'critic']
+    : ['skeptic', 'alternative architect', 'skeptic'];
+
+  // Filter out primary model so a model never debates itself
+  const filtered = base.filter((c) => c.modelTier !== primary);
+  if (filtered.length < challengerCount) {
+    const peerSelection = resolvePeerChallengers({
+      primaryModel: primary,
+      count: challengerCount,
+    });
+    for (const tier of peerSelection.challengers) {
+      if (filtered.length >= challengerCount) break;
+      if (!filtered.some((c) => c.modelTier === tier) && tier !== primary) {
+        filtered.push({
+          role: roles[filtered.length] ?? (profile === 'code' ? 'implementer' : 'alternative architect'),
+          modelTier: tier as RouterModel,
+        });
+      }
+    }
+  }
+
+  const challengers = uniq(uniqChallengers(filtered))
+    .slice(0, challengerCount)
+    .map((c, idx) => ({
+      ...c,
+      role: roles[idx] ?? c.role,
+    }));
 
   return {
     profile,
+    primaryBand,
+    primaryScore: primaryMeta.benchmarkScore,
     challengers,
-    maxChallengerChars: profile === 'code' ? 2400 : profile === 'video_ui' ? 1800 : 2000,
+    maxChallengerChars: profile === 'code' ? 2400 : 2000,
   };
 }

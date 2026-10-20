@@ -210,7 +210,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers':
     'Content-Type, Authorization, x-client-info, apikey, x-client-request-id, x-request-id',
   'Access-Control-Expose-Headers':
-    'X-Prismatix-Protocol, X-Prismatix-Schema, X-Prismatix-Catalog, X-Prismatix-Tariff, X-Prismatix-Release, X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Cost-Note, X-Debate-Degraded, X-Debate-Degraded-Reason, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path, X-Prismatix-Execution-Id, Retry-After, X-Route-Decision',
+    'X-Prismatix-Protocol, X-Prismatix-Schema, X-Prismatix-Catalog, X-Prismatix-Tariff, X-Prismatix-Release, X-Router-Model, X-Router-Model-Id, X-Provider, X-Model-Override, X-Router-Rationale, X-Complexity-Score, X-Gemini-Thinking-Level, X-Memory-Hits, X-Memory-Tokens, X-Cost-Estimate-USD, X-Cost-Pricing-Version, X-Debate-Mode, X-Debate-Profile, X-Debate-Trigger, X-Debate-Model, X-Debate-Execution-Mode, X-Debate-Cost-Note, X-Debate-Degraded, X-Debate-Degraded-Reason, X-SMD-Mode, X-SMD-Issue-Count, X-SMD-High-Critical-Count, X-SMD-Unresolved-Risk-Count, X-SMD-Parse-Status, X-SMD-Fast-Path, X-Prismatix-Execution-Id, Retry-After, X-Route-Decision',
 };
 
 const FUNCTION_TIMEOUT_MS = 55000;
@@ -677,7 +677,7 @@ async function maybeRunDebateMode(params: {
   if (!isProviderReadyForModelTier(primaryTier, params.resolver)) return null;
   for (const c of plan.challengers) {
     const assignedTier = params.forcedModelTier || c.modelTier;
-    const sequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role);
+    const sequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role, primaryTier);
     if (!sequence.some((tier) => isProviderReadyForModelTier(tier, params.resolver))) return null;
   }
 
@@ -764,7 +764,7 @@ async function maybeRunDebateMode(params: {
       ];
 
       const assignedTier = params.forcedModelTier || c.modelTier;
-      const fallbackSequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role);
+      const fallbackSequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role, primaryTier);
       for (const workerTier of fallbackSequence) {
         if (workerController.signal.aborted) break;
         if (!isProviderReadyForModelTier(workerTier, params.resolver)) continue;
@@ -2599,7 +2599,7 @@ Deno.serve(async (req: Request) => {
       const draftTokens = proposerCost.projectedOutputTokens;
       for (const c of plan.challengers) {
         const assignedTier = forcedVideoUiTier || c.modelTier;
-        const candidateTiers = buildFallbackSequence(assignedTier, debateReq.profile, c.role);
+        const candidateTiers = buildFallbackSequence(assignedTier, debateReq.profile, c.role, decision.modelTier);
         let maxCandidateCostUsd = 0;
         let cTokens = 0;
         let cPromptTokens = 0;
@@ -3042,6 +3042,10 @@ Deno.serve(async (req: Request) => {
     let debateActive = false;
     let debateProfileEffective: DebateProfile = 'general';
     let debateTriggerEffective: DebateTrigger = 'off';
+    const isManualModelSelected = typeof manualModelOverride === 'string' &&
+      manualModelOverride.trim() !== '' &&
+      manualModelOverride.trim().toLowerCase() !== 'auto';
+    const debateExecutionMode: 'auto' | 'manual' = isManualModelSelected ? 'manual' : 'auto';
     let debateOverrideHeader = '';
     let debateSynthesisMessages: Message[] | null = null;
     let debateModelTierEffective = '';
@@ -3382,7 +3386,10 @@ Deno.serve(async (req: Request) => {
       upstreamBody: upstream.response.body,
       extractDeltas: upstream.extractDeltas,
       initialMeta: debateActive && debateParticipants.length > 0
-        ? { debate_participants: debateParticipants }
+        ? {
+            debate_participants: debateParticipants,
+            debate_execution_mode: debateExecutionMode,
+          }
         : undefined,
       onDelta: (delta) => {
         assistantText += delta;
@@ -3451,6 +3458,7 @@ Deno.serve(async (req: Request) => {
                         active: debateActive,
                         profile: debateProfileEffective,
                         trigger: debateTriggerEffective,
+                        executionMode: debateExecutionMode,
                         participants: debateParticipants,
                         modelTier: debateModelTierEffective,
                         degraded: debateReq.requested && !debateActive,
@@ -3679,6 +3687,7 @@ Deno.serve(async (req: Request) => {
           debateProfile: debateProfileEffective,
           debateTrigger: debateTriggerEffective,
           ...(debateModelTierEffective ? { debateModelTier: debateModelTierEffective } : {}),
+          debateExecutionMode: debateActive ? debateExecutionMode : undefined,
           costNote: 'estimated',
           degraded: debateReq.requested && !debateActive,
           degradedReason: debateDegradedReason,
