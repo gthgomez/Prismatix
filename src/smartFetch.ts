@@ -23,9 +23,8 @@ const QUERY_SAFETY_MARGIN = 2000;
 const MAX_CLIENT_QUERY_LENGTH = MAX_ROUTER_QUERY_LENGTH - QUERY_SAFETY_MARGIN;
 
 export interface DebateRequestOptions {
-  mode?: 'debate';
+  mode?: 'debate' | 'off';
   debateProfile?: DebateProfile;
-  debateContrarianInstructions?: string;
 }
 
 export interface DebateResponseMetadata {
@@ -34,6 +33,8 @@ export interface DebateResponseMetadata {
   debateTrigger?: string;
   debateModel?: string;
   debateCostNote?: string;
+  debateDegraded?: boolean;
+  debateDegradedReason?: string;
 }
 
 interface RouterRequestPayload {
@@ -50,9 +51,8 @@ interface RouterRequestPayload {
   attachmentRefs?: AttachmentRef[];
   modelOverride?: RouterModel;
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
-  mode?: 'debate';
+  mode?: 'debate' | 'off';
   debateProfile?: DebateProfile;
-  debateContrarianInstructions?: string;
 }
 
 export interface RouterResponseBase {
@@ -72,6 +72,8 @@ export interface RouterResponseBase {
   debateTrigger?: string;
   debateModel?: string;
   debateCostNote?: string;
+  debateDegraded?: boolean;
+  debateDegradedReason?: string;
   debateParticipants?: DebateParticipant[];
   /** PX06: server-issued execution identity (correlates the terminal receipt). */
   executionId?: string;
@@ -403,12 +405,12 @@ export async function askPrismatix(
       devLog('[smartFetch] Manual model override:', modelOverride);
     }
 
-    if (debateOptions?.mode === 'debate' && debateOptions.debateProfile) {
+    if (debateOptions?.mode === 'off') {
+      payload.mode = 'off';
+      payload.debateProfile = 'off';
+    } else if (debateOptions?.mode === 'debate' && debateOptions.debateProfile) {
       payload.mode = 'debate';
       payload.debateProfile = debateOptions.debateProfile;
-      if (debateOptions.debateContrarianInstructions) {
-        payload.debateContrarianInstructions = debateOptions.debateContrarianInstructions;
-      }
     }
 
     devLog('[smartFetch] Request:', {
@@ -538,6 +540,8 @@ export async function askPrismatix(
     const debateTriggerHeader = response.headers.get('X-Debate-Trigger');
     const debateModelHeader = response.headers.get('X-Debate-Model');
     const debateCostNoteHeader = response.headers.get('X-Debate-Cost-Note');
+    const debateDegradedHeader = response.headers.get('X-Debate-Degraded');
+    const debateDegradedReasonHeader = response.headers.get('X-Debate-Degraded-Reason');
     const complexityScore = complexityHeader ? parseInt(complexityHeader, 10) : 50;
     const parsedCostEstimate = costEstimateHeader ? Number(costEstimateHeader) : Number.NaN;
     const costEstimateUsd = Number.isFinite(parsedCostEstimate) ? parsedCostEstimate : undefined;
@@ -556,6 +560,8 @@ export async function askPrismatix(
       debateTrigger: debateTriggerHeader || undefined,
       debateModel: debateModelHeader || undefined,
       debateCostNote: debateCostNoteHeader || undefined,
+      debateDegraded: debateDegradedHeader === 'true' ? true : undefined,
+      debateDegradedReason: debateDegradedReasonHeader || undefined,
     };
 
     devLog('[smartFetch] Response:', {
@@ -597,6 +603,8 @@ export async function askPrismatix(
       debateTrigger: debateMetadata.debateTrigger,
       debateModel: debateMetadata.debateModel,
       debateCostNote: debateMetadata.debateCostNote,
+      debateDegraded: debateMetadata.debateDegraded,
+      debateDegradedReason: debateMetadata.debateDegradedReason,
       executionId,
       clientRequestId,
       memoryHits,

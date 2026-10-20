@@ -32,5 +32,16 @@ jobs:
       - name: Run tests
         run: npm run test
 
+      - name: Build
+        run: npm run build
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Deno check Edge Functions router
+        run: deno check --config supabase/functions/deno.json supabase/functions/router/index.ts
+
       - name: Stale-model coupling budget
         run: node scripts/audit-stale-models.mjs --check

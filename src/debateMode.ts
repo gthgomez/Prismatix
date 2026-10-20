@@ -1,10 +1,11 @@
 import type { DebateProfile, DebateRole, FileUploadPayload, Message } from './types';
 
 export type { DebateParticipant } from './types';
-export type DebateSelection = 'off' | DebateProfile;
+export type DebateSelection = 'off' | 'auto' | DebateProfile;
 
 export const DEBATE_SELECTIONS: Array<{ value: DebateSelection; label: string }> = [
   { value: 'off', label: 'Debate Off' },
+  { value: 'auto', label: 'Auto (High Complexity)' },
   { value: 'general', label: 'General' },
   { value: 'code', label: 'Code' },
   { value: 'video_ui', label: 'Video UI' },
@@ -16,14 +17,16 @@ export function hasReadyVideoAttachment(attachments: FileUploadPayload[]): boole
 
 export function getDebatePayload(
   selection: DebateSelection,
-): { mode?: 'debate'; debateProfile?: DebateProfile; debateContrarianInstructions?: string } {
+): { mode?: 'debate' | 'off'; debateProfile?: DebateProfile | 'off' } {
   if (selection === 'off') {
+    return { mode: 'off', debateProfile: 'off' };
+  }
+  if (selection === 'auto') {
     return {};
   }
   return {
     mode: 'debate',
     debateProfile: selection,
-    debateContrarianInstructions: getDebateRoleInstructions(selection, 'contrarian'),
   };
 }
 
@@ -64,6 +67,8 @@ export function getDebateRoleInstructions(profile: DebateProfile, role: DebateRo
         'and any assumptions about user intent that are not supported by the content. ' +
         'Be specific about what a real user would struggle with.'
       );
+    default:
+      return 'Provide your best, well-reasoned critique of the proposal.';
   }
 }
 
@@ -73,6 +78,7 @@ export function shouldShowDebateBadges(msg: Message): boolean {
     msg.debateProfile ||
     msg.debateTrigger ||
     msg.debateModel ||
-    msg.debateCostNote,
+    msg.debateCostNote ||
+    msg.debateDegraded,
   );
 }

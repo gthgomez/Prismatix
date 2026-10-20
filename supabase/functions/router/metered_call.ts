@@ -82,6 +82,7 @@ export interface RunMeteredCallInput {
   // call itself (from a teed usage stream) after the response body is consumed.
   // The pre-dispatch row is still written first, so the call is never unmetered.
   deferSettlement?: boolean;
+  isFinalized?: () => boolean;
 }
 
 // Per-dispatch metering context threaded from a request handler into every
@@ -98,6 +99,9 @@ export interface MeteredCallContext {
   // PX05: shared per-execution output budget. Every dispatch clamps its output
   // cap through this so the SUM of stage maxima cannot exceed the reservation.
   outputBudget?: ExecutionOutputBudget;
+  // Execution-wide usage promise accumulator to track all dispatched streaming calls
+  usagePromises?: Promise<unknown>[];
+  isFinalized?: () => boolean;
 }
 
 export type MeteredCallFactory = (
@@ -220,6 +224,18 @@ export async function runMeteredCall<T>(
   input: RunMeteredCallInput,
   dispatch: () => Promise<MeteredDispatchResult<T>>,
 ): Promise<T> {
+  const terminalStatuses = new Set(['completed', 'cancelled', 'failed', 'indeterminate']);
+  if (
+    (input.execution?.status && terminalStatuses.has(input.execution.status)) ||
+    (input.isFinalized && input.isFinalized())
+  ) {
+    throw new MeteredCallAccountingError(
+      input.execution.id,
+      'execution_already_finalized',
+      `Cannot dispatch metered call for finalized execution (${input.execution?.status ?? 'finalized'})`,
+    );
+  }
+
   const attemptNumber = input.attemptNumber ?? 1;
   const base: RecordModelCallInput = {
     execution_id: input.execution.id,

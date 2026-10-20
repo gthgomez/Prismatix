@@ -144,6 +144,14 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                   {message.role === 'assistant' && shouldShowDebateBadges(message) && (
                     <div className='metadata-debate-details'>
                       <div className='metadata-divider' />
+                      {message.debateDegraded && (
+                        <div className='metadata-item'>
+                          <span className='item-label'>Degraded</span>
+                          <span className='item-value' style={{ color: 'var(--color-warning, #f59e0b)' }}>
+                            {message.debateDegradedReason ? `Yes (${message.debateDegradedReason})` : 'Yes'}
+                          </span>
+                        </div>
+                      )}
                       {message.debateProfile && (
                         <div className='metadata-item'>
                           <span className='item-label'>Debate</span>
@@ -153,7 +161,9 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                       {message.debateTrigger && (
                         <div className='metadata-item'>
                           <span className='item-label'>Trigger</span>
-                          <span className='item-value'>{message.debateTrigger}</span>
+                          <span className='item-value'>
+                            {message.debateTrigger === 'auto' ? 'Auto (Complexity)' : message.debateTrigger}
+                          </span>
                         </div>
                       )}
                       {message.debateModel && (
@@ -304,6 +314,31 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 showCursor={isStreamingAssistant}
               />
             </div>
+
+            {message.role === 'assistant' && message.debateDegraded && (
+              <div
+                className='debate-degraded-banner'
+                role='status'
+                aria-live='polite'
+                style={{
+                  margin: '0.5rem 0',
+                  padding: '0.35rem 0.6rem',
+                  borderRadius: '4px',
+                  background: 'rgba(245, 158, 11, 0.1)',
+                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                  color: '#f59e0b',
+                  fontSize: '0.8rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                }}
+              >
+                <span aria-hidden='true'>⚠️</span>
+                <span>
+                  Debate mode degraded to standard response{message.debateDegradedReason ? `: ${message.debateDegradedReason}` : ''}.
+                </span>
+              </div>
+            )}
 
             {message.role === 'assistant' && message.debateParticipants && message.debateParticipants.length > 0 && (
               <DebateView participants={message.debateParticipants} />

@@ -495,7 +495,12 @@ export function deriveOutputTokenCap(
  */
 export interface ExecutionOutputBudget {
   remainingUsd(): number;
-  clampTokenCap(requestedTokens: number, outputRatePer1M: number): number;
+  clampTokenCap(
+    requestedTokens: number,
+    outputRatePer1M: number,
+    promptTokens?: number,
+    inputRatePer1M?: number,
+  ): number;
 }
 
 export function createExecutionOutputBudget(admittedBudgetUsd: number): ExecutionOutputBudget {
@@ -506,11 +511,36 @@ export function createExecutionOutputBudget(admittedBudgetUsd: number): Executio
     remainingUsd(): number {
       return remaining;
     },
-    clampTokenCap(requestedTokens: number, outputRatePer1M: number): number {
+    clampTokenCap(
+      requestedTokens: number,
+      outputRatePer1M: number,
+      promptTokens: number = 0,
+      inputRatePer1M: number = 0,
+    ): number {
       if (!Number.isFinite(requestedTokens) || requestedTokens <= 0) return requestedTokens;
-      if (!Number.isFinite(outputRatePer1M) || outputRatePer1M <= 0) return requestedTokens;
-      const granted = Math.max(0, Math.min(requestedTokens, deriveOutputTokenCap(remaining, outputRatePer1M, requestedTokens)));
-      remaining = Math.max(0, remaining - (granted / TOKENS_PER_MILLION) * outputRatePer1M);
+
+      const inputCost =
+        Number.isFinite(promptTokens) && promptTokens > 0 &&
+        Number.isFinite(inputRatePer1M) && inputRatePer1M > 0
+          ? (promptTokens / TOKENS_PER_MILLION) * inputRatePer1M
+          : 0;
+
+      // If the remaining budget cannot even cover the input tokens for this stage,
+      // 0 tokens are affordable and the dispatch must be blocked.
+      if (remaining <= inputCost) {
+        remaining = 0;
+        return 0;
+      }
+
+      const availableForOutput = remaining - inputCost;
+      if (!Number.isFinite(outputRatePer1M) || outputRatePer1M <= 0) {
+        remaining = Math.max(0, availableForOutput);
+        return requestedTokens;
+      }
+
+      const granted = Math.max(0, Math.min(requestedTokens, deriveOutputTokenCap(availableForOutput, outputRatePer1M, requestedTokens)));
+      const grantedCost = inputCost + (granted / TOKENS_PER_MILLION) * outputRatePer1M;
+      remaining = Math.max(0, remaining - grantedCost);
       return granted;
     },
   };

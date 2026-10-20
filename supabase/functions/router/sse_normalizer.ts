@@ -39,6 +39,8 @@ export interface NormalizedProxyStreamParams {
   onError?: (err: unknown) => void | Promise<void>;
   /** Heartbeat interval while waiting on upstream. Defaults to 15s. */
   heartbeatMs?: number;
+  /** Optional metadata event emitted at the start of the stream (e.g. debate participants). */
+  initialMeta?: Record<string, unknown>;
 }
 
 export function createNormalizedProxyStream(
@@ -163,6 +165,14 @@ export function createNormalizedProxyStream(
     start(ctrl) {
       controller = ctrl;
       reader = params.upstreamBody.getReader();
+
+      if (params.initialMeta) {
+        safeEnqueue(
+          encodeSseEvent({
+            data: JSON.stringify({ type: 'meta', ...params.initialMeta }),
+          }),
+        );
+      }
 
       if (heartbeatMs > 0 && Number.isFinite(heartbeatMs)) {
         heartbeatId = setInterval(() => {

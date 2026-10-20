@@ -94,6 +94,7 @@ import type { AttachmentRef } from '../../supabase/functions/_shared/conversatio
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import { readRouterStream } from '../hooks/useStreamHandler';
 import {
+  calculateDebatePreFlightCost,
   calculateFinalCost,
   calculatePreFlightCost,
   estimateTokenCount,
@@ -747,6 +748,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               },
             }
           : {}),
+        ...(item.debateParticipants && item.debateParticipants.length > 0
+          ? { debateParticipants: item.debateParticipants, debateActive: true }
+          : {}),
+        ...(item.debateProfile ? { debateProfile: item.debateProfile as any } : {}),
+        ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
       });
     }
     return mapped;
@@ -926,11 +932,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return `${msg.role}: ${content}`;
     }).join('\n');
     const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
-    const preflight = calculatePreFlightCost(
-      estimatedModel,
-      `${historyText}\nuser: ${queryText}`,
-      imageCount,
-    );
+    const isDebate = debateSelection !== 'off' && debateSelection !== 'auto';
+    const preflight = isDebate
+      ? calculateDebatePreFlightCost(
+          debateSelection,
+          estimatedModel,
+          `${historyText}\nuser: ${queryText}`,
+          imageCount,
+        )
+      : calculatePreFlightCost(
+          estimatedModel,
+          `${historyText}\nuser: ${queryText}`,
+          imageCount,
+        );
     const promptTokenEstimate = passedPromptTokenEstimate ?? preflight.promptTokens;
 
     if (!skipBudgetCheck) {
@@ -1007,6 +1021,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     abortControllerRef.current = abortController;
     executionIdRef.current = undefined;
     setStreamOutcome(null);
+
+    const restoreComposerSafely = () => {
+      if (queryText) {
+        setInput((current) => {
+          // Only restore if user hasn't typed a newer distinct draft
+          if (!current.trim() || current === queryText) {
+            return queryText;
+          }
+          return current;
+        });
+      }
+      if (attachmentsToProcess.length > 0) {
+        setDraftAttachments((current) => {
+          // Only restore if user hasn't added new draft attachments
+          if (current.length === 0) {
+            return attachmentsToProcess;
+          }
+          return current;
+        });
+      }
+    };
 
     try {
       // PX07: upload every draft image, preserving its ORIGINAL ordinal. A
@@ -1087,6 +1122,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateTrigger,
         debateModel,
         debateCostNote,
+        debateDegraded,
+        debateDegradedReason,
         executionId,
         clientRequestId,
       } = result;
@@ -1130,6 +1167,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateTrigger,
         debateModel,
         debateCostNote,
+        debateDegraded,
+        debateDegradedReason,
         thinkingLog: [],
         cost: costEstimateUsd !== undefined
           ? {
@@ -1191,6 +1230,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       // PX06: an abort mid-stream makes readRouterStream resolve with the
       // partial content; surface the cancellation instead of a completion.
       if (abortController.signal.aborted || terminationStatus === 'cancelled') {
+        if (!assistantContent || waitingFirstTokenRef.current) {
+          restoreComposerSafely();
+        }
         setStreamOutcome({ status: 'cancelled', executionId });
         scheduleCostEstimatorHide(1500);
         return;
@@ -1205,6 +1247,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
       // Handle premature stream termination without terminal receipt/[DONE]
       if (terminationStatus === 'interrupted' || terminationStatus === 'error') {
+        if (!assistantContent || waitingFirstTokenRef.current) {
+          restoreComposerSafely();
+        }
         const errorMsg =
           terminationStatus === 'interrupted'
             ? 'Connection closed prematurely before the response completed.'
@@ -1346,6 +1391,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       if (error instanceof DuplicateRequestError) {
         // PX07: the same logical send already created an execution. Load/show
         // the existing turn; never auto-dispatch a new paid request.
+        restoreComposerSafely();
         setDuplicateNotice(
           error.executionId
             ? `This request was already recorded (execution ${error.executionId.slice(0, 8)}).`
@@ -1358,6 +1404,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       } else if (abortController.signal.aborted) {
         // PX06: a user Stop is a cancellation, not an error. Surface it and the
         // execution identity (the server finalizes the execution `cancelled`).
+        if (waitingFirstTokenRef.current) {
+          restoreComposerSafely();
+        }
         setStreamOutcome({ status: 'cancelled', executionId: executionIdRef.current });
         scheduleCostEstimatorHide(1500);
       } else {
@@ -1374,6 +1423,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           timestamp: Date.now(),
         }]);
         scheduleCostEstimatorHide(1500);
+
+        // Priority F1: Restore user prompt and attachments safely if failure occurred before first token was delivered
+        if (waitingFirstTokenRef.current) {
+          restoreComposerSafely();
+        }
       }
     } finally {
       abortControllerRef.current = null;
@@ -1435,11 +1489,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return `${msg.role}: ${content}`;
     }).join('\n');
     const imageCount = draftAttachments.filter((file) => file.isImage).length;
-    const preflight = calculatePreFlightCost(
-      estimatedModel,
-      `${historyText}\nuser: ${queryText}`,
-      imageCount,
-    );
+    const isDebate = debateSelection !== 'off' && debateSelection !== 'auto';
+    const preflight = isDebate
+      ? calculateDebatePreFlightCost(
+          debateSelection,
+          estimatedModel,
+          `${historyText}\nuser: ${queryText}`,
+          imageCount,
+        )
+      : calculatePreFlightCost(
+          estimatedModel,
+          `${historyText}\nuser: ${queryText}`,
+          imageCount,
+        );
     const promptTokenEstimate = preflight.promptTokens;
 
     if (!skipBudgetCheck) {
@@ -1547,11 +1609,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return `${msg.role}: ${content}`;
     }).join('\n');
     const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
-    const preflight = calculatePreFlightCost(
-      targetModel,
-      `${historyText}\nuser: ${userPrompt}`,
-      imageCount,
-    );
+    const isDebate = debateSelection !== 'off' && debateSelection !== 'auto';
+    const preflight = isDebate
+      ? calculateDebatePreFlightCost(
+          debateSelection,
+          targetModel,
+          `${historyText}\nuser: ${userPrompt}`,
+          imageCount,
+        )
+      : calculatePreFlightCost(
+          targetModel,
+          `${historyText}\nuser: ${userPrompt}`,
+          imageCount,
+        );
 
     const dailyTotalUsd = await fetchServerDailyTotal();
     const budgetDecision = evaluateBudget({
@@ -1595,7 +1665,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     }
 
     executeRegenerateAction();
-  }, [resetAutoScroll]);
+  }, [resetAutoScroll, debateSelection]);
 
   const handleEditPrompt = useCallback(async (index: number, newPrompt: string) => {
     if (isStreamingRef.current) return;
@@ -1620,11 +1690,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return `${msg.role}: ${content}`;
     }).join('\n');
     const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
-    const preflight = calculatePreFlightCost(
-      targetModel,
-      `${historyText}\nuser: ${newPrompt}`,
-      imageCount,
-    );
+    const isDebate = debateSelection !== 'off' && debateSelection !== 'auto';
+    const preflight = isDebate
+      ? calculateDebatePreFlightCost(
+          debateSelection,
+          targetModel,
+          `${historyText}\nuser: ${newPrompt}`,
+          imageCount,
+        )
+      : calculatePreFlightCost(
+          targetModel,
+          `${historyText}\nuser: ${newPrompt}`,
+          imageCount,
+        );
 
     const dailyTotalUsd = await fetchServerDailyTotal();
     const budgetDecision = evaluateBudget({
@@ -1668,7 +1746,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     }
 
     executeEditAction();
-  }, [resetAutoScroll]);
+  }, [resetAutoScroll, debateSelection]);
 
   const handleFeedback = useCallback((index: number, type: 'up' | 'down') => {
     setMessages((prev) => {
@@ -1976,7 +2054,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   )}
                 </span>
                 {manualModelOverride && <span className='manual-badge'>Manual</span>}
-                {debateSelection !== 'off' && <span className='debate-badge'>Debate</span>}
+                {debateSelection !== 'off' && (
+                  <span className='debate-badge'>
+                    {debateSelection === 'auto' ? 'Debate (Auto)' : 'Debate'}
+                  </span>
+                )}
                 <svg
                   className={`dropdown-chevron ${showModelSelector ? 'open' : ''}`}
                   width='12'

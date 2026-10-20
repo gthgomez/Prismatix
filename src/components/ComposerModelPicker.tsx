@@ -446,7 +446,9 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
           </span>
 
           {debateSelection && debateSelection !== 'off' && (
-            <span className='composer-pill-badge debate'>Debate</span>
+            <span className='composer-pill-badge debate'>
+              {debateSelection === 'auto' ? 'Debate (Auto)' : 'Debate'}
+            </span>
           )}
 
           <span className={`composer-pill-chevron ${isOpen ? 'is-open' : ''}`} aria-hidden='true'>
