@@ -3,13 +3,11 @@ import {
   parseDebateRequest,
   computeDebateEligibility,
   buildDebateHeaders,
-  buildFallbackSequence,
 } from '../../supabase/functions/router/debate_runtime.ts';
 import {
   getDebatePlan,
 } from '../../supabase/functions/router/debate_profiles.ts';
 import {
-  MODEL_BENCHMARKS,
   getModelBenchmark,
   getModelIntelligenceBand,
   resolvePeerChallengers,
@@ -203,12 +201,12 @@ describe('Debate Mode Orchestration & End-to-End Safety', () => {
       const participants = [
         {
           role: 'proposer',
-          model: 'deepseek-v4-pro' as any,
+          model: 'deepseek-v4-pro',
           response: 'Initial draft',
         },
         {
           role: 'critic',
-          model: 'deepseek-v4-1-flash' as any,
+          model: 'deepseek-v4-1-flash',
           response: 'Critical feedback',
         },
       ];
@@ -216,7 +214,10 @@ describe('Debate Mode Orchestration & End-to-End Safety', () => {
       const proxyStream = createNormalizedProxyStream({
         upstreamBody,
         initialMeta: { debate_participants: participants },
-        extractDeltas: (p: any) => [p?.choices?.[0]?.delta?.content || ''],
+        extractDeltas: (payload: unknown) => {
+          const p = payload as { choices?: Array<{ delta?: { content?: string } }> } | null;
+          return [p?.choices?.[0]?.delta?.content || ''];
+        },
         onDelta: () => {},
         onComplete: async () => ({}),
       });
