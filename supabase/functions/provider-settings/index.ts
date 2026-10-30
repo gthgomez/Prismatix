@@ -99,8 +99,9 @@ function jsonResponse(body: unknown, status: number): Response {
 }
 
 /**
- * Resolves per-provider plug-in state for the client. OpenCode is always
- * offered; every other provider is on only when its row is enabled.
+ * Resolves per-provider plug-in state for the client. Providers are enabled
+ * only when selected in the user's config; OpenCode is disabled in BYOK-only
+ * mode because it has no per-user BYOK key path.
  */
 export function buildProviderStates(
   config: RawUserConfig | null,

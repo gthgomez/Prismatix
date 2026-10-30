@@ -2181,7 +2181,7 @@ Deno.serve(async (req: Request) => {
 
     // PX12 provider plug-ins: build the per-request resolver from the user's
     // stored provider state. Strict per-user enablement; a lookup failure leaves
-    // the config empty, which resolves to opencode-only (fail closed).
+    // the config empty, which leaves no provider key eligible for dispatch.
     let userProviderConfig: { default_provider?: unknown; providers?: unknown } | null = null;
     let providerConfigUnavailable = false;
     try {
