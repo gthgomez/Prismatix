@@ -13,6 +13,7 @@
 //     reports `transcript.saved = false` on the terminal receipt.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { projectReceipt } from '../../supabase/functions/_shared/execution_receipt.ts';
+import { FAKE_BYOK_CIPHERTEXT, TEST_BYOK_ENCRYPTION_KEY } from '../helpers/byok-fixtures';
 
 const ROUTER_ENTRY = ['../../supabase/functions/router/index.ts'].join('');
 const SUPABASE_URL = 'http://127.0.0.1:54321';
@@ -35,6 +36,7 @@ const BASE_ROUTER_ENV: Record<string, string> = {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
   ANTHROPIC_API_KEY: ANTHROPIC_KEY,
+  BYOK_ENCRYPTION_KEY: TEST_BYOK_ENCRYPTION_KEY,
 };
 
 const PROVIDER_HOSTS = [
@@ -202,8 +204,9 @@ function makeRoutes(
     }
     if (call.url.includes('/rest/v1/rpc/get_access_grant')) return jsonResponse(grantRow());
     if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-      return jsonResponse({ default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] });
+      return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] });
     }
+    if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) return jsonResponse(FAKE_BYOK_CIPHERTEXT);
     if (call.url.includes('/rest/v1/conversations')) {
       return jsonResponse({ user_id: SUBJECT, total_tokens: 0 });
     }

@@ -45,6 +45,8 @@ import { dispatchOpenCodeStream } from './opencode_adapters.ts';
 import { resolveProductionRoute } from './production_routing.ts';
 import {
   createProviderResolver,
+  ProviderCredentialError,
+  ProviderKeyUnavailableError,
   type ProviderResolver,
 } from './provider_resolver.ts';
 import { decryptKey } from '../_shared/byok_crypto.ts';
@@ -218,15 +220,8 @@ const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const VIDEO_CONTEXT_MAX_CHARS = 5000;
 const DEV_MODE = Deno.env.get('DEV_MODE') === 'true';
 
-const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
-const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY') || '';
-const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY') || '';
-const NVIDIA_API_KEY = Deno.env.get('NVIDIA_API_KEY') || '';
-const DEEPINFRA_API_KEY = Deno.env.get('DEEPINFRA_API_KEY') || '';
-const OPENCODE_API_KEY = Deno.env.get('OPENCODE_API_KEY') || '';
 const OPENCODE_BASE_URL = Deno.env.get('OPENCODE_BASE_URL') || 'https://opencode.ai/zen/v1';
 configureOpenCodePricing(OPENCODE_BASE_URL);
-const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') || '';
 const OPENROUTER_BASE_URL = Deno.env.get('OPENROUTER_BASE_URL') || 'https://openrouter.ai/api/v1';
 
 function envFlag(name: string, defaultValue: boolean): boolean {
@@ -310,25 +305,6 @@ const activeStreamsByUser = new Map<string, number>();
 // ============================================================================
 // PROVIDER HELPERS
 // ============================================================================
-
-function serverProviderKey(provider: Provider): string | undefined {
-  switch (provider) {
-    case 'opencode':
-      return OPENCODE_API_KEY || undefined;
-    case 'openrouter':
-      return OPENROUTER_API_KEY || undefined;
-    case 'anthropic':
-      return ANTHROPIC_API_KEY || undefined;
-    case 'openai':
-      return OPENAI_API_KEY || undefined;
-    case 'google':
-      return GOOGLE_API_KEY || undefined;
-    case 'nvidia':
-      return NVIDIA_API_KEY || undefined;
-    case 'deepinfra':
-      return DEEPINFRA_API_KEY || undefined;
-  }
-}
 
 /** Operator kill-switch for a provider (the ENABLE_* env flags). */
 function globalProviderEnabled(provider: Provider): boolean {
@@ -1367,9 +1343,8 @@ export async function callProviderStream(
     resolver.isReady('openrouter'),
   );
 
-  // Resolve credentials per request: a connected user key (BYOK) wins over the
-  // deployment-wide server key. Fails closed when the provider has none or is
-  // not enabled for this account.
+    // Resolve credentials per request from the user's encrypted BYOK key only.
+    // Deployment secrets are not an authorized provider credential path.
   const apiKey = await resolver.resolveKey(decision.provider);
 
   const dispatch = async (): Promise<UpstreamCallResult> => {
@@ -2206,15 +2181,17 @@ Deno.serve(async (req: Request) => {
 
     // PX12 provider plug-ins: build the per-request resolver from the user's
     // stored provider state. Strict per-user enablement; a lookup failure leaves
-    // the config empty, which resolves to opencode-only (fail closed).
+    // the config empty, which leaves no provider key eligible for dispatch.
     let userProviderConfig: { default_provider?: unknown; providers?: unknown } | null = null;
+    let providerConfigUnavailable = false;
     try {
       const { data: providerConfigData, error: providerConfigError } = await supabaseClient.rpc(
         'get_user_provider_config',
         { p_subject_id: userId },
       );
       if (providerConfigError) {
-        console.warn('[PX12] provider config lookup error; failing closed to opencode-only');
+        console.warn('[PX12] provider config lookup unavailable; failing closed');
+        providerConfigUnavailable = true;
       } else if (
         providerConfigData &&
         typeof providerConfigData === 'object' &&
@@ -2226,11 +2203,18 @@ Deno.serve(async (req: Request) => {
         };
       }
     } catch {
-      console.warn('[PX12] provider config lookup failed; failing closed to opencode-only');
+      console.warn('[PX12] provider config lookup unavailable; failing closed');
+      providerConfigUnavailable = true;
+    }
+
+    if (providerConfigUnavailable) {
+      return new Response(JSON.stringify({ error: 'provider_configuration_unavailable' }), {
+        status: 503,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
     }
 
     const providerResolver: ProviderResolver = createProviderResolver(userProviderConfig, {
-      serverKey: (provider) => serverProviderKey(provider),
       globalEnabled: (provider) => globalProviderEnabled(provider),
       fetchUserKey: async (provider) => {
         const { data: ciphertext, error: keyError } = await supabaseClient.rpc(
@@ -2239,14 +2223,14 @@ Deno.serve(async (req: Request) => {
         );
         if (keyError) {
           console.warn(`[PX12] key material lookup failed for provider '${provider}'`);
-          return null;
+          throw new ProviderKeyUnavailableError(provider);
         }
         if (typeof ciphertext !== 'string' || ciphertext === '') return null;
         try {
           return await decryptKey(ciphertext);
         } catch {
           console.warn(`[PX12] stored key decrypt failed for provider '${provider}'`);
-          return null;
+          throw new ProviderKeyUnavailableError(provider);
         }
       },
     });
@@ -2254,10 +2238,11 @@ Deno.serve(async (req: Request) => {
     if (!providerResolver.anyReady()) {
       return new Response(
         JSON.stringify({
-          error: 'Server misconfigured: no provider credentials available.',
+          error: 'provider_key_required',
+          message: 'Connect and enable a provider key in Provider Settings before sending a request.',
         }),
         {
-          status: 500,
+          status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         },
       );
@@ -2477,8 +2462,8 @@ Deno.serve(async (req: Request) => {
     let decision: RouteDecision;
     try {
       decision = await resolveProductionRoute(routerParams, normalizedOverride, {
-        openCodePrimary: defaultGateway === 'opencode' && providerResolver.isReady('opencode'),
-        openCodeApiKey: OPENCODE_API_KEY || undefined,
+        openCodePrimary: false,
+        openCodeApiKey: undefined,
         openCodeBaseUrl: OPENCODE_BASE_URL,
       });
     } catch (routeError) {
@@ -3314,6 +3299,21 @@ Deno.serve(async (req: Request) => {
       // which keeps the hold pending_reconcile when calls are unsettled.
       await settleAdmission('ledger');
       await finalizeLedger('failed', 'upstream_error');
+      if (upstreamError instanceof ProviderCredentialError) {
+        return new Response(JSON.stringify({
+          error: 'provider_key_required',
+          message: 'Connect and enable a provider key in Provider Settings before sending a request.',
+        }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
+      if (upstreamError instanceof ProviderKeyUnavailableError) {
+        return new Response(JSON.stringify({ error: 'provider_key_unavailable' }), {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
       const message = upstreamError instanceof Error
         ? upstreamError.message
         : String(upstreamError);

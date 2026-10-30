@@ -54,6 +54,7 @@ import type {
   ExecutionStoreClient,
   ExecutionStoreRpcResponse,
 } from '../../supabase/functions/router/execution_store.ts';
+import { FAKE_BYOK_CIPHERTEXT, TEST_BYOK_ENCRYPTION_KEY } from '../helpers/byok-fixtures';
 
 // ============================================================================
 // FAKE CLIENTS
@@ -1120,6 +1121,12 @@ describe('video worker budget reconciliation (real handler)', () => {
           updated_by: null,
         });
       }
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+        return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'google', enabled: true, has_key: true }] });
+      }
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) {
+        return jsonResponse(FAKE_BYOK_CIPHERTEXT);
+      }
       if (call.method === 'PATCH' && call.body.includes('"running"')) {
         return jsonResponse({ id: JOB_ID, asset_id: ASSET_ID, status: 'running', attempt: 1 });
       }
@@ -1140,6 +1147,7 @@ describe('video worker budget reconciliation (real handler)', () => {
       SUPABASE_URL: 'http://127.0.0.1:54321',
       SUPABASE_SERVICE_ROLE_KEY: 'test-key',
       GOOGLE_API_KEY: 'test-google-key',
+      BYOK_ENCRYPTION_KEY: TEST_BYOK_ENCRYPTION_KEY,
       VIDEO_WORKER_SECRET: WORKER_SECRET,
     });
     await import(/* @vite-ignore */ WORKER_ENTRY);

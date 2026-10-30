@@ -35,6 +35,7 @@ import {
   resolveReleaseIdentity,
   type ReleaseIdentity,
 } from '../../supabase/functions/_shared/release_identity.ts';
+import { FAKE_BYOK_CIPHERTEXT, TEST_BYOK_ENCRYPTION_KEY } from '../helpers/byok-fixtures';
 
 // Computed specifiers keep tsc from type-checking the Deno entrypoints; the
 // `deno-npm-stubs` vite plugin resolves their `npm:` imports under vitest.
@@ -63,6 +64,7 @@ const BASE_ROUTER_ENV: Record<string, string> = {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
   ANTHROPIC_API_KEY: ANTHROPIC_KEY,
+  BYOK_ENCRYPTION_KEY: TEST_BYOK_ENCRYPTION_KEY,
   ...IDENTITY_ENV,
 };
 
@@ -368,7 +370,10 @@ function supabaseRoutes(options?: { authOk?: boolean; memoryEntitled?: boolean }
       return jsonResponse({ ...grantRow(), allowed_features: options?.memoryEntitled ? ['chat', 'memory'] : ['chat'] });
     }
     if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-      return jsonResponse({ default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] });
+      return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] });
+    }
+    if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) {
+      return jsonResponse(FAKE_BYOK_CIPHERTEXT);
     }
     if (call.url.includes('/rest/v1/conversations')) {
       return jsonResponse({ user_id: SUBJECT_A, total_tokens: 0 });
@@ -470,7 +475,12 @@ describe('release identity resolution (pure module)', () => {
 
 describe('router release identity headers', () => {
   it('allows the browser chat request headers without authenticating or dispatching on preflight', async () => {
-    const calls = installFetchRecorder(supabaseRoutes());
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+        return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: false, has_key: false }] });
+      }
+      return supabaseRoutes()(call);
+    });
     const origin = 'https://prismatix-app.vercel.app';
     const handler = await loadServeHandler(ROUTER_ENTRY, {
       ...BASE_ROUTER_ENV,
@@ -786,12 +796,52 @@ describe('strict unknown manual model rejection (F17)', () => {
     expect(providerCalls(calls)).toEqual([]);
   });
 
-  it('dispatches the stable Qwen selection to its official Messages endpoint and wire ID', async () => {
+  it('rejects a paid router path without a user key even when a fake server key exists', async () => {
     const happy = supabaseRoutes();
     const calls = installFetchRecorder((call) => {
-      if (call.url === 'https://opencode.ai/zen/go/v1/messages') return anthropicSseResponse();
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+        return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: false, has_key: false }] });
+      }
       return happy(call);
     });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(routerRequest(
+      chatBody({ platform: 'mobile', modelOverride: 'anthropic:haiku' }),
+      'px02-user-token',
+    ));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: 'provider_key_required' });
+    expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it.each([
+    ['undecryptable user key', () => jsonResponse('not-valid-ciphertext')],
+    ['key lookup failure', () => jsonResponse({ message: 'fake lookup failure' }, 500)],
+  ])('fails closed on %s instead of using a fake server key', async (_label, keyMaterialResponse) => {
+    const happy = supabaseRoutes();
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+        return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] });
+      }
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) return keyMaterialResponse();
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV, ANTHROPIC_API_KEY: 'fake-server-key' });
+
+    const res = await handler(routerRequest(
+      chatBody({ platform: 'mobile', modelOverride: 'anthropic:haiku' }),
+      'px02-user-token',
+    ));
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ error: 'provider_key_unavailable' });
+    expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it('does not use a fake deployment key for the legacy server-only OpenCode path', async () => {
+    const calls = installFetchRecorder(supabaseRoutes());
     const handler = await loadServeHandler(ROUTER_ENTRY, {
       ...BASE_ROUTER_ENV,
       OPENCODE_API_KEY: 'test-opencode-key',
@@ -801,14 +851,8 @@ describe('strict unknown manual model rejection (F17)', () => {
       chatBody({ platform: 'mobile', modelOverride: 'qwen-3.8-flash' }),
       'px02-user-token',
     ));
-    expect(res.status).toBe(200);
-    expect(await res.text()).toContain('Hello from Prism');
-    await flushAsync();
-    const dispatch = calls.find((call) => call.url === 'https://opencode.ai/zen/go/v1/messages');
-    expect(dispatch).toBeDefined();
-    expect(JSON.parse(dispatch!.body).model).toBe('qwen3.8-flash');
-    expect(dispatch!.headers.get('user-agent')).toBe('Prismatix/1.0');
-    expect(dispatch!.headers.get('x-opencode-session')).toBe(CONVERSATION_ID);
+    expect(res.status).toBe(400);
+    expect(providerCalls(calls)).toEqual([]);
   });
 
   it('honors OpenRouter as the default when OpenCode and native keys are also ready', async () => {
@@ -817,8 +861,8 @@ describe('strict unknown manual model rejection (F17)', () => {
       if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
         return jsonResponse({ default_provider: 'openrouter', providers: [
           { provider: 'opencode', enabled: true, has_key: false },
-          { provider: 'openrouter', enabled: true, has_key: false },
-          { provider: 'anthropic', enabled: true, has_key: false },
+          { provider: 'openrouter', enabled: true, has_key: true },
+          { provider: 'anthropic', enabled: true, has_key: true },
         ] });
       }
       if (call.url === 'https://openrouter.ai/api/v1/chat/completions') {
@@ -839,6 +883,8 @@ describe('strict unknown manual model rejection (F17)', () => {
     expect(dispatches).toHaveLength(1);
     expect(dispatches[0]!.url).toBe('https://openrouter.ai/api/v1/chat/completions');
     expect(JSON.parse(dispatches[0]!.body).model).toBe('anthropic/claude-haiku-5.5');
+    expect(dispatches[0]!.headers.get('authorization')).toBe('Bearer fake-byok-provider-key');
+    expect(dispatches[0]!.headers.get('authorization')).not.toContain('fixture-openrouter');
   });
 
   it('does not reject modelOverride "auto" — it streams normally', async () => {
@@ -914,7 +960,8 @@ describe('mobile memory isolation (real handler)', () => {
     const happy = supabaseRoutes({ memoryEntitled: true });
     let rounds = 0;
     const calls = installFetchRecorder(call => {
-      if (call.url.includes('get_user_provider_config')) return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'openrouter', enabled: true }] });
+      if (call.url.includes('get_user_provider_config')) return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'openrouter', enabled: true, has_key: true }] });
+      if (call.url.includes('get_user_provider_key_material')) return jsonResponse(FAKE_BYOK_CIPHERTEXT);
       if (call.url === 'https://openrouter.ai/api/v1/chat/completions') {
         rounds++;
         const payload = rounds === 1 ? { choices: [{ delta: { tool_calls: [{ index: 0, id: 'recall-1', function: { name: 'search_memory', arguments: '{"query":"preferences"}' } }] } }], usage: { prompt_tokens: 100, completion_tokens: 20 } } : { choices: [{ delta: { content: 'A grounded memory answer.' } }], usage: { prompt_tokens: 120, completion_tokens: 30 } };

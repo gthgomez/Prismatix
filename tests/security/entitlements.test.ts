@@ -423,6 +423,40 @@ describe('video-worker auth gate (real handler)', () => {
     expect(google.getFileCalls).toBe(0);
   });
 
+  it('never uses the fake deployment Google key for a queued BYOK-only job', async () => {
+    const calls = installFetchRecorder((call) => {
+      if (call.method === 'GET' && call.url.includes('/rest/v1/video_jobs')) {
+        return jsonResponse([queuedJobRow(SUBJECT_A)]);
+      }
+      if (call.url.includes('/rest/v1/rpc/get_access_grant')) {
+        return jsonResponse({ subject_id: SUBJECT_A, enabled: true, allowed_features: ['video'] });
+      }
+      if (call.method === 'PATCH') return emptyResponse();
+      if (call.url.includes('/rest/v1/rpc/px05_reconcile_reservation')) {
+        return jsonResponse({ ok: true });
+      }
+      return null;
+    });
+    const handler = await loadServeHandler(WORKER_ENTRY, {
+      ...BASE_ENV,
+      VIDEO_WORKER_SECRET: WORKER_SECRET,
+      GOOGLE_API_KEY: 'fake-deployment-google-key',
+    });
+
+    const res = await handler(workerRequest(WORKER_SECRET));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'provider_key_required' });
+    const patchBodies = calls.filter((call) => call.method === 'PATCH')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>);
+    expect(patchBodies.some((body) => body.status === 'running')).toBe(false);
+    expect(patchBodies.some((body) => body.status === 'failed' && body.error_code === 'provider_key_required')).toBe(true);
+    const google = googleAiStubState();
+    expect(google.constructions).toBe(0);
+    expect(google.uploadFileCalls).toBe(0);
+    expect(google.getFileCalls).toBe(0);
+  });
+
   it('refuses a queued job whose owner has no grant: no lock, no provider calls, job failed closed', async () => {
     const calls = installFetchRecorder((call) => {
       if (call.method === 'GET' && call.url.includes('/rest/v1/video_jobs')) {

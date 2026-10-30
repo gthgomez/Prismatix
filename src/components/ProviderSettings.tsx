@@ -1,7 +1,7 @@
 // src/components/ProviderSettings.tsx
 // Provider plug-ins modal: connect BYOK keys, toggle providers on/off, and pick
-// the default first-class gateway. OpenCode configuration is reported by the
-// deployment and must not be presented as ready when no server key is set.
+// the default BYOK gateway. The legacy server-key-only OpenCode path is shown
+// as disabled and is never reported as ready.
 
 import React, { useEffect, useRef, useState } from 'react';
 import type { ProviderPlugins } from '../hooks/useProviderPlugins';
@@ -142,8 +142,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
         </div>
 
         <p className='provider-settings-intro'>
-          Connect a provider key and turn it on to make its models available. OpenCode availability
-          depends on this deployment’s server configuration.
+          Connect your own provider key and turn it on to make its models available. Prismatix uses
+          BYOK for all provider calls.
         </p>
 
         {loading && <div className='provider-settings-note'>Loading providers…</div>}
@@ -174,10 +174,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                       <span className='provider-badge provider-badge--default'>Default</span>
                     )}
                     {isOpencode && (
-                      <span
-                        className={`provider-badge ${provider.hasKey ? 'provider-badge--configured' : 'provider-badge--setup'}`}
-                      >
-                        {provider.hasKey ? 'Server key set' : 'No server key'}
+                      <span className='provider-badge provider-badge--setup'>
+                        BYOK only
                       </span>
                     )}
                   </div>
@@ -203,12 +201,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                 </div>
 
                 {isOpencode ? (
-                  <div
-                    className={`provider-card-note ${provider.hasKey ? 'is-configured' : 'needs-setup'}`}
-                  >
-                    {provider.hasKey
-                      ? 'Server key configured. Credentials are supplied by this deployment; no key is needed from you.'
-                      : 'No server key is configured. Ask the deployment operator to configure one before using OpenCode.'}
+                  <div className='provider-card-note needs-setup'>
+                    OpenCode uses a deployment key and is disabled in BYOK-only mode. Connect your
+                    OpenRouter key to use models available through that provider.
                   </div>
                 ) : (
                   <>

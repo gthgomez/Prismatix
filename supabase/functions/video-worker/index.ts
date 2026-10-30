@@ -11,6 +11,12 @@ import {
   reconcileReservation,
   type AdmissionClient,
 } from '../router/admission.ts';
+import { decryptKey } from '../_shared/byok_crypto.ts';
+import {
+  createProviderResolver,
+  ProviderCredentialError,
+  ProviderKeyUnavailableError,
+} from '../router/provider_resolver.ts';
 
 // SECURITY: Lock CORS to the configured frontend origin.
 // Set ALLOWED_ORIGIN in Supabase project secrets (e.g. https://your-app.vercel.app).
@@ -24,7 +30,6 @@ const CORS_HEADERS = {
 
 const ENABLE_VIDEO_PIPELINE = envFlag('ENABLE_VIDEO_PIPELINE', false);
 const DEV_MODE = Deno.env.get('DEV_MODE') === 'true';
-const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY') || '';
 const VIDEO_WORKER_SECRET = Deno.env.get('VIDEO_WORKER_SECRET') || '';
 
 type VideoJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
@@ -200,14 +205,6 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  if (!GOOGLE_API_KEY) {
-    return new Response(JSON.stringify({ error: 'Google API Key missing' }), {
-      status: 500,
-      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-    });
-  }
-
-  const fileManager = new GoogleAIFileManager(GOOGLE_API_KEY);
   const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: { persistSession: false },
     db: { schema: 'public' },
@@ -254,6 +251,60 @@ Deno.serve(async (req: Request) => {
     devError('[video-worker] entitlement lookup failed; leaving job queued:', entitlementError);
     return new Response(JSON.stringify({ error: 'entitlement_unavailable' }), { status: 500, headers: CORS_HEADERS });
   }
+
+  // Resolve the asset owner's enabled Google key before locking or dispatching.
+  // Deployment secrets are never a fallback in background processing.
+  const { data: providerConfig, error: providerConfigError } = await supabase.rpc(
+    'get_user_provider_config',
+    { p_subject_id: ownerId },
+  );
+  if (providerConfigError) {
+    return new Response(JSON.stringify({ error: 'provider_configuration_unavailable' }), {
+      status: 503,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+  const providerResolver = createProviderResolver(providerConfig, {
+    globalEnabled: (provider) => provider === 'google' && envFlag('ENABLE_GOOGLE', true),
+    fetchUserKey: async (provider) => {
+      const { data: ciphertext, error } = await supabase.rpc(
+        'get_user_provider_key_material',
+        { p_subject_id: ownerId, p_provider: provider },
+      );
+      if (error) throw new ProviderKeyUnavailableError(provider);
+      if (typeof ciphertext !== 'string' || ciphertext === '') return null;
+      try {
+        return await decryptKey(ciphertext);
+      } catch {
+        console.warn(`[video-worker] stored key decrypt failed for provider '${provider}'`);
+        throw new ProviderKeyUnavailableError(provider);
+      }
+    },
+  });
+  let googleApiKey: string;
+  try {
+    googleApiKey = await providerResolver.resolveKey('google');
+  } catch (keyError) {
+    if (keyError instanceof ProviderCredentialError) {
+      await markJobFailed(
+        supabase,
+        queuedJob.id,
+        queuedJob.asset_id,
+        'provider_key_required',
+        'Connect and enable a Google key to process this video.',
+      );
+      await reconcileVideoBudget(supabase, queuedJob.asset_id, 'provider_key_required');
+      return new Response(JSON.stringify({ error: 'provider_key_required' }), {
+        status: 400,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ error: 'provider_key_unavailable' }), {
+      status: 503,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+  const fileManager = new GoogleAIFileManager(googleApiKey);
 
   const nowIso = new Date().toISOString();
 

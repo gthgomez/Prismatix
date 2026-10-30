@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryExtractor } from "../../supabase/functions/memory/provider";
+import { decryptKey } from "../../supabase/functions/_shared/byok_crypto";
+import { FAKE_BYOK_CIPHERTEXT, installTestByokEnv } from "../helpers/byok-fixtures";
 const subject = "11111111-1111-4111-8111-111111111111";
 const job = {
   id: "job",
@@ -14,13 +17,17 @@ const job = {
   }],
 };
 describe("memory provider control and admission", () => {
-  it('uses an enabled gateway when the preferred provider is native', async () => {
+  let cleanupByokEnv: (() => void) | null = null;
+  beforeEach(() => { cleanupByokEnv = installTestByokEnv(); });
+  afterEach(() => { cleanupByokEnv?.(); cleanupByokEnv = null; });
+
+  it('uses OpenRouter BYOK for background extraction', async () => {
     const rpc = vi.fn(async () => ({ data: { default_provider: 'anthropic', providers: [
-      { provider: 'anthropic', enabled: true }, { provider: 'openrouter', enabled: true },
+      { provider: 'anthropic', enabled: true, has_key: true }, { provider: 'openrouter', enabled: true, has_key: true },
       { provider: 'opencode', enabled: false },
     ] }, error: null }));
     await expect(createMemoryExtractor({ rpc }, subject, k =>
-      ['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'].includes(k) ? 'fake-key' : undefined
+      k.startsWith('ENABLE_') ? undefined : undefined
     )).resolves.toBeTypeOf('function');
   });
   for (const hasUsage of [true, false]) {
@@ -44,8 +51,10 @@ describe("memory provider control and admission", () => {
           data: name === "get_user_provider_config"
             ? {
               default_provider: "openrouter",
-              providers: [{ provider: "openrouter", enabled: true }],
+              providers: [{ provider: "openrouter", enabled: true, has_key: true }],
             }
+            : name === "get_user_provider_key_material"
+            ? FAKE_BYOK_CIPHERTEXT
             : name === "get_access_grant"
             ? {
               subject_id: subject,
@@ -66,8 +75,9 @@ describe("memory provider control and admission", () => {
         const extract = await createMemoryExtractor(
           { rpc },
           subject,
-          (k) => k === "OPENROUTER_API_KEY" ? "fake-key" : undefined,
+          () => undefined,
         );
+        expect(await decryptKey(FAKE_BYOK_CIPHERTEXT)).toBe("fake-byok-provider-key");
         expect(await extract(job)).toBe('{"facts":[]}');
         const records = rpc.mock.calls.filter((c) =>
           c[0] === "px03_record_model_call"
@@ -86,7 +96,7 @@ describe("memory provider control and admission", () => {
       },
     );
   }
-  it("never dispatches disabled providers even with server keys", async () => {
+  it("never dispatches a background job without an enabled user key even if a server key exists", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new Error("unexpected provider call"),
     );
@@ -94,7 +104,7 @@ describe("memory provider control and admission", () => {
       rpc: vi.fn(async () => ({
         data: {
           default_provider: "openrouter",
-          providers: [{ provider: "openrouter", enabled: false }],
+          providers: [{ provider: "openrouter", enabled: false, has_key: false }],
         },
         error: null,
       })),
@@ -103,7 +113,7 @@ describe("memory provider control and admission", () => {
       createMemoryExtractor(
         client,
         subject,
-        (k) => k === "OPENROUTER_API_KEY" ? "fake-key" : undefined,
+        (k) => k === "OPENROUTER_API_KEY" ? "fake-server-key" : undefined,
       ),
     ).rejects.toThrow("memory_provider_unavailable");
     expect(fetcher).not.toHaveBeenCalled();
@@ -117,7 +127,7 @@ describe("memory provider control and admission", () => {
       data: name === "get_user_provider_config"
         ? {
           default_provider: "openrouter",
-          providers: [{ provider: "openrouter", enabled: true }],
+          providers: [{ provider: "openrouter", enabled: true, has_key: true }],
         }
         : name === "get_access_grant"
         ? {
@@ -127,7 +137,9 @@ describe("memory provider control and admission", () => {
           max_daily_usd: 1,
           max_per_execution_usd: .1,
         }
-        : name === "px03_create_execution"
+            : name === "get_user_provider_key_material"
+            ? FAKE_BYOK_CIPHERTEXT
+            : name === "px03_create_execution"
         ? { execution: { id: "execution" }, reused: false }
         : name === "px05_admit_execution"
         ? { admitted: false, reason: "budget_exhausted" }
@@ -137,7 +149,7 @@ describe("memory provider control and admission", () => {
     const extract = await createMemoryExtractor(
       { rpc },
       subject,
-      (k) => k === "OPENROUTER_API_KEY" ? "fake-key" : undefined,
+      () => undefined,
     );
     await expect(extract(job)).rejects.toThrow("memory_budget_deferred");
     expect(fetcher).not.toHaveBeenCalled();

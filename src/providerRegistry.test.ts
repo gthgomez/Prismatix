@@ -13,18 +13,23 @@ import {
 import { MODEL_ORDER } from './modelCatalog';
 
 describe('provider plug-in defaults', () => {
-  it('offers exactly opencode + openrouter by default', () => {
-    expect(DEFAULT_PROVIDER_CHOICES).toEqual(['opencode', 'openrouter']);
+  it('offers only the BYOK OpenRouter gateway by default', () => {
+    expect(DEFAULT_PROVIDER_CHOICES).toEqual(['openrouter']);
     const offered = Object.values(PROVIDER_PLUGINS)
       .filter((p) => p.offeredByDefault)
       .map((p) => p.id)
       .sort();
-    expect(offered).toEqual(['opencode', 'openrouter']);
+    expect(offered).toEqual(['openrouter']);
   });
 
-  it('enables only opencode for a fresh user with no rows', () => {
+  it('defaults fresh and legacy-default users to OpenRouter BYOK', () => {
     expect(resolveDefaultProvider(null)).toBe(FALLBACK_DEFAULT_PROVIDER);
-    expect([...resolveEnabledProviderIds(null)]).toEqual(['opencode']);
+    expect([...resolveEnabledProviderIds(null)]).toEqual(['openrouter']);
+    expect(resolveDefaultProvider({ default_provider: 'opencode' })).toBe('openrouter');
+    expect([...resolveEnabledProviderIds({
+      default_provider: 'opencode',
+      providers: [{ provider: 'opencode', enabled: true, has_key: false }],
+    })]).toEqual(['openrouter']);
   });
 
   it('enables the chosen default gateway when it is openrouter', () => {
@@ -41,7 +46,7 @@ describe('provider plug-in defaults', () => {
         { provider: 'deepinfra', enabled: false, has_key: true },
       ],
     });
-    expect(enabled.has('opencode' as ProviderId)).toBe(true);
+    expect(enabled.has('opencode' as ProviderId)).toBe(false);
     expect(enabled.has('anthropic' as ProviderId)).toBe(true);
     expect(enabled.has('deepinfra' as ProviderId)).toBe(false);
   });

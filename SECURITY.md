@@ -13,9 +13,9 @@ In scope:
   another user's conversations, messages, `cost_logs`, `user_memories`, or `video_assets`.
 - The routing and cost guardrails: a bypass that lets a request proceed without a known price, or
   that re-routes to a more expensive or non-eligible model than the documented policy allows.
-- Any path by which a provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`,
-  `NVIDIA_API_KEY`, `DEEPINFRA_API_KEY`) is exposed to the browser, logged, echoed in a response, or
-  sent to an unintended host.
+- Any path by which a user's provider API key is exposed to another user, the browser after save,
+  logs, responses, or an unintended host; or any path that uses deployment provider secrets to
+  fund user or background work.
 - The Supabase anon key handling, the `ALLOWED_ORIGIN` check on edge functions, and video upload
   and retrieval in Supabase Storage.
 - Streaming, spend, rate, and concurrent-stream guards, where a bypass produces unbounded upstream

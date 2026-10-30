@@ -1,9 +1,9 @@
 // provider_resolver.ts — per-request provider readiness and credential
-// resolution. Merges deployment-wide secrets (server keys + operator
-// kill-switches) with the requesting user's provider plug-in state so that:
+// resolution. Merges operator kill-switches with the requesting user's
+// provider plug-in state so that:
 //
 //   * auto-routing can only ever target a provider the user has enabled, and
-//   * a connected user key (BYOK) is used instead of the shared server key.
+//   * only a connected user key (BYOK) can authorize a provider call.
 //
 // A resolver instance is built once per request and must never be shared
 // across requests (it is bound to one subject's provider state).
@@ -19,8 +19,6 @@ import {
 import { MODEL_REGISTRY, type Provider } from './router_logic.ts';
 
 export interface ProviderResolverConfig {
-  /** Deployment-wide secret for the provider, if configured. */
-  serverKey(provider: Provider): string | undefined;
   /** Operator kill-switch (ENABLE_* env flags). */
   globalEnabled(provider: Provider): boolean;
   /** Resolves and decrypts the user's key for the provider, or null. */
@@ -29,10 +27,23 @@ export interface ProviderResolverConfig {
 
 export class ProviderCredentialError extends Error {
   readonly provider: Provider;
+  readonly code = 'provider_key_required';
 
   constructor(provider: Provider) {
     super(`No usable credentials for provider '${provider}'.`);
     this.name = 'ProviderCredentialError';
+    this.provider = provider;
+  }
+}
+
+/** The user has a saved key, but the backend could not safely retrieve it. */
+export class ProviderKeyUnavailableError extends Error {
+  readonly provider: Provider;
+  readonly code = 'provider_key_unavailable';
+
+  constructor(provider: Provider) {
+    super(`Unable to retrieve the saved key for provider '${provider}'.`);
+    this.name = 'ProviderKeyUnavailableError';
     this.provider = provider;
   }
 }
@@ -52,9 +63,8 @@ export function createProviderResolver(
   config: RawUserProviderConfig | null | undefined,
   deps: ProviderResolverConfig,
 ): ProviderResolver {
-  // Missing/empty state resolves to the default first-class gateway only
-  // (opencode), so a lookup failure can never enable server-keyed providers the
-  // account has not opted into. Strict per-user enablement applies always.
+  // Missing/empty state resolves to OpenRouter BYOK by default. A provider is
+  // only credential-ready when this user's encrypted key metadata exists.
   const userEnabled = resolveEnabledProviderIds(config);
 
   const userKeyed = new Set<Provider>();
@@ -66,8 +76,7 @@ export function createProviderResolver(
     }
   }
 
-  const hasCredentials = (provider: Provider): boolean =>
-    userKeyed.has(provider) || !!deps.serverKey(provider);
+  const hasCredentials = (provider: Provider): boolean => userKeyed.has(provider);
 
   const isEnabled = (provider: Provider): boolean =>
     deps.globalEnabled(provider) && userEnabled.has(provider as ProviderId);
@@ -86,12 +95,16 @@ export function createProviderResolver(
     // Enforce enablement/kill-switch at the credential boundary so no call path
     // can spend a key for a provider this account has not enabled.
     if (!isEnabled(provider)) throw new ProviderCredentialError(provider);
-    if (userKeyed.has(provider)) {
-      const userKey = await deps.fetchUserKey(provider);
-      if (userKey && userKey.trim() !== '') return userKey;
+    if (!userKeyed.has(provider)) throw new ProviderCredentialError(provider);
+    let userKey: string | null;
+    try {
+      userKey = await deps.fetchUserKey(provider);
+    } catch {
+      // Never turn an unavailable/revoked/decryption-failed key into another
+      // credential path. In particular, no deployment key is consulted.
+      throw new ProviderKeyUnavailableError(provider);
     }
-    const serverKey = deps.serverKey(provider);
-    if (serverKey && serverKey.trim() !== '') return serverKey;
+    if (typeof userKey === 'string' && userKey.trim() !== '') return userKey;
     throw new ProviderCredentialError(provider);
   };
 
