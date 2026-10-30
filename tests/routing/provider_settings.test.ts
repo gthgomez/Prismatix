@@ -79,14 +79,14 @@ async function invoke(
 }
 
 describe('provider-settings — state', () => {
-  it('a fresh user (no rows) has only opencode enabled', async () => {
+  it('a fresh or legacy-OpenCode-default user gets OpenRouter BYOK', async () => {
     const mod = await loadModule({});
     const state = mod.buildProviderStates({ default_provider: 'opencode', providers: [] }, () => undefined);
-    expect(state.providers.filter((p) => p.enabled).map((p) => p.id)).toEqual(['opencode']);
-    expect(state.defaultProvider).toBe('opencode');
+    expect(state.providers.filter((p) => p.enabled).map((p) => p.id)).toEqual(['openrouter']);
+    expect(state.defaultProvider).toBe('openrouter');
   });
 
-  it('opts in to openrouter as the chosen default and reports server keys', async () => {
+  it('reports only user-stored key metadata even when a fake server key exists', async () => {
     const mod = await loadModule({});
     const state = mod.buildProviderStates(
       { default_provider: 'openrouter', providers: [{ provider: 'deepinfra', enabled: true, has_key: true, key_last4: 'abcd' }] },
@@ -96,7 +96,7 @@ describe('provider-settings — state', () => {
     expect(byId.get('openrouter')?.enabled).toBe(true);
     expect(byId.get('deepinfra')?.enabled).toBe(true);
     expect(byId.get('deepinfra')?.hasKey).toBe(true);
-    expect(byId.get('opencode')?.hasKey).toBe(true);
+    expect(byId.get('opencode')?.hasKey).toBe(false);
     expect(byId.get('openrouter')?.defaultProvider).toBe(true);
   });
 });
@@ -222,17 +222,17 @@ describe('provider-settings — enable / default / delete', () => {
     });
   });
 
-  it('sets the default provider (opencode or openrouter only)', async () => {
+  it('allows only the BYOK OpenRouter gateway as the default', async () => {
     const mod = await loadModule(BASE_ENV);
     const calls: RpcCall[] = [];
-    const ok = await invoke(mod, { action: 'set_default', provider: 'opencode' }, BASE_ENV, 'user-1', calls);
+    const ok = await invoke(mod, { action: 'set_default', provider: 'openrouter' }, BASE_ENV, 'user-1', calls);
     expect(ok.status).toBe(200);
     expect(calls.find((c) => c.fn === 'set_user_default_provider')!.params).toMatchObject({
       p_subject_id: 'user-1',
-      p_provider: 'opencode',
+      p_provider: 'openrouter',
     });
 
-    const bad = await invoke(mod, { action: 'set_default', provider: 'anthropic' });
+    const bad = await invoke(mod, { action: 'set_default', provider: 'opencode' });
     expect(bad.status).toBe(400);
   });
 

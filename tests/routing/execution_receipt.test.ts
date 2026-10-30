@@ -23,6 +23,7 @@ import {
   type ExecutionStoreClient,
   type ExecutionStoreRpcResponse,
 } from '../../supabase/functions/router/execution_store.ts';
+import { FAKE_BYOK_CIPHERTEXT, TEST_BYOK_ENCRYPTION_KEY } from '../helpers/byok-fixtures';
 
 // PX06 final-review: inject a deterministic synchronous throw in the response
 // HEADER region (after admission, outside the upstream try/catch) so the outer
@@ -292,6 +293,7 @@ const BASE_ROUTER_ENV: Record<string, string> = {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
   ANTHROPIC_API_KEY: ANTHROPIC_KEY,
+  BYOK_ENCRYPTION_KEY: TEST_BYOK_ENCRYPTION_KEY,
 };
 
 const PROVIDER_HOSTS = [
@@ -567,8 +569,9 @@ describe('PX06 finding 1: abort-driven upstream error finalizes cancelled', () =
         return jsonResponse(streamGrantRow());
       }
       if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-        return jsonResponse({ default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] });
+        return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] });
       }
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) return jsonResponse(FAKE_BYOK_CIPHERTEXT);
       if (call.url.includes('/rest/v1/conversations')) {
         return jsonResponse({ user_id: SUBJECT, total_tokens: 0 });
       }
@@ -712,8 +715,9 @@ describe('PX06 finding 1: abort-driven upstream error finalizes cancelled', () =
       }
       if (call.url.includes('/rest/v1/rpc/get_access_grant')) return jsonResponse(streamGrantRow());
       if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-        return jsonResponse({ default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] });
+        return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] });
       }
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) return jsonResponse(FAKE_BYOK_CIPHERTEXT);
       if (call.url.includes('/rest/v1/conversations')) {
         return jsonResponse({ user_id: SUBJECT, total_tokens: 0 });
       }
@@ -843,8 +847,9 @@ describe('PX06 outer catch: post-admission crash finalizes indeterminate', () =>
       }
       if (call.url.includes('/rest/v1/rpc/get_access_grant')) return jsonResponse(streamGrantRow());
       if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-        return jsonResponse({ default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] });
+        return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] });
       }
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) return jsonResponse(FAKE_BYOK_CIPHERTEXT);
       if (call.url.includes('/rest/v1/conversations')) {
         return jsonResponse({ user_id: SUBJECT, total_tokens: 0 });
       }

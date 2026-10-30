@@ -126,14 +126,6 @@ VITE_ENABLE_VIDEO_PIPELINE=false
 Supabase edge function secrets (set via `supabase secrets set`):
 
 ```
-ANTHROPIC_API_KEY
-OPENAI_API_KEY
-GOOGLE_API_KEY
-NVIDIA_API_KEY
-DEEPINFRA_API_KEY
-OPENCODE_API_KEY
-OPENCODE_BASE_URL (optional; defaults to https://opencode.ai/zen/v1)
-OPENROUTER_API_KEY (optional; users may instead connect their own OpenRouter key)
 OPENROUTER_BASE_URL (optional; defaults to https://openrouter.ai/api/v1)
 BYOK_ENCRYPTION_KEY (required for user-connected provider keys; base64, 32 bytes)
 ALLOWED_ORIGIN=https://your-frontend.vercel.app
@@ -150,12 +142,14 @@ USER_RATE_LIMIT_MAX_REQUESTS=20
 MAX_ACTIVE_STREAMS_PER_USER=2
 ```
 
-### Provider plug-ins (opt-in providers + BYOK)
+### Provider plug-ins (BYOK-only)
 
-OpenCode is the only provider enabled by default. Every other provider is an
-opt-in plug-in: a user connects their own key and turns it on. A model whose
-native provider is off still becomes available (and routable) when OpenRouter is
-enabled and the model has an OpenRouter route.
+OpenRouter BYOK is the default. Users connect and enable their own provider keys
+in Provider Settings. A model whose native provider is off still becomes
+available (and routable) when the user has enabled OpenRouter and the model has
+an OpenRouter route. The legacy OpenCode route requires a deployment key and is
+disabled in BYOK-only mode. No provider secret configured on the deployment is
+used to dispatch user or background work.
 
 - User keys are stored as AES-256-GCM ciphertext (`prismatix_internal.user_provider_keys`)
   and are never returned to the browser; the UI shows only the last 4 characters.
@@ -183,21 +177,14 @@ enabled and the model has an OpenRouter route.
    supabase db push
    ```
 
-4. **Set edge function secrets** (one-time, per provider key you want active):
+4. **Set edge function secrets** (one-time):
    ```bash
-   supabase secrets set ANTHROPIC_API_KEY=sk-...
-   supabase secrets set OPENAI_API_KEY=sk-...
-   supabase secrets set GOOGLE_API_KEY=...
-   supabase secrets set NVIDIA_API_KEY=...
-   supabase secrets set DEEPINFRA_API_KEY=...
-   supabase secrets set OPENCODE_API_KEY=...
    supabase secrets set ALLOWED_ORIGIN=http://localhost:5173
    supabase secrets set ENABLE_DEBATE_MODE=false
    supabase secrets set ENABLE_SMD_LIGHT=false
    supabase secrets set ENABLE_VIDEO_PIPELINE=false
    supabase secrets set ENABLE_DEEPINFRA=false
    supabase secrets set ENABLE_OPENROUTER=true
-   supabase secrets set OPENROUTER_API_KEY=sk-or-...
    # BYOK: base64 32-byte key for encrypting user-connected provider keys
    supabase secrets set BYOK_ENCRYPTION_KEY="$(openssl rand -base64 32)"
    supabase secrets set ENABLE_SERVER_SPEND_LIMIT=true
@@ -207,6 +194,11 @@ enabled and the model has an OpenRouter route.
    supabase secrets set USER_RATE_LIMIT_MAX_REQUESTS=20
    supabase secrets set MAX_ACTIVE_STREAMS_PER_USER=2
    ```
+
+   Do not set deployment provider API keys for user processing. Users save their
+   own provider keys in Provider Settings; they are encrypted at rest. Existing
+   project/user admission limits remain in force and conservatively count BYOK
+   activity until owner-funded and user-funded accounting are separated.
 
 5. **Deploy edge functions:**
    ```bash

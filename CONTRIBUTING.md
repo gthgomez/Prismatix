@@ -48,7 +48,7 @@ npm run test         # Vitest unit tests
 
 ## Security invariants
 
-- Never expose the `ANTHROPIC_API_KEY` or other provider keys to the frontend. They live in Supabase edge function secrets only.
+- Provider credentials are BYOK: users' keys are encrypted at rest and decrypted only for their own provider requests. Never put provider keys in frontend env vars, log them, return them to the browser, or use deployment provider secrets for user work.
 - All edge function calls require a valid Supabase JWT. Do not remove JWT verification.
 - Preserve the conversation ownership check in the router — users may only access their own conversation history.
 

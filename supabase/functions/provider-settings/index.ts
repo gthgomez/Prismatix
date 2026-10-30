@@ -7,7 +7,6 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { ByokConfigError, encryptKey } from '../_shared/byok_crypto.ts';
-import { serverHasProviderKey } from '../_shared/provider_credentials.ts';
 import {
   PROVIDER_PLUGIN_ORDER,
   PROVIDER_PLUGINS,
@@ -105,7 +104,7 @@ function jsonResponse(body: unknown, status: number): Response {
  */
 export function buildProviderStates(
   config: RawUserConfig | null,
-  getEnv: (key: string) => string | undefined,
+  _getEnv: (key: string) => string | undefined,
 ): ProviderStatePayload {
   const rows = new Map<ProviderId, RawProviderRow>();
   if (Array.isArray(config?.providers)) {
@@ -120,13 +119,13 @@ export function buildProviderStates(
   const providers = PROVIDER_PLUGIN_ORDER.map((id) => {
     const plugin = PROVIDER_PLUGINS[id];
     const row = rows.get(id);
-    const serverKey = serverHasProviderKey(id, getEnv);
-
     return {
       id,
       label: plugin.label,
       enabled: enabledSet.has(id),
-      hasKey: row?.has_key === true || serverKey,
+      // Server secrets are never credentials in BYOK-only mode. Only the
+      // caller's encrypted provider row can make a provider key-present.
+      hasKey: id !== 'opencode' && row?.has_key === true,
       keyLast4: typeof row?.key_last4 === 'string' ? row.key_last4 : null,
       offeredByDefault: plugin.offeredByDefault,
       defaultProvider: defaultProvider === id,

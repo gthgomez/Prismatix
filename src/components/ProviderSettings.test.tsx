@@ -17,19 +17,19 @@ function makeProvider(hasKey: boolean): ProviderState {
   return {
     id: 'opencode',
     label: 'OpenCode',
-    enabled: true,
+    enabled: false,
     hasKey,
     keyLast4: null,
-    offeredByDefault: true,
-    defaultProvider: true,
+    offeredByDefault: false,
+    defaultProvider: false,
   };
 }
 
 function makePlugins(provider: ProviderState): ProviderPlugins {
   return {
     providers: [provider],
-    defaultProvider: 'opencode',
-    enabledProviders: new Set(['opencode']),
+    defaultProvider: 'openrouter',
+    enabledProviders: new Set(['openrouter']),
     loading: false,
     error: null,
     refresh: vi.fn(async () => {}),
@@ -88,26 +88,26 @@ describe('ProviderSettings', () => {
     container.remove();
   });
 
-  it('describes deployment-provided credentials only when configured', () => {
-    for (const hasKey of [true, false]) {
-      const container = document.createElement('div');
-      roots.push(
-        renderInto(
-          container,
-          <ProviderSettings
-            plugins={makePlugins(makeProvider(hasKey))}
-            preferences={makePreferences()}
-            onClose={vi.fn()}
-          />,
-        ),
-      );
-      const note = container.querySelector('.provider-card-note')?.textContent ?? '';
-      expect(note).toContain(hasKey ? 'Server key configured' : 'No server key is configured');
-      expect(note).not.toContain('always available');
-      expect(container.querySelector('.provider-badge:not(.provider-badge--default)')?.textContent)
-        .toBe(hasKey ? 'Server key set' : 'No server key');
-      act(() => roots.pop()!.unmount());
-    }
+  it('clearly marks the server-key-only OpenCode path as disabled', () => {
+    const container = document.createElement('div');
+    roots.push(
+      renderInto(
+        container,
+        <ProviderSettings
+          plugins={makePlugins(makeProvider(true))}
+          preferences={makePreferences()}
+          onClose={vi.fn()}
+        />,
+      ),
+    );
+    const note = container.querySelector('.provider-card-note')?.textContent ?? '';
+    expect(note).toContain('disabled in BYOK-only mode');
+    expect(note).toContain('OpenRouter key');
+    expect(container.querySelector('.provider-badge:not(.provider-badge--default)')?.textContent)
+      .toBe('BYOK only');
+    expect(container.querySelector('[role="switch"]')).toBeNull();
+    expect(container.querySelector('[aria-label="OpenCode API key"]')).toBeNull();
+    act(() => roots.pop()!.unmount());
   });
 
   it('allows expanding provider models and toggling visibility and favorites', () => {

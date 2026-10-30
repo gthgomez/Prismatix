@@ -1,6 +1,5 @@
 import { memoryRpc, type MemoryRpcClient } from '../_shared/memory_contract.ts';
 import { isEntitled, loadAccessGrant } from '../_shared/access_policy.ts';
-import { PROVIDER_KEY_ENV } from '../_shared/provider_credentials.ts';
 import {
   openRouterModelId,
   type RawUserProviderConfig,
@@ -10,8 +9,6 @@ import { decryptKey } from '../_shared/byok_crypto.ts';
 import { createProviderResolver } from '../router/provider_resolver.ts';
 import { CURATED_OPENCODE_REGISTRY } from '../router/models_hub.ts';
 import { isHistoricModel } from '../_shared/model_lifecycle.ts';
-import { dispatchOpenCodeStream } from '../router/opencode_adapters.ts';
-import { fetchDiscoveredModelIds } from '../router/opencode_discovery.ts';
 import { createUsageTracker } from '../router/usage.ts';
 import { createSseParser, isDoneData } from '../_shared/sse_parser.ts';
 import {
@@ -42,9 +39,8 @@ export async function createMemoryExtractor(
     | RawUserProviderConfig
     | null;
   const resolver = createProviderResolver(raw, {
-    serverKey: (p) => getEnv(PROVIDER_KEY_ENV[p]),
     globalEnabled: (p) => {
-      if (!['opencode', 'openrouter'].includes(p)) return false;
+      if (p !== 'openrouter') return false;
       const flag = getEnv('ENABLE_' + p.toUpperCase());
       return flag ? !['0', 'false', 'no', 'off'].includes(flag.toLowerCase()) : true;
     },
@@ -57,15 +53,12 @@ export async function createMemoryExtractor(
     },
   });
   const preferred = resolveDefaultProvider(raw);
-  const provider = ([preferred, 'opencode', 'openrouter'] as const).find((p) =>
-    ['opencode', 'openrouter'].includes(p) && resolver.isReady(p)
-  );
-  if (!provider || !['opencode', 'openrouter'].includes(provider)) {
-    throw new Error('memory_provider_unavailable');
-  }
-  const gateway = provider as 'opencode' | 'openrouter';
-  const base = getEnv('OPENCODE_BASE_URL') ?? 'https://opencode.ai/zen/v1';
-  const getPrices = (tier: string) => getModelPricing(tier, new Date(), gateway === 'opencode' && base.replace(/\/$/, '') === 'https://opencode.ai/zen/go/v1');
+  const gateway = preferred === 'openrouter' && resolver.isReady('openrouter')
+    ? 'openrouter'
+    : null;
+  if (!gateway) throw new Error('memory_provider_unavailable');
+  const base = getEnv('OPENROUTER_BASE_URL') ?? 'https://openrouter.ai/api/v1';
+  const getPrices = (tier: string) => getModelPricing(tier);
   const tiers = Object.keys(CURATED_OPENCODE_REGISTRY).filter((t) =>
     !isHistoricModel(t) && !getPrices(t).isUnknown
   );
@@ -75,18 +68,11 @@ export async function createMemoryExtractor(
       Number(!CURATED_OPENCODE_REGISTRY[b]!.displayName.includes('Haiku')) ||
     getPrices(a).inputRatePer1M - getPrices(b).inputRatePer1M
   );
-  const available = gateway === 'opencode'
-    ? await fetchDiscoveredModelIds(await resolver.resolveKey(gateway), base)
-    : null;
   const tier = tiers.find((t) =>
-    gateway === 'opencode'
-      ? available?.has(CURATED_OPENCODE_REGISTRY[t]!.modelId)
-      : !!openRouterModelId(t)
+    !!openRouterModelId(t)
   );
   if (!tier) throw new Error('memory_provider_unavailable');
-  const model = gateway === 'opencode'
-    ? CURATED_OPENCODE_REGISTRY[tier]!.modelId
-    : openRouterModelId(tier)!;
+  const model = openRouterModelId(tier)!;
   const prices = getPrices(tier);
   return async (job: MemoryJob): Promise<string> => {
     const grant = await loadAccessGrant(client, subject);
@@ -164,42 +150,28 @@ export async function createMemoryExtractor(
       }, async () => {
         dispatched = true;
         const signal = AbortSignal.timeout(30000);
-        const result = gateway === 'opencode'
-          ? await dispatchOpenCodeStream({
-            config: CURATED_OPENCODE_REGISTRY[tier]!,
-            messages: [{ role: 'user', content: prompt }],
-            openCodeApiKey: apiKey,
-            openCodeBaseUrl: base,
-            sessionId: job.conversation_id,
+        const result = {
+          response: await fetch(base.replace(/\/$/, '') + '/chat/completions', {
+            method: 'POST',
+            headers: {
+              Authorization: 'Bearer ' + apiKey,
+              'Content-Type': 'application/json',
+              'X-Title': 'Prismatix',
+            },
+            body: JSON.stringify({
+              model,
+              messages: [{ role: 'user', content: prompt }],
+              max_tokens: outputMax,
+              stream: true,
+              stream_options: { include_usage: true },
+            }),
             signal,
-            maxTokens: outputMax,
-          })
-          : {
-            response: await fetch(
-              (getEnv('OPENROUTER_BASE_URL') ?? 'https://openrouter.ai/api/v1') +
-                '/chat/completions',
-              {
-                method: 'POST',
-                headers: {
-                  Authorization: 'Bearer ' + apiKey,
-                  'Content-Type': 'application/json',
-                  'X-Title': 'Prismatix',
-                },
-                body: JSON.stringify({
-                  model,
-                  messages: [{ role: 'user', content: prompt }],
-                  max_tokens: outputMax,
-                  stream: true,
-                  stream_options: { include_usage: true },
-                }),
-                signal,
-              },
-            ),
-            extractDeltas: (payload: any): string[] =>
-              typeof payload?.choices?.[0]?.delta?.content === 'string'
-                ? [payload.choices[0].delta.content]
-                : [],
-          };
+          }),
+          extractDeltas: (payload: any): string[] =>
+            typeof payload?.choices?.[0]?.delta?.content === 'string'
+              ? [payload.choices[0].delta.content]
+              : [],
+        };
         if (!result.response.ok || !result.response.body) throw new Error('memory_upstream_failed');
         const tracker = createUsageTracker(gateway),
           parser = createSseParser(),

@@ -41,6 +41,23 @@ vi.mock('../smartFetch', async (importOriginal) => {
   };
 });
 
+const providerPlugins = vi.hoisted(() => ({
+  providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }],
+  defaultProvider: 'openrouter',
+  enabledProviders: new Set(['openrouter']),
+  loading: false,
+  error: null,
+  refresh: vi.fn(async () => {}),
+  setEnabled: vi.fn(async () => true),
+  setKey: vi.fn(async () => true),
+  removeKey: vi.fn(async () => true),
+  setDefault: vi.fn(async () => true),
+}));
+
+vi.mock('../hooks/useProviderPlugins', () => ({
+  useProviderPlugins: () => providerPlugins,
+}));
+
 import { ChatInterface } from './ChatInterface';
 import { askPrismatix } from '../smartFetch';
 

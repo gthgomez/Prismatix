@@ -31,8 +31,6 @@ export interface ProviderPlugins {
   setDefault: (provider: ProviderId) => Promise<boolean>;
 }
 
-const OPENCODE: ProviderId = 'opencode';
-
 export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   const [payload, setPayload] = useState<ProviderSettingsPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -95,10 +93,9 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
 
   const providers = payload?.providers ?? [];
 
-  // Fail safe: until state loads, expose OpenCode only so the picker is never
-  // empty and auto-routing stays on the default gateway.
+  // Fail safe: until state loads, expose no provider and make no paid call.
   const enabledProviders = useMemo<ReadonlySet<ProviderId>>(() => {
-    if (!payload) return new Set<ProviderId>([OPENCODE]);
+    if (!payload) return new Set<ProviderId>();
     return new Set(payload.providers.filter((p) => p.enabled).map((p) => p.id));
   }, [payload]);
 

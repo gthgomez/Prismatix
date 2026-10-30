@@ -5,7 +5,7 @@ import {
   normalizeDecisionAgainstProviderAvailability,
 } from '../../supabase/functions/router/provider_availability.ts';
 import { createProviderResolver } from '../../supabase/functions/router/provider_resolver.ts';
-import type { Provider, RouterParams } from '../../supabase/functions/router/router_logic.ts';
+import type { RouterParams } from '../../supabase/functions/router/router_logic.ts';
 import type { RawUserProviderConfig } from '../../supabase/functions/_shared/provider_registry.ts';
 
 const PARAMS: RouterParams = {
@@ -15,19 +15,17 @@ const PARAMS: RouterParams = {
   history: [],
 };
 
-function resolver(config: RawUserProviderConfig | null, serverKeys: Partial<Record<Provider, string>>) {
+function resolver(config: RawUserProviderConfig | null) {
   return createProviderResolver(config, {
-    serverKey: (p) => serverKeys[p],
     globalEnabled: () => true,
-    fetchUserKey: async () => null,
+    fetchUserKey: async () => 'fake-user-byok-key',
   });
 }
 
 describe('auto-routing provider gating', () => {
   it('keeps the decision when the decided provider is enabled', async () => {
     const r = resolver(
-      { default_provider: 'opencode', providers: [{ provider: 'google', enabled: true, has_key: false }] },
-      { google: 'g-key' },
+      { default_provider: 'openrouter', providers: [{ provider: 'google', enabled: true, has_key: true }] },
     );
 
     const decided = await resolveProductionRoute(PARAMS, undefined, { openCodePrimary: false });
@@ -45,8 +43,7 @@ describe('auto-routing provider gating', () => {
     // Only anthropic is enabled; the decided model is the cheaper google tier.
     // The guard must NOT silently substitute a pricier provider.
     const r = resolver(
-      { default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] },
-      { anthropic: 'sk-ant' },
+      { default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] },
     );
 
     const decided = await resolveProductionRoute(PARAMS, undefined, { openCodePrimary: false });
@@ -63,8 +60,7 @@ describe('auto-routing provider gating', () => {
 
   it('fails closed when a manual pick targets a disabled provider', async () => {
     const r = resolver(
-      { default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] },
-      { anthropic: 'sk-ant' },
+      { default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] },
     );
 
     const decided = await resolveProductionRoute(PARAMS, 'gemini-2.5-flash', { openCodePrimary: false });
@@ -79,8 +75,7 @@ describe('auto-routing provider gating', () => {
 
   it('unlocks a disabled native model through OpenRouter when it is enabled', async () => {
     const r = resolver(
-      { default_provider: 'openrouter', providers: [{ provider: 'openrouter', enabled: true, has_key: false }] },
-      { openrouter: 'sk-or' },
+      { default_provider: 'openrouter', providers: [{ provider: 'openrouter', enabled: true, has_key: true }] },
     );
 
     const decided = await resolveProductionRoute(PARAMS, 'sonnet-4.6', { openCodePrimary: false });
