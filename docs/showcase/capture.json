@@ -1,0 +1,64 @@
+{
+  "sourceRevision": "c516e3683d0dbdc2c0e4aaf46d9556f75a70ae47",
+  "capturedAt": "2026-10-30T12:09:54.533Z",
+  "dateInBrowser": "2026-10-30T12:00:00Z",
+  "browser": "154.0.8037.57",
+  "viewport": {
+    "width": 1280,
+    "height": 900
+  },
+  "origin": "http://127.0.0.1:4311",
+  "externalRequestsBlocked": true,
+  "blockedHosts": [
+    "fonts.googleapis.com"
+  ],
+  "sampleData": "Shipped DEMO_SCENARIOS; scripted responses, route explanations and syntheticCost values. No model/provider requests.",
+  "workflow": "Open public demo; replay architecture sample; switch to fast concept and debate samples.",
+  "videoSeconds": 16.133333,
+  "gifPlaybackSpeed": 1.0083333125,
+  "pageErrors": [],
+  "screenshots": [
+    {
+      "file": "01-overview.jpg",
+      "description": "Public demo landing page; architecture and public-demo entry point."
+    },
+    {
+      "file": "02-architecture.jpg",
+      "description": "Architecture sample replay: scripted stream, route explanation and synthetic cost."
+    },
+    {
+      "file": "03-fast-concept.jpg",
+      "description": "Fast concept sample; displayed routing and prices are illustrative."
+    },
+    {
+      "file": "04-debate.jpg",
+      "description": "Scripted multi-model debate sample; no model calls were made."
+    }
+  ],
+  "files": {
+    "01-overview.jpg": {
+      "bytes": 126748,
+      "sha256": "aea122ed6f3b5e2a989b5d363ea8de985a3982cf8f3731fac3ef6b635ff67f23"
+    },
+    "02-architecture.jpg": {
+      "bytes": 103982,
+      "sha256": "e27caa1ae3a988ab513ceca956d695c07847423f6d33206c0f845ba4fa2bb240"
+    },
+    "03-fast-concept.jpg": {
+      "bytes": 137566,
+      "sha256": "c745e736c4f86a0b6768074ab373910c2cef7b5d4f11abcb96a548604ef7b31a"
+    },
+    "04-debate.jpg": {
+      "bytes": 146112,
+      "sha256": "317c8422e13ef7f6308ab79d655fef8ffb7a280b0c934e26fe4b9f2ea719c0c3"
+    },
+    "workflow.mp4": {
+      "bytes": 340395,
+      "sha256": "8a999d81d685368ae2ab1502f91f36e9a43ac3c381d3367f0bd6acec46aef203"
+    },
+    "preview.gif": {
+      "bytes": 1279907,
+      "sha256": "5ed205a2e996e13aa1dff3e4270e787b872a9049bc2df77990d2359d414801b8"
+    }
+  }
+}
