@@ -1,6 +1,10 @@
 -- Serialize admission and settlement per subject before they acquire row locks.
 -- This keeps admission's project/user-window-first path from deadlocking against
 -- settlement's reservation-first path while preserving all existing accounting.
+-- Each service RPC operates on one subject and is issued as its own PostgREST
+-- request/transaction. Do not batch different subjects' PX05 RPCs in one SQL
+-- transaction: transaction-scoped subject locks do not impose a cross-subject
+-- order for callers that retain earlier locks across multiple RPC invocations.
 create or replace function public.px05_lock_reservation_subject(p_execution_id uuid)
 returns uuid
 language plpgsql
