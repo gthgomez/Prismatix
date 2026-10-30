@@ -9,6 +9,31 @@
 
 Prismatix routes each chat request through an OpenCode model-hub gateway by default, choosing between curated models by routing role — and explains every choice in the UI. Direct Anthropic/OpenAI/Google/NVIDIA/DeepInfra connections remain as an explicit legacy posture, not the default path.
 
+## See it in action
+
+Explore the public sample: replay a scripted response, inspect its route explanation, then switch between concept and debate scenarios.
+
+<a href="docs/showcase/media/workflow.mp4"><img src="docs/showcase/media/preview.gif" alt="Recorded local workflow: Explore the public sample: replay a scripted response, inspect its route explanation, then switch between concept and debate scenarios." width="900"></a>
+
+[Watch or download the MP4](docs/showcase/media/workflow.mp4) · [Capture notes and reproduction](docs/showcase/README.md)
+
+**What you are seeing:** Real browser capture of the shipped interactive sample. Responses, model names, routing decisions, token counts, and costs in this preview are scripted examples; no provider inference or billing was exercised.
+
+**Demo status:** [Open interactive sample](https://prismatix-app.vercel.app/demo). The public URL returned HTTP 200 on 2026-10-30; authenticated chat and provider availability were not tested.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/showcase/media/01-overview.jpg" alt="Public demo landing page; architecture and public-demo entry point." width="100%"><br><strong>1. Public demo</strong><br>Public demo landing page; architecture and public-demo entry point.</td>
+<td width="50%"><img src="docs/showcase/media/02-architecture.jpg" alt="Architecture sample replay: scripted stream, route explanation and synthetic cost." width="100%"><br><strong>2. Architecture replay</strong><br>Architecture sample replay: scripted stream, route explanation and synthetic cost.</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/showcase/media/03-fast-concept.jpg" alt="Fast concept sample; displayed routing and prices are illustrative." width="100%"><br><strong>3. Fast concept sample</strong><br>Fast concept sample; displayed routing and prices are illustrative.</td>
+<td width="50%"><img src="docs/showcase/media/04-debate.jpg" alt="Scripted multi-model debate sample; no model calls were made." width="100%"><br><strong>4. Debate sample</strong><br>Scripted multi-model debate sample; no model calls were made.</td>
+</tr>
+</table>
+
+Captured from [`c516e3683d0d`](https://github.com/gthgomez/Prismatix/tree/c516e3683d0dbdc2c0e4aaf46d9556f75a70ae47) on 2026-10-30. The GIF is a compact preview; the MP4 preserves the recorded workflow timing.
+
 ---
 
 ## What it does
