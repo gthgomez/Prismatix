@@ -6,6 +6,8 @@
 --     -f tests/integration/px05-admission-settlement-lock-order.sql
 -- To verify the missing-admission-barrier negative control, set
 -- px05.test_disable_admission_barrier=on before running; the script must fail.
+-- To verify the missing-settlement-observation negative control, set
+-- px05.test_hide_settlement_wait=on before running; it must fail and clean up.
 --
 -- The test inserts a trigger barrier after admission has locked the daily
 -- budget windows. It starts ledger settlement while admission is paused, waits
@@ -179,12 +181,16 @@ begin
         v_detail := concat_ws('; ', nullif(v_detail, ''), 'could not start settlement session');
       else
         for i in 1..500 loop
-          select wait_event into v_settle_wait_event
-          from pg_stat_activity
-          where application_name = 'px05_lock_settle'
-            and wait_event_type = 'Lock'
-          limit 1;
-          v_settle_waiting := v_settle_wait_event = 'advisory';
+          if current_setting('px05.test_hide_settlement_wait', true) = 'on' then
+            v_settle_wait_event := null;
+          else
+            select wait_event into v_settle_wait_event
+            from pg_stat_activity
+            where application_name = 'px05_lock_settle'
+              and wait_event_type = 'Lock'
+            limit 1;
+          end if;
+          v_settle_waiting := coalesce(v_settle_wait_event = 'advisory', false);
           exit when v_settle_waiting;
           perform pg_sleep(0.01);
         end loop;
@@ -246,8 +252,9 @@ begin
   from prismatix_internal.budget_windows
   where scope = 'user' and subject_id = v_subject and window_start = date_trunc('day', now());
 
-  v_passed := v_admit_paused
-    and v_settle_waiting
+  v_passed := (
+    coalesce(v_admit_paused, false)
+    and coalesce(v_settle_waiting, false)
     and coalesce(v_admit_error, '') not like 'ERROR:%'
     and coalesce(v_settle_error, '') not like 'ERROR:%'
     and (v_admit_result->>'admitted')::boolean is true
@@ -256,13 +263,15 @@ begin
     and v_committed = 0.01
     and v_unknown_result->>'state' = 'pending_reconcile'
     and v_unknown_state = 'pending_reconcile'
-    and v_held = 0.08;
+    and v_held = 0.08
+  ) is true;
 
   if v_passed then
     v_detail := 'both barriers observed; concurrent settlement committed actual cost and unknown-cost hold remained pending';
   else
     v_detail := concat_ws('; ', nullif(v_detail, ''),
-      'barriers=admission:' || v_admit_paused || ',settlement-advisory:' || v_settle_waiting,
+      'barriers=admission:' || coalesce(v_admit_paused::text, 'null') ||
+        ',settlement-advisory:' || coalesce(v_settle_waiting::text, 'null'),
       'admission=' || coalesce(v_admit_result::text, 'no result') || ' (' || coalesce(v_admit_error, '') || ')',
       'settlement=' || coalesce(v_settle_result::text, 'no result') || ' (' || coalesce(v_settle_error, '') || ')',
       'reservation=' || coalesce(v_state, 'missing') || '/' || coalesce(v_committed::text, 'null'),
