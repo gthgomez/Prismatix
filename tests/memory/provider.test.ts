@@ -1,5 +1,7 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryExtractor } from "../../supabase/functions/memory/provider";
+import { decryptKey } from "../../supabase/functions/_shared/byok_crypto";
 import { FAKE_BYOK_CIPHERTEXT, installTestByokEnv } from "../helpers/byok-fixtures";
 const subject = "11111111-1111-4111-8111-111111111111";
 const job = {
@@ -75,6 +77,7 @@ describe("memory provider control and admission", () => {
           subject,
           () => undefined,
         );
+        expect(await decryptKey(FAKE_BYOK_CIPHERTEXT)).toBe("fake-byok-provider-key");
         expect(await extract(job)).toBe('{"facts":[]}');
         const records = rpc.mock.calls.filter((c) =>
           c[0] === "px03_record_model_call"
