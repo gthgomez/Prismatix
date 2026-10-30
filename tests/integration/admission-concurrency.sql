@@ -1,8 +1,8 @@
 -- tests/integration/admission-concurrency.sql
 -- PX05 atomic budget admission / lease / quota assertions.
 --
--- Self-contained psql assertion script. It re-applies the REAL PX05 migration
--- (idempotent) and then asserts the money/concurrency invariants the router and
+-- Psql assertion script for a fully migrated disposable Supabase database.
+-- It asserts the money/concurrency invariants the router and
 -- video paths depend on:
 --   * schema, RLS and service-role-only RPC grants are present;
 --   * per-user budget exhaustion denies with ZERO reservation and no held money;
@@ -23,21 +23,15 @@
 -- to auth.users, so the budget assertions need no auth fixture rows.
 --
 -- Run from the REPO ROOT:
---   Local:
+--   Local only:
 --     supabase start && supabase db reset
 --     psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
 --          -v ON_ERROR_STOP=1 -f tests/integration/admission-concurrency.sql
---   Staging (already-migrated schema):
---     psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -f tests/integration/admission-concurrency.sql
 --
--- NOTE: this script was authored but NOT executed in the PX05 work environment
--- (no psql/Postgres server available). It is a real assertion script, not a
--- comment: every check raises on failure.
+-- The focused PostgreSQL regression and the full-chain migration checks are run
+-- separately; this script is restricted to a disposable local database.
 
 \set ON_ERROR_STOP on
-
--- Apply the REAL migration under test (idempotent DDL; committed).
-\i supabase/migrations/20261006020000_px05_budgets_leases.sql
 
 -- ---------------------------------------------------------------------------
 -- 1) Schema / RLS / grants (self-contained, rolled back).
@@ -99,9 +93,9 @@ begin
   end if;
 end $$;
 
--- Every reservation mutator locks the PROJECT window before the USER window
--- (same fixed order as admit), so no lock cycle is possible. Assert the static
--- ordering from the stored function definitions.
+-- Every reservation mutator keeps the PROJECT-before-USER window order. The
+-- subject mutex is the cross-function lock-order guard; assert that admission
+-- and all reservation mutators use it before relying on that serialization.
 do $$
 declare
   fn text;
@@ -119,12 +113,19 @@ begin
     if def is null then
       raise exception 'PX05 FAIL: function % not found', fn;
     end if;
+    if fn = 'px05_admit_execution' then
+      if position('pg_advisory_xact_lock' in def) = 0 then
+        raise exception 'PX05 FAIL: % does not acquire the subject mutex', fn;
+      end if;
+    elsif position('px05_lock_reservation_subject' in def) = 0 then
+      raise exception 'PX05 FAIL: % does not acquire the subject mutex', fn;
+    end if;
     if position('scope = ''project''' in def) = 0
        or position('scope = ''user''' in def) = 0 then
       raise exception 'PX05 FAIL: % does not lock both windows', fn;
     end if;
     if position('scope = ''project''' in def) > position('scope = ''user''' in def) then
-      raise exception 'PX05 FAIL: % locks the user window before the project window', fn;
+      raise exception 'PX05 FAIL: % orders the user window before the project window', fn;
     end if;
   end loop;
 end $$;
@@ -165,6 +166,12 @@ begin
     and grantee = 'service_role';
   if n <> 6 then
     raise exception 'PX05 FAIL: service_role is missing px05_* execute grants (found %)', n;
+  end if;
+
+  if has_function_privilege('anon', 'public.px05_lock_reservation_subject(uuid)', 'EXECUTE')
+     or has_function_privilege('authenticated', 'public.px05_lock_reservation_subject(uuid)', 'EXECUTE')
+     or has_function_privilege('service_role', 'public.px05_lock_reservation_subject(uuid)', 'EXECUTE') then
+    raise exception 'PX05 FAIL: a client/service role can execute the internal subject lock helper';
   end if;
 end $$;
 
@@ -224,7 +231,7 @@ begin
     raise exception 'PX05 FAIL: user window held_usd = % (expected 0.10)', held;
   end if;
 
-  v := public.px05_admit_execution(u1, e2, 0.05, 0.10, 900, 100, 0.10, 100, 1);
+  v := public.px05_admit_execution(u1, e2, 0.05, 0.10, 900, 100, 0.10, 100, 2);
   if (v->>'admitted')::boolean is not false or v->>'reason' <> 'budget_exhausted' then
     raise exception 'PX05 FAIL: budget exhaustion was not denied (%)', v;
   end if;
@@ -292,24 +299,25 @@ begin
   end if;
 
   -- 2e) Per-minute request rate. request_limit = 2.
-  v := public.px05_admit_execution(u2, e1, 0.01, 0.01, 900, 2, 100, 100, 1);
+  v := public.px05_admit_execution(u2, gen_random_uuid(), 0.01, 0.01, 900, 2, 100, 100, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: rate test first admit denied (%)', v;
   end if;
   -- Expire the active lease so the active-limit check does not shadow the rate.
   update prismatix_internal.execution_leases set expires_at = now() - interval '1 minute'
    where subject_id = u2 and released_at is null;
-  v := public.px05_admit_execution(u2, e2, 0.01, 0.01, 900, 2, 100, 100, 1);
+  v := public.px05_admit_execution(u2, gen_random_uuid(), 0.01, 0.01, 900, 2, 100, 100, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: rate test second admit denied (%)', v;
   end if;
-  v := public.px05_admit_execution(u2, e3, 0.01, 0.01, 900, 2, 100, 100, 1);
+  v := public.px05_admit_execution(u2, gen_random_uuid(), 0.01, 0.01, 900, 2, 100, 100, 1);
   if (v->>'admitted')::boolean is not false or v->>'reason' <> 'rate_limited' then
     raise exception 'PX05 FAIL: per-minute rate limit not enforced (%)', v;
   end if;
 
   -- 2f) Active-run limit: a second concurrent execution for the same subject is
   --     denied while the first lease is live.
+  e1 := gen_random_uuid(); e2 := gen_random_uuid(); e3 := gen_random_uuid();
   v := public.px05_admit_execution(u3, e1, 0.01, 0.01, 900, 100, 100, 100, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: active test first admit denied (%)', v;
@@ -346,18 +354,24 @@ begin
     raise exception 'PX05 FAIL: stale lease changed held_usd to %', held;
   end if;
 
+  -- Isolate the project quota scenario from earlier fixture activity.
+  update prismatix_internal.budget_windows
+     set limit_usd = 100, committed_usd = 0, held_usd = 0
+   where scope = 'project' and subject_id = c_project
+     and window_start = date_trunc('day', now());
+
   -- 2h) The project window is SHARED. Project daily = 0.10; two subjects of 0.05
   --     consume it; a brand-new subject is denied even though its own window is
   --     fresh (a new account cannot obtain a fresh project budget).
-  v := public.px05_admit_execution(u4, e1, 0.05, 0.05, 900, 100, 100, 0.10, 1);
+  v := public.px05_admit_execution(u4, gen_random_uuid(), 0.05, 0.05, 900, 100, 100, 0.10, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: project test u4 denied (%)', v;
   end if;
-  v := public.px05_admit_execution(u5, e1, 0.05, 0.05, 900, 100, 100, 0.10, 1);
+  v := public.px05_admit_execution(u5, gen_random_uuid(), 0.05, 0.05, 900, 100, 100, 0.10, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: project test u5 denied (%)', v;
   end if;
-  v := public.px05_admit_execution(u6, e1, 0.05, 0.05, 900, 100, 100, 0.10, 1);
+  v := public.px05_admit_execution(u6, gen_random_uuid(), 0.05, 0.05, 900, 100, 100, 0.10, 1);
   if (v->>'admitted')::boolean is not false or v->>'reason' <> 'budget_exhausted' then
     raise exception 'PX05 FAIL: new account obtained a fresh project budget (%)', v;
   end if;
@@ -368,6 +382,7 @@ begin
   end if;
 
   -- 2i) Confirmed-zero work can be released (hold returned).
+  e1 := gen_random_uuid();
   v := public.px05_admit_execution(u7, e1, 0.20, 0.20, 900, 100, 100, 100, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: release test admit denied (%)', v;
@@ -584,40 +599,34 @@ begin
   perform dblink_connect('px05_s1', v_conn);
   perform dblink_connect('px05_s2', v_conn);
 
-  -- 25 async admits per session; each subject is distinct so the per-user lease
-  -- limit never masks the shared project budget.
-  for i in 1..25 loop
-    perform dblink_send_query('px05_s1', format(
-      $q$select public.px05_admit_execution(
-            %L::uuid, gen_random_uuid(), %L, %L, 900, 1000, 100, %L, 1)$q$,
-      ('c0000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid,
-      per_exec, per_exec, limit_usd
-    ));
-  end loop;
-  for i in 26..50 loop
-    perform dblink_send_query('px05_s2', format(
-      $q$select public.px05_admit_execution(
-            %L::uuid, gen_random_uuid(), %L, %L, 900, 1000, 100, %L, 1)$q$,
-      ('c0000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid,
-      per_exec, per_exec, limit_usd
-    ));
-  end loop;
+  -- One set-returning statement per connection runs 25 sequential calls per
+  -- session while the two sessions overlap. dblink permits only one active
+  -- query per connection, so do not send multiple queries to either session.
+  perform dblink_send_query('px05_s1', format(
+    $q$select public.px05_admit_execution(
+          ('c0000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid,
+          gen_random_uuid(), 0.10, 0.10, 900, 1000, 100, %L, 1)
+       from generate_series(1, 25) as g(i)$q$,
+    limit_usd
+  ));
+  perform dblink_send_query('px05_s2', format(
+    $q$select public.px05_admit_execution(
+          ('c0000000-0000-4000-8000-' || lpad((i + 25)::text, 12, '0'))::uuid,
+          gen_random_uuid(), 0.10, 0.10, 900, 1000, 100, %L, 1)
+       from generate_series(1, 25) as g(i)$q$,
+    limit_usd
+  ));
 
-  -- Drain session 1.
-  for i in 1..25 loop
-    for rec in select * from dblink_get_result('px05_s1') as t(r jsonb) loop
-      v_result := rec.r;
-      if (v_result->>'admitted')::boolean then v_admitted := v_admitted + 1;
-      else v_denied := v_denied + 1; end if;
-    end loop;
+  -- Drain both query result sets; every returned row represents one admit.
+  for rec in select * from dblink_get_result('px05_s1') as t(r jsonb) loop
+    v_result := rec.r;
+    if (v_result->>'admitted')::boolean then v_admitted := v_admitted + 1;
+    else v_denied := v_denied + 1; end if;
   end loop;
-  -- Drain session 2.
-  for i in 1..25 loop
-    for rec in select * from dblink_get_result('px05_s2') as t(r jsonb) loop
-      v_result := rec.r;
-      if (v_result->>'admitted')::boolean then v_admitted := v_admitted + 1;
-      else v_denied := v_denied + 1; end if;
-    end loop;
+  for rec in select * from dblink_get_result('px05_s2') as t(r jsonb) loop
+    v_result := rec.r;
+    if (v_result->>'admitted')::boolean then v_admitted := v_admitted + 1;
+    else v_denied := v_denied + 1; end if;
   end loop;
 
   perform dblink_disconnect('px05_s1');
