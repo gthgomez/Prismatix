@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase';
 import {
   listPromptTemplates,
   createPromptTemplate,
+  updatePromptTemplate,
   deletePromptTemplate,
   duplicatePromptTemplate,
   substituteVariables,
@@ -33,8 +34,9 @@ export const PromptLibraryModal: React.FC<PromptLibraryModalProps> = ({
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [isCreating, setIsCreating] = useState(false);
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
 
-  // New template form state
+  // New/Edit template form state
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newCategory, setNewCategory] = useState('general');
@@ -54,6 +56,7 @@ export const PromptLibraryModal: React.FC<PromptLibraryModalProps> = ({
       void loadTemplates();
       setSelectedTemplate(null);
       setIsCreating(false);
+      setEditingTemplateId(null);
     }
   }, [isOpen, activeProjectId, search]);
 
@@ -75,24 +78,47 @@ export const PromptLibraryModal: React.FC<PromptLibraryModalProps> = ({
     onClose();
   };
 
-  const handleCreateNew = async (e: React.FormEvent) => {
+  const handleStartEdit = (tpl: PromptTemplate) => {
+    setEditingTemplateId(tpl.id);
+    setNewTitle(tpl.title);
+    setNewDescription(tpl.description || '');
+    setNewCategory(tpl.category);
+    setNewTemplateText(tpl.template);
+    setIsCreating(true);
+  };
+
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim() || !newTemplateText.trim()) return;
 
     setIsSaving(true);
-    const res = await createPromptTemplate(supabase, {
-      title: newTitle,
-      description: newDescription,
-      category: newCategory,
-      template: newTemplateText,
-      projectId: activeProjectId,
-    });
+    let res: { success: boolean; template?: PromptTemplate; error?: string };
+
+    if (editingTemplateId) {
+      res = await updatePromptTemplate(supabase, editingTemplateId, {
+        title: newTitle,
+        description: newDescription,
+        category: newCategory,
+        template: newTemplateText,
+        projectId: activeProjectId,
+      });
+    } else {
+      res = await createPromptTemplate(supabase, {
+        title: newTitle,
+        description: newDescription,
+        category: newCategory,
+        template: newTemplateText,
+        projectId: activeProjectId,
+      });
+    }
+
     setIsSaving(false);
 
     if (res.success && res.template) {
       setNewTitle('');
       setNewDescription('');
       setNewTemplateText('');
+      setEditingTemplateId(null);
       setIsCreating(false);
       void loadTemplates();
     }
@@ -139,8 +165,8 @@ export const PromptLibraryModal: React.FC<PromptLibraryModalProps> = ({
 
         <div className='knowledge-modal-body' style={{ overflowY: 'auto', flex: 1 }}>
           {isCreating ? (
-            <form onSubmit={handleCreateNew} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <h4>Create Prompt Template</h4>
+            <form onSubmit={handleSaveForm} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <h4>{editingTemplateId ? 'Edit Prompt Template' : 'Create Prompt Template'}</h4>
               <div>
                 <label style={{ fontSize: '0.8rem', display: 'block', marginBottom: '0.25rem' }}>Template Title</label>
                 <input
@@ -432,6 +458,15 @@ export const PromptLibraryModal: React.FC<PromptLibraryModalProps> = ({
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                       <div style={{ display: 'flex', gap: '0.35rem' }}>
+                        <button
+                          type='button'
+                          onClick={() => handleStartEdit(tpl)}
+                          title='Edit template'
+                          aria-label={`Edit ${tpl.title}`}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.85rem' }}
+                        >
+                          ✏️
+                        </button>
                         <button
                           type='button'
                           onClick={() => handleDuplicate(tpl.id)}

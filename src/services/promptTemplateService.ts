@@ -164,6 +164,59 @@ export async function createPromptTemplate(
 }
 
 /**
+ * Updates an existing prompt template.
+ */
+export async function updatePromptTemplate(
+  client: SupabaseClient,
+  id: string,
+  input: Partial<PromptTemplateInput>,
+): Promise<{ success: boolean; template?: PromptTemplate; error?: string }> {
+  try {
+    const updates: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (input.title !== undefined) updates.title = input.title.trim();
+    if (input.description !== undefined) updates.description = input.description.trim();
+    if (input.template !== undefined) {
+      updates.template = input.template.trim();
+      updates.variables = extractTemplateVariables(input.template.trim());
+    }
+    if (input.category !== undefined) updates.category = input.category.trim();
+    if (input.projectId !== undefined) updates.project_id = input.projectId || null;
+
+    const { data, error } = await client
+      .from('prompt_templates')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      return { success: false, error: error?.message || 'Update failed' };
+    }
+
+    return {
+      success: true,
+      template: {
+        id: String(data.id),
+        userId: String(data.user_id),
+        projectId: data.project_id ? String(data.project_id) : null,
+        title: String(data.title),
+        description: String(data.description || ''),
+        template: String(data.template),
+        variables: Array.isArray(data.variables) ? (data.variables as string[]) : [],
+        category: String(data.category || 'general'),
+        createdAt: String(data.created_at),
+        updatedAt: String(data.updated_at),
+      },
+    };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
  * Deletes a prompt template.
  */
 export async function deletePromptTemplate(

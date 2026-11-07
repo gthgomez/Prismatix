@@ -3,9 +3,22 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { previewConversationImport, executeConversationImport } from '../../src/services/conversationImport';
-import { branchConversation, recordMessageVersion } from '../../src/services/conversationBranching';
-import { substituteVariables, extractTemplateVariables, listPromptTemplates, createPromptTemplate } from '../../src/services/promptTemplateService';
-import { getLocalPreferences, setLocalPreferences, saveServerPreferences, syncPreferences, DEFAULT_PREFERENCES } from '../../src/services/userPreferencesService';
+import { branchConversation, persistMessageVersion, recordMessageVersion } from '../../src/services/conversationBranching';
+import {
+  substituteVariables,
+  extractTemplateVariables,
+  listPromptTemplates,
+  createPromptTemplate,
+  updatePromptTemplate,
+} from '../../src/services/promptTemplateService';
+import {
+  getLocalPreferences,
+  setLocalPreferences,
+  clearLocalPreferences,
+  saveServerPreferences,
+  syncPreferences,
+  DEFAULT_PREFERENCES,
+} from '../../src/services/userPreferencesService';
 import { archiveConversation, setConversationTags } from '../../src/services/conversationService';
 
 describe('F16: Conversation Import & Migration', () => {
@@ -93,43 +106,34 @@ describe('F16: Conversation Import & Migration', () => {
     expect(emptyObj.error).toMatch(/JSON structure/);
   });
 
-  it('executes conversation import and records cost_status: imported', async () => {
-    const insertedConversations: any[] = [];
-    const insertedMessages: any[] = [];
+  it('executes conversation import via secure server RPC', async () => {
+    let calledRpcName = '';
+    let rpcPayload: any = null;
 
     const mockClient: any = {
       auth: {
         getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-123' } } }),
       },
       from: (table: string) => {
-        if (table === 'conversations') {
-          return {
-            select: () => ({
-              eq: () => Promise.resolve({ data: [], error: null }),
-            }),
-            insert: vi.fn((data) => {
-              insertedConversations.push(data);
-              return Promise.resolve({ error: null });
-            }),
-          };
-        }
-        if (table === 'messages') {
-          return {
-            insert: vi.fn((data) => {
-              insertedMessages.push(data);
-              return Promise.resolve({ error: null });
-            }),
-          };
-        }
-        if (table === 'cost_logs') {
-          return {
-            select: () => ({
-              eq: () => Promise.resolve({ data: [], error: null }),
-            }),
-          };
-        }
-        return {};
+        expect(table).toBe('conversations');
+        return {
+          select: () => ({
+            eq: () => Promise.resolve({ data: [], error: null }),
+          }),
+        };
       },
+      rpc: vi.fn((fnName, args) => {
+        calledRpcName = fnName;
+        rpcPayload = args;
+        return Promise.resolve({
+          data: {
+            success: true,
+            conversation_id: 'conv-new-1',
+            messages_count: 2,
+          },
+          error: null,
+        });
+      }),
     };
 
     const raw = JSON.stringify({
@@ -138,7 +142,7 @@ describe('F16: Conversation Import & Migration', () => {
           title: 'Imported Topic',
           messages: [
             { role: 'user', content: 'User question' },
-            { role: 'assistant', content: 'Assistant answer' },
+            { role: 'assistant', content: 'Assistant answer', model: 'gemini-3.8-flash' },
           ],
         },
       ],
@@ -148,90 +152,91 @@ describe('F16: Conversation Import & Migration', () => {
     expect(result.success).toBe(true);
     expect(result.importedConversations).toBe(1);
     expect(result.importedMessages).toBe(2);
-    expect(insertedConversations).toHaveLength(1);
-    expect(insertedConversations[0].title).toBe('Imported Topic');
-    expect(insertedConversations[0].user_id).toBe('user-123');
-
-    expect(insertedMessages).toHaveLength(2);
-    expect(insertedMessages[1].metadata.costStatus).toBe('imported');
+    expect(calledRpcName).toBe('px16_import_conversation');
+    expect(rpcPayload.p_conversation.title).toBe('Imported Topic');
+    expect(rpcPayload.p_conversation.messages).toHaveLength(2);
+    expect(rpcPayload.p_conversation.messages[0].role).toBe('user');
+    expect(rpcPayload.p_conversation.messages[1].model).toBe('gemini-3.8-flash');
   });
 });
 
 describe('F17: Conversation Branching & Version History', () => {
-  it('branches conversation up to target message with lineage recorded', async () => {
-    const sourceMessagesDesc = [
-      { id: 'msg-4', role: 'assistant', content: 'Second response', attachments: [] },
-      { id: 'msg-3', role: 'user', content: 'Second prompt', attachments: [] },
-      { id: 'msg-2', role: 'assistant', content: 'First response', attachments: [] },
-      { id: 'msg-1', role: 'user', content: 'First prompt', attachments: [] },
-    ];
-
-    let insertedConv: any = null;
-    const insertedMessages: any[] = [];
-
-    const createOrderChain = () => {
-      const chain: any = {
-        order: () => chain,
-        limit: () => Promise.resolve({ data: sourceMessagesDesc, error: null }),
-      };
-      return chain;
-    };
+  it('branches conversation via px17_branch_conversation server RPC', async () => {
+    let rpcName = '';
+    let rpcArgs: any = null;
 
     const mockClient: any = {
       auth: {
         getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
       },
-      from: (table: string) => {
-        if (table === 'conversations') {
-          return {
-            select: () => ({
-              eq: () => ({
-                single: () => Promise.resolve({ data: { id: 'conv-orig', title: 'Original Chat', project_id: 'proj-1' }, error: null }),
-              }),
-            }),
-            insert: (data: any) => {
-              insertedConv = data;
-              return Promise.resolve({ error: null });
-            },
-          };
-        }
-        if (table === 'messages') {
-          return {
-            select: () => ({
-              eq: () => createOrderChain(),
-            }),
-            insert: (data: any) => {
-              insertedMessages.push(data);
-              return Promise.resolve({ error: null });
-            },
-          };
-        }
-        if (table === 'cost_logs') {
-          return {
-            select: () => ({
-              eq: () => Promise.resolve({ data: [], error: null }),
-            }),
-          };
-        }
-        return {};
-      },
+      rpc: vi.fn((name, args) => {
+        rpcName = name;
+        rpcArgs = args;
+        return Promise.resolve({
+          data: {
+            success: true,
+            new_conversation_id: 'conv-branch-123',
+            copied_message_count: 2,
+            title: 'Branch: Custom Title',
+          },
+          error: null,
+        });
+      }),
     };
 
     const res = await branchConversation(mockClient, {
-      sourceConversationId: 'conv-orig',
-      fromMessageId: 'msg-2',
+      sourceConversationId: '123e4567-e89b-12d3-a456-426614174000',
+      fromMessageId: '123e4567-e89b-12d3-a456-426614174001',
+      branchTitle: 'Branch: Custom Title',
     });
 
+    expect(rpcName).toBe('px17_branch_conversation');
+    expect(rpcArgs.p_source_conversation_id).toBe('123e4567-e89b-12d3-a456-426614174000');
+    expect(rpcArgs.p_from_message_id).toBe('123e4567-e89b-12d3-a456-426614174001');
+    expect(rpcArgs.p_branch_title).toBe('Branch: Custom Title');
+    expect(res.newConversationId).toBe('conv-branch-123');
     expect(res.copiedMessageCount).toBe(2);
-    expect(insertedConv.parent_conversation_id).toBe('conv-orig');
-    expect(insertedConv.forked_from_message_id).toBe('msg-2');
-    expect(insertedConv.project_id).toBe('proj-1');
-    expect(insertedMessages).toHaveLength(2);
-    expect(insertedMessages[0].content).toBe('First prompt');
-    expect(insertedMessages[1].content).toBe('First response');
+    expect(res.newTitle).toBe('Branch: Custom Title');
   });
 
-  it('records message response versions without overwriting previous versions', () => {
+  it('persists message versions durably via px17_record_message_version RPC', async () => {
+    let rpcName = '';
+    let rpcArgs: any = null;
+
+    const mockClient: any = {
+      rpc: vi.fn((name, args) => {
+        rpcName = name;
+        rpcArgs = args;
+        return Promise.resolve({
+          data: {
+            success: true,
+            versions: [
+              { version: 1, content: 'Initial', model: 'flash', timestamp: 1000 },
+              { version: 2, content: 'Regenerated', model: 'sol', timestamp: 2000 },
+            ],
+            current_version: 2,
+          },
+          error: null,
+        });
+      }),
+    };
+
+    const res = await persistMessageVersion(
+      mockClient,
+      '123e4567-e89b-12d3-a456-426614174002',
+      'Regenerated',
+      'gpt-6-sol',
+    );
+
+    expect(rpcName).toBe('px17_record_message_version');
+    expect(rpcArgs.p_message_id).toBe('123e4567-e89b-12d3-a456-426614174002');
+    expect(rpcArgs.p_content).toBe('Regenerated');
+    expect(rpcArgs.p_model).toBe('gpt-6-sol');
+    expect(res.currentVersion).toBe(2);
+    expect(res.versions).toHaveLength(2);
+  });
+
+  it('records message response versions in memory without overwriting previous versions', () => {
     const initialMessage: any = {
       id: 'msg-10',
       role: 'assistant',
@@ -328,7 +333,7 @@ describe('F19: Reusable Prompt Library with Variable Substitution', () => {
     expect(substituted).toBe('Hello Alice, welcome to !');
   });
 
-  it('creates and lists prompt templates via Supabase client', async () => {
+  it('creates, updates, and lists prompt templates via Supabase client', async () => {
     const templatesList = [
       {
         id: 't-1',
@@ -338,6 +343,8 @@ describe('F19: Reusable Prompt Library with Variable Substitution', () => {
         category: 'coding',
       },
     ];
+
+    let updatedPayload: any = null;
 
     const mockClient: any = {
       auth: {
@@ -367,6 +374,29 @@ describe('F19: Reusable Prompt Library with Variable Substitution', () => {
                 }),
             }),
           }),
+          update: vi.fn((data) => {
+            updatedPayload = data;
+            return {
+              eq: () => ({
+                select: () => ({
+                  single: () =>
+                    Promise.resolve({
+                      data: {
+                        id: 't-1',
+                        user_id: 'u-123',
+                        title: data.title || 'Code Review Updated',
+                        template: data.template || 'Updated {{code}}',
+                        variables: ['code'],
+                        category: 'coding',
+                        created_at: new Date().toISOString(),
+                        updated_at: new Date().toISOString(),
+                      },
+                      error: null,
+                    }),
+                }),
+              }),
+            };
+          }),
         };
       },
     };
@@ -382,6 +412,14 @@ describe('F19: Reusable Prompt Library with Variable Substitution', () => {
     });
     expect(created.success).toBe(true);
     expect(created.template?.variables).toEqual(['doc']);
+
+    const updated = await updatePromptTemplate(mockClient, 't-1', {
+      title: 'Code Review Advanced',
+      template: 'Advanced review: {{code}}',
+    });
+    expect(updated.success).toBe(true);
+    expect(updatedPayload.title).toBe('Code Review Advanced');
+    expect(updatedPayload.variables).toEqual(['code']);
   });
 });
 
@@ -390,17 +428,19 @@ describe('F20: User Preference Synchronization', () => {
     window.localStorage.clear();
   });
 
-  it('reads and writes localStorage preferences correctly', () => {
-    expect(getLocalPreferences()).toEqual(DEFAULT_PREFERENCES);
+  it('scopes localStorage preferences by user ID to prevent cross-account leakage', () => {
+    const prefsA = { ...DEFAULT_PREFERENCES, routingProfile: 'economy' as const };
+    const prefsB = { ...DEFAULT_PREFERENCES, routingProfile: 'capability' as const };
 
-    const custom = {
-      ...DEFAULT_PREFERENCES,
-      routingProfile: 'economy' as const,
-      webSearchEnabled: true,
-    };
-    setLocalPreferences(custom);
-    expect(getLocalPreferences().routingProfile).toBe('economy');
-    expect(getLocalPreferences().webSearchEnabled).toBe(true);
+    setLocalPreferences(prefsA, 'user-A');
+    setLocalPreferences(prefsB, 'user-B');
+
+    expect(getLocalPreferences('user-A').routingProfile).toBe('economy');
+    expect(getLocalPreferences('user-B').routingProfile).toBe('capability');
+
+    clearLocalPreferences('user-A');
+    expect(getLocalPreferences('user-A').routingProfile).toBe('balanced'); // back to default
+    expect(getLocalPreferences('user-B').routingProfile).toBe('capability'); // preserved
   });
 
   it('syncs preferences from server and merges with defaults', async () => {
@@ -430,11 +470,11 @@ describe('F20: User Preference Synchronization', () => {
     const synced = await syncPreferences(mockClient);
     expect(synced.routingProfile).toBe('deep_reasoning');
     expect(synced.maxSpendCap).toBe(0.5);
-    // Cached to localStorage
-    expect(getLocalPreferences().routingProfile).toBe('deep_reasoning');
+    // Cached to user-scoped localStorage
+    expect(getLocalPreferences('u-123').routingProfile).toBe('deep_reasoning');
   });
 
-  it('saves preferences to server and updates local cache', async () => {
+  it('saves preferences to server and updates local cache with user scoping', async () => {
     let upsertedData: any = null;
 
     const mockClient: any = {
@@ -458,6 +498,6 @@ describe('F20: User Preference Synchronization', () => {
     expect(upsertedData.user_id).toBe('u-123');
     expect(upsertedData.preferences.routingProfile).toBe('capability');
     expect(upsertedData.preferences.webSearchEnabled).toBe(true);
-    expect(getLocalPreferences().routingProfile).toBe('capability');
+    expect(getLocalPreferences('u-123').routingProfile).toBe('capability');
   });
 });
