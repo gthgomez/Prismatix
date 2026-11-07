@@ -32,14 +32,16 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Network-only for all API, auth, Supabase, and external provider calls
+  // Network-only for all API, auth, Supabase functions, and external provider calls
   if (
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/rest/') ||
     url.pathname.startsWith('/auth/') ||
+    url.pathname.startsWith('/functions/') ||
     url.hostname.includes('supabase.co') ||
     url.hostname.includes('openrouter.ai') ||
     url.hostname.includes('api.openai.com') ||
+    url.hostname.includes('api.search.brave.com') ||
     event.request.method !== 'GET'
   ) {
     return;

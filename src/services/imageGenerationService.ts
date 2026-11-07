@@ -68,6 +68,8 @@ export interface ImageGenerationResult {
   prompt: string;
   size: string;
   costUsd: number;
+  costStatus?: 'settled' | 'unmetered' | 'failed';
+  isMock?: boolean;
   revisedPrompt?: string;
   error?: string;
   timestamp: string;
@@ -138,6 +140,8 @@ export async function executeImageGeneration(params: ImageGenerationParams): Pro
       prompt,
       size,
       costUsd: estimatedCost,
+      costStatus: 'unmetered',
+      isMock: true,
       revisedPrompt: `A photorealistic depiction of: ${prompt}`,
       timestamp: new Date().toISOString(),
     };
@@ -151,6 +155,8 @@ export async function executeImageGeneration(params: ImageGenerationParams): Pro
       prompt,
       size,
       costUsd: 0,
+      costStatus: 'failed',
+      isMock: false,
       error: `No API key provided for ${modelInfo.provider.toUpperCase()} image generation. Configure your BYOK key in Provider Settings.`,
       timestamp: new Date().toISOString(),
     };

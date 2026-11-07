@@ -53,14 +53,42 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   const isStreamingAssistant = isStreaming && message.role === 'assistant';
   const textContent = extractTextContent(message.content);
 
+  const storedVersions = (Array.isArray(message.metadata?.versions) ? message.metadata.versions : []) as Array<{
+    version: number;
+    content: string;
+    model_used?: string;
+    created_at?: string;
+  }>;
+
+  const allVersions = React.useMemo(() => {
+    if (storedVersions.length === 0) return [];
+    const last = storedVersions[storedVersions.length - 1];
+    if (last && last.content !== textContent) {
+      return [...storedVersions, { version: storedVersions.length + 1, content: textContent, model_used: message.model }];
+    }
+    return storedVersions;
+  }, [storedVersions, textContent, message.model]);
+
+  const [selectedVersionIdx, setSelectedVersionIdx] = useState<number>(allVersions.length > 0 ? allVersions.length - 1 : 0);
+
+  useEffect(() => {
+    if (allVersions.length > 0) {
+      setSelectedVersionIdx(allVersions.length - 1);
+    }
+  }, [allVersions.length]);
+
+  const activeContent = allVersions.length > 0 && allVersions[selectedVersionIdx]
+    ? allVersions[selectedVersionIdx].content
+    : textContent;
+
   const [isEditing, setIsEditing] = useState(false);
-  const [editText, setEditText] = useState(textContent);
+  const [editText, setEditText] = useState(activeContent);
 
   useEffect(() => {
     if (!isEditing) {
-      setEditText(textContent);
+      setEditText(activeContent);
     }
-  }, [textContent, isEditing]);
+  }, [activeContent, isEditing]);
 
   const handleSaveEdit = () => {
     const trimmed = editText.trim();
@@ -71,7 +99,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
   const handleCancelEdit = () => {
     setIsEditing(false);
-    setEditText(textContent);
+    setEditText(activeContent);
   };
 
   return (
@@ -100,6 +128,47 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
           <span className='message-role'>
             {message.role === 'user' ? 'You' : 'Assistant'}
           </span>
+          {allVersions.length > 1 && (
+            <div className='message-version-switcher' style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.75rem', color: 'var(--color-text-dim, #9ca3af)', marginLeft: '0.5rem' }}>
+              <button
+                type='button'
+                aria-label='Previous response version'
+                disabled={selectedVersionIdx <= 0}
+                onClick={() => setSelectedVersionIdx((i) => Math.max(0, i - 1))}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: selectedVersionIdx <= 0 ? 'rgba(255,255,255,0.2)' : 'var(--color-primary, #4ecdc4)',
+                  cursor: selectedVersionIdx <= 0 ? 'default' : 'pointer',
+                  padding: '0 0.2rem',
+                  fontSize: '0.85rem',
+                  fontWeight: 'bold',
+                }}
+              >
+                ‹
+              </button>
+              <span aria-label={`Version ${selectedVersionIdx + 1} of ${allVersions.length}`}>
+                {selectedVersionIdx + 1} / {allVersions.length}
+              </span>
+              <button
+                type='button'
+                aria-label='Next response version'
+                disabled={selectedVersionIdx >= allVersions.length - 1}
+                onClick={() => setSelectedVersionIdx((i) => Math.min(allVersions.length - 1, i + 1))}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: selectedVersionIdx >= allVersions.length - 1 ? 'rgba(255,255,255,0.2)' : 'var(--color-primary, #4ecdc4)',
+                  cursor: selectedVersionIdx >= allVersions.length - 1 ? 'default' : 'pointer',
+                  padding: '0 0.2rem',
+                  fontSize: '0.85rem',
+                  fontWeight: 'bold',
+                }}
+              >
+                ›
+              </button>
+            </div>
+          )}
           {message.model && (
             <div className='message-metadata-container'>
               <button
@@ -323,7 +392,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
           <>
             <div className='message-text'>
               <FormattedMessage
-                content={textContent}
+                content={activeContent}
                 isStreaming={isStreamingAssistant}
                 showCursor={isStreamingAssistant}
               />
@@ -515,19 +584,19 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
             {(!isWaitingFirstToken || !isStreamingAssistant) && (
               <MessageActionToolbar
                 role={message.role}
-                content={textContent}
+                content={activeContent}
                 isStreaming={isStreamingAssistant}
                 onCopy={() => onCopy?.(index)}
                 onEdit={() => {
-                  setEditText(textContent);
+                  setEditText(activeContent);
                   setIsEditing(true);
                 }}
                 onRegenerate={(override) => onRegenerate?.(index, override)}
                 onBranch={onBranch ? () => onBranch(index) : undefined}
                 feedback={message.feedback}
                 onFeedback={(type) => onFeedback?.(index, type)}
-                hasArtifacts={message.role === 'assistant' && textContent.includes('```')}
-                onOpenArtifact={onOpenArtifact ? () => onOpenArtifact(index, textContent) : undefined}
+                hasArtifacts={message.role === 'assistant' && activeContent.includes('```')}
+                onOpenArtifact={onOpenArtifact ? () => onOpenArtifact(index, activeContent) : undefined}
               />
             )}
           </>

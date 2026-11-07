@@ -1314,14 +1314,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const handleImageGenerated = useCallback(
     async (result: ImageGenerationResult) => {
       const convId = selectedConversationIdRef.current;
+      const isMock = result.isMock ?? Boolean(result.imageUrl?.startsWith('data:image/svg+xml'));
+      const finalCost = isMock ? 0 : (result.costUsd || 0);
       const newMsg: Message = {
         role: 'assistant',
         content: result.revisedPrompt || result.prompt,
         timestamp: Date.now(),
         model: result.modelId as RouterModel,
         cost: {
-          status: 'settled',
-          finalUsd: result.costUsd,
+          status: isMock ? 'unmetered' : 'settled',
+          finalUsd: finalCost,
         },
         metadata: {
           type: 'image_generation',
@@ -1332,16 +1334,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
       if (convId) {
         try {
-          await supabase.from('messages').insert({
-            conversation_id: convId,
-            role: 'assistant',
-            content: newMsg.content,
-            model: result.modelId,
-            actual_cost: result.costUsd,
-            metadata: newMsg.metadata,
+          await supabase.rpc('px28_record_image_message', {
+            p_conversation_id: convId,
+            p_content: newMsg.content,
+            p_model: result.modelId,
+            p_image_result: result,
+            p_is_mock: isMock,
           });
         } catch (err) {
-          console.warn('Failed to persist generated image message:', err);
+          console.warn('Failed to persist generated image message via px28_record_image_message:', err);
         }
       }
       setActionNotice({ type: 'success', message: `Image generated via ${result.modelId}` });
@@ -3629,7 +3630,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         isOpen={isArtifactModalOpen}
         artifact={activeArtifact}
         onClose={() => setIsArtifactModalOpen(false)}
-        onUpdateArtifact={(updated) => setActiveArtifact(updated)}
+        onUpdateArtifact={async (updated) => {
+          setActiveArtifact(updated);
+          const convId = selectedConversationIdRef.current;
+          if (convId && user) {
+            try {
+              await supabase.from('artifacts').upsert({
+                id: updated.id,
+                user_id: user.id,
+                conversation_id: convId,
+                title: updated.title,
+                language: updated.language,
+                current_content: updated.currentContent,
+                versions: updated.versions,
+                updated_at: new Date().toISOString(),
+              });
+            } catch (err) {
+              console.warn('[ChatInterface] Failed to persist artifact revision:', err);
+            }
+          }
+        }}
       />
       </div>
     </div>

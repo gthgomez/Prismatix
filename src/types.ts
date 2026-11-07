@@ -87,7 +87,7 @@ export type RouteRole =
 export type RouteGateway = 'opencode' | 'openrouter' | 'direct_fallback';
 export type RouteSelection = 'auto' | 'override';
 
-export type CostStatus = 'settled' | 'estimated' | 'pending' | 'unknown';
+export type CostStatus = 'settled' | 'estimated' | 'pending' | 'unknown' | 'unmetered';
 
 /**
  * Client mirror of the router's explainable route contract (X-Route-Decision).
