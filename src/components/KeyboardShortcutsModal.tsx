@@ -21,6 +21,7 @@ const KEYBOARD_SHORTCUT_CATEGORIES: ShortcutCategory[] = [
     shortcuts: [
       { keys: ['Ctrl / ⌘', 'Shift', 'O'], description: 'Start new chat' },
       { keys: ['Ctrl / ⌘', 'Shift', 'S'], description: 'Toggle conversation sidebar' },
+      { keys: ['Ctrl / ⌘', 'Shift', 'F'], description: 'Global full-text chat search' },
       { keys: ['Ctrl / ⌘', 'K'], description: 'Focus model & route picker' },
       { keys: ['?'], description: 'Open keyboard shortcuts cheatsheet' },
       { keys: ['Esc'], description: 'Stop streaming response / dismiss popovers' },

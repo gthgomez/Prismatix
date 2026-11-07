@@ -21,6 +21,7 @@ supabase/.temp/
 # Testing
 coverage/
 .nyc_output/
+test-results/
 
 # Python artifacts
 __pycache__/

@@ -120,6 +120,8 @@ import { useProviderPlugins } from '../hooks/useProviderPlugins';
 import { useModelPickerPreferences } from '../hooks/useModelPickerPreferences';
 import { ProviderSettings } from './ProviderSettings';
 import { MemorySettings } from './MemorySettings';
+import { FirstRunSetupCard } from './FirstRunSetupCard';
+import { GlobalSearchModal } from './GlobalSearchModal';
 import {
   getComposerSendValidationView,
   VIDEO_UI_DEBATE_SEND_ERROR,
@@ -346,6 +348,39 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // PX07 conversation continuity state.
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [hasMoreConversations, setHasMoreConversations] = useState(false);
+  const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
+  const [loadMoreConversationsError, setLoadMoreConversationsError] = useState<string | null>(null);
+  const [conversationsError, setConversationsError] = useState<string | null>(null);
+
+  // PR 1: F04 older message pagination state
+  const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
+  const [isLoadingEarlierMessages, setIsLoadingEarlierMessages] = useState(false);
+  const [earlierMessagesError, setEarlierMessagesError] = useState<string | null>(null);
+  const [conversationLoadError, setConversationLoadError] = useState<string | null>(null);
+
+  // PR 1: F02 lossless draft recovery and retry state (in-memory session only)
+  const [failedTurnDraft, setFailedTurnDraft] = useState<{
+    rawInput: string;
+    queryText: string;
+    attachments: FileUploadPayload[];
+    error?: string;
+    failedUserIndex?: number;
+    overrideModel?: RouterModel;
+  } | null>(null);
+  const activeDraftRef = useRef<{
+    rawInput: string;
+    queryText: string;
+    attachments: FileUploadPayload[];
+    overrideModel?: RouterModel;
+  } | null>(null);
+
+  // PR 1: F05 global full-text chat search state
+  const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
+
+  // Shared quality requirement: action notice banner (rename/delete)
+  const [actionNotice, setActionNotice] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
+
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Past-chats visibility, persisted per browser. Hidden means the list is
@@ -703,6 +738,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
       const provenance = item.provenance;
       mapped.push({
+        id: item.id,
+        createdAt: item.createdAt,
         role: item.role,
         content: item.content,
         timestamp: Date.parse(item.createdAt) || Date.now(),
@@ -761,13 +798,41 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const refreshConversations = async () => {
     setConversationsLoading(true);
+    setConversationsError(null);
     try {
       const list = await listConversations(supabase, { limit: 50 });
       setConversations(list);
+      setHasMoreConversations(list.length === 50);
     } catch (error) {
       console.warn('[ChatInterface] Failed to list conversations:', error);
+      setConversationsError('Failed to load conversations.');
     } finally {
       setConversationsLoading(false);
+    }
+  };
+
+  const handleLoadMoreConversations = async () => {
+    if (isLoadingMoreConversations || !hasMoreConversations || conversations.length === 0) return;
+    const last = conversations[conversations.length - 1];
+    if (!last) return;
+
+    setIsLoadingMoreConversations(true);
+    setLoadMoreConversationsError(null);
+    try {
+      const nextBatch = await listConversations(supabase, {
+        limit: 50,
+        before: { lastActivityAt: last.lastActivityAt, id: last.id },
+      });
+      setConversations((prev) => {
+        const seen = new Set(prev.map((c) => c.id));
+        const newRows = nextBatch.filter((c) => !seen.has(c.id));
+        return [...prev, ...newRows];
+      });
+      setHasMoreConversations(nextBatch.length === 50);
+    } catch (err) {
+      setLoadMoreConversationsError('Failed to load older conversations.');
+    } finally {
+      setIsLoadingMoreConversations(false);
     }
   };
 
@@ -778,6 +843,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setConversationId(conversationId);
     setDuplicateNotice(null);
     setContextExcludedCount(0);
+    setConversationLoadError(null);
+    setEarlierMessagesError(null);
     try {
       const loaded = await loadConversation(supabase, conversationId, { limit: 200 });
       // Ignore a stale load: a newer selection (or a New Chat / account-change
@@ -799,6 +866,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         return;
       }
       setMessages(mapped);
+      setHasEarlierMessages(loaded.length === 200);
     } catch (error) {
       if (
         loadSeq !== conversationLoadSeqRef.current ||
@@ -807,7 +875,164 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         return;
       }
       console.warn('[ChatInterface] Failed to load conversation:', error);
-      setMessages([]);
+      setConversationLoadError('Failed to load conversation history.');
+    }
+  };
+
+  const handleLoadEarlierMessages = async () => {
+    if (isLoadingEarlierMessages || !hasEarlierMessages || messages.length === 0) return;
+    const currentConvId = selectedConversationIdRef.current;
+    if (!currentConvId) return;
+
+    const oldest = messages[0];
+    if (!oldest || !oldest.id) return;
+
+    const cursorCreatedAt =
+      oldest.createdAt ||
+      (oldest.timestamp ? new Date(oldest.timestamp).toISOString() : new Date().toISOString());
+    const cursorId = oldest.id;
+
+    setIsLoadingEarlierMessages(true);
+    setEarlierMessagesError(null);
+
+    const container = chatMessagesRef.current;
+    const prevScrollHeight = container ? container.scrollHeight : 0;
+    const prevScrollTop = container ? container.scrollTop : 0;
+    const loadSeq = conversationLoadSeqRef.current;
+
+    try {
+      const earlier = await loadConversation(supabase, currentConvId, {
+        limit: 50,
+        before: { createdAt: cursorCreatedAt, id: cursorId },
+      });
+
+      if (
+        loadSeq !== conversationLoadSeqRef.current ||
+        selectedConversationIdRef.current !== currentConvId
+      ) {
+        return;
+      }
+
+      const mappedEarlier = await mapLoadedMessages(earlier);
+      if (
+        loadSeq !== conversationLoadSeqRef.current ||
+        selectedConversationIdRef.current !== currentConvId
+      ) {
+        return;
+      }
+
+      setMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id).filter(Boolean));
+        const deduplicated = mappedEarlier.filter((m) => !m.id || !seen.has(m.id));
+        return [...deduplicated, ...prev];
+      });
+
+      setHasEarlierMessages(earlier.length === 50);
+
+      // Stable scroll restoration
+      requestAnimationFrame(() => {
+        if (container) {
+          container.scrollTop = container.scrollHeight - prevScrollHeight + prevScrollTop;
+        }
+      });
+    } catch (err) {
+      setEarlierMessagesError('Failed to load earlier messages.');
+    } finally {
+      setIsLoadingEarlierMessages(false);
+    }
+  };
+
+  const handleRestoreDraft = () => {
+    if (!failedTurnDraft) return;
+    setInput(failedTurnDraft.rawInput);
+    setDraftAttachments(failedTurnDraft.attachments);
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      inputRef.current.focus();
+    }
+    // Remove the failed assistant message from history if one was appended
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.role === 'assistant' && typeof last.content === 'string' && last.content.startsWith('⚠️')) {
+        return prev.slice(0, -1);
+      }
+      return prev;
+    });
+    setFailedTurnDraft(null);
+  };
+
+  const handleRetryTurn = async () => {
+    if (!failedTurnDraft || isStreaming) return;
+    const { queryText, attachments, overrideModel } = failedTurnDraft;
+    setFailedTurnDraft(null);
+
+    // Remove the failed assistant message if present
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.role === 'assistant' && typeof last.content === 'string' && last.content.startsWith('⚠️')) {
+        return prev.slice(0, -1);
+      }
+      return prev;
+    });
+
+    const historyForRequest = [...messages];
+    const lastUserIdx = messages.length - 1;
+    const historyBeforeUser =
+      lastUserIdx >= 0 && messages[lastUserIdx]?.role === 'user'
+        ? messages.slice(0, lastUserIdx)
+        : historyForRequest;
+
+    await executeTurn({
+      queryText,
+      attachmentsToProcess: attachments,
+      historyMessages: historyBeforeUser,
+      overrideModel: overrideModel || undefined,
+      skipBudgetCheck: true,
+    });
+  };
+
+  const handleSelectSearchResult = async (targetConvId: string, targetMsgId: string | null) => {
+    setIsGlobalSearchOpen(false);
+    if (selectedConversationIdRef.current !== targetConvId) {
+      writeSelectedConversation(user?.id ?? null, targetConvId);
+      await openConversation(targetConvId);
+    }
+
+    if (targetMsgId) {
+      setTimeout(() => {
+        const el = document.getElementById(`message-${targetMsgId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('search-match-flash');
+          setTimeout(() => el.classList.remove('search-match-flash'), 2500);
+        }
+      }, 350);
+    }
+  };
+
+  const handleRenameConversation = async (conversationId: string, title: string) => {
+    setActionNotice(null);
+    try {
+      await renameConversation(supabase, conversationId, title);
+      await refreshConversations();
+    } catch (error) {
+      console.error('[ChatInterface] Failed to rename conversation:', error);
+      setActionNotice({ message: 'Failed to rename chat. Please try again.', type: 'error' });
+    }
+  };
+
+  const handleDeleteConversation = async (conversationId: string) => {
+    if (isStreaming) return;
+    setActionNotice(null);
+    try {
+      await deleteConversation(supabase, conversationId);
+      await refreshConversations();
+      if (selectedConversationIdRef.current === conversationId) {
+        handleNewChat();
+      }
+    } catch (error) {
+      console.error('[ChatInterface] Failed to delete conversation:', error);
+      setActionNotice({ message: 'Failed to delete chat. Please try again.', type: 'error' });
     }
   };
 
@@ -819,8 +1044,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const handleNewChat = () => {
     if (isStreaming) return;
-    // Invalidate any in-flight conversation load: a pending load must not
-    // overwrite the fresh New Chat state when it resolves.
     conversationLoadSeqRef.current += 1;
     selectedConversationIdRef.current = null;
     setSelectedConversationId(null);
@@ -830,6 +1053,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setDraftAttachments([]);
     setDuplicateNotice(null);
     setContextExcludedCount(0);
+    setConversationLoadError(null);
   };
 
   const toggleChatsHidden = () => {
@@ -846,7 +1070,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const handleSidebarToggle = () => {
-    // If past chats are collapsed, the ☰ button reveals them (and opens the drawer on mobile).
     if (chatsHidden) {
       setChatsHidden(false);
       try {
@@ -856,28 +1079,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
     }
     setSidebarOpen((prev) => !prev);
-  };
-
-  const handleRenameConversation = async (conversationId: string, title: string) => {
-    try {
-      await renameConversation(supabase, conversationId, title);
-    } catch (error) {
-      console.error('[ChatInterface] Failed to rename conversation:', error);
-    }
-    await refreshConversations();
-  };
-
-  const handleDeleteConversation = async (conversationId: string) => {
-    if (isStreaming) return;
-    try {
-      await deleteConversation(supabase, conversationId);
-    } catch (error) {
-      console.error('[ChatInterface] Failed to delete conversation:', error);
-    }
-    await refreshConversations();
-    if (selectedConversationIdRef.current === conversationId) {
-      handleNewChat();
-    }
   };
 
   // Per-account selection: restore on sign-in/account change, isolated by user.
@@ -1388,6 +1589,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         });
       }
       scheduleCostEstimatorHide(3000);
+      setFailedTurnDraft(null);
+      activeDraftRef.current = null;
       // PX07: the list/title changed server-side; refresh in the background.
       void refreshConversations();
     } catch (error) {
@@ -1412,6 +1615,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         }
         setStreamOutcome({ status: 'cancelled', executionId: executionIdRef.current });
         scheduleCostEstimatorHide(1500);
+        setFailedTurnDraft({
+          rawInput: activeDraftRef.current?.rawInput || queryText,
+          queryText,
+          attachments: attachmentsToProcess,
+          error: 'Generation cancelled',
+          overrideModel: overrideModel || undefined,
+        });
       } else {
         console.error('Stream error:', error);
         const errorDesc = describeStreamError(error);
@@ -1427,7 +1637,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         }]);
         scheduleCostEstimatorHide(1500);
 
-        // Priority F1: Restore user prompt and attachments safely if failure occurred before first token was delivered
+        // F02: Preserve user prompt and attachments safely in session memory
+        setFailedTurnDraft({
+          rawInput: activeDraftRef.current?.rawInput || queryText,
+          queryText,
+          attachments: attachmentsToProcess,
+          error: errorDesc,
+          overrideModel: overrideModel || undefined,
+        });
         if (waitingFirstTokenRef.current) {
           restoreComposerSafely();
         }
@@ -1450,7 +1667,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return;
     }
     if (enabledProviders.size === 0) {
-      setSendValidationError('No providers are currently enabled. Open Provider Settings to configure OpenCode or BYOK keys.');
+      setSendValidationError('No AI providers configured. Open Provider Settings to connect your OpenRouter or direct provider key.');
       return;
     }
     if (debateSelection === 'video_ui' && !hasReadyVideo) {
@@ -1559,6 +1776,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     const historyForRequest = [...messages];
     setMessages((prev) => [...prev, userMessage]);
 
+    // Preserve draft in activeDraftRef before clearing inputs so it is recoverable if anything fails
+    activeDraftRef.current = {
+      rawInput: input,
+      queryText,
+      attachments: [...draftAttachments],
+      overrideModel: manualModelOverride || undefined,
+    };
+
     // Clear inputs
     setInput('');
     const attachmentsToProcess = [...draftAttachments];
@@ -1569,7 +1794,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       queryText,
       attachmentsToProcess,
       historyMessages: historyForRequest,
-      overrideModel: manualModelOverride,
+      overrideModel: manualModelOverride || undefined,
       promptTokenEstimate,
       skipBudgetCheck: true,
     });
@@ -1834,7 +2059,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         return;
       }
 
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        setIsGlobalSearchOpen((prev) => !prev);
+        return;
+      }
+
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setShowModelSelector((prev) => !prev);
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'm' || e.key === 'M')) {
         e.preventDefault();
         setShowModelSelector((prev) => !prev);
         return;
@@ -1945,6 +2182,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           isLoading={conversationsLoading}
           disabled={isStreaming}
           isOpen={sidebarOpen}
+          hasMore={hasMoreConversations}
+          isLoadingMore={isLoadingMoreConversations}
+          loadMoreError={loadMoreConversationsError || conversationsError}
+          onLoadMore={() => void handleLoadMoreConversations()}
+          onOpenSearch={() => setIsGlobalSearchOpen(true)}
           onClose={() => setSidebarOpen(false)}
           onRename={(id, title) => void handleRenameConversation(id, title)}
           onSelect={handleSelectConversation}
@@ -2103,6 +2345,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               )}
             </div>
 
+            <button
+              type='button'
+              onClick={() => setIsGlobalSearchOpen(true)}
+              className='header-button search-button'
+              title='Global Search (Ctrl+K)'
+              aria-label='Search all past conversations and messages'
+              data-tooltip='Global Search'
+            >
+              <svg
+                width='18'
+                height='18'
+                viewBox='0 0 24 24'
+                fill='none'
+                stroke='currentColor'
+                strokeWidth='2'
+                aria-hidden='true'
+              >
+                <circle cx='11' cy='11' r='8' />
+                <line x1='21' y1='21' x2='16.65' y2='16.65' />
+              </svg>
+            </button>
             <button type='button' className='header-button memory-trigger' aria-label={lastRecall?.conversationId === selectedConversationId ? `Memory: ${lastRecall.hits} recalled` : 'Memory'} aria-haspopup='dialog' aria-expanded={showMemorySettings} onClick={() => setShowMemorySettings(true)}>
               <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'><rect x='5' y='5' width='14' height='14' rx='3' /><path d='M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4' /></svg>
               <span className='memory-trigger-label'>Memory</span>
@@ -2254,6 +2517,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         {messages.length === 0
           ? (
             <div className='empty-state'>
+              {!providerPlugins.isConfigured && !providerPlugins.loading && (
+                <FirstRunSetupCard
+                  plugins={providerPlugins}
+                  onOpenSettings={() => setShowProviderSettings(true)}
+                />
+              )}
               <div className='empty-state-badge'>Adaptive AI Router</div>
               <h2>What would you like to<br /><span>build or explore?</span></h2>
               <p>
@@ -2281,6 +2550,47 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           )
           : (
             <div className='messages-list'>
+              {conversationLoadError && (
+                <div className='conversation-load-error-banner' role='alert'>
+                  <span>{conversationLoadError}</span>
+                  <button
+                    type='button'
+                    className='conversation-load-retry-btn'
+                    onClick={() => selectedConversationId && void openConversation(selectedConversationId)}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              {hasEarlierMessages && (
+                <div className='earlier-messages-pagination'>
+                  <button
+                    type='button'
+                    className='load-earlier-messages-btn'
+                    disabled={isLoadingEarlierMessages}
+                    onClick={handleLoadEarlierMessages}
+                  >
+                    {isLoadingEarlierMessages ? 'Loading earlier messages…' : 'Load earlier messages'}
+                  </button>
+                </div>
+              )}
+              {earlierMessagesError && (
+                <div className='earlier-messages-error' role='alert'>
+                  <span>{earlierMessagesError}</span>
+                  <button
+                    type='button'
+                    className='earlier-messages-retry-btn'
+                    onClick={handleLoadEarlierMessages}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              {contextExcludedCount > 0 && (
+                <div className='context-exclusion-boundary' role='note'>
+                  <span>— {contextExcludedCount} older message{contextExcludedCount > 1 ? 's are' : ' is'} preserved in history but excluded from active LLM context —</span>
+                </div>
+              )}
               {messages.map((msg, idx) => {
                 const isLast = idx === messages.length - 1;
                 return (
@@ -2309,6 +2619,51 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           onClick={handleScrollToBottom}
         />
       </main>
+
+      {/* Action Notice (Shared Quality Requirement) */}
+      {actionNotice && (
+        <div className={`action-notice-toast ${actionNotice.type}`} role='status'>
+          <span>{actionNotice.message}</span>
+          <button type='button' onClick={() => setActionNotice(null)} aria-label='Dismiss notice'>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* F02 Lossless Draft Recovery Bar */}
+      {failedTurnDraft && (
+        <div className='draft-recovery-bar' role='alert'>
+          <div className='draft-recovery-text'>
+            <span className='draft-recovery-icon' aria-hidden='true'>⚠️</span>
+            <span>Send failed: {failedTurnDraft.error || 'The request could not be completed.'}</span>
+          </div>
+          <div className='draft-recovery-actions'>
+            <button
+              type='button'
+              className='draft-recovery-restore-btn'
+              onClick={handleRestoreDraft}
+            >
+              Restore draft
+            </button>
+            <button
+              type='button'
+              className='draft-recovery-retry-btn'
+              onClick={() => void handleRetryTurn()}
+              disabled={isStreaming}
+            >
+              Retry
+            </button>
+            <button
+              type='button'
+              className='draft-recovery-dismiss-btn'
+              onClick={() => setFailedTurnDraft(null)}
+              aria-label='Dismiss recovery notice'
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Input Area */}
       <ChatInputComposer
@@ -2373,6 +2728,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       <KeyboardShortcutsModal
         isOpen={isShortcutsOpen}
         onClose={handleCloseShortcuts}
+      />
+
+      <GlobalSearchModal
+        client={supabase}
+        isOpen={isGlobalSearchOpen}
+        onClose={() => setIsGlobalSearchOpen(false)}
+        onSelectResult={handleSelectSearchResult}
       />
       </div>
     </div>

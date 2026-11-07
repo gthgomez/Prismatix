@@ -8,7 +8,7 @@
 // account changes and drops stale responses.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ProviderSettingsPayload, ProviderState } from '../types';
+import type { ProviderKeyStatus, ProviderSettingsPayload, ProviderState } from '../types';
 import type { ProviderId } from '../providerRegistry';
 import {
   deleteProviderKey,
@@ -16,12 +16,15 @@ import {
   setDefaultProvider,
   setProviderEnabled,
   setProviderKey,
+  validateProviderKey,
+  type ProviderValidationResult,
 } from '../services/providerSettings';
 
 export interface ProviderPlugins {
   providers: ProviderState[];
   defaultProvider: ProviderId | null;
   enabledProviders: ReadonlySet<ProviderId>;
+  isConfigured: boolean;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
@@ -29,10 +32,12 @@ export interface ProviderPlugins {
   setKey: (provider: ProviderId, apiKey: string) => Promise<boolean>;
   removeKey: (provider: ProviderId) => Promise<boolean>;
   setDefault: (provider: ProviderId) => Promise<boolean>;
+  validateKey: (provider: ProviderId, apiKey?: string) => Promise<ProviderValidationResult>;
 }
 
 export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   const [payload, setPayload] = useState<ProviderSettingsPayload | null>(null);
+  const [statuses, setStatuses] = useState<Record<string, { status: ProviderKeyStatus; message?: string }>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -91,18 +96,67 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     [applyPayload],
   );
 
-  const providers = payload?.providers ?? [];
+  const providers = useMemo(() => {
+    const raw = payload?.providers ?? [];
+    return raw.map((p) => {
+      const override = statuses[p.id];
+      if (!override) return p;
+      return {
+        ...p,
+        status: override.status,
+        statusMessage: override.message,
+      };
+    });
+  }, [payload, statuses]);
 
   // Fail safe: until state loads, expose no provider and make no paid call.
   const enabledProviders = useMemo<ReadonlySet<ProviderId>>(() => {
     if (!payload) return new Set<ProviderId>();
-    return new Set(payload.providers.filter((p) => p.enabled).map((p) => p.id));
-  }, [payload]);
+    return new Set(
+      providers
+        .filter((p) => p.enabled && p.status !== 'invalid_revoked')
+        .map((p) => p.id),
+    );
+  }, [payload, providers]);
+
+  const isConfigured = useMemo(() => {
+    return providers.some((p) => p.hasKey && p.enabled && p.status !== 'invalid_revoked');
+  }, [providers]);
+
+  const validateKeyHandler = useCallback(
+    async (provider: ProviderId, apiKey?: string): Promise<ProviderValidationResult> => {
+      try {
+        const result = await validateProviderKey(provider, apiKey);
+        if (mountedRef.current) {
+          setStatuses((prev) => ({
+            ...prev,
+            [provider]: { status: result.status, message: result.message },
+          }));
+        }
+        return result;
+      } catch (err) {
+        const fallback: ProviderValidationResult = {
+          provider,
+          status: 'unavailable',
+          message: err instanceof Error ? err.message : 'Validation failed',
+        };
+        if (mountedRef.current) {
+          setStatuses((prev) => ({
+            ...prev,
+            [provider]: { status: 'unavailable', message: fallback.message },
+          }));
+        }
+        return fallback;
+      }
+    },
+    [],
+  );
 
   return {
     providers,
     defaultProvider: payload?.defaultProvider ?? null,
     enabledProviders,
+    isConfigured,
     loading,
     error,
     refresh,
@@ -110,5 +164,6 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     setKey: (provider, apiKey) => mutate(() => setProviderKey(provider, apiKey)),
     removeKey: (provider) => mutate(() => deleteProviderKey(provider)),
     setDefault: (provider) => mutate(() => setDefaultProvider(provider)),
+    validateKey: validateKeyHandler,
   };
 }

@@ -215,3 +215,91 @@
 .conversation-item-pin {
   color: var(--color-text);
 }
+
+.conversation-search-global-trigger {
+  background: var(--color-surface-hover, rgba(78, 205, 196, 0.12));
+  color: var(--color-primary, #4ecdc4);
+  border: 1px solid rgba(78, 205, 196, 0.35);
+  border-radius: var(--radius-sm, 4px);
+  padding: 0.2rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.conversation-search-global-trigger:hover {
+  background: rgba(78, 205, 196, 0.22);
+}
+
+.conversation-search-note {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  margin: 0.25rem 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+}
+
+.conversation-search-note-action {
+  background: transparent;
+  border: none;
+  color: var(--color-primary, #4ecdc4);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font-size: 0.75rem;
+  text-decoration: underline;
+}
+
+.conversation-pagination-row {
+  display: flex;
+  justify-content: center;
+  padding: 0.75rem 0.5rem;
+}
+
+.conversation-load-more-btn {
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  background: var(--color-surface, #131922);
+  border: 1px solid var(--color-border, #2a3441);
+  color: var(--color-text, #f1f5f9);
+  border-radius: var(--radius-md, 8px);
+  font-size: 0.8rem;
+  cursor: pointer;
+  min-height: 36px;
+  transition: all 0.15s ease;
+}
+
+.conversation-load-more-btn:hover:not(:disabled) {
+  border-color: var(--color-primary, #4ecdc4);
+  background: var(--color-surface-hover, rgba(78, 205, 196, 0.06));
+}
+
+.conversation-load-more-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin: 0.5rem;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--color-danger, #ef4444);
+  font-size: 0.78rem;
+}
+
+.conversation-load-more-retry {
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  border-radius: 4px;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
