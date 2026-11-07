@@ -27,6 +27,7 @@ import {
   generateArtifactId,
   persistArtifactToDatabase,
   persistArtifactRevisionToDatabase,
+  getOrCreateArtifactForMessage,
 } from '../../src/services/artifactService';
 import {
   subscribeToOnlineStatus,
@@ -444,5 +445,100 @@ describe('Wave 2 Multimodal Hardening: UUID Identity, RPC Revisions, Truthful Se
     expect(res.isMock).toBe(true);
     expect(res.costStatus).toBe('unmetered');
     expect(res.imageUrl).toContain('data:image/svg+xml');
+  });
+
+  it('invokes image-generation edge function for authenticated live generation', async () => {
+    let invokedBody: any = null;
+    const mockClient = {
+      functions: {
+        invoke: vi.fn((fnName: string, options: any) => {
+          expect(fnName).toBe('image-generation');
+          invokedBody = options.body;
+          return Promise.resolve({
+            data: {
+              success: true,
+              imageUrl: 'https://storage.prismatix.ai/chat-uploads/u1/images/exec1.png',
+              storagePath: 'u1/images/exec1.png',
+              modelId: 'dall-e-3',
+              prompt: options.body.prompt,
+              size: options.body.size,
+              costUsd: 0.040,
+              costStatus: 'settled',
+              isMock: false,
+              executionId: 'exec1',
+              timestamp: new Date().toISOString(),
+            },
+            error: null,
+          });
+        }),
+      },
+    };
+
+    const res = await executeImageGeneration(
+      {
+        prompt: 'Aurora borealis over snow covered mountains',
+        modelId: 'dall-e-3',
+        size: '1024x1024',
+        mockMode: false,
+        conversationId: 'conv-123',
+      },
+      mockClient,
+    );
+
+    expect(res.success).toBe(true);
+    expect(res.isMock).toBe(false);
+    expect(res.costStatus).toBe('settled');
+    expect(res.executionId).toBe('exec1');
+    expect(invokedBody.prompt).toBe('Aurora borealis over snow covered mountains');
+    expect(invokedBody.modelId).toBe('dall-e-3');
+    expect(invokedBody.conversationId).toBe('conv-123');
+  });
+
+  it('getOrCreateArtifactForMessage retrieves existing artifact from database without generating fresh ID', async () => {
+    const mockClient = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              order: () => ({
+                limit: () =>
+                  Promise.resolve({
+                    data: [
+                      {
+                        id: 'existing-artifact-id-999',
+                        title: 'script.py',
+                        language: 'python',
+                        current_content: 'print("Existing v2")',
+                        versions: [
+                          { versionNumber: 1, content: 'print("v1")' },
+                          { versionNumber: 2, content: 'print("Existing v2")' },
+                        ],
+                        created_at: '2026-11-01T00:00:00Z',
+                        updated_at: '2026-11-01T01:00:00Z',
+                      },
+                    ],
+                    error: null,
+                  }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    };
+
+    const extracted = {
+      id: 'temporary-new-uuid',
+      title: 'script.py',
+      language: 'python',
+      currentContent: 'print("Extracted")',
+      versions: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const loaded = await getOrCreateArtifactForMessage(mockClient, 'conv-1', 'u-1', extracted, 'msg-1');
+    expect(loaded.id).toBe('existing-artifact-id-999');
+    expect(loaded.currentContent).toBe('print("Existing v2")');
+    expect(loaded.versions).toHaveLength(2);
   });
 });

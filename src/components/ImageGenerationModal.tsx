@@ -16,6 +16,8 @@ export interface ImageGenerationModalProps {
   onImageGenerated: (result: ImageGenerationResult) => void;
   initialPrompt?: string;
   userApiKey?: string;
+  conversationId?: string;
+  client?: any;
   providerPlugins?: ProviderPlugins;
   onOpenProviderSettings?: () => void;
 }
@@ -26,6 +28,8 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
   onImageGenerated,
   initialPrompt = '',
   userApiKey,
+  conversationId,
+  client,
   providerPlugins,
   onOpenProviderSettings,
 }) => {
@@ -60,13 +64,16 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
     setErrorMessage(null);
 
     try {
-      const result = await executeImageGeneration({
-        prompt: prompt.trim(),
-        modelId: selectedModelId,
-        size: selectedSize,
-        apiKey: userApiKey,
-        mockMode: useMockMode || !userApiKey,
-      });
+      const result = await executeImageGeneration(
+        {
+          prompt: prompt.trim(),
+          modelId: selectedModelId,
+          size: selectedSize,
+          conversationId,
+          mockMode: useMockMode,
+        },
+        client,
+      );
 
       if (result.success) {
         onImageGenerated(result);

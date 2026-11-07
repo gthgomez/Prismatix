@@ -57,6 +57,43 @@ export async function persistArtifactToDatabase(
   }
 }
 
+export async function getOrCreateArtifactForMessage(
+  client: any,
+  conversationId: string,
+  userId: string,
+  extracted: Artifact,
+  messageId?: string,
+): Promise<Artifact> {
+  if (!client || !conversationId) return extracted;
+  try {
+    let query = client.from('artifacts').select('*').eq('conversation_id', conversationId);
+    if (messageId) {
+      query = query.eq('message_id', messageId);
+    } else {
+      query = query.eq('title', extracted.title);
+    }
+    const { data, error } = await query.order('created_at', { ascending: false }).limit(1);
+    if (!error && data && data.length > 0) {
+      const row = data[0];
+      return {
+        id: row.id,
+        title: row.title,
+        language: row.language,
+        currentContent: row.current_content,
+        versions: Array.isArray(row.versions) ? row.versions : [],
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    }
+    // If not found in database, insert it
+    await persistArtifactToDatabase(client, extracted, conversationId, userId, messageId);
+    return extracted;
+  } catch (err) {
+    console.warn('[artifactService] getOrCreateArtifact error:', err);
+    return extracted;
+  }
+}
+
 export async function persistArtifactRevisionToDatabase(
   client: any,
   artifactId: string,

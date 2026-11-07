@@ -60,32 +60,35 @@ test.describe('PR 6 Multimodal & Polished Product (E2E)', () => {
     await signInAsMockUser(page);
 
     // Send a message that generates a code block
-    const textarea = page.getByPlaceholder(/ask anything/i);
+    const textarea = page.locator('.chat-input');
+    await expect(textarea).toBeVisible();
     await textarea.fill('Write a simple typescript function');
-    await textarea.press('Enter');
+
+    const sendBtn = page.locator('.send-button');
+    await expect(sendBtn).toBeVisible();
+    await sendBtn.click();
 
     // Wait for assistant response to render
     const assistantMsg = page.locator('.message-assistant').last();
     await expect(assistantMsg).toBeVisible();
 
-    // Check for Artifact action button in message toolbar
+    // Check for Artifact action button in message toolbar (unconditional, strictly asserted)
     const artifactBtn = assistantMsg.getByRole('button', { name: /view and edit extracted artifacts/i });
-    if (await artifactBtn.isVisible()) {
-      await artifactBtn.click();
+    await expect(artifactBtn).toBeVisible({ timeout: 10000 });
+    await artifactBtn.click();
 
-      const artifactModal = page.locator('.artifact-viewer-modal');
-      await expect(artifactModal).toBeVisible();
-      await expect(artifactModal.getByRole('heading', { name: /artifact/i })).toBeVisible();
+    const artifactModal = page.locator('.artifact-viewer-modal');
+    await expect(artifactModal).toBeVisible();
+    await expect(artifactModal.locator('#artifact-title')).toBeVisible();
 
-      // Check editor textarea
-      const editorTextarea = artifactModal.getByLabel(/artifact code content/i);
-      await expect(editorTextarea).toBeVisible();
+    // Check editor textarea
+    const editorTextarea = artifactModal.getByLabel(/artifact code content/i);
+    await expect(editorTextarea).toBeVisible();
 
-      // Close modal
-      const closeBtn = artifactModal.getByRole('button', { name: /close artifact viewer/i });
-      await closeBtn.click();
-      await expect(artifactModal).not.toBeVisible();
-    }
+    // Close modal
+    const closeBtn = artifactModal.getByRole('button', { name: /close artifact viewer/i });
+    await closeBtn.click();
+    await expect(artifactModal).not.toBeVisible();
   });
 
   test('F30: verifies PWA web app manifest link and theme color meta tags', async ({ page }) => {

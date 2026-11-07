@@ -97,36 +97,26 @@ exception
     end if;
 end $$;
 
--- Step 7: Test px28_record_image_message for Alice (Mock image: truthful unmetered cost)
+-- Step 7: Test Alice (authenticated) cannot directly record image message via RPC (must use edge function)
 select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
 
 do $$
-declare
-  v_msg public.messages;
-  v_cost_status text;
-  v_final_usd numeric;
 begin
-  select * into v_msg
-  from public.px28_record_image_message(
+  perform public.px28_record_image_message(
     'aaaa1111-1111-4111-8111-111111111111',
     'Futuristic city at twilight',
     'dall-e-3',
     '{"imageUrl": "data:image/svg+xml;...", "costUsd": 0.040, "isMock": true}'::jsonb,
     true
   );
-
-  v_cost_status := v_msg.metadata->'cost'->>'status';
-  v_final_usd := (v_msg.metadata->'cost'->>'finalUsd')::numeric;
-
-  if v_cost_status != 'unmetered' then
-    raise exception 'FAIL: Expected unmetered cost status for mock image, got %', v_cost_status;
-  end if;
-
-  if v_final_usd != 0 then
-    raise exception 'FAIL: Expected 0 final cost for mock image, got %', v_final_usd;
-  end if;
-
-  raise notice 'PASS: px28_record_image_message correctly recorded unmetered status for mock image';
+  raise exception 'FAIL: Authenticated user was able to directly call px28_record_image_message!';
+exception
+  when others then
+    if sqlerrm like '%client_execution_prohibited%' or sqlstate = '42501' then
+      raise notice 'PASS: Authenticated user blocked from calling px28_record_image_message directly';
+    else
+      raise;
+    end if;
 end $$;
 
 -- Step 8: Test Alice cannot record image into Bob's conversation
@@ -142,7 +132,7 @@ begin
   raise exception 'FAIL: Alice was able to record image in Bob conversation!';
 exception
   when others then
-    if sqlerrm like '%conversation_not_found%' then
+    if sqlerrm like '%client_execution_prohibited%' or sqlstate = '42501' or sqlerrm like '%conversation_not_found%' then
       raise notice 'PASS: Alice blocked from recording image in Bob conversation';
     else
       raise;
@@ -162,8 +152,8 @@ begin
   raise exception 'FAIL: Alice was able to record forged settled image message!';
 exception
   when others then
-    if sqlerrm like '%client_settlement_prohibited%' then
-      raise notice 'PASS: Alice blocked from forging settled image execution (client_settlement_prohibited raised)';
+    if sqlerrm like '%client_execution_prohibited%' or sqlstate = '42501' then
+      raise notice 'PASS: Alice blocked from forging settled image execution (prohibited from client)';
     else
       raise;
     end if;

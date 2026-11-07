@@ -139,8 +139,8 @@ import { ArtifactViewerModal } from './ArtifactViewerModal';
 import { defaultVoiceDictationService } from '../services/voiceDictationService';
 import {
   extractArtifactsFromText,
-  persistArtifactToDatabase,
   persistArtifactRevisionToDatabase,
+  getOrCreateArtifactForMessage,
   type Artifact,
 } from '../services/artifactService';
 import type { ImageGenerationResult } from '../services/imageGenerationService';
@@ -1318,8 +1318,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   // Wave 2 PR 6: Image generation persistence (F28)
   const handleImageGenerated = useCallback(
-    async (result: ImageGenerationResult) => {
-      const convId = selectedConversationIdRef.current;
+    (result: ImageGenerationResult) => {
       const isMock = result.isMock ?? Boolean(result.imageUrl?.startsWith('data:image/svg+xml'));
       const finalCost = isMock ? 0 : (result.costUsd || 0);
       const newMsg: Message = {
@@ -1328,7 +1327,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         timestamp: Date.now(),
         model: result.modelId as RouterModel,
         cost: {
-          status: isMock ? 'unmetered' : 'settled',
+          status: isMock ? 'unmetered' : (result.costStatus === 'settled' ? 'settled' : 'unmetered'),
           finalUsd: finalCost,
         },
         metadata: {
@@ -1337,33 +1336,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         },
       };
       setMessages((prev) => [...prev, newMsg]);
-
-      if (convId) {
-        try {
-          await supabase.rpc('px28_record_image_message', {
-            p_conversation_id: convId,
-            p_content: newMsg.content,
-            p_model: result.modelId,
-            p_image_result: result,
-            p_is_mock: isMock,
-          });
-        } catch (err) {
-          console.warn('Failed to persist generated image message via px28_record_image_message:', err);
-        }
-      }
       setActionNotice({ type: 'success', message: `Image generated via ${result.modelId}` });
     },
     []
   );
 
   // Wave 2 PR 6: Artifact inspection (F29)
-  const handleOpenArtifact = useCallback((_index: number, content: string) => {
-    const extracted = extractArtifactsFromText(content);
-    if (extracted.length > 0) {
-      setActiveArtifact(extracted[0] ?? null);
-      setIsArtifactModalOpen(true);
-    }
-  }, []);
+  const handleOpenArtifact = useCallback(
+    async (_index: number, content: string, messageId?: string) => {
+      const extracted = extractArtifactsFromText(content);
+      if (extracted.length > 0) {
+        const first = extracted[0]!;
+        const convId = selectedConversationIdRef.current;
+        if (convId && user) {
+          const durable = await getOrCreateArtifactForMessage(supabase, convId, user.id, first, messageId);
+          setActiveArtifact(durable);
+        } else {
+          setActiveArtifact(first);
+        }
+        setIsArtifactModalOpen(true);
+      }
+    },
+    [user]
+  );
 
   // Preference synchronization across devices (F20)
   useEffect(() => {
@@ -3669,6 +3664,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onClose={() => setIsImageGenModalOpen(false)}
         onImageGenerated={handleImageGenerated}
         initialPrompt={input}
+        conversationId={selectedConversationIdRef.current || undefined}
+        client={supabase}
         providerPlugins={providerPlugins}
         onOpenProviderSettings={() => setShowProviderSettings(true)}
       />
@@ -3681,20 +3678,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           setActiveArtifact(updated);
           const convId = selectedConversationIdRef.current;
           if (convId && user) {
-            // 1. Ensure artifact record exists in database
-            const saveRes = await persistArtifactToDatabase(supabase, updated, convId, user.id);
-            if (!saveRes.success) {
-              console.warn('[ChatInterface] Failed to persist artifact:', saveRes.error);
-              setActionNotice({ type: 'error', message: `Failed to persist artifact: ${saveRes.error}` });
-              return;
-            }
-
-            // 2. Persist revision via atomic RPC px29_save_artifact_revision
+            // Persist revision via atomic RPC px29_save_artifact_revision
+            // (Avoids duplicating revisions from double-saving)
             const revRes = await persistArtifactRevisionToDatabase(supabase, updated.id, updated.currentContent, 'user');
-            if (!revRes.success) {
+            if (!revRes.success || !revRes.data) {
               console.warn('[ChatInterface] Failed to persist artifact revision via px29:', revRes.error);
               setActionNotice({ type: 'error', message: `Failed to persist revision: ${revRes.error}` });
             } else {
+              const row = revRes.data;
+              const synced: Artifact = {
+                id: row.id,
+                title: row.title,
+                language: row.language,
+                currentContent: row.current_content,
+                versions: Array.isArray(row.versions) ? row.versions : [],
+                createdAt: row.created_at,
+                updatedAt: row.updated_at,
+              };
+              setActiveArtifact(synced);
               setActionNotice({ type: 'success', message: 'Artifact revision saved successfully.' });
             }
           }

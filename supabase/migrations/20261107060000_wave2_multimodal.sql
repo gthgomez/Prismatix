@@ -62,12 +62,14 @@ create index if not exists idx_artifacts_conversation_id on public.artifacts (co
 -- 2. Server-owned atomic RPC for image generation message persistence (F28)
 -- Prevents authenticated client direct inserts into public.messages,
 -- truthfully sets settled vs unmetered cost depending on mock status.
+-- ONLY executable by service_role (backend edge function execution).
 create or replace function public.px28_record_image_message(
   p_conversation_id uuid,
   p_content text,
   p_model text,
   p_image_result jsonb,
-  p_is_mock boolean default false
+  p_is_mock boolean default false,
+  p_user_id uuid default null
 )
 returns public.messages
 language plpgsql
@@ -75,28 +77,25 @@ security definer
 set search_path = public, pg_catalog
 as $$
 declare
-  v_user_id uuid := auth.uid();
+  v_caller_role text := coalesce(current_setting('request.jwt.claim.role', true), '');
+  v_user_id uuid := coalesce(p_user_id, auth.uid());
   v_conv_owner uuid;
   v_new_message public.messages;
   v_cost_status text;
   v_final_cost numeric;
 begin
+  -- Defense-in-depth: Never allow client requests (authenticated role) to forge assistant messages
+  -- or settled cost. Only server-owned execution (service_role) can record assistant image messages.
+  if v_caller_role = 'authenticated' then
+    raise exception 'client_execution_prohibited: authenticated clients cannot directly persist assistant image messages; use edge function';
+  end if;
+
   if v_user_id is null then
     raise exception 'unauthorized';
   end if;
 
-  -- Defense-in-depth: Never allow client requests (authenticated role) to forge settled cost.
-  -- Only server-owned execution (service_role) or authoritative backend receipt can record 'settled'.
-  if coalesce(current_setting('request.jwt.claim.role', true), '') = 'authenticated' then
-    if not coalesce(p_is_mock, false) then
-      raise exception 'client_settlement_prohibited: authenticated clients cannot forge settled image executions';
-    end if;
-    v_cost_status := 'unmetered';
-    v_final_cost := 0;
-  else
-    v_cost_status := case when p_is_mock then 'unmetered' else 'settled' end;
-    v_final_cost := case when p_is_mock then 0 else coalesce((p_image_result->>'costUsd')::numeric, 0) end;
-  end if;
+  v_cost_status := case when p_is_mock then 'unmetered' else 'settled' end;
+  v_final_cost := case when p_is_mock then 0 else coalesce((p_image_result->>'costUsd')::numeric, 0) end;
 
   select user_id into v_conv_owner
   from public.conversations
@@ -136,10 +135,10 @@ begin
 end;
 $$;
 
-revoke all on function public.px28_record_image_message(uuid, text, text, jsonb, boolean) from public;
-revoke all on function public.px28_record_image_message(uuid, text, text, jsonb, boolean) from anon;
-grant execute on function public.px28_record_image_message(uuid, text, text, jsonb, boolean) to authenticated;
-grant execute on function public.px28_record_image_message(uuid, text, text, jsonb, boolean) to service_role;
+revoke all on function public.px28_record_image_message(uuid, text, text, jsonb, boolean, uuid) from public;
+revoke all on function public.px28_record_image_message(uuid, text, text, jsonb, boolean, uuid) from anon;
+revoke all on function public.px28_record_image_message(uuid, text, text, jsonb, boolean, uuid) from authenticated;
+grant execute on function public.px28_record_image_message(uuid, text, text, jsonb, boolean, uuid) to service_role;
 
 -- 3. Atomic RPC for persisting artifact revisions (F29)
 create or replace function public.px29_save_artifact_revision(
