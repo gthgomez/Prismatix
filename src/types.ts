@@ -186,7 +186,7 @@ export interface Message {
     modelB: { model: RouterModel; content: string; cost?: number };
     preferred?: 'A' | 'B';
   };
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface FileUploadPayload {

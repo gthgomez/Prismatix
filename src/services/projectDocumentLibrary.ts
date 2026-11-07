@@ -166,13 +166,15 @@ export async function addProjectDocument(
             upsert: true,
           });
 
-        if (!uploadErr) {
-          filePath = storageKey;
-        } else {
-          console.warn('[projectDocumentLibrary] Storage upload warning:', uploadErr.message);
+        if (uploadErr) {
+          return { success: false, error: `Storage upload failed: ${uploadErr.message}` };
         }
+        filePath = storageKey;
       } catch (uploadEx) {
-        console.warn('[projectDocumentLibrary] Storage upload exception:', uploadEx);
+        return {
+          success: false,
+          error: `Storage upload exception: ${uploadEx instanceof Error ? uploadEx.message : String(uploadEx)}`,
+        };
       }
     }
 
@@ -180,6 +182,7 @@ export async function addProjectDocument(
       ...(options.metadata || {}),
       chunkCount: chunks.length,
       charCount: options.extractedText.length,
+      status: 'ready',
     };
 
     // 2. Insert document record
@@ -196,6 +199,14 @@ export async function addProjectDocument(
     });
 
     if (docErr) {
+      // Compensate: purge uploaded storage file if database insert fails
+      if (filePath && client?.storage) {
+        try {
+          await client.storage.from('project-documents').remove([filePath]);
+        } catch {
+          // Best-effort cleanup
+        }
+      }
       return { success: false, error: docErr.message };
     }
 
@@ -219,7 +230,16 @@ export async function addProjectDocument(
 
       const { error: chunkErr } = await client.from('project_document_chunks').insert(chunkRows);
       if (chunkErr) {
-        console.warn('[projectDocumentLibrary] chunk insert warning:', chunkErr.message);
+        // Compensate: purge document record and storage file on indexing failure
+        try {
+          await client.from('project_documents').delete().eq('id', docId);
+          if (filePath && client?.storage) {
+            await client.storage.from('project-documents').remove([filePath]);
+          }
+        } catch {
+          // Best-effort rollback
+        }
+        return { success: false, error: `Document chunk indexing failed: ${chunkErr.message}` };
       }
     }
 

@@ -56,20 +56,24 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   const storedVersions = (Array.isArray(message.metadata?.versions) ? message.metadata.versions : []) as Array<{
     version: number;
     content: string;
+    model?: string;
     model_used?: string;
     created_at?: string;
+    timestamp?: number;
   }>;
 
   const allVersions = React.useMemo(() => {
     if (storedVersions.length === 0) return [];
     const last = storedVersions[storedVersions.length - 1];
     if (last && last.content !== textContent) {
-      return [...storedVersions, { version: storedVersions.length + 1, content: textContent, model_used: message.model }];
+      return [...storedVersions, { version: storedVersions.length + 1, content: textContent, model_used: message.model, model: message.model }];
     }
     return storedVersions;
   }, [storedVersions, textContent, message.model]);
 
-  const [selectedVersionIdx, setSelectedVersionIdx] = useState<number>(allVersions.length > 0 ? allVersions.length - 1 : 0);
+  const [selectedVersionIdx, setSelectedVersionIdx] = useState<number>(() =>
+    allVersions.length > 0 ? allVersions.length - 1 : 0
+  );
 
   useEffect(() => {
     if (allVersions.length > 0) {
@@ -275,6 +279,33 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
             promptTokens={message.cost?.promptTokens}
             completionTokens={message.cost?.completionTokens}
           />
+          {allVersions.length > 1 && (
+            <div className='message-version-nav' role='navigation' aria-label='Response versions'>
+              <button
+                type='button'
+                className='version-btn prev-version'
+                disabled={selectedVersionIdx === 0}
+                onClick={() => setSelectedVersionIdx((i) => Math.max(0, i - 1))}
+                aria-label='Previous version'
+                title='Previous version'
+              >
+                ‹
+              </button>
+              <span className='version-counter'>
+                {selectedVersionIdx + 1} / {allVersions.length}
+              </span>
+              <button
+                type='button'
+                className='version-btn next-version'
+                disabled={selectedVersionIdx === allVersions.length - 1}
+                onClick={() => setSelectedVersionIdx((i) => Math.min(allVersions.length - 1, i + 1))}
+                aria-label='Next version'
+                title='Next version'
+              >
+                ›
+              </button>
+            </div>
+          )}
           <span className='message-time'>
             {new Date(message.timestamp).toLocaleTimeString()}
           </span>

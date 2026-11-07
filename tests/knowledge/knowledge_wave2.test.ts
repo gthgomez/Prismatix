@@ -331,3 +331,128 @@ describe('F25: Multi-Document Analysis & Comparison', () => {
     expect(comp.summary).toContain('Doc B');
   });
 });
+
+describe('Wave 2 Hardening: Rollback, SSRF Fail-Closed, Authoritative FTS, Deduplicated Research', () => {
+  it('Defect 11: addProjectDocument rolls back storage file and document row on chunk insertion error', async () => {
+    const deletedDocs: string[] = [];
+    const removedStoragePaths: string[] = [];
+
+    const mockClient: any = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'u-eng' } } }),
+      },
+      storage: {
+        from: (bucket: string) => ({
+          upload: vi.fn().mockResolvedValue({ error: null }),
+          remove: vi.fn((paths: string[]) => {
+            removedStoragePaths.push(...paths);
+            return Promise.resolve({ error: null });
+          }),
+        }),
+      },
+      from: (table: string) => {
+        if (table === 'project_documents') {
+          return {
+            insert: vi.fn().mockResolvedValue({ error: null }),
+            delete: () => ({
+              eq: (col: string, val: string) => {
+                deletedDocs.push(val);
+                return Promise.resolve({ error: null });
+              },
+            }),
+          };
+        }
+        if (table === 'project_document_chunks') {
+          return {
+            insert: vi.fn().mockResolvedValue({ error: { message: 'Chunk table constraint violation' } }),
+          };
+        }
+        return {};
+      },
+    };
+
+    const res = await addProjectDocument(mockClient, {
+      projectId: 'proj-atomic',
+      name: 'FailedIndex.md',
+      extractedText: 'Some content that fails indexing step.',
+      fileBytes: new Uint8Array([1, 2, 3]),
+    });
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('Document chunk indexing failed');
+    // Storage file cleaned up
+    expect(removedStoragePaths.length).toBeGreaterThan(0);
+    // Document row deleted
+    expect(deletedDocs.length).toBeGreaterThan(0);
+  });
+
+  it('Defect 12: fetchAndParseUrl fails closed when edge function invoke fails or errors', async () => {
+    const mockClient: any = {
+      functions: {
+        invoke: vi.fn().mockResolvedValue({
+          data: null,
+          error: { message: 'Edge Function SSRF blocked request' },
+        }),
+      },
+    };
+
+    const res = await fetchAndParseUrl('https://example.com/blocked', fetch, mockClient);
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('Edge Function SSRF blocked request');
+  });
+
+  it('Defect 14: searchProjectKnowledge returns empty array without scanning table when RPC returns []', async () => {
+    let tableScanAttempted = false;
+
+    const mockClient: any = {
+      rpc: vi.fn().mockResolvedValue({
+        data: [], // Authoritative zero hits
+        error: null,
+      }),
+      from: () => {
+        tableScanAttempted = true;
+        return {
+          select: () => ({
+            eq: () => ({
+              limit: () => Promise.resolve({ data: [{ id: 'fake-chunk', content: 'unwanted' }], error: null }),
+            }),
+          }),
+        };
+      },
+    };
+
+    const hits = await searchProjectKnowledge(mockClient, {
+      projectId: 'proj-empty',
+      query: 'query with zero matches',
+    });
+
+    expect(hits).toEqual([]);
+    expect(tableScanAttempted).toBe(false);
+  });
+
+  it('Defect 13: executeResearchWorkflow consumes existingCitations without redundant searches', async () => {
+    const existingCitations = [
+      {
+        id: 1,
+        title: 'Prismatix Docs',
+        url: 'https://docs.prismatix.ai',
+        domain: 'docs.prismatix.ai',
+        snippet: 'Authoritative Prismatix manual.',
+      },
+    ];
+
+    const mockClient: any = {
+      rpc: vi.fn().mockResolvedValue({ data: [], error: null }),
+    };
+
+    const res = await executeResearchWorkflow(mockClient, 'docs query', {
+      includeWebSearch: false,
+      existingCitations,
+    });
+
+    expect(res.totalSources).toBe(1);
+    expect(res.citations).toHaveLength(1);
+    expect(res.citations[0]?.title).toBe('Prismatix Docs');
+    expect(res.groundingPrompt).toContain('Authoritative Prismatix manual');
+  });
+});

@@ -203,23 +203,34 @@ export async function fetchAndParseUrl(
     return { success: false, error: `SSRF Security Violation: ${check.reason}` };
   }
 
-  // If running with standard fetch in an environment with the edge function available, use server-side reader
-  if (fetchFn === fetch && client?.functions?.invoke) {
+  // If running with standard fetch, always require and use the server-side edge function.
+  // Never fall back to direct browser fetch to prevent client-side SSRF or CORS leaks.
+  if (fetchFn === fetch) {
+    if (!client?.functions?.invoke) {
+      return {
+        success: false,
+        error: 'Edge Function service is unavailable for secure URL ingestion.',
+      };
+    }
     try {
       const { data, error } = await client.functions.invoke('page-reader', {
         body: { url },
       });
-      if (!error && data?.success && data?.data) {
-        return {
-          success: true,
-          data: data.data,
-        };
+      if (error) {
+        return { success: false, error: error.message || 'Page reader service encountered an error' };
       }
-      if (error && error.message && !error.message.includes('FunctionsFetchError')) {
-        return { success: false, error: error.message };
+      if (!data?.success || !data?.data) {
+        return { success: false, error: data?.error || 'Page reader returned empty or invalid data' };
       }
-    } catch {
-      // Fall through to direct fetch
+      return {
+        success: true,
+        data: data.data,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: `Page reader service unreachable: ${err.message || 'network error'}`,
+      };
     }
   }
 

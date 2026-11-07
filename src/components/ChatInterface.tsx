@@ -142,7 +142,7 @@ import type { ImageGenerationResult } from '../services/imageGenerationService';
 import { subscribeToOnlineStatus, subscribeToInstallPrompt, promptPwaInstall } from '../services/pwaService';
 import { executeResearchWorkflow } from '../services/researchWorkflow';
 import { searchProjectKnowledge, formatKnowledgeGroundingBlock } from '../services/projectKnowledgeSearch';
-import { branchConversation } from '../services/conversationBranching';
+import { branchConversation, persistMessageVersion } from '../services/conversationBranching';
 import {
   archiveConversation,
   setConversationTags,
@@ -890,6 +890,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         ...(item.debateProfile ? { debateProfile: item.debateProfile as any } : {}),
         ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
         ...(item.debateExecutionMode ? { debateExecutionMode: item.debateExecutionMode } : {}),
+        ...(item.metadata ? { metadata: item.metadata } : {}),
         ...(item.metadata?.comparisonResults
           ? { comparisonResults: item.metadata.comparisonResults as any }
           : {}),
@@ -1424,6 +1425,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     overrideModel,
     promptTokenEstimate: passedPromptTokenEstimate,
     skipBudgetCheck = false,
+    regenerateTargetMessageId,
   }: {
     queryText: string;
     attachmentsToProcess: FileUploadPayload[];
@@ -1431,6 +1433,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     overrideModel?: RouterModel | null;
     promptTokenEstimate?: number;
     skipBudgetCheck?: boolean;
+    regenerateTargetMessageId?: string;
   }) => {
     const estimatedModel = overrideModel || manualModelOverride || currentModel;
     const historyText = historyMessages.map((msg) => {
@@ -1602,29 +1605,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       const projectPromptContext = formatProjectContextPrompt(activeProject);
       let queryWithContext = projectPromptContext ? `${projectPromptContext}\n\n${queryText}` : queryText;
 
-      // F22: Grounded project knowledge search
-      if (activeProjectId) {
+      // Unified Grounding & Search Planning (F11, F22, F24)
+      // Eliminates duplicate web search requests and duplicate project knowledge queries.
+      let citations: SearchCitation[] | undefined;
+
+      // 1. Fetch web search once per turn if enabled
+      if (webSearchEnabled) {
         try {
-          const knowledgeHits = await searchProjectKnowledge(supabase, {
-            projectId: activeProjectId,
-            query: queryText,
-            limit: 3,
-          });
-          if (knowledgeHits.length > 0) {
-            const groundingBlock = formatKnowledgeGroundingBlock(knowledgeHits);
-            queryWithContext = `${groundingBlock}\n\n${queryWithContext}`;
+          const searchRes = await executeWebSearch(queryText);
+          if (searchRes.citations.length > 0) {
+            citations = searchRes.citations;
+          } else if (searchRes.error) {
+            setActionNotice({ message: searchRes.error, type: 'error' });
           }
         } catch (err) {
-          console.warn('[ChatInterface] Project knowledge search failed:', err);
+          console.warn('[ChatInterface] Web search failed, proceeding without search:', err);
         }
       }
 
-      // F24: Multi-source research workflow mode
+      // 2. F24: Multi-source research workflow mode incorporates project knowledge and web results
       if (researchMode) {
         try {
           const researchCtx = await executeResearchWorkflow(supabase, queryText, {
             projectId: activeProjectId,
-            includeWebSearch: webSearchEnabled,
+            includeWebSearch: false, // Already fetched above to prevent duplicate execution
+            existingCitations: citations,
           });
           if (researchCtx.groundingPrompt) {
             queryWithContext = `${researchCtx.groundingPrompt}\n\n${queryWithContext}`;
@@ -1632,21 +1637,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         } catch (err) {
           console.warn('[ChatInterface] Research workflow failed:', err);
         }
-      }
-
-      // F11: Opt-in web search augmentation
-      let citations: SearchCitation[] | undefined;
-      if (webSearchEnabled) {
-        try {
-          const searchRes = await executeWebSearch(queryText);
-          if (searchRes.citations.length > 0) {
-            citations = searchRes.citations;
-            queryWithContext = `${queryWithContext}${searchRes.contextPrompt}`;
-          } else if (searchRes.error) {
-            setActionNotice({ message: searchRes.error, type: 'error' });
+      } else {
+        // Standard mode: project knowledge search and/or web search augmentation
+        if (activeProjectId) {
+          try {
+            const knowledgeHits = await searchProjectKnowledge(supabase, {
+              projectId: activeProjectId,
+              query: queryText,
+              limit: 3,
+            });
+            if (knowledgeHits.length > 0) {
+              const groundingBlock = formatKnowledgeGroundingBlock(knowledgeHits);
+              queryWithContext = `${groundingBlock}\n\n${queryWithContext}`;
+            }
+          } catch (err) {
+            console.warn('[ChatInterface] Project knowledge search failed:', err);
           }
-        } catch (err) {
-          console.warn('[ChatInterface] Web search failed, proceeding without search:', err);
+        }
+
+        if (citations && citations.length > 0) {
+          const webGrounding = `\n\n[Web Search Grounding]\n${citations.map((c) => `[${c.id}] ${c.title} (${c.url}): ${c.snippet}`).join('\n')}\n`;
+          queryWithContext = `${queryWithContext}${webGrounding}`;
         }
       }
 
@@ -2068,6 +2079,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
       setSpendRefreshKey((prev) => prev + 1);
 
+      let messageVersions: any[] | undefined;
+      if (regenerateTargetMessageId && assistantContent) {
+        try {
+          const verRes = await persistMessageVersion(
+            supabase,
+            regenerateTargetMessageId,
+            assistantContent,
+            model,
+          );
+          if (verRes.success) {
+            messageVersions = verRes.versions;
+          }
+        } catch (verErr) {
+          console.warn('[ChatInterface] Failed to record message version:', verErr);
+        }
+      }
+
       if (streamUpdateApplies()) {
         setMessages((prev) => {
           const updated = [...prev];
@@ -2075,6 +2103,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           if (lastMessage?.role === 'assistant') {
             updated[updated.length - 1] = {
               ...lastMessage,
+              id: regenerateTargetMessageId || lastMessage.id,
               cost: {
                 estimatedUsd: costEstimateUsd ?? computedCost.finalUsd,
                 finalUsd: authoritativeFinalUsd,
@@ -2086,6 +2115,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               },
               thinkingLog: [...thinkingLog],
               thinkingDurationMs: Date.now() - streamStartMs,
+              metadata: {
+                ...(lastMessage.metadata || {}),
+                ...(messageVersions ? { versions: messageVersions } : {}),
+              },
               ...(debateParticipants && debateParticipants.length > 0
                 ? { debateParticipants }
                 : {}),
@@ -2400,6 +2433,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return;
     }
 
+    const targetAssistantMsg = snapshot[index];
+    const regenerateTargetMessageId = targetAssistantMsg?.id;
+
     const executeRegenerateAction = () => {
       setMessages(snapshot.slice(0, userIndex + 1));
       resetAutoScroll();
@@ -2410,6 +2446,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         overrideModel: modelOverride !== undefined ? modelOverride : selectedOverride,
         promptTokenEstimate: preflight.promptTokens,
         skipBudgetCheck: true,
+        regenerateTargetMessageId,
       });
     };
 
