@@ -159,6 +159,41 @@ begin
   end;
 end $$;
 
+-- D2. Import Content Truncation Disclosure: Message > 100,000 characters records explicit truncation
+do $$
+declare
+  v_payload jsonb;
+  v_res jsonb;
+  v_conv_id uuid := gen_random_uuid();
+  v_msg_row public.messages;
+begin
+  v_payload := jsonb_build_object(
+    'id', v_conv_id,
+    'title', 'Long Message Chat',
+    'messages', jsonb_build_array(
+      jsonb_build_object(
+        'id', '44444444-4444-4444-8444-444444444444'::uuid,
+        'role', 'user',
+        'content', repeat('X', 100050)
+      )
+    )
+  );
+
+  v_res := public.px16_import_conversation(v_payload);
+  if (v_res->>'success')::boolean is not true then
+    raise exception 'FAIL: px16_import_conversation failed for long message: %', v_res;
+  end if;
+
+  select * into v_msg_row from public.messages where id = '44444444-4444-4444-8444-444444444444'::uuid;
+  if (v_msg_row.metadata->>'truncated') <> 'true' then
+    raise exception 'FAIL: Message metadata did not record explicit truncation flag: %', v_msg_row.metadata;
+  end if;
+
+  if v_msg_row.content not like '%[Content truncated at 100,000 characters]' then
+    raise exception 'FAIL: Message content did not contain truncation disclosure notice';
+  end if;
+end $$;
+
 -- E. Direct client insert into messages is blocked (PX07 security contract)
 do $$
 begin

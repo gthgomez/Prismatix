@@ -308,9 +308,15 @@ export async function deleteProjectDocument(
 
     if (filePath && client?.storage) {
       try {
-        await client.storage.from('project-documents').remove([filePath]);
+        const { error: removeErr } = await client.storage.from('project-documents').remove([filePath]);
+        if (removeErr) {
+          console.warn('[projectDocumentLibrary] Storage file remove failed:', removeErr);
+          // If storage deletion fails, abort database deletion to prevent permanently orphaned files in storage
+          return false;
+        }
       } catch (storageErr) {
         console.warn('[projectDocumentLibrary] Storage file remove warning:', storageErr);
+        return false;
       }
     }
 

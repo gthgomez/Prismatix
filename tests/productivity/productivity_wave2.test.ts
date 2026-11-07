@@ -106,6 +106,22 @@ describe('F16: Conversation Import & Migration', () => {
     expect(emptyObj.error).toMatch(/JSON structure/);
   });
 
+  it('detects and warns on messages exceeding 100,000 characters and bounded 1,000-message limit', () => {
+    const longContent = 'A'.repeat(100050);
+    const raw = JSON.stringify({
+      conversations: [
+        {
+          title: 'Big Chat',
+          messages: [{ role: 'user', content: longContent }],
+        },
+      ],
+    });
+
+    const preview = previewConversationImport(raw);
+    expect(preview.valid).toBe(true);
+    expect(preview.warnings.some((w) => w.includes('100,000 characters'))).toBe(true);
+  });
+
   it('executes conversation import via secure server RPC', async () => {
     let calledRpcName = '';
     let rpcPayload: any = null;

@@ -118,13 +118,13 @@ export function validateUrlForSsrf(rawUrl: string): SsrfCheckResult {
   return { valid: true };
 }
 
-export async function validateHostDns(hostname: string): Promise<SsrfCheckResult> {
+export async function validateHostDns(hostname: string): Promise<SsrfCheckResult & { resolvedIps?: string[] }> {
   const cleanHost = hostname.replace(/^\[|\]$/g, '').trim().toLowerCase();
 
   // If already directly an IP, validate directly
   const directIpCheck = isPrivateIp(cleanHost);
   if (directIpCheck.isPrivate) {
-    return { valid: false, reason: directIpCheck.reason };
+    return { valid: false, reason: directIpCheck.reason, resolvedIps: [cleanHost] };
   }
 
   // Perform DNS resolution in Deno runtime
@@ -144,6 +144,7 @@ export async function validateHostDns(hostname: string): Promise<SsrfCheckResult
           return { valid: false, reason: `DNS resolves host "${cleanHost}" to prohibited private IP ${resolvedIp} (${check.reason})` };
         }
       }
+      return { valid: true, resolvedIps: allIps };
     } catch (dnsErr) {
       return { valid: false, reason: `DNS resolution error for "${cleanHost}": ${dnsErr instanceof Error ? dnsErr.message : String(dnsErr)}` };
     }
@@ -215,14 +216,27 @@ export async function fetchWithSsrfProtection(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
+    // If HTTP protocol and we resolved a concrete IP, target the validated IP directly
+    // and pass the original Host header to prevent DNS rebinding attacks.
+    let fetchTarget = currentUrl;
+    const fetchHeaders: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) PrismatixPageReader/1.0',
+      Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9',
+    };
+
+    if (parsed.protocol === 'http:' && dnsCheck.resolvedIps && dnsCheck.resolvedIps.length > 0) {
+      const targetIp = dnsCheck.resolvedIps[0];
+      const portPart = parsed.port ? `:${parsed.port}` : '';
+      const formattedIp = targetIp.includes(':') ? `[${targetIp}]` : targetIp;
+      fetchTarget = `http://${formattedIp}${portPart}${parsed.pathname}${parsed.search}`;
+      fetchHeaders['Host'] = parsed.host;
+    }
+
     let res: Response;
     try {
-      res = await fetchFn(currentUrl, {
+      res = await fetchFn(fetchTarget, {
         method: 'GET',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) PrismatixPageReader/1.0',
-          Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9',
-        },
+        headers: fetchHeaders,
         redirect: 'manual',
         signal: controller.signal,
       });
@@ -324,21 +338,25 @@ export async function handlePageReader(req: Request): Promise<Response> {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  let userId = 'authenticated_user';
 
-  if (supabaseUrl && supabaseServiceKey) {
-    const supabaseClient = createClient(supabaseUrl, supabaseServiceKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return new Response(JSON.stringify({ error: 'Server authentication service is misconfigured' }), {
+      status: 500,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
-    if (userError || !user) {
-      return new Response(JSON.stringify({ error: 'Invalid or expired authentication session' }), {
-        status: 401,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      });
-    }
-    userId = user.id;
   }
+
+  const supabaseClient = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
+  if (userError || !user) {
+    return new Response(JSON.stringify({ error: 'Invalid or expired authentication session' }), {
+      status: 401,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+  const userId = user.id;
 
   // 2. Enforce user-level rate limiting
   if (!checkRateLimit(userId)) {
