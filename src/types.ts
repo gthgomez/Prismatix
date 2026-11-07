@@ -131,6 +131,8 @@ export type VideoAssetStatus =
   | 'failed'
   | 'expired';
 
+export type RoutingProfile = 'economy' | 'balanced' | 'capability';
+
 export interface MessageCost {
   estimatedUsd?: number;
   finalUsd?: number;
@@ -171,6 +173,18 @@ export interface Message {
   thinkingDurationMs?: number;
   cost?: MessageCost;
   feedback?: 'up' | 'down';
+  citations?: Array<{
+    id: number;
+    title: string;
+    url: string;
+    domain: string;
+    snippet: string;
+  }>;
+  comparisonResults?: {
+    modelA: { model: RouterModel; content: string; cost?: number };
+    modelB: { model: RouterModel; content: string; cost?: number };
+    preferred?: 'A' | 'B';
+  };
 }
 
 export interface FileUploadPayload {
