@@ -182,7 +182,16 @@ export function previewConversationImport(rawJson: string): ImportPreview {
         Boolean(m) && typeof m === 'object' && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string',
     );
 
-    totalMessages += validMessages.length;
+    if (validMessages.length > 1000) {
+      warnings.push(`Conversation "${title}" has ${validMessages.length} messages (exceeds the 1,000-message limit). Only the first 1,000 messages will be imported.`);
+    }
+
+    const hasLongMessage = validMessages.some((m) => m.content.length > 100000);
+    if (hasLongMessage) {
+      warnings.push(`Conversation "${title}" contains message(s) exceeding 100,000 characters. Content will be bounded to 100,000 characters with an explicit truncation notice.`);
+    }
+
+    totalMessages += Math.min(validMessages.length, 1000);
 
     if (conv.projectName) {
       projectsMap.set(conv.projectName, { id: conv.projectId || undefined, name: conv.projectName });
@@ -290,17 +299,26 @@ export async function executeConversationImport(
 
       const isReKeyed = targetConvId !== conv.id;
       const rawMessages = Array.isArray(conv.messages) ? conv.messages : [];
-      const messagesPayload = rawMessages
-        .filter((msg) => msg && typeof msg.content === 'string' && msg.content.trim().length > 0)
-        .map((msg) => ({
+      const filteredMessages = rawMessages.filter((msg) => msg && typeof msg.content === 'string' && msg.content.trim().length > 0);
+      const boundedMessages = filteredMessages.slice(0, 1000);
+
+      const messagesPayload = boundedMessages.map((msg) => {
+        const isLong = msg.content.length > 100000;
+        const boundedContent = isLong
+          ? msg.content.slice(0, 99950) + '\n\n[Content truncated at 100,000 characters]'
+          : msg.content;
+
+        return {
           id: (!isReKeyed && msg.id && isUuid(msg.id)) ? msg.id : generateUuid(),
           role: msg.role === 'assistant' ? 'assistant' : 'user',
-          content: msg.content,
+          content: boundedContent,
           model: msg.model || null,
           tokenCount: (msg.promptTokens || 0) + (msg.completionTokens || 0),
           createdAt: msg.createdAt || new Date().toISOString(),
           cost: msg.cost || null,
-        }));
+          truncated: isLong || undefined,
+        };
+      });
 
       // Call secure server RPC to persist conversation and messages atomically
       const { data: rpcData, error: rpcErr } = await client.rpc('px16_import_conversation', {

@@ -263,9 +263,9 @@ begin
         continue;
       end if;
 
-      -- Bound content length to 100,000 characters
+      -- Bound content length to 100,000 characters with explicit disclosure
       if length(v_content) > 100000 then
-        v_content := substring(v_content, 1, 100000);
+        v_content := substring(v_content, 1, 99950) || E'\n\n[Content truncated at 100,000 characters]';
       end if;
 
       v_role := coalesce(v_msg->>'role', 'user');
@@ -300,6 +300,10 @@ begin
         'source_model', v_model,
         'historical_cost', v_msg->'cost'
       );
+
+      if length(coalesce(v_msg->>'content', '')) > 100000 or (v_msg->>'truncated')::boolean is true then
+        v_msg_meta := jsonb_set(v_msg_meta, '{truncated}', 'true'::jsonb);
+      end if;
 
       -- Insert message atomically without execution_id (exempt from router unique constraint)
       insert into public.messages (
