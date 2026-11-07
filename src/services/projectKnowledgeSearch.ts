@@ -89,7 +89,11 @@ export async function searchProjectKnowledge(
           p_limit: limit,
         });
 
-        if (!rpcErr && Array.isArray(rpcData) && rpcData.length > 0) {
+        if (!rpcErr && Array.isArray(rpcData)) {
+          // Authoritative result from database RPC (even if empty)
+          if (rpcData.length === 0) {
+            return [];
+          }
           return (rpcData as Array<Record<string, unknown>>)
             .filter((r) => Number(r.score || 0) >= minScore)
             .map((r) => ({
@@ -102,6 +106,9 @@ export async function searchProjectKnowledge(
               tokenCount: Number(r.token_count || Math.ceil(String(r.content || '').length / 4)),
               metadata: (r.metadata as Record<string, unknown>) || {},
             }));
+        }
+        if (rpcErr) {
+          console.warn('[projectKnowledgeSearch] rpc returned error, falling back to local table scan:', rpcErr.message);
         }
       } catch (rpcEx) {
         console.warn('[projectKnowledgeSearch] rpc fallback to table scan:', rpcEx);

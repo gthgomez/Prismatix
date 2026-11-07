@@ -5,7 +5,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { searchProjectKnowledge, type KnowledgeSearchResult } from './projectKnowledgeSearch';
-import { executeWebSearch } from './webSearchService';
+import { executeWebSearch, type SearchCitation } from './webSearchService';
 
 export interface ResearchSource {
   id: string;
@@ -22,6 +22,7 @@ export interface ResearchContext {
   totalSources: number;
   groundingPrompt: string;
   estimatedTokens: number;
+  citations: SearchCitation[];
 }
 
 export interface ResearchWorkflowOptions {
@@ -30,6 +31,7 @@ export interface ResearchWorkflowOptions {
   maxWebResults?: number;
   maxProjectChunks?: number;
   tokenBudget?: number;
+  existingCitations?: SearchCitation[];
 }
 
 /**
@@ -42,6 +44,7 @@ export async function executeResearchWorkflow(
 ): Promise<ResearchContext> {
   const tokenBudget = options.tokenBudget || 3500;
   const sources: ResearchSource[] = [];
+  const collectedCitations: SearchCitation[] = [];
 
   // 1. Gather Project Document chunks if a project workspace is active
   if (options.projectId) {
@@ -66,11 +69,23 @@ export async function executeResearchWorkflow(
     }
   }
 
-  // 2. Gather Web Search results if explicitly enabled
-  if (options.includeWebSearch) {
+  // 2. Gather Web Search results if explicitly enabled or pre-fetched
+  if (options.existingCitations && options.existingCitations.length > 0) {
+    for (const hit of options.existingCitations) {
+      collectedCitations.push(hit);
+      sources.push({
+        id: `web-${hit.id}`,
+        type: 'web',
+        title: hit.title,
+        url: hit.url,
+        snippet: hit.snippet || hit.title,
+      });
+    }
+  } else if (options.includeWebSearch) {
     try {
       const searchRes = await executeWebSearch(query);
       for (const hit of searchRes.citations) {
+        collectedCitations.push(hit);
         sources.push({
           id: `web-${hit.id}`,
           type: 'web',
@@ -117,6 +132,7 @@ export async function executeResearchWorkflow(
     totalSources: sources.length,
     groundingPrompt,
     estimatedTokens: Math.ceil(groundingPrompt.length / 4),
+    citations: collectedCitations,
   };
 }
 

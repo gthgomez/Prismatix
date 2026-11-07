@@ -1,8 +1,11 @@
 // supabase/functions/page-reader/index.ts
 // F23: Server-side secure webpage ingestion with strict SSRF defense.
-// Blocks loopback, private RFC 1918, cloud metadata IMDS (169.254.169.254),
+// Authenticates requests, enforces per-user rate limits, blocks loopback, private RFC 1918,
+// cloud metadata IMDS (169.254.169.254), resolves and validates DNS addresses to prevent DNS rebinding,
 // validates each redirect hop (max 3), enforces a 2MB streaming byte cap,
 // 10-second timeout, and extracts clean, safe text content.
+
+import { createClient } from '@supabase/supabase-js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -14,9 +17,67 @@ const MAX_BYTES = 2 * 1024 * 1024; // 2MB streaming limit
 const TIMEOUT_MS = 10000; // 10 seconds
 const MAX_REDIRECTS = 3;
 
+// Rate limiting: 15 requests per minute per authenticated user
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const MAX_REQUESTS_PER_WINDOW = 15;
+const rateLimitMap = new Map<string, { count: number; windowStart: number }>();
+
+function checkRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(userId);
+  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rateLimitMap.set(userId, { count: 1, windowStart: now });
+    return true;
+  }
+  if (entry.count >= MAX_REQUESTS_PER_WINDOW) {
+    return false;
+  }
+  entry.count++;
+  return true;
+}
+
 export interface SsrfCheckResult {
   valid: boolean;
   reason?: string;
+}
+
+export function isPrivateIp(ip: string): { isPrivate: boolean; reason?: string } {
+  const clean = ip.replace(/^\[|\]$/g, '').trim().toLowerCase();
+
+  // IPv4 check
+  if (clean.includes('.')) {
+    const parts = clean.split('.');
+    if (parts.length === 4) {
+      const b0 = parseInt(parts[0] ?? '0', 10);
+      const b1 = parseInt(parts[1] ?? '0', 10);
+
+      if (b0 === 127) return { isPrivate: true, reason: 'Loopback 127.0.0.0/8 is prohibited' };
+      if (b0 === 0) return { isPrivate: true, reason: 'Current/broadcast network 0.0.0.0/8 is prohibited' };
+      if (b0 === 10) return { isPrivate: true, reason: 'Private Class A 10.0.0.0/8 is prohibited' };
+      if (b0 === 172 && b1 >= 16 && b1 <= 31) return { isPrivate: true, reason: 'Private Class B 172.16.0.0/12 is prohibited' };
+      if (b0 === 192 && b1 === 168) return { isPrivate: true, reason: 'Private Class C 192.168.0.0/16 is prohibited' };
+      if (b0 === 169 && b1 === 254) return { isPrivate: true, reason: 'Cloud IMDS / link-local 169.254.0.0/16 is prohibited' };
+      if (b0 === 100 && b1 >= 64 && b1 <= 127) return { isPrivate: true, reason: 'Carrier-grade NAT 100.64.0.0/10 is prohibited' };
+      if (b0 >= 224) return { isPrivate: true, reason: 'Multicast or reserved IP space is prohibited' };
+    }
+  }
+
+  // IPv6 check
+  if (
+    clean === '::1' ||
+    clean.startsWith('fe80:') ||
+    clean.startsWith('fc00:') ||
+    clean.startsWith('fd00:') ||
+    clean.startsWith('::ffff:127.') ||
+    clean.startsWith('::ffff:10.') ||
+    clean.startsWith('::ffff:172.') ||
+    clean.startsWith('::ffff:192.168.') ||
+    clean.startsWith('::ffff:169.254.')
+  ) {
+    return { isPrivate: true, reason: 'Private or loopback IPv6 address is prohibited' };
+  }
+
+  return { isPrivate: false };
 }
 
 export function validateUrlForSsrf(rawUrl: string): SsrfCheckResult {
@@ -48,55 +109,43 @@ export function validateUrlForSsrf(rawUrl: string): SsrfCheckResult {
     return { valid: false, reason: 'Targeting local/internal network domains is prohibited.' };
   }
 
-  // IPv6 loopback & private / link-local
-  if (
-    hostname === '::1' ||
-    hostname === '[::1]' ||
-    hostname.startsWith('fe80:') ||
-    hostname.startsWith('[fe80:') ||
-    hostname.startsWith('fc00:') ||
-    hostname.startsWith('[fc00:') ||
-    hostname.startsWith('fd00:') ||
-    hostname.startsWith('[fd00:')
-  ) {
-    return { valid: false, reason: 'Targeting private or loopback IPv6 addresses is prohibited.' };
+  // Direct IP checks
+  const ipCheck = isPrivateIp(hostname);
+  if (ipCheck.isPrivate) {
+    return { valid: false, reason: ipCheck.reason };
   }
 
-  const cleanHost = hostname.replace(/^\[|\]$/g, '');
-  const isNumericIp = /^(\d+|0x[0-9a-fA-F]+)(\.(\d+|0x[0-9a-fA-F]+)){0,3}$/.test(cleanHost);
+  return { valid: true };
+}
 
-  if (isNumericIp) {
-    const parts = cleanHost.split('.');
-    if (parts.length === 4) {
-      const b0 = parseInt(parts[0] ?? '0', 10);
-      const b1 = parseInt(parts[1] ?? '0', 10);
+export async function validateHostDns(hostname: string): Promise<SsrfCheckResult> {
+  const cleanHost = hostname.replace(/^\[|\]$/g, '').trim().toLowerCase();
 
-      // Loopback 127.0.0.0/8
-      if (b0 === 127) return { valid: false, reason: 'Loopback address (127.0.0.0/8) is prohibited.' };
-      // Broadcast / Current network 0.0.0.0/8
-      if (b0 === 0) return { valid: false, reason: 'Broadcast network (0.0.0.0/8) is prohibited.' };
-      // Private Class A 10.0.0.0/8
-      if (b0 === 10) return { valid: false, reason: 'Private network (10.0.0.0/8) is prohibited.' };
-      // Private Class B 172.16.0.0/12
-      if (b0 === 172 && b1 >= 16 && b1 <= 31) return { valid: false, reason: 'Private network (172.16.0.0/12) is prohibited.' };
-      // Private Class C 192.168.0.0/16
-      if (b0 === 192 && b1 === 168) return { valid: false, reason: 'Private network (192.168.0.0/16) is prohibited.' };
-      // Link Local & Cloud IMDS (169.254.0.0/16)
-      if (b0 === 169 && b1 === 254) return { valid: false, reason: 'Cloud instance metadata and link-local address (169.254.0.0/16) is prohibited.' };
-      // Carrier-Grade NAT (100.64.0.0/10)
-      if (b0 === 100 && b1 >= 64 && b1 <= 127) return { valid: false, reason: 'Carrier-grade NAT space is prohibited.' };
-      // Multicast / Reserved (224.0.0.0/4 and above)
-      if (b0 >= 224) return { valid: false, reason: 'Multicast or reserved IP space is prohibited.' };
-    } else {
-      try {
-        const num = parseInt(cleanHost, 10);
-        const b0 = (num >> 24) & 255;
-        if (b0 === 127 || b0 === 10 || b0 === 169 || b0 === 192 || b0 === 172) {
-          return { valid: false, reason: 'Numeric internal IP representation is prohibited.' };
-        }
-      } catch {
-        return { valid: false, reason: 'Invalid numeric IP representation.' };
+  // If already directly an IP, validate directly
+  const directIpCheck = isPrivateIp(cleanHost);
+  if (directIpCheck.isPrivate) {
+    return { valid: false, reason: directIpCheck.reason };
+  }
+
+  // Perform DNS resolution in Deno runtime
+  if (typeof Deno !== 'undefined' && typeof Deno.resolveDns === 'function') {
+    try {
+      const aRecords = await Deno.resolveDns(cleanHost, 'A').catch(() => []);
+      const aaaaRecords = await Deno.resolveDns(cleanHost, 'AAAA').catch(() => []);
+      const allIps = [...aRecords, ...aaaaRecords];
+
+      if (allIps.length === 0) {
+        return { valid: false, reason: `DNS resolution failed: no IP address resolved for host "${cleanHost}"` };
       }
+
+      for (const resolvedIp of allIps) {
+        const check = isPrivateIp(resolvedIp);
+        if (check.isPrivate) {
+          return { valid: false, reason: `DNS resolves host "${cleanHost}" to prohibited private IP ${resolvedIp} (${check.reason})` };
+        }
+      }
+    } catch (dnsErr) {
+      return { valid: false, reason: `DNS resolution error for "${cleanHost}": ${dnsErr instanceof Error ? dnsErr.message : String(dnsErr)}` };
     }
   }
 
@@ -114,6 +163,9 @@ export function extractCleanText(html: string): { title: string; description?: s
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
+    .replace(/<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi, '')
     .replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '')
     .replace(/<header\b[^<]*(?:(?!<\/header>)<[^<]*)*<\/header>/gi, '')
     .replace(/<footer\b[^<]*(?:(?!<\/footer>)<[^<]*)*<\/footer>/gi, '')
@@ -152,6 +204,12 @@ export async function fetchWithSsrfProtection(
     const ssrfCheck = validateUrlForSsrf(currentUrl);
     if (!ssrfCheck.valid) {
       return { ok: false, status: 400, text: '', finalUrl: currentUrl, error: `SSRF Violation: ${ssrfCheck.reason}` };
+    }
+
+    const parsed = new URL(currentUrl);
+    const dnsCheck = await validateHostDns(parsed.hostname);
+    if (!dnsCheck.valid) {
+      return { ok: false, status: 400, text: '', finalUrl: currentUrl, error: `SSRF Violation: ${dnsCheck.reason}` };
     }
 
     const controller = new AbortController();
@@ -250,6 +308,42 @@ export async function handlePageReader(req: Request): Promise<Response> {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  // 1. Authenticate caller
+  const authHeader = req.headers.get('Authorization') ?? '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (!token) {
+    return new Response(JSON.stringify({ error: 'Authentication required to ingest URLs' }), {
+      status: 401,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+  let userId = 'authenticated_user';
+
+  if (supabaseUrl && supabaseServiceKey) {
+    const supabaseClient = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
+    if (userError || !user) {
+      return new Response(JSON.stringify({ error: 'Invalid or expired authentication session' }), {
+        status: 401,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
+    userId = user.id;
+  }
+
+  // 2. Enforce user-level rate limiting
+  if (!checkRateLimit(userId)) {
+    return new Response(JSON.stringify({ error: 'Rate limit exceeded: Please wait before requesting another URL' }), {
+      status: 429,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });
   }
