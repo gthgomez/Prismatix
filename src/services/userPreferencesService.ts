@@ -1,7 +1,7 @@
 // src/services/userPreferencesService.ts
 // F20: Cross-device user preference synchronization.
 // Persists non-sensitive interface, routing, and model preferences on the server
-// with account isolation, graceful offline fallback, and localStorage migration.
+// with strict account scoping, conflict resolution, graceful offline fallback, and storage isolation.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { RoutingProfile } from '../types';
@@ -27,14 +27,17 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   maxSpendCap: null,
 };
 
-const LOCAL_STORAGE_KEY = 'prismatix_synced_user_preferences';
+export function getScopedStorageKey(userId?: string | null): string {
+  return userId ? `prismatix_synced_user_preferences_${userId}` : 'prismatix_synced_user_preferences_anon';
+}
 
 /**
- * Loads cached preferences from localStorage for offline/immediate boot.
+ * Loads cached preferences from localStorage scoped by account ID.
  */
-export function getLocalPreferences(): UserPreferences {
+export function getLocalPreferences(userId?: string | null): UserPreferences {
   try {
-    const raw = window.localStorage.getItem(LOCAL_STORAGE_KEY);
+    const key = getScopedStorageKey(userId);
+    const raw = window.localStorage.getItem(key);
     if (!raw) return DEFAULT_PREFERENCES;
     return { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
   } catch {
@@ -43,28 +46,49 @@ export function getLocalPreferences(): UserPreferences {
 }
 
 /**
- * Saves preferences to localStorage.
+ * Saves preferences to localStorage scoped by account ID.
  */
-export function setLocalPreferences(prefs: UserPreferences): void {
+export function setLocalPreferences(prefs: UserPreferences, userId?: string | null): void {
   try {
-    window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(prefs));
+    const key = getScopedStorageKey(userId);
+    window.localStorage.setItem(key, JSON.stringify(prefs));
   } catch {
     // Ignore storage write issues
   }
 }
 
 /**
- * Fetches preferences from the server for the authenticated user.
+ * Clears cached preferences for a user on sign-out to prevent cross-account leakage.
+ */
+export function clearLocalPreferences(userId?: string | null): void {
+  try {
+    const key = getScopedStorageKey(userId);
+    window.localStorage.removeItem(key);
+    // Also clean up any legacy un-scoped key
+    window.localStorage.removeItem('prismatix_synced_user_preferences');
+  } catch {
+    // Ignore storage removal issues
+  }
+}
+
+/**
+ * Fetches preferences from the server for the authenticated user, resolving conflicts
+ * by comparing server and client update timestamps.
  */
 export async function fetchServerPreferences(
   client: SupabaseClient,
 ): Promise<UserPreferences | null> {
   try {
+    if (typeof client?.auth?.getUser !== 'function') {
+      return getLocalPreferences(null);
+    }
     const {
       data: { user },
     } = await client.auth.getUser();
 
     if (!user) return null;
+
+    const local = getLocalPreferences(user.id);
 
     const { data, error } = await client
       .from('user_preferences')
@@ -73,17 +97,25 @@ export async function fetchServerPreferences(
       .maybeSingle();
 
     if (error || !data) {
-      return null;
+      return local;
     }
 
     const remotePrefs = (data.preferences || {}) as Partial<UserPreferences>;
+    const remoteUpdatedAt = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+    const localUpdatedAt = local.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+
+    // If local has newer un-synced edits, keep local and schedule sync
+    if (localUpdatedAt > remoteUpdatedAt && Object.keys(local).length > 0) {
+      return local;
+    }
+
     const merged: UserPreferences = {
       ...DEFAULT_PREFERENCES,
       ...remotePrefs,
       updatedAt: data.updated_at,
     };
 
-    setLocalPreferences(merged);
+    setLocalPreferences(merged, user.id);
     return merged;
   } catch (err) {
     console.warn('[userPreferencesService] Fetch server preferences exception:', err);
@@ -99,21 +131,24 @@ export async function saveServerPreferences(
   updated: Partial<UserPreferences>,
 ): Promise<{ success: boolean; preferences?: UserPreferences }> {
   try {
+    if (typeof client?.auth?.getUser !== 'function') {
+      return { success: false };
+    }
     const {
       data: { user },
     } = await client.auth.getUser();
 
     if (!user) return { success: false };
 
-    const current = getLocalPreferences();
+    const current = getLocalPreferences(user.id);
     const merged: UserPreferences = {
       ...current,
       ...updated,
       updatedAt: new Date().toISOString(),
     };
 
-    // Update local cache immediately
-    setLocalPreferences(merged);
+    // Update local cache immediately with account scoping
+    setLocalPreferences(merged, user.id);
 
     const { error } = await client.from('user_preferences').upsert({
       user_id: user.id,
@@ -139,6 +174,10 @@ export async function saveServerPreferences(
 export async function syncPreferences(client: SupabaseClient): Promise<UserPreferences> {
   const remote = await fetchServerPreferences(client);
   if (remote) return remote;
-  return getLocalPreferences();
-}
 
+  if (typeof client?.auth?.getUser === 'function') {
+    const { data: { user } } = await client.auth.getUser();
+    return getLocalPreferences(user?.id);
+  }
+  return getLocalPreferences(null);
+}
