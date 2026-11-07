@@ -15,7 +15,8 @@ function hostOf(value: string): string {
   }
 }
 
-const SUPABASE_URL = ENV_SUPABASE_URL || DERIVED_SUPABASE_URL;
+const DEFAULT_MOCK_SUPABASE_URL = 'https://mock.supabase.co';
+const SUPABASE_URL = ENV_SUPABASE_URL || DERIVED_SUPABASE_URL || DEFAULT_MOCK_SUPABASE_URL;
 const ENABLE_VIDEO_PIPELINE = (() => {
   const raw = String(import.meta.env.VITE_ENABLE_VIDEO_PIPELINE || '').trim().toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
@@ -47,7 +48,7 @@ const ROUTER_ENDPOINT = (() => {
 export const CONFIG = {
   // Supabase Configuration
   SUPABASE_URL,
-  SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+  SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY || 'mock-anon-key',
   
   // Router Endpoint (modern format: https://[PROJECT_ID].supabase.co/functions/v1/[function-name])
   ROUTER_ENDPOINT,
