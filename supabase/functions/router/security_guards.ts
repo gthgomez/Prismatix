@@ -45,6 +45,8 @@ export interface NormalizedRouterRequest {
   geminiFlashThinkingLevel?: string;
   mode?: string;
   debateProfile?: string;
+  routingProfile?: 'balanced' | 'economy' | 'capability';
+  spendCapUsd?: number;
 }
 
 export type GuardResult<T> =
@@ -157,6 +159,22 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
     return debateProfileResult;
   }
 
+  let routingProfile: 'balanced' | 'economy' | 'capability' | undefined = undefined;
+  if (input.routingProfile !== undefined && input.routingProfile !== null) {
+    if (typeof input.routingProfile !== 'string' || !['balanced', 'economy', 'capability'].includes(input.routingProfile)) {
+      return reject(400, 'Bad Request: routingProfile must be "balanced", "economy", or "capability"');
+    }
+    routingProfile = input.routingProfile as 'balanced' | 'economy' | 'capability';
+  }
+
+  let spendCapUsd: number | undefined = undefined;
+  if (input.spendCapUsd !== undefined && input.spendCapUsd !== null) {
+    if (typeof input.spendCapUsd !== 'number' || !Number.isFinite(input.spendCapUsd) || input.spendCapUsd < 0) {
+      return reject(400, 'Bad Request: spendCapUsd must be a non-negative number');
+    }
+    spendCapUsd = input.spendCapUsd;
+  }
+
   return {
     ok: true,
     value: {
@@ -173,6 +191,8 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
       geminiFlashThinkingLevel: thinkingResult.value,
       mode: modeResult.value,
       debateProfile: debateProfileResult.value,
+      routingProfile,
+      spendCapUsd,
     },
   };
 }

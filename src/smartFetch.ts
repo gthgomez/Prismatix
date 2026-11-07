@@ -5,6 +5,7 @@ import { supabase } from './lib/supabase';
 import { CONFIG } from './config';
 import { devLog, devWarn, devError } from './utils';
 import { noteServerTariffVersion } from './catalogSkew';
+import { readRouterStream } from './hooks/useStreamHandler';
 import type { AttachmentRef } from '../supabase/functions/_shared/conversation_attachments';
 import type {
   DebateParticipant,
@@ -25,6 +26,8 @@ const MAX_CLIENT_QUERY_LENGTH = MAX_ROUTER_QUERY_LENGTH - QUERY_SAFETY_MARGIN;
 export interface DebateRequestOptions {
   mode?: 'debate' | 'off';
   debateProfile?: DebateProfile;
+  routingProfile?: 'balanced' | 'economy' | 'capability';
+  spendCapUsd?: number;
 }
 
 export interface DebateResponseMetadata {
@@ -54,6 +57,8 @@ interface RouterRequestPayload {
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
   mode?: 'debate' | 'off';
   debateProfile?: DebateProfile;
+  routingProfile?: 'balanced' | 'economy' | 'capability';
+  spendCapUsd?: number;
 }
 
 export interface RouterResponseBase {
@@ -328,6 +333,8 @@ export async function askPrismatix(
   imageStorageUrl?: string,
   signal?: AbortSignal,
   attachmentRefs?: AttachmentRef[],
+  routingProfile?: 'balanced' | 'economy' | 'capability',
+  spendCapUsd?: number,
 ): Promise<(RouterResponseBase & { stream: ReadableStream<Uint8Array> }) | null> {
   try {
     const routerEndpoint = CONFIG.ROUTER_ENDPOINT || getEnvVar('VITE_ROUTER_ENDPOINT');
@@ -413,6 +420,14 @@ export async function askPrismatix(
     } else if (debateOptions?.mode === 'debate' && debateOptions.debateProfile) {
       payload.mode = 'debate';
       payload.debateProfile = debateOptions.debateProfile;
+    }
+
+    if (routingProfile) {
+      payload.routingProfile = routingProfile;
+    }
+
+    if (spendCapUsd !== undefined && spendCapUsd > 0) {
+      payload.spendCapUsd = spendCapUsd;
     }
 
     devLog('[smartFetch] Request:', {
@@ -633,6 +648,9 @@ export async function askPrismatixSync(
   modelOverride?: RouterModel | null,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel = 'high',
   debateOptions?: DebateRequestOptions,
+  routingProfile?: 'balanced' | 'economy' | 'capability',
+  spendCapUsd?: number,
+  signal?: AbortSignal,
 ): Promise<(RouterResponseBase & { content: string }) | null> {
   const result = await askPrismatix(
     query,
@@ -641,22 +659,28 @@ export async function askPrismatixSync(
     modelOverride,
     geminiFlashThinkingLevel,
     debateOptions,
+    undefined,
+    signal,
+    undefined,
+    routingProfile,
+    spendCapUsd,
   );
   if (!result) return null;
 
-  const reader = result.stream.getReader();
-  const decoder = new TextDecoder();
-  let content = '';
-
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      content += decoder.decode(value, { stream: true });
-    }
+    const streamResult = await readRouterStream(
+      result.stream,
+      result.costEstimateUsd ? 100 : 50,
+      {
+        onFirstToken: () => {},
+        onUsageUpdate: () => {},
+        onContentUpdate: () => {},
+      },
+      signal,
+    );
 
     const { stream: _, ...base } = result;
-    return { ...base, content };
+    return { ...base, content: streamResult.assistantContent };
   } catch (error) {
     devError('[smartFetch] Stream reading error:', error);
     return null;

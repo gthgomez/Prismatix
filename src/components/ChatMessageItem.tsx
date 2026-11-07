@@ -26,6 +26,7 @@ export interface ChatMessageItemProps {
   onRegenerate?: (index: number, modelOverride?: RouterModel) => void;
   onEditPrompt?: (index: number, newContent: string) => void;
   onFeedback?: (index: number, type: 'up' | 'down') => void;
+  onSelectComparisonPreference?: (index: number, preferred: 'A' | 'B') => void;
 }
 
 export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
@@ -41,6 +42,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   onRegenerate,
   onEditPrompt,
   onFeedback,
+  onSelectComparisonPreference,
 }) => {
   if (import.meta.env.MODE === 'test') chatMessageItemRenderLog.push(index);
   const modelPillMeta = message.model ? assistantModelPillDisplay(message) : null;
@@ -354,6 +356,97 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 executionMode={message.debateExecutionMode}
                 profile={message.debateProfile}
               />
+            )}
+
+            {message.citations && message.citations.length > 0 && (
+              <div className='message-citations-container'>
+                <div className='message-citations-header'>
+                  <span>🔍 Sources ({message.citations.length})</span>
+                </div>
+                <div className='message-citations-list'>
+                  {message.citations.map((c) => (
+                    <a
+                      key={c.id}
+                      href={c.url}
+                      target='_blank'
+                      rel='noopener noreferrer'
+                      className='citation-pill'
+                      title={c.snippet}
+                    >
+                      <span className='citation-num'>[{c.id}]</span>
+                      <span className='citation-domain'>{c.domain}</span>
+                      <span className='citation-title'>
+                        {c.title.length > 28 ? `${c.title.slice(0, 25)}…` : c.title}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {message.comparisonResults && (
+              <div className='comparison-results-container'>
+                <div className={`comparison-column model-a ${message.comparisonResults.preferred === 'A' ? 'is-preferred' : ''}`}>
+                  <div className='comparison-header'>
+                    <span className='comparison-model-badge'>{message.comparisonResults.modelA.model}</span>
+                    {message.comparisonResults.modelA.cost !== undefined && (
+                      <span className='comparison-cost'>${message.comparisonResults.modelA.cost.toFixed(4)}</span>
+                    )}
+                  </div>
+                  <div className='comparison-content'>
+                    <FormattedMessage content={message.comparisonResults.modelA.content} />
+                  </div>
+                  <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
+                    <button
+                      type='button'
+                      onClick={() => onSelectComparisonPreference?.(index, 'A')}
+                      style={{
+                        padding: '0.25rem 0.6rem',
+                        fontSize: '0.75rem',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        border: '1px solid',
+                        borderColor: message.comparisonResults.preferred === 'A' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.15)',
+                        background: message.comparisonResults.preferred === 'A' ? 'rgba(78, 205, 196, 0.2)' : 'transparent',
+                        color: message.comparisonResults.preferred === 'A' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
+                        fontWeight: message.comparisonResults.preferred === 'A' ? 600 : 400,
+                      }}
+                    >
+                      {message.comparisonResults.preferred === 'A' ? '✓ Preferred model' : 'Prefer this model'}
+                    </button>
+                  </div>
+                </div>
+                <div className={`comparison-column model-b ${message.comparisonResults.preferred === 'B' ? 'is-preferred' : ''}`}>
+                  <div className='comparison-header'>
+                    <span className='comparison-model-badge'>{message.comparisonResults.modelB.model}</span>
+                    {message.comparisonResults.modelB.cost !== undefined && (
+                      <span className='comparison-cost'>${message.comparisonResults.modelB.cost.toFixed(4)}</span>
+                    )}
+                  </div>
+                  <div className='comparison-content'>
+                    <FormattedMessage content={message.comparisonResults.modelB.content} />
+                  </div>
+                  <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
+                    <button
+                      type='button'
+                      onClick={() => onSelectComparisonPreference?.(index, 'B')}
+                      style={{
+                        padding: '0.25rem 0.6rem',
+                        fontSize: '0.75rem',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        border: '1px solid',
+                        borderColor: message.comparisonResults.preferred === 'B' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.15)',
+                        background: message.comparisonResults.preferred === 'B' ? 'rgba(78, 205, 196, 0.2)' : 'transparent',
+                        color: message.comparisonResults.preferred === 'B' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
+                        fontWeight: message.comparisonResults.preferred === 'B' ? 600 : 400,
+                      }}
+                    >
+                      {message.comparisonResults.preferred === 'B' ? '✓ Preferred model' : 'Prefer this model'}
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
 
             {isWaitingFirstToken && isStreamingAssistant && (

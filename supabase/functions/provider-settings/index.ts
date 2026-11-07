@@ -181,6 +181,20 @@ export async function validateProviderKeyMetadata(
       return { status: 'unknown', message: `DeepInfra response: HTTP ${res.status}` };
     }
 
+    if (provider === 'brave') {
+      const res = await fetchFn('https://api.search.brave.com/res/v1/web/search?q=test&count=1', {
+        headers: {
+          Accept: 'application/json',
+          'X-Subscription-Token': apiKey,
+        },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) return { status: 'enabled', message: 'Brave Search key verified' };
+      if (res.status === 401 || res.status === 403) return { status: 'invalid_revoked', message: 'Brave Search key invalid' };
+      if (res.status >= 500) return { status: 'unavailable', message: `Brave Search service unavailable (${res.status})` };
+      return { status: 'unknown', message: `Brave Search response: HTTP ${res.status}` };
+    }
+
     // Default for direct providers without a dedicated safe metadata endpoint
     return { status: 'enabled', message: 'Key saved' };
   } catch (err: unknown) {

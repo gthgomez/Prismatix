@@ -109,9 +109,8 @@ test.describe('PR 1 Daily-Use Foundation (E2E)', () => {
     if (isMobile) {
       // In mobile, open sidebar via toggle button
       const toggleSidebarBtn = page.locator('button[aria-label="Toggle conversations sidebar"]');
-      if (await toggleSidebarBtn.isVisible()) {
-        await toggleSidebarBtn.click();
-      }
+      await toggleSidebarBtn.waitFor({ state: 'visible', timeout: 5000 });
+      await toggleSidebarBtn.click();
     }
 
     // Sidebar must render loaded conversations

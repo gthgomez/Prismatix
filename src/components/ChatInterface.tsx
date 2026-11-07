@@ -67,11 +67,14 @@ const CAPABILITY_PILLARS: CapabilityPillar[] = [
 ];
 import {
   askPrismatix,
+  askPrismatixSync,
   DuplicateRequestError,
   getConversationId,
   resetConversation,
   setConversationId,
 } from '../smartFetch';
+import { executeWebSearch, type SearchCitation } from '../services/webSearchService';
+import { submitRoutingFeedback } from '../services/routingFeedbackService';
 import { supabase } from '../lib/supabase';
 import {
   assignConversationProject,
@@ -115,6 +118,7 @@ import type {
   GeminiFlashThinkingLevel,
   Message,
   RouterModel,
+  RoutingProfile,
 } from '../types';
 import { MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog';
 import { filterVisibleModels, isModelVisible } from '../providerRegistry';
@@ -193,7 +197,10 @@ export function describeStreamError(error: unknown): string {
       case 'balance_exhausted':
       case 'daily_limit_exceeded':
       case 'monthly_limit_exceeded':
+      case 'daily_spend_limit_exceeded':
         return `Usage allowance reached for this period.${retryNote} Check spend settings or wait for quota reset.`;
+      case 'request_cost_limit_exceeded':
+        return `Request cost exceeds your configured spend cap.${retryNote} Lower prompt size, increase spend cap, or select an economy model.`;
       case 'rate_limited':
       case 'rate_limit_exceeded':
       case 'too_many_requests':
@@ -395,6 +402,39 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+
+  // PR 3: F11 Web Search, F12 Comparison, F13 Routing Profiles & Spend Caps
+  const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('prismatix_web_search_enabled') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [comparisonMode, setComparisonMode] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('prismatix_comparison_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [comparisonModelA, setComparisonModelA] = useState<RouterModel>('gemini-3.8-flash');
+  const [comparisonModelB, setComparisonModelB] = useState<RouterModel>('gpt-6-sol');
+  const [routingProfile, setRoutingProfile] = useState<RoutingProfile>(() => {
+    try {
+      return (window.localStorage.getItem('prismatix_routing_profile') as RoutingProfile) || 'balanced';
+    } catch {
+      return 'balanced';
+    }
+  });
+  const [maxSpendCap, setMaxSpendCap] = useState<number | null>(() => {
+    try {
+      const saved = window.localStorage.getItem('prismatix_max_spend_cap');
+      return saved ? Number(saved) : null;
+    } catch {
+      return null;
+    }
+  });
 
   // Shared quality requirement: action notice banner (rename/delete)
   const [actionNotice, setActionNotice] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
@@ -809,6 +849,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         ...(item.debateProfile ? { debateProfile: item.debateProfile as any } : {}),
         ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
         ...(item.debateExecutionMode ? { debateExecutionMode: item.debateExecutionMode } : {}),
+        ...(item.metadata?.comparisonResults
+          ? { comparisonResults: item.metadata.comparisonResults as any }
+          : {}),
+        ...(item.metadata?.citations
+          ? { citations: item.metadata.citations as any }
+          : {}),
       });
     }
     return mapped;
@@ -1327,18 +1373,168 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       // Pass array of attachments to the Prismatix router fetch utility.
       const activeProject = activeProjectId ? projects.find((p) => p.id === activeProjectId) : null;
       const projectPromptContext = formatProjectContextPrompt(activeProject);
-      const queryWithProject = projectPromptContext ? `${projectPromptContext}\n\n${queryText}` : queryText;
+      let queryWithContext = projectPromptContext ? `${projectPromptContext}\n\n${queryText}` : queryText;
+
+      // F11: Opt-in web search augmentation
+      let citations: SearchCitation[] | undefined;
+      if (webSearchEnabled) {
+        try {
+          const searchRes = await executeWebSearch(queryText);
+          if (searchRes.citations.length > 0) {
+            citations = searchRes.citations;
+            queryWithContext = `${queryWithContext}${searchRes.contextPrompt}`;
+          } else if (searchRes.error) {
+            setActionNotice({ message: searchRes.error, type: 'error' });
+          }
+        } catch (err) {
+          console.warn('[ChatInterface] Web search failed, proceeding without search:', err);
+        }
+      }
+
+      // F12: Side-by-side comparison mode execution
+      if (comparisonMode) {
+        setIsStreaming(true);
+        setIsWaitingFirstToken(false);
+        const placeholderMsg: Message = {
+          role: 'assistant',
+          content: `Comparing **${comparisonModelA}** and **${comparisonModelB}**...`,
+          timestamp: Date.now(),
+          comparisonResults: {
+            modelA: { model: comparisonModelA, content: 'Evaluating prompt...' },
+            modelB: { model: comparisonModelB, content: 'Evaluating prompt...' },
+          },
+          citations,
+        };
+        setMessages((prev) => [...prev, placeholderMsg]);
+
+        const [resA, resB] = await Promise.allSettled([
+          askPrismatixSync(
+            queryWithContext,
+            historyForRequest,
+            attachmentsToProcess,
+            comparisonModelA,
+            geminiFlashThinkingLevel,
+            undefined,
+            routingProfile,
+            maxSpendCap ?? undefined,
+            abortController.signal,
+          ),
+          askPrismatixSync(
+            queryWithContext,
+            historyForRequest,
+            attachmentsToProcess,
+            comparisonModelB,
+            geminiFlashThinkingLevel,
+            undefined,
+            routingProfile,
+            maxSpendCap ?? undefined,
+            abortController.signal,
+          ),
+        ]);
+
+        const contentA =
+          resA.status === 'fulfilled' && resA.value?.content
+            ? resA.value.content
+            : `⚠️ ${resA.status === 'rejected' ? (resA.reason as Error)?.message || 'Failed' : 'Unable to generate response'}`;
+        const costA = resA.status === 'fulfilled' ? resA.value?.costEstimateUsd : undefined;
+
+        const contentB =
+          resB.status === 'fulfilled' && resB.value?.content
+            ? resB.value.content
+            : `⚠️ ${resB.status === 'rejected' ? (resB.reason as Error)?.message || 'Failed' : 'Unable to generate response'}`;
+        const costB = resB.status === 'fulfilled' ? resB.value?.costEstimateUsd : undefined;
+
+        if (resA.status === 'fulfilled' && resA.value?.costEstimateUsd) {
+          recordCost({
+            model: comparisonModelA,
+            cost: resA.value.costEstimateUsd,
+            conversationId: sendConversationId,
+            costStatus: 'estimated',
+          });
+        }
+        if (resB.status === 'fulfilled' && resB.value?.costEstimateUsd) {
+          recordCost({
+            model: comparisonModelB,
+            cost: resB.value.costEstimateUsd,
+            conversationId: sendConversationId,
+            costStatus: 'estimated',
+          });
+        }
+
+        const comparisonResultsData = {
+          modelA: { model: comparisonModelA, content: contentA, cost: costA },
+          modelB: { model: comparisonModelB, content: contentB, cost: costB },
+        };
+        const comparisonSummary = `Side-by-side comparison: **${comparisonModelA}** vs **${comparisonModelB}**`;
+
+        const execIdA = resA.status === 'fulfilled' ? resA.value?.executionId : undefined;
+        let persistedId: string | undefined;
+
+        if (execIdA) {
+          try {
+            const { data } = await supabase
+              .from('messages')
+              .update({
+                content: comparisonSummary,
+                metadata: {
+                  comparisonResults: comparisonResultsData,
+                  citations: citations && citations.length > 0 ? citations : undefined,
+                },
+              })
+              .eq('execution_id', execIdA)
+              .select('id')
+              .maybeSingle();
+            if (data?.id) {
+              persistedId = data.id;
+            }
+          } catch (err) {
+            console.warn('[ChatInterface] Failed to persist comparison metadata to Supabase:', err);
+          }
+        }
+
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last && last.role === 'assistant') {
+            updated[updated.length - 1] = {
+              ...last,
+              id: persistedId ?? last.id,
+              content: comparisonSummary,
+              comparisonResults: comparisonResultsData,
+              citations,
+            };
+          }
+          return updated;
+        });
+
+        setIsStreaming(false);
+        setSpendRefreshKey((prev) => prev + 1);
+        void refreshConversations();
+        return;
+      }
+
+      // F13: Routing profile selection fallback
+      let effectiveOverride = overrideModel || manualModelOverride;
+      if (!effectiveOverride) {
+        if (routingProfile === 'economy') {
+          effectiveOverride = 'gemini-3.8-flash';
+        } else if (routingProfile === 'capability') {
+          effectiveOverride = 'gpt-6-sol';
+        }
+      }
 
       const result = await askPrismatix(
-        queryWithProject,
+        queryWithContext,
         historyForRequest,
         attachmentsToProcess,
-        overrideModel || manualModelOverride,
+        effectiveOverride,
         geminiFlashThinkingLevel,
         getDebatePayload(debateSelection),
         firstImageStorageRef,
         abortController.signal,
         attachmentRefs,
+        routingProfile,
+        maxSpendCap ?? undefined,
       );
 
       if (!result) throw new Error('Failed to get response from router');
@@ -1412,6 +1608,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         debateDegraded,
         debateDegradedReason,
         thinkingLog: [],
+        citations,
         cost: costEstimateUsd !== undefined
           ? {
             estimatedUsd: costEstimateUsd,
@@ -1524,6 +1721,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             model,
             cost: authoritativeCost,
             pricingVersion: costPricingVersion || computedCost.pricingVersion,
+            provider,
+            conversationId: sendConversationId,
+            costStatus,
+            promptTokens,
+            completionTokens,
+            executionId: receipt?.executionId ?? executionId,
           });
           setSessionCostTotal((prev) => prev + authoritativeCost);
           setFinalMessageCost(authoritativeCost);
@@ -1595,6 +1798,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           model,
           cost: authoritativeFinalUsd,
           pricingVersion: costPricingVersion || computedCost.pricingVersion,
+          provider,
+          conversationId: sendConversationId,
+          costStatus,
+          promptTokens,
+          completionTokens,
+          executionId: receipt?.executionId ?? executionId,
         });
         setSessionCostTotal((prev) => prev + authoritativeFinalUsd);
       }
@@ -1761,6 +1970,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           imageCount,
         );
     const promptTokenEstimate = preflight.promptTokens;
+
+    // F13: Spend cap enforcement
+    if (comparisonMode) {
+      const preflightA = calculatePreFlightCost(
+        comparisonModelA,
+        `${historyText}\nuser: ${queryText}`,
+        imageCount,
+      );
+      const preflightB = calculatePreFlightCost(
+        comparisonModelB,
+        `${historyText}\nuser: ${queryText}`,
+        imageCount,
+      );
+      const combined = preflightA.estimatedUsd + preflightB.estimatedUsd;
+      if (maxSpendCap !== null && combined > maxSpendCap) {
+        setSendValidationError(
+          `Estimated combined cost of $${combined.toFixed(4)} exceeds your configured spend cap of $${maxSpendCap.toFixed(2)}. Adjust your spend cap or choose different models.`,
+        );
+        return;
+      }
+    } else if (maxSpendCap !== null && preflight.estimatedUsd > maxSpendCap) {
+      setSendValidationError(
+        `Estimated cost of $${preflight.estimatedUsd.toFixed(4)} exceeds your configured spend cap of $${maxSpendCap.toFixed(2)}. Adjust your spend cap or choose an economy model.`,
+      );
+      return;
+    }
 
     if (!skipBudgetCheck) {
       // Fetch from server first so budget cannot be bypassed by clearing localStorage or opening a new tab.
@@ -2019,10 +2254,59 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       const updated = [...prev];
       const target = updated[index];
       if (target) {
+        const nextFeedback = target.feedback === type ? undefined : type;
         updated[index] = {
           ...target,
-          feedback: target.feedback === type ? undefined : type,
+          feedback: nextFeedback,
         };
+        if (nextFeedback) {
+          void submitRoutingFeedback(supabase, {
+            conversationId: selectedConversationIdRef.current,
+            chosenModel: target.model || 'gemini-3.8-flash',
+            routingRole: target.routeInfo?.role || null,
+            feedbackType: nextFeedback === 'up' ? 'thumb_up' : 'thumb_down',
+          });
+        }
+      }
+      return updated;
+    });
+  }, []);
+
+  const handleSelectComparisonPreference = useCallback((index: number, preferred: 'A' | 'B') => {
+    setMessages((prev) => {
+      const updated = [...prev];
+      const target = updated[index];
+      if (target?.comparisonResults) {
+        const nextComparisonResults = {
+          ...target.comparisonResults,
+          preferred,
+        };
+        updated[index] = {
+          ...target,
+          comparisonResults: nextComparisonResults,
+        };
+        const preferredModel =
+          preferred === 'A'
+            ? target.comparisonResults.modelA.model
+            : target.comparisonResults.modelB.model;
+        void submitRoutingFeedback(supabase, {
+          conversationId: selectedConversationIdRef.current,
+          messageId: target.id,
+          chosenModel: preferredModel,
+          feedbackType: 'comparison_preference',
+          comparisonPreferredModel: preferredModel,
+        });
+        if (target.id) {
+          void supabase
+            .from('messages')
+            .update({
+              metadata: {
+                comparisonResults: nextComparisonResults,
+                citations: target.citations,
+              },
+            })
+            .eq('id', target.id);
+        }
       }
       return updated;
     });
@@ -2690,6 +2974,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     onRegenerate={handleRegenerate}
                     onEditPrompt={handleEditPrompt}
                     onFeedback={handleFeedback}
+                    onSelectComparisonPreference={handleSelectComparisonPreference}
                   />
                 );
               })}
@@ -2747,6 +3032,130 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           </div>
         </div>
       )}
+
+      {/* PR 3 Routing Intelligence Bar (F11, F12, F13) */}
+      <div className='routing-intelligence-bar' role='toolbar' aria-label='Routing and research controls'>
+        <div className='routing-controls-group'>
+          <button
+            type='button'
+            className={`web-search-toggle-btn ${webSearchEnabled ? 'active' : ''}`}
+            onClick={() => {
+              const next = !webSearchEnabled;
+              setWebSearchEnabled(next);
+              try {
+                window.localStorage.setItem('prismatix_web_search_enabled', String(next));
+              } catch {
+                // Ignore storage write failure
+              }
+            }}
+            title='Toggle web search augmentation (BYOK)'
+            aria-pressed={webSearchEnabled}
+          >
+            <span>🌐</span>
+            <span>Search web</span>
+          </button>
+
+          <button
+            type='button'
+            className={`web-search-toggle-btn ${comparisonMode ? 'active' : ''}`}
+            onClick={() => {
+              const next = !comparisonMode;
+              setComparisonMode(next);
+              try {
+                window.localStorage.setItem('prismatix_comparison_mode', String(next));
+              } catch {
+                // Ignore storage write failure
+              }
+            }}
+            title='Toggle side-by-side model comparison'
+            aria-pressed={comparisonMode}
+          >
+            <span>⚖️</span>
+            <span>Compare</span>
+          </button>
+
+          {comparisonMode && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+              <select
+                aria-label='Select comparison model A'
+                value={comparisonModelA}
+                onChange={(e) => setComparisonModelA(e.target.value as RouterModel)}
+                className='routing-profile-select'
+              >
+                <option value='gemini-3.8-flash'>Gemini 3.8 Flash</option>
+                <option value='gpt-6-sol'>GPT-6 Sol</option>
+                <option value='deepseek-v4-pro'>DeepSeek V4 Pro</option>
+                <option value='grok-4.6'>Grok 4.6</option>
+                <option value='qwen-3.8-flash'>Qwen 3.8 Flash</option>
+              </select>
+              <span>vs</span>
+              <select
+                aria-label='Select comparison model B'
+                value={comparisonModelB}
+                onChange={(e) => setComparisonModelB(e.target.value as RouterModel)}
+                className='routing-profile-select'
+              >
+                <option value='gpt-6-sol'>GPT-6 Sol</option>
+                <option value='gemini-3.8-flash'>Gemini 3.8 Flash</option>
+                <option value='deepseek-v4-pro'>DeepSeek V4 Pro</option>
+                <option value='grok-4.6'>Grok 4.6</option>
+                <option value='qwen-3.8-flash'>Qwen 3.8 Flash</option>
+              </select>
+            </div>
+          )}
+        </div>
+
+        <div className='routing-controls-group'>
+          <label htmlFor='routing-profile-select' style={{ fontSize: '0.75rem', color: 'var(--color-text-dim, #9ca3af)' }}>
+            Profile:
+          </label>
+          <select
+            id='routing-profile-select'
+            aria-label='Select routing profile'
+            value={routingProfile}
+            onChange={(e) => {
+              const val = e.target.value as RoutingProfile;
+              setRoutingProfile(val);
+              try {
+                window.localStorage.setItem('prismatix_routing_profile', val);
+              } catch {
+                // Ignore storage write failure
+              }
+            }}
+            className='routing-profile-select'
+          >
+            <option value='balanced'>Balanced</option>
+            <option value='economy'>Economy</option>
+            <option value='capability'>Capability</option>
+          </select>
+
+          <label htmlFor='spend-cap-select' style={{ fontSize: '0.75rem', color: 'var(--color-text-dim, #9ca3af)', marginLeft: '0.25rem' }}>
+            Cap:
+          </label>
+          <select
+            id='spend-cap-select'
+            aria-label='Select per-turn spend cap'
+            value={maxSpendCap === null ? 'none' : String(maxSpendCap)}
+            onChange={(e) => {
+              const val = e.target.value === 'none' ? null : Number(e.target.value);
+              setMaxSpendCap(val);
+              try {
+                if (val === null) window.localStorage.removeItem('prismatix_max_spend_cap');
+                else window.localStorage.setItem('prismatix_max_spend_cap', String(val));
+              } catch {
+                // Ignore storage write failure
+              }
+            }}
+            className='spend-cap-select'
+          >
+            <option value='none'>No Cap</option>
+            <option value='0.01'>$0.01</option>
+            <option value='0.05'>$0.05</option>
+            <option value='0.10'>$0.10</option>
+            <option value='0.25'>$0.25</option>
+          </select>
+        </div>
+      </div>
 
       {/* Input Area */}
       <ChatInputComposer

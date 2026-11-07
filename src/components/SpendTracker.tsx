@@ -1,7 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CONFIG } from '../config';
 import { supabase } from '../lib/supabase';
-import type { SpendStats } from '../services/financeTracker';
+import {
+  downloadSpendCsv,
+  fetchAuthoritativeCostLogs,
+  filterAndGroupSpend,
+  getFinanceStore,
+  type DateRangeFilter,
+  type GroupByFilter,
+  type SpendStats,
+} from '../services/financeTracker';
 
 interface SpendTrackerProps {
   refreshKey: number;
@@ -19,6 +27,9 @@ const EMPTY_STATS: SpendStats = {
 export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
   const [stats, setStats] = useState<SpendStats>(EMPTY_STATS);
   const [isOpen, setIsOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'overview' | 'breakdown'>('overview');
+  const [dateRange, setDateRange] = useState<DateRangeFilter>('all');
+  const [groupBy, setGroupBy] = useState<GroupByFilter>('model');
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'error'>('idle');
   const [syncMessage, setSyncMessage] = useState('');
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
@@ -175,37 +186,196 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
             </div>
             <button type='button' className='popover-close' aria-label='Close spend analytics' onClick={close}>×</button>
           </div>
-          
-          <div className='spend-grid'>
-            <div className='spend-card'>
-              <div className='spend-label'>Today</div>
-              <div className='spend-value'>${stats.today.toFixed(4)}</div>
-            </div>
-            <div className='spend-card'>
-              <div className='spend-label'>This Week</div>
-              <div className='spend-value'>${stats.thisWeek.toFixed(4)}</div>
-            </div>
-            <div className='spend-card'>
-              <div className='spend-label'>This Month</div>
-              <div className='spend-value'>${stats.thisMonth.toFixed(4)}</div>
-            </div>
-            <div className='spend-card'>
-              <div className='spend-label'>All Time</div>
-              <div className='spend-value'>${stats.allTime.toFixed(4)}</div>
-            </div>
+
+          <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.85rem' }}>
+            <button
+              type="button"
+              onClick={() => setActiveTab('overview')}
+              style={{
+                flex: 1,
+                padding: '0.3rem 0.5rem',
+                borderRadius: '6px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                border: '1px solid',
+                borderColor: activeTab === 'overview' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.1)',
+                background: activeTab === 'overview' ? 'rgba(78, 205, 196, 0.15)' : 'transparent',
+                color: activeTab === 'overview' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
+                cursor: 'pointer',
+              }}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('breakdown')}
+              style={{
+                flex: 1,
+                padding: '0.3rem 0.5rem',
+                borderRadius: '6px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                border: '1px solid',
+                borderColor: activeTab === 'breakdown' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.1)',
+                background: activeTab === 'breakdown' ? 'rgba(78, 205, 196, 0.15)' : 'transparent',
+                color: activeTab === 'breakdown' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
+                cursor: 'pointer',
+              }}
+            >
+              Breakdown
+            </button>
           </div>
 
-          <div className="spend-divider" />
+          {activeTab === 'overview' ? (
+            <>
+              <div className='spend-grid'>
+                <div className='spend-card'>
+                  <div className='spend-label'>Today</div>
+                  <div className='spend-value'>${stats.today.toFixed(4)}</div>
+                </div>
+                <div className='spend-card'>
+                  <div className='spend-label'>This Week</div>
+                  <div className='spend-value'>${stats.thisWeek.toFixed(4)}</div>
+                </div>
+                <div className='spend-card'>
+                  <div className='spend-label'>This Month</div>
+                  <div className='spend-value'>${stats.thisMonth.toFixed(4)}</div>
+                </div>
+                <div className='spend-card'>
+                  <div className='spend-label'>All Time</div>
+                  <div className='spend-value'>${stats.allTime.toFixed(4)}</div>
+                </div>
+              </div>
 
-          <div className='spend-last'>
-            <div className="last-msg-row">
-              <span className="label">Last message</span>
-              <span className="value">${stats.lastMessageCost.toFixed(6)}</span>
+              <div className="spend-divider" />
+
+              <div className='spend-last'>
+                <div className="last-msg-row">
+                  <span className="label">Last message</span>
+                  <span className="value">${stats.lastMessageCost.toFixed(6)}</span>
+                </div>
+                <div className="msg-count-row">
+                  <span className="label">Total messages</span>
+                  <span className="value">{stats.messageCount}</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="spend-breakdown-section" style={{ fontSize: '0.75rem', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                <select
+                  aria-label="Filter date range"
+                  value={dateRange}
+                  onChange={(e) => setDateRange(e.target.value as DateRangeFilter)}
+                  style={{
+                    flex: 1,
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '6px',
+                    color: '#fff',
+                    padding: '0.25rem 0.4rem',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  <option value="all">All Time</option>
+                  <option value="today">Today</option>
+                  <option value="7d">Last 7 Days</option>
+                  <option value="30d">Last 30 Days</option>
+                </select>
+
+                <select
+                  aria-label="Group spend by"
+                  value={groupBy}
+                  onChange={(e) => setGroupBy(e.target.value as GroupByFilter)}
+                  style={{
+                    flex: 1,
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '6px',
+                    color: '#fff',
+                    padding: '0.25rem 0.4rem',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  <option value="model">By Model</option>
+                  <option value="provider">By Provider</option>
+                  <option value="conversation">By Conversation</option>
+                </select>
+              </div>
+
+              {(() => {
+                const store = getFinanceStore();
+                const grouped = filterAndGroupSpend(store.history, dateRange, groupBy);
+                if (grouped.length === 0) {
+                  return (
+                    <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.4)', padding: '1rem 0' }}>
+                      No spend records for this selection.
+                    </div>
+                  );
+                }
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '160px', overflowY: 'auto' }}>
+                    {grouped.map((g) => (
+                      <div
+                        key={g.groupKey}
+                        style={{
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          border: '1px solid rgba(255, 255, 255, 0.06)',
+                          borderRadius: '6px',
+                          padding: '0.4rem 0.6rem',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 600, color: '#fff' }}>{g.groupKey}</div>
+                          <div style={{ fontSize: '0.65rem', color: 'rgba(255, 255, 255, 0.4)' }}>
+                            {g.count} turn{g.count > 1 ? 's' : ''} • Settled: ${g.settledCost.toFixed(4)}
+                            {g.estimatedCost > 0 && ` • Est: $${g.estimatedCost.toFixed(4)}`}
+                          </div>
+                        </div>
+                        <div style={{ fontWeight: 700, color: 'var(--color-primary, #4ecdc4)' }}>
+                          ${g.totalCost.toFixed(4)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              <div style={{ marginTop: '0.5rem', fontSize: '0.65rem', color: 'rgba(255, 255, 255, 0.35)', fontStyle: 'italic' }}>
+                * Settled values reflect completed receipts. Provider-side invoices may differ slightly.
+              </div>
             </div>
-            <div className="msg-count-row">
-              <span className="label">Total messages</span>
-              <span className="value">{stats.messageCount}</span>
-            </div>
+          )}
+
+          <div style={{ marginTop: '0.75rem', display: 'flex', justifyContent: 'center' }}>
+            <button
+              type="button"
+              className="spend-csv-btn"
+              onClick={async () => {
+                const logs = await fetchAuthoritativeCostLogs(supabase);
+                downloadSpendCsv(logs);
+              }}
+              style={{
+                background: 'rgba(78, 205, 196, 0.1)',
+                border: '1px solid rgba(78, 205, 196, 0.3)',
+                color: 'var(--color-primary, #4ecdc4)',
+                padding: '0.4rem 0.85rem',
+                borderRadius: '6px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.4rem',
+              }}
+            >
+              📥 Export Spend CSV
+            </button>
           </div>
 
           <div className='spend-sync-note'>
