@@ -9,6 +9,15 @@ interface AttachmentPreviewProps {
   onClearAll: () => void;
 }
 
+function getFileIcon(name: string, kind?: string): string {
+  if (kind === 'video') return '🎬';
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.pdf')) return '📕';
+  if (lower.endsWith('.docx') || lower.endsWith('.doc')) return '📘';
+  if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv')) return '📊';
+  return '📄';
+}
+
 export const AttachmentPreview: React.FC<AttachmentPreviewProps> = ({
   attachments,
   onRemove,
@@ -42,10 +51,20 @@ export const AttachmentPreview: React.FC<AttachmentPreviewProps> = ({
                   className='draft-thumbnail'
                 />
               )
-              : <div className='draft-file-icon'>{file.kind === 'video' ? '🎬' : '📄'}</div>}
+              : <div className='draft-file-icon'>{getFileIcon(file.name, file.kind)}</div>}
             <span className='draft-filename' title={file.name}>
               {file.name.length > 20 ? file.name.slice(0, 17) + '...' : file.name}
             </span>
+            {file.pageCount && file.pageCount > 0 && (
+              <span className='draft-doc-badge' title={`${file.pageCount} pages`}>
+                {file.pageCount}p
+              </span>
+            )}
+            {file.sheetCount && file.sheetCount > 0 && (
+              <span className='draft-doc-badge' title={`${file.sheetCount} sheets`}>
+                {file.sheetCount} sheets
+              </span>
+            )}
             {file.kind === 'video' && (
               <span className='draft-video-status'>
                 {file.status === 'ready'

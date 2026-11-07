@@ -5,6 +5,7 @@
 import React, { useRef, useState, useCallback } from 'react';
 import { CONFIG } from '../config';
 import type { FileUploadPayload } from '../types';
+import { parseDocumentFile } from '../utils/documentParsers';
 
 interface FileUploadProps {
   onFileContent: (file: FileUploadPayload) => void;
@@ -35,6 +36,7 @@ const ACCEPT_STRING = [
   'image/*',
   'video/*',
   '.txt', '.md', '.json', '.csv',
+  '.pdf', '.docx', '.xlsx',
   '.py', '.ts', '.tsx', '.js', '.jsx',
   '.html', '.css', '.sql', '.yaml', '.yml',
   '.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'
@@ -44,6 +46,16 @@ const ACCEPTED_TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.json', '.csv',
   '.py', '.ts', '.tsx', '.js', '.jsx',
   '.html', '.css', '.sql', '.yaml', '.yml'
+]);
+
+const ACCEPTED_DOCUMENT_EXTENSIONS = new Set([
+  '.pdf', '.docx', '.xlsx'
+]);
+
+const ACCEPTED_DOCUMENT_MIMES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
 
 const ACCEPTED_IMAGE_EXTENSIONS = new Set([
@@ -76,6 +88,7 @@ const ACCEPTED_TEXT_MIME_TYPES = new Set([
 ]);
 
 const MAX_SINGLE_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_DOCUMENT_FILE_BYTES = 15 * 1024 * 1024; // 15MB for PDF/DOCX/XLSX
 const MAX_TEXT_FILE_BYTES = 300 * 1024;
 const MAX_TEXT_FILE_CHARS = 45000;
 
@@ -85,12 +98,15 @@ function getExtension(fileName: string): string {
   return fileName.slice(idx).toLowerCase();
 }
 
-function detectFileKind(file: File): 'image' | 'text' | 'video' | 'unsupported' {
+function detectFileKind(file: File): 'image' | 'text' | 'document' | 'video' | 'unsupported' {
   const mimeType = String(file.type || '').toLowerCase();
   const extension = getExtension(file.name);
 
   const isImage = ACCEPTED_TYPES.images.includes(mimeType) || ACCEPTED_IMAGE_EXTENSIONS.has(extension);
   if (isImage) return 'image';
+
+  const isDoc = ACCEPTED_DOCUMENT_MIMES.has(mimeType) || ACCEPTED_DOCUMENT_EXTENSIONS.has(extension);
+  if (isDoc) return 'document';
 
   const isVideo =
     mimeType.startsWith('video/') ||
@@ -162,9 +178,41 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       };
     }
 
+    if (fileKind === 'document') {
+      if (file.size > MAX_DOCUMENT_FILE_BYTES) {
+        console.warn(`[FileUpload] Document "${file.name}" exceeds 15MB limit`);
+        alert(`"${file.name}" exceeds the 15MB document upload limit.`);
+        return null;
+      }
+
+      try {
+        const parsed = await parseDocumentFile(file);
+        return {
+          clientId: createClientId(),
+          name: file.name,
+          kind: 'text',
+          isImage: false,
+          file,
+          mediaType: file.type || 'application/octet-stream',
+          size: file.size,
+          content: parsed.text,
+          fileText: parsed.text,
+          extractedText: parsed.text,
+          previewText: parsed.preview,
+          pageCount: parsed.metadata.pageCount,
+          sheetCount: parsed.metadata.sheetCount,
+        };
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'Failed to parse document';
+        console.error(`[FileUpload] Error parsing document "${file.name}":`, err);
+        alert(`Error reading "${file.name}": ${errorMsg}`);
+        return null;
+      }
+    }
+
     if (fileKind === 'unsupported') {
       console.warn(`[FileUpload] Unsupported file type for "${file.name}" (${file.type || 'unknown'})`);
-      alert(`Unsupported file type for "${file.name}". Please upload images or text/code files.`);
+      alert(`Unsupported file type for "${file.name}". Please upload images, documents (.pdf, .docx, .xlsx), or text/code files.`);
       return null;
     }
 

@@ -1430,6 +1430,15 @@
 .draft-thumbnail { width: 32px; height: 32px; border-radius: var(--radius-sm); object-fit: cover; }
 .draft-file-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; }
 .draft-filename { font-size: 0.75rem; color: var(--color-text-dim); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-doc-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 9999px;
+  background: rgba(78, 205, 196, 0.15);
+  color: var(--color-primary);
+  border: 1px solid rgba(78, 205, 196, 0.3);
+}
 
 .draft-remove-btn {
   background: transparent; border: none;

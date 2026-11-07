@@ -122,6 +122,10 @@ import { ProviderSettings } from './ProviderSettings';
 import { MemorySettings } from './MemorySettings';
 import { FirstRunSetupCard } from './FirstRunSetupCard';
 import { GlobalSearchModal } from './GlobalSearchModal';
+import { ProjectModal } from './ProjectModal';
+import { ExportModal } from './ExportModal';
+import { listProjects, formatProjectContextPrompt, type Project } from '../services/projectService';
+import type { ExportableConversation } from '../services/conversationExport';
 import {
   getComposerSendValidationView,
   VIDEO_UI_DEBATE_SEND_ERROR,
@@ -377,6 +381,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   // PR 1: F05 global full-text chat search state
   const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
+
+  // PR 2: F09 Projects & F10 Export state
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   // Shared quality requirement: action notice banner (rename/delete)
   const [actionNotice, setActionNotice] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
@@ -803,6 +814,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       const list = await listConversations(supabase, { limit: 50 });
       setConversations(list);
       setHasMoreConversations(list.length === 50);
+      void listProjects(supabase).then(setProjects);
     } catch (error) {
       console.warn('[ChatInterface] Failed to list conversations:', error);
       setConversationsError('Failed to load conversations.');
@@ -1294,8 +1306,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       });
 
       // Pass array of attachments to the Prismatix router fetch utility.
+      const activeProject = activeProjectId ? projects.find((p) => p.id === activeProjectId) : null;
+      const projectPromptContext = formatProjectContextPrompt(activeProject);
+      const queryWithProject = projectPromptContext ? `${projectPromptContext}\n\n${queryText}` : queryText;
+
       const result = await askPrismatix(
-        queryText,
+        queryWithProject,
         historyForRequest,
         attachmentsToProcess,
         overrideModel || manualModelOverride,
@@ -2172,6 +2188,51 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setShowModelSelector(true);
   };
 
+  const currentConversationForExport: ExportableConversation | null = selectedConversationId
+    ? {
+        id: selectedConversationId,
+        title: conversations.find((c) => c.id === selectedConversationId)?.title || 'Current Conversation',
+        projectId: activeProjectId,
+        projectName: projects.find((p) => p.id === activeProjectId)?.name,
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+          model: m.model,
+          cost: typeof m.cost === 'number' ? m.cost : undefined,
+          costStatus: typeof m.cost === 'object' && m.cost && 'status' in m.cost ? String((m.cost as any).status) : undefined,
+          attachments: m.attachments?.map((a) => ({
+            name: a.name,
+            kind: a.kind,
+            size: a.size || a.sizeBytes,
+            pageCount: a.pageCount,
+            sheetCount: a.sheetCount,
+          })),
+        })),
+      }
+    : null;
+
+  const handleFetchAllConversations = async (): Promise<ExportableConversation[]> => {
+    const list = await listConversations(supabase, { limit: 100 });
+    const fullList: ExportableConversation[] = [];
+    for (const item of list) {
+      try {
+        const msgs = await loadConversation(supabase, item.id, { limit: 100 });
+        fullList.push({
+          id: item.id,
+          title: item.title || 'Untitled Conversation',
+          lastActivityAt: item.lastActivityAt,
+          messages: msgs.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+        });
+      } catch {
+        // Skip inaccessible item
+      }
+    }
+    return fullList;
+  };
+
   return (
     <div className='app-with-sidebar'>
       {!chatsHidden && (
@@ -2192,6 +2253,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           onSelect={handleSelectConversation}
           onNewChat={handleNewChat}
           onDelete={(id) => void handleDeleteConversation(id)}
+          projects={projects}
+          activeProjectId={activeProjectId}
+          onSelectProject={(projId) => setActiveProjectId(projId)}
+          onOpenNewProject={() => {
+            setEditingProject(null);
+            setIsProjectModalOpen(true);
+          }}
+          onOpenExport={() => setIsExportModalOpen(true)}
         />
       )}
       <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>
@@ -2735,6 +2804,35 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         isOpen={isGlobalSearchOpen}
         onClose={() => setIsGlobalSearchOpen(false)}
         onSelectResult={handleSelectSearchResult}
+      />
+
+      <ProjectModal
+        client={supabase}
+        isOpen={isProjectModalOpen}
+        initialProject={editingProject}
+        onClose={() => {
+          setIsProjectModalOpen(false);
+          setEditingProject(null);
+        }}
+        onSaved={(saved) => {
+          setProjects((prev) => {
+            const idx = prev.findIndex((p) => p.id === saved.id);
+            if (idx >= 0) {
+              const copy = [...prev];
+              copy[idx] = saved;
+              return copy;
+            }
+            return [saved, ...prev];
+          });
+          setActiveProjectId(saved.id);
+        }}
+      />
+
+      <ExportModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        currentConversation={currentConversationForExport}
+        onFetchAllConversations={handleFetchAllConversations}
       />
       </div>
     </div>

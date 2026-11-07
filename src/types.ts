@@ -196,6 +196,9 @@ export interface FileUploadPayload {
   videoDurationSeconds?: number;
   videoMimeType?: string;
   videoError?: string;
+  pageCount?: number;
+  sheetCount?: number;
+  previewText?: string;
 }
 
 export interface ModelOption {
