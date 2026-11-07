@@ -53,6 +53,17 @@ const denoNpmStubs: Plugin = {
 
 export default defineConfig({
   plugins: [react(), denoNpmStubs],
+  define: {
+    'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(
+      process.env.VITE_SUPABASE_URL || 'https://mock.supabase.co'
+    ),
+    'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(
+      process.env.VITE_SUPABASE_ANON_KEY || 'mock-anon-key-12345'
+    ),
+    'import.meta.env.VITE_ROUTER_ENDPOINT': JSON.stringify(
+      process.env.VITE_ROUTER_ENDPOINT || 'https://mock.supabase.co/functions/v1/router'
+    ),
+  },
   test: {
     environment: 'jsdom',
     globals: true,
