@@ -28,6 +28,7 @@ export interface ChatMessageItemProps {
   onFeedback?: (index: number, type: 'up' | 'down') => void;
   onBranch?: (index: number) => void;
   onSelectComparisonPreference?: (index: number, preferred: 'A' | 'B') => void;
+  onOpenArtifact?: (index: number, content: string) => void;
 }
 
 export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
@@ -45,6 +46,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   onFeedback,
   onBranch,
   onSelectComparisonPreference,
+  onOpenArtifact,
 }) => {
   if (import.meta.env.MODE === 'test') chatMessageItemRenderLog.push(index);
   const modelPillMeta = message.model ? assistantModelPillDisplay(message) : null;
@@ -327,6 +329,55 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               />
             </div>
 
+            {message.metadata?.imageGeneration && (
+              <div
+                className='generated-image-card'
+                style={{
+                  margin: '0.75rem 0',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  background: '#141416',
+                }}
+              >
+                <img
+                  src={message.metadata.imageGeneration.imageUrl}
+                  alt={message.metadata.imageGeneration.prompt}
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '400px',
+                    objectFit: 'contain',
+                    display: 'block',
+                    background: '#09090b',
+                    margin: '0 auto',
+                  }}
+                />
+                <div
+                  style={{
+                    padding: '0.5rem 0.75rem',
+                    background: 'rgba(0, 0, 0, 0.35)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                  }}
+                >
+                  <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
+                    🎨 {message.metadata.imageGeneration.modelId} • ${message.metadata.imageGeneration.costUsd?.toFixed(4) ?? '0.0000'}
+                  </span>
+                  <a
+                    href={message.metadata.imageGeneration.imageUrl}
+                    download='prismatix-generated-image.png'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    style={{ fontSize: '0.75rem', color: '#4ECDC4', textDecoration: 'none', fontWeight: 500 }}
+                  >
+                    Download
+                  </a>
+                </div>
+              </div>
+            )}
+
             {message.role === 'assistant' && message.debateDegraded && (
               <div
                 className='debate-degraded-banner'
@@ -475,6 +526,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 onBranch={onBranch ? () => onBranch(index) : undefined}
                 feedback={message.feedback}
                 onFeedback={(type) => onFeedback?.(index, type)}
+                hasArtifacts={message.role === 'assistant' && textContent.includes('```')}
+                onOpenArtifact={onOpenArtifact ? () => onOpenArtifact(index, textContent) : undefined}
               />
             )}
           </>
