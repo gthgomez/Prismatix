@@ -132,6 +132,10 @@ import { ProjectModal } from './ProjectModal';
 import { ExportModal } from './ExportModal';
 import { ImportModal } from './ImportModal';
 import { PromptLibraryModal } from './PromptLibraryModal';
+import { UrlIngestionModal } from './UrlIngestionModal';
+import { DocumentComparisonModal } from './DocumentComparisonModal';
+import { executeResearchWorkflow } from '../services/researchWorkflow';
+import { searchProjectKnowledge, formatKnowledgeGroundingBlock } from '../services/projectKnowledgeSearch';
 import { branchConversation, persistMessageVersion } from '../services/conversationBranching';
 import {
   archiveConversation,
@@ -415,6 +419,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isPromptLibraryOpen, setIsPromptLibraryOpen] = useState(false);
+  const [isUrlModalOpen, setIsUrlModalOpen] = useState(false);
+  const [isDocComparisonModalOpen, setIsDocComparisonModalOpen] = useState(false);
+  const [researchMode, setResearchMode] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('prismatix_research_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // PR 3: F11 Web Search, F12 Comparison, F13 Routing Profiles & Spend Caps
   const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
@@ -1484,19 +1497,62 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       const projectPromptContext = formatProjectContextPrompt(activeProject);
       let queryWithContext = projectPromptContext ? `${projectPromptContext}\n\n${queryText}` : queryText;
 
-      // F11: Opt-in web search augmentation
+      // Unified Grounding & Search Planning (F11, F22, F24)
+      // Eliminates duplicate web search requests and duplicate project knowledge queries.
       let citations: SearchCitation[] | undefined;
+
+      // 1. Fetch web search once per turn if enabled
       if (webSearchEnabled) {
         try {
           const searchRes = await executeWebSearch(queryText);
           if (searchRes.citations.length > 0) {
             citations = searchRes.citations;
-            queryWithContext = `${queryWithContext}${searchRes.contextPrompt}`;
           } else if (searchRes.error) {
             setActionNotice({ message: searchRes.error, type: 'error' });
           }
         } catch (err) {
           console.warn('[ChatInterface] Web search failed, proceeding without search:', err);
+        }
+      }
+
+      // 2. F24: Multi-source research workflow mode incorporates project knowledge and web results
+      if (researchMode) {
+        try {
+          const researchCtx = await executeResearchWorkflow(supabase, queryText, {
+            projectId: activeProjectId,
+            includeWebSearch: !(citations && citations.length > 0),
+            existingCitations: citations,
+          });
+          if (researchCtx.citations && researchCtx.citations.length > 0) {
+            citations = researchCtx.citations;
+          }
+          if (researchCtx.groundingPrompt) {
+            queryWithContext = `${researchCtx.groundingPrompt}\n\n${queryWithContext}`;
+          }
+        } catch (err) {
+          console.warn('[ChatInterface] Research workflow failed:', err);
+        }
+      } else {
+        // Standard mode: project knowledge search and/or web search augmentation
+        if (activeProjectId) {
+          try {
+            const knowledgeHits = await searchProjectKnowledge(supabase, {
+              projectId: activeProjectId,
+              query: queryText,
+              limit: 3,
+            });
+            if (knowledgeHits.length > 0) {
+              const groundingBlock = formatKnowledgeGroundingBlock(knowledgeHits);
+              queryWithContext = `${groundingBlock}\n\n${queryWithContext}`;
+            }
+          } catch (err) {
+            console.warn('[ChatInterface] Project knowledge search failed:', err);
+          }
+        }
+
+        if (citations && citations.length > 0) {
+          const webGrounding = `\n\n[Web Search Grounding]\n${citations.map((c) => `[${c.id}] ${c.title} (${c.url}): ${c.snippet}`).join('\n')}\n`;
+          queryWithContext = `${queryWithContext}${webGrounding}`;
         }
       }
 
@@ -3218,6 +3274,25 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <span>Compare</span>
           </button>
 
+          <button
+            type='button'
+            className={`web-search-toggle-btn ${researchMode ? 'active' : ''}`}
+            onClick={() => {
+              const next = !researchMode;
+              setResearchMode(next);
+              try {
+                window.localStorage.setItem('prismatix_research_mode', String(next));
+              } catch {
+                // Ignore storage write failure
+              }
+            }}
+            title='Toggle multi-source research workflow mode'
+            aria-pressed={researchMode}
+          >
+            <span>🔬</span>
+            <span>Research</span>
+          </button>
+
           {comparisonMode && (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
               <select
@@ -3341,6 +3416,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         duplicateNotice={duplicateNotice}
         composerValidationView={composerValidationView}
         onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
+        onOpenUrlIngestion={() => setIsUrlModalOpen(true)}
+        onOpenDocComparison={() => setIsDocComparisonModalOpen(true)}
       />
 
       <BudgetGuard
@@ -3416,6 +3493,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onClose={() => setIsPromptLibraryOpen(false)}
         activeProjectId={activeProjectId}
         onSelectPrompt={handleInsertPromptTemplate}
+      />
+
+      <UrlIngestionModal
+        isOpen={isUrlModalOpen}
+        onClose={() => setIsUrlModalOpen(false)}
+        onInsertContent={(content) => {
+          setInput((prev) => (prev ? `${prev}\n\n${content}` : content));
+          inputRef.current?.focus();
+        }}
+      />
+
+      <DocumentComparisonModal
+        isOpen={isDocComparisonModalOpen}
+        onClose={() => setIsDocComparisonModalOpen(false)}
+        onInsertPrompt={(prompt) => {
+          setInput(prompt);
+          inputRef.current?.focus();
+        }}
       />
       </div>
     </div>
