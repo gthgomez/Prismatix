@@ -1361,13 +1361,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   );
 
   // Preference synchronization across devices (F20)
+  const userInteractedPrefsRef = useRef<{
+    routingProfile?: boolean;
+    webSearchEnabled?: boolean;
+    maxSpendCap?: boolean;
+  }>({});
+
+  useEffect(() => {
+    userInteractedPrefsRef.current = {};
+  }, [user?.id]);
+
   useEffect(() => {
     if (!user) return;
     void syncPreferences(supabase).then((prefs) => {
-      if (prefs.routingProfile) setRoutingProfile(prefs.routingProfile);
-      if (prefs.webSearchEnabled !== undefined) setWebSearchEnabled(prefs.webSearchEnabled);
-      if (prefs.maxSpendCap !== undefined) setMaxSpendCap(prefs.maxSpendCap);
-      if (prefs.defaultProjectId && !activeProjectId) setActiveProjectId(prefs.defaultProjectId);
+      if (prefs.routingProfile && !userInteractedPrefsRef.current.routingProfile) {
+        setRoutingProfile(prefs.routingProfile);
+      }
+      if (prefs.webSearchEnabled !== undefined && !userInteractedPrefsRef.current.webSearchEnabled) {
+        setWebSearchEnabled(prefs.webSearchEnabled);
+      }
+      if (prefs.maxSpendCap !== undefined && !userInteractedPrefsRef.current.maxSpendCap) {
+        setMaxSpendCap(prefs.maxSpendCap);
+      }
+      if (prefs.defaultProjectId && !activeProjectId) {
+        setActiveProjectId(prefs.defaultProjectId);
+      }
     });
   }, [user?.id]);
 
@@ -3383,6 +3401,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             type='button'
             className={`web-search-toggle-btn ${webSearchEnabled ? 'active' : ''}`}
             onClick={() => {
+              userInteractedPrefsRef.current.webSearchEnabled = true;
               const next = !webSearchEnabled;
               setWebSearchEnabled(next);
               try {
@@ -3476,6 +3495,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             aria-label='Select routing profile'
             value={routingProfile}
             onChange={(e) => {
+              userInteractedPrefsRef.current.routingProfile = true;
               const val = e.target.value as RoutingProfile;
               setRoutingProfile(val);
               try {
@@ -3499,6 +3519,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             aria-label='Select per-turn spend cap'
             value={maxSpendCap === null ? 'none' : String(maxSpendCap)}
             onChange={(e) => {
+              userInteractedPrefsRef.current.maxSpendCap = true;
               const val = e.target.value === 'none' ? null : Number(e.target.value);
               setMaxSpendCap(val);
               try {
