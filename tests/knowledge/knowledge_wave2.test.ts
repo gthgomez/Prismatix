@@ -118,6 +118,84 @@ describe('F21: Persistent Project File Library', () => {
     expect(ok).toBe(true);
     expect(deletedId).toBe('doc-to-del');
   });
+
+  it('aborts database deletion if storage file removal fails', async () => {
+    let dbDeleteCalled = false;
+    const mockClient: any = {
+      from: (table: string) => {
+        if (table === 'project_documents') {
+          return {
+            select: () => ({
+              eq: () => Promise.resolve({ data: [{ file_path: 'user1/proj1/doc.pdf' }], error: null }),
+            }),
+            delete: () => ({
+              eq: () => {
+                dbDeleteCalled = true;
+                return Promise.resolve({ error: null });
+              },
+            }),
+          };
+        }
+        return {};
+      },
+      storage: {
+        from: () => ({
+          remove: vi.fn().mockResolvedValue({ error: new Error('Storage service unavailable') }),
+        }),
+      },
+    };
+
+    const ok = await deleteProjectDocument(mockClient, 'doc-with-storage');
+    expect(ok).toBe(false);
+    expect(dbDeleteCalled).toBe(false);
+  });
+
+  it('uploads binary file to storage and saves filePath when fileBytes provided', async () => {
+    let uploadedPath = '';
+    let insertedDoc: any = null;
+    const mockClient: any = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'u-user1' } } }),
+      },
+      storage: {
+        from: () => ({
+          upload: vi.fn((path) => {
+            uploadedPath = path;
+            return Promise.resolve({ error: null });
+          }),
+        }),
+      },
+      from: (table: string) => {
+        if (table === 'project_documents') {
+          return {
+            insert: vi.fn((data) => {
+              insertedDoc = data;
+              return Promise.resolve({ error: null });
+            }),
+          };
+        }
+        if (table === 'project_document_chunks') {
+          return {
+            insert: vi.fn().mockResolvedValue({ error: null }),
+          };
+        }
+        return {};
+      },
+    };
+
+    const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const res = await addProjectDocument(mockClient, {
+      projectId: 'proj-123',
+      name: 'Guide.pdf',
+      extractedText: 'Full guide text content here.',
+      fileBytes: bytes,
+    });
+
+    expect(res.success).toBe(true);
+    expect(uploadedPath).toContain('u-user1/proj-123');
+    expect(uploadedPath).toContain('Guide.pdf');
+    expect(insertedDoc.file_path).toBe(uploadedPath);
+  });
 });
 
 describe('F22: Grounded Project Knowledge Search', () => {
@@ -342,7 +420,7 @@ describe('Wave 2 Hardening: Rollback, SSRF Fail-Closed, Authoritative FTS, Dedup
         getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'u-eng' } } }),
       },
       storage: {
-        from: (bucket: string) => ({
+        from: (_bucket: string) => ({
           upload: vi.fn().mockResolvedValue({ error: null }),
           remove: vi.fn((paths: string[]) => {
             removedStoragePaths.push(...paths);

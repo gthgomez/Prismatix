@@ -1520,9 +1520,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         try {
           const researchCtx = await executeResearchWorkflow(supabase, queryText, {
             projectId: activeProjectId,
-            includeWebSearch: false, // Already fetched above to prevent duplicate execution
+            includeWebSearch: !(citations && citations.length > 0),
             existingCitations: citations,
           });
+          if (researchCtx.citations && researchCtx.citations.length > 0) {
+            citations = researchCtx.citations;
+          }
           if (researchCtx.groundingPrompt) {
             queryWithContext = `${researchCtx.groundingPrompt}\n\n${queryWithContext}`;
           }
