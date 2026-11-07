@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, 'campaign/**']
+    branches: [main, 'campaign/**', 'feat/**']
 
 jobs:
   ci:
@@ -40,8 +40,20 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Deno check Edge Functions router
-        run: deno check --config supabase/functions/deno.json supabase/functions/router/index.ts
+      - name: Deno check Edge Functions
+        run: |
+          for f in supabase/functions/*/index.ts; do
+            if [ -f "$f" ]; then
+              echo "Checking $f..."
+              deno check --config supabase/functions/deno.json "$f"
+            fi
+          done
 
       - name: Stale-model coupling budget
         run: node scripts/audit-stale-models.mjs --check
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright acceptance tests
+        run: npx playwright test --project=chromium
