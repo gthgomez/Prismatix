@@ -26,6 +26,7 @@ export interface ChatMessageItemProps {
   onRegenerate?: (index: number, modelOverride?: RouterModel) => void;
   onEditPrompt?: (index: number, newContent: string) => void;
   onFeedback?: (index: number, type: 'up' | 'down') => void;
+  onBranch?: (index: number) => void;
   onSelectComparisonPreference?: (index: number, preferred: 'A' | 'B') => void;
 }
 
@@ -42,6 +43,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   onRegenerate,
   onEditPrompt,
   onFeedback,
+  onBranch,
   onSelectComparisonPreference,
 }) => {
   if (import.meta.env.MODE === 'test') chatMessageItemRenderLog.push(index);
@@ -470,6 +472,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                   setIsEditing(true);
                 }}
                 onRegenerate={(override) => onRegenerate?.(index, override)}
+                onBranch={onBranch ? () => onBranch(index) : undefined}
                 feedback={message.feedback}
                 onFeedback={(type) => onFeedback?.(index, type)}
               />
