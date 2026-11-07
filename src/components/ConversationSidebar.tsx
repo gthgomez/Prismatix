@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConversationSummary } from '../services/conversationService';
+import type { Project } from '../services/projectService';
 import {
   clampChatListWidth, describeChatActivity, MAX_CHAT_LIST_WIDTH, MIN_CHAT_LIST_WIDTH,
   readChatListPreferences, saveChatListPreferences, type ChatListPreferences,
@@ -36,6 +37,11 @@ export interface ConversationSidebarProps {
   onSelect: (conversationId: string) => void;
   onNewChat: () => void;
   onDelete: (conversationId: string) => void;
+  projects?: Project[];
+  activeProjectId?: string | null;
+  onSelectProject?: (projectId: string | null) => void;
+  onOpenNewProject?: () => void;
+  onOpenExport?: () => void;
 }
 
 // Account changes reset transient UI and load only that account's display preferences.
@@ -60,6 +66,11 @@ function ChatHistory({
   onSelect,
   onNewChat,
   onDelete,
+  projects = [],
+  activeProjectId = null,
+  onSelectProject,
+  onOpenNewProject,
+  onOpenExport,
 }: ConversationSidebarProps) {
   const [query, setQuery] = useState('');
   const [menuId, setMenuId] = useState<string | null>(null);
@@ -437,7 +448,55 @@ function ChatHistory({
           </button>
           {onClose && <button type='button' className='conversation-sidebar-close' onClick={onClose} aria-label='Close sidebar'>✕</button>}
         </div>
-        <button type='button' className='conversation-new-button' disabled={disabled} onClick={() => { setMenuId(null); onNewChat(); onClose?.(); }}>+ New Chat</button>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: 'var(--spacing-xs)' }}>
+          <button
+            type='button'
+            className='conversation-new-button'
+            style={{ flex: 1 }}
+            disabled={disabled}
+            onClick={() => { setMenuId(null); onNewChat(); onClose?.(); }}
+          >
+            + New Chat
+          </button>
+          {onOpenExport && (
+            <button
+              type='button'
+              className='btn-secondary'
+              style={{ padding: '0 0.6rem', fontSize: '0.8rem', minHeight: '38px', borderRadius: 'var(--radius-sm)' }}
+              title='Export conversation(s)'
+              onClick={onOpenExport}
+            >
+              Export
+            </button>
+          )}
+        </div>
+
+        <div className='project-filter-row' style={{ padding: '0.35rem 0', borderBottom: 'none' }}>
+          <select
+            className='project-select'
+            value={activeProjectId || ''}
+            onChange={(e) => onSelectProject?.(e.target.value ? e.target.value : null)}
+            aria-label='Filter by project workspace'
+          >
+            <option value=''>All workspaces</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {onOpenNewProject && (
+            <button
+              type='button'
+              className='project-add-btn'
+              title='Create project workspace'
+              onClick={onOpenNewProject}
+              aria-label='Create project workspace'
+            >
+              +
+            </button>
+          )}
+        </div>
         <div className='conversation-search-wrap'>
           <svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'><circle cx='10' cy='10' r='6' /><path d='m15 15 6 6' /></svg>
           <input type='search' className='conversation-search' placeholder='Filter loaded chats…' aria-label='Filter loaded chats' value={query}
