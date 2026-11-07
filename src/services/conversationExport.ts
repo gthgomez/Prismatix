@@ -4,6 +4,13 @@
 // Strictly excludes credentials and secrets.
 
 import type { RouterModel } from '../types';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import {
+  listConversations,
+  loadConversation,
+  type ConversationSummary,
+  type LoadedMessage,
+} from './conversationService';
 
 export interface ExportableConversation {
   id: string;
@@ -198,4 +205,145 @@ export function downloadFile(content: string, filename: string, mimeType: string
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+export interface ExportProgress {
+  stage: 'listing' | 'messages' | 'complete' | 'cancelled';
+  conversationsLoaded: number;
+  totalConversations?: number;
+  currentTitle?: string;
+}
+
+export interface ExportResult {
+  conversations: ExportableConversation[];
+  partialErrors: Array<{ conversationId: string; error: string }>;
+  isComplete: boolean;
+}
+
+/**
+ * Paginates through the user's complete conversation and message history.
+ * Never silences errors, preserves full model/cost/receipt metadata, and supports cancellation (F10).
+ */
+export async function fetchAllExportableConversations(
+  client: SupabaseClient,
+  options: {
+    onProgress?: (progress: ExportProgress) => void;
+    signal?: AbortSignal;
+  } = {},
+): Promise<ExportResult> {
+  const allSummaries: ConversationSummary[] = [];
+  let beforeCursor: { lastActivityAt: string; id: string } | undefined = undefined;
+  const PAGE_LIMIT = 50;
+
+  // 1. Fetch entire conversation list without arbitrary 100-item cap
+  while (true) {
+    if (options.signal?.aborted) {
+      return { conversations: [], partialErrors: [], isComplete: false };
+    }
+
+    const batch = await listConversations(client, {
+      limit: PAGE_LIMIT,
+      before: beforeCursor,
+    });
+
+    if (batch.length === 0) break;
+    allSummaries.push(...batch);
+
+    if (options.onProgress) {
+      options.onProgress({
+        stage: 'listing',
+        conversationsLoaded: allSummaries.length,
+      });
+    }
+
+    if (batch.length < PAGE_LIMIT) break;
+    const last = batch[batch.length - 1];
+    if (!last) break;
+    beforeCursor = { lastActivityAt: last.lastActivityAt, id: last.id };
+  }
+
+  const exportableList: ExportableConversation[] = [];
+  const partialErrors: Array<{ conversationId: string; error: string }> = [];
+
+  // 2. Fetch all messages per conversation
+  for (let i = 0; i < allSummaries.length; i++) {
+    if (options.signal?.aborted) {
+      return { conversations: exportableList, partialErrors, isComplete: false };
+    }
+
+    const summary = allSummaries[i];
+    if (!summary) continue;
+
+    if (options.onProgress) {
+      options.onProgress({
+        stage: 'messages',
+        conversationsLoaded: i + 1,
+        totalConversations: allSummaries.length,
+        currentTitle: summary.title || 'Untitled',
+      });
+    }
+
+    try {
+      const allMessages: LoadedMessage[] = [];
+      let msgBeforeCursor: { createdAt: string; id: string } | undefined = undefined;
+      const MSG_PAGE_LIMIT = 100;
+
+      while (true) {
+        if (options.signal?.aborted) break;
+
+        const msgBatch = await loadConversation(client, summary.id, {
+          limit: MSG_PAGE_LIMIT,
+          before: msgBeforeCursor,
+        });
+
+        if (msgBatch.length === 0) break;
+        allMessages.unshift(...msgBatch);
+
+        if (msgBatch.length < MSG_PAGE_LIMIT) break;
+        const oldest = msgBatch[0];
+        if (!oldest) break;
+        msgBeforeCursor = { createdAt: oldest.createdAt, id: oldest.id };
+      }
+
+      exportableList.push({
+        id: summary.id,
+        title: summary.title || 'Untitled Conversation',
+        lastActivityAt: summary.lastActivityAt,
+        projectId: summary.projectId,
+        messages: allMessages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          createdAt: m.createdAt,
+          model: m.provenance?.model,
+          provider: m.provenance?.provider,
+          cost: m.provenance?.cost?.totalUsd,
+          costStatus: m.provenance?.cost?.costStatus,
+          promptTokens: m.tokenCount ?? undefined,
+          attachments: m.attachments?.map((a) => ({
+            name: a.name || 'attachment',
+            kind: a.kind,
+            size: a.size || undefined,
+          })),
+        })),
+      });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      partialErrors.push({ conversationId: summary.id, error: errMsg });
+    }
+  }
+
+  if (options.onProgress) {
+    options.onProgress({
+      stage: 'complete',
+      conversationsLoaded: exportableList.length,
+      totalConversations: allSummaries.length,
+    });
+  }
+
+  return {
+    conversations: exportableList,
+    partialErrors,
+    isComplete: true,
+  };
 }

@@ -77,7 +77,9 @@ import { executeWebSearch, type SearchCitation } from '../services/webSearchServ
 import { submitRoutingFeedback } from '../services/routingFeedbackService';
 import { supabase } from '../lib/supabase';
 import {
+  assignConversationProject,
   deleteConversation,
+  getConversationProjectId,
   listConversations,
   loadConversation,
   renameConversation,
@@ -129,7 +131,12 @@ import { GlobalSearchModal } from './GlobalSearchModal';
 import { ProjectModal } from './ProjectModal';
 import { ExportModal } from './ExportModal';
 import { listProjects, formatProjectContextPrompt, type Project } from '../services/projectService';
-import type { ExportableConversation } from '../services/conversationExport';
+import {
+  fetchAllExportableConversations,
+  type ExportableConversation,
+  type ExportProgress,
+  type ExportResult,
+} from '../services/conversationExport';
 import {
   getComposerSendValidationView,
   VIDEO_UI_DEBATE_SEND_ERROR,
@@ -844,11 +851,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return mapped;
   };
 
-  const refreshConversations = async () => {
+  const refreshConversations = async (projectId?: string | null) => {
     setConversationsLoading(true);
     setConversationsError(null);
+    const targetProjectId = projectId !== undefined ? projectId : activeProjectId;
     try {
-      const list = await listConversations(supabase, { limit: 50 });
+      const list = await listConversations(supabase, {
+        limit: 50,
+        projectId: targetProjectId ?? undefined,
+      });
       setConversations(list);
       setHasMoreConversations(list.length === 50);
       void listProjects(supabase).then(setProjects);
@@ -870,6 +881,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     try {
       const nextBatch = await listConversations(supabase, {
         limit: 50,
+        projectId: activeProjectId ?? undefined,
         before: { lastActivityAt: last.lastActivityAt, id: last.id },
       });
       setConversations((prev) => {
@@ -916,6 +928,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
       setMessages(mapped);
       setHasEarlierMessages(loaded.length === 200);
+
+      // Restore project membership on conversation open (F09)
+      const convSummary = conversations.find((c) => c.id === conversationId);
+      const projId = convSummary?.projectId !== undefined
+        ? convSummary.projectId
+        : await getConversationProjectId(supabase, conversationId);
+      setActiveProjectId(projId ?? null);
     } catch (error) {
       if (
         loadSeq !== conversationLoadSeqRef.current ||
@@ -1495,6 +1514,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         selectedConversationIdRef.current = sendConversationId;
         setSelectedConversationId(sendConversationId);
         writeSelectedConversation(user?.id ?? null, sendConversationId);
+        if (activeProjectId) {
+          void assignConversationProject(supabase, sendConversationId, activeProjectId);
+        }
       }
 
       if (!manualModelOverride && !overrideModel) {
@@ -2420,26 +2442,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
     : null;
 
-  const handleFetchAllConversations = async (): Promise<ExportableConversation[]> => {
-    const list = await listConversations(supabase, { limit: 100 });
-    const fullList: ExportableConversation[] = [];
-    for (const item of list) {
-      try {
-        const msgs = await loadConversation(supabase, item.id, { limit: 100 });
-        fullList.push({
-          id: item.id,
-          title: item.title || 'Untitled Conversation',
-          lastActivityAt: item.lastActivityAt,
-          messages: msgs.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-        });
-      } catch {
-        // Skip inaccessible item
-      }
-    }
-    return fullList;
+  const handleFetchAllConversations = async (
+    onProgress?: (progress: ExportProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<ExportResult> => {
+    return fetchAllExportableConversations(supabase, { onProgress, signal });
   };
 
   return (
@@ -2456,7 +2463,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           isLoadingMore={isLoadingMoreConversations}
           loadMoreError={loadMoreConversationsError || conversationsError}
           onLoadMore={() => void handleLoadMoreConversations()}
-          onOpenSearch={() => setIsGlobalSearchOpen(true)}
+          onOpenSearch={() => {
+            setIsGlobalSearchOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+          }}
           onClose={() => setSidebarOpen(false)}
           onRename={(id, title) => void handleRenameConversation(id, title)}
           onSelect={handleSelectConversation}
@@ -2468,8 +2478,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           onOpenNewProject={() => {
             setEditingProject(null);
             setIsProjectModalOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
           }}
-          onOpenExport={() => setIsExportModalOpen(true)}
+          onOpenExport={() => {
+            setIsExportModalOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+          }}
         />
       )}
       <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>

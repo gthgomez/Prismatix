@@ -14,6 +14,7 @@ export interface XlsxParseResult {
 const MAX_SHEETS = 10;
 const MAX_ROWS_PER_SHEET = 500;
 const MAX_COLS_PER_SHEET = 30;
+const MAX_CELLS_PER_WORKBOOK = 10000;
 const MAX_TOTAL_CHARS = 100000;
 
 export async function parseXlsx(fileData: ArrayBuffer | Uint8Array): Promise<XlsxParseResult> {
@@ -66,6 +67,7 @@ export async function parseXlsx(fileData: ArrayBuffer | Uint8Array): Promise<Xls
   // 3. Read sheet worksheets
   const sheetTexts: string[] = [];
   const parsedSheetNames: string[] = [];
+  const cellCounter = { count: 0 };
 
   for (let i = 0; i < Math.min(sheets.length, MAX_SHEETS); i++) {
     const sheetMeta = sheets[i];
@@ -88,8 +90,9 @@ export async function parseXlsx(fileData: ArrayBuffer | Uint8Array): Promise<Xls
     }
 
     if (sheetXml) {
-      const tableMd = parseSheetXml(sheetXml, sharedStrings);
+      const tableMd = parseSheetXml(sheetXml, sharedStrings, cellCounter);
       sheetTexts.push(`### Sheet: ${sheetMeta.name}\n\n${tableMd}`);
+      if (cellCounter.count >= MAX_CELLS_PER_WORKBOOK) break;
     }
   }
 
@@ -162,7 +165,7 @@ function parseSharedStrings(xml: string): string[] {
   return strings;
 }
 
-function parseSheetXml(xml: string, sharedStrings: string[]): string {
+function parseSheetXml(xml: string, sharedStrings: string[], cellCounter: { count: number }): string {
   const rowRegex = /<row\s+[^>]*r="(\d+)"[\s\S]*?<\/row>/g;
   let rowMatch: RegExpExecArray | null;
   const grid: Map<number, Map<number, string>> = new Map();
@@ -170,6 +173,7 @@ function parseSheetXml(xml: string, sharedStrings: string[]): string {
   let rowCount = 0;
 
   while ((rowMatch = rowRegex.exec(xml)) !== null && rowCount < MAX_ROWS_PER_SHEET) {
+    if (cellCounter.count >= MAX_CELLS_PER_WORKBOOK) break;
     const rawRIdx = rowMatch[1];
     if (!rawRIdx) continue;
     const rIdx = parseInt(rawRIdx, 10);
@@ -180,6 +184,7 @@ function parseSheetXml(xml: string, sharedStrings: string[]): string {
     let cellMatch: RegExpExecArray | null;
 
     while ((cellMatch = cellRegex.exec(rowContent)) !== null) {
+      if (cellCounter.count >= MAX_CELLS_PER_WORKBOOK) break;
       const colLetters = cellMatch[1] || '';
       const colIdx = columnLetterToIndex(colLetters);
       if (colIdx >= MAX_COLS_PER_SHEET) continue;
@@ -209,6 +214,7 @@ function parseSheetXml(xml: string, sharedStrings: string[]): string {
 
       const cleanVal = value.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').trim();
       cellMap.set(colIdx, cleanVal);
+      cellCounter.count++;
     }
 
     if (cellMap.size > 0) {
@@ -263,5 +269,6 @@ function decodeXmlEntities(str: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
     .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(Number(dec)));
 }

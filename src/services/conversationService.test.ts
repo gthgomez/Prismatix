@@ -128,7 +128,7 @@ describe('listConversations', () => {
     expect(params.get('limit')).toBe('20');
     expect(params.get('order')).toBe('last_activity_at.desc,id.desc');
     expect(params.get('select')).not.toContain('!inner');
-    expect(rows).toEqual([{ id: CONV, title: null, lastActivityAt: '2026-10-13' }]);
+    expect(rows).toEqual([{ id: CONV, title: null, lastActivityAt: '2026-10-13', projectId: null }]);
   });
   it('uses the first user message for legacy placeholder titles without replacing renamed chats', async () => {
     const fake = makeClient({ conversations: [{ data: [
@@ -154,8 +154,8 @@ describe('listConversations', () => {
     const result = await listConversations(fake.client as never, { limit: 20 });
 
     expect(result).toEqual([
-      { id: CONV, title: 'First', lastActivityAt: '2026-10-01T00:00:00Z' },
-      { id: MSG, title: null, lastActivityAt: '2026-09-01T00:00:00Z' },
+      { id: CONV, title: 'First', lastActivityAt: '2026-10-01T00:00:00Z', projectId: null },
+      { id: MSG, title: null, lastActivityAt: '2026-09-01T00:00:00Z', projectId: null },
     ]);
     const calls = fake.queries.conversations![0]!.calls;
     expect(calls).toContain('order:last_activity_at:desc');

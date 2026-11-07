@@ -21,6 +21,7 @@ export interface ConversationSummary {
   id: string;
   title: string | null;
   lastActivityAt: string;
+  projectId?: string | null;
 }
 
 export interface LoadedMessageCost {
@@ -176,12 +177,12 @@ function adaptLegacyImageUrl(row: RawMessageRow, attachments: AttachmentRef[]): 
  */
 export async function listConversations(
   client: SupabaseClient,
-  options: { limit?: number; before?: ConversationListCursor } = {},
+  options: { limit?: number; before?: ConversationListCursor; projectId?: string | null } = {},
 ): Promise<ConversationSummary[]> {
   const limit = options.limit ?? DEFAULT_LIST_LIMIT;
   let query = client
     .from('conversations')
-    .select('id, title, last_activity_at, messages(content)')
+    .select('id, title, last_activity_at, project_id, messages(content)')
     .eq('messages.role', 'user')
     .order('created_at', { ascending: true, referencedTable: 'messages' })
     .order('id', { ascending: true, referencedTable: 'messages' })
@@ -189,6 +190,14 @@ export async function listConversations(
     .order('last_activity_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(limit);
+
+  if (options.projectId !== undefined) {
+    if (options.projectId === null) {
+      query = query.is('project_id', null);
+    } else {
+      query = query.eq('project_id', options.projectId);
+    }
+  }
 
   if (options.before) {
     const { lastActivityAt, id } = options.before;
@@ -208,8 +217,42 @@ export async function listConversations(
       id: String(row.id),
       title: (!title?.trim() || title.trim() === 'New Chat') && preview ? preview : title,
       lastActivityAt: String(row.last_activity_at),
+      projectId: typeof row.project_id === 'string' ? row.project_id : null,
     };
   });
+}
+
+/**
+ * Durably assigns or updates a conversation's project membership (F09).
+ */
+export async function assignConversationProject(
+  client: SupabaseClient,
+  conversationId: string,
+  projectId: string | null,
+): Promise<boolean> {
+  const { error } = await client
+    .from('conversations')
+    .update({ project_id: projectId })
+    .eq('id', conversationId);
+  return !error;
+}
+
+/**
+ * Gets a conversation's assigned project ID from Supabase.
+ */
+export async function getConversationProjectId(
+  client: SupabaseClient,
+  conversationId: string,
+): Promise<string | null> {
+  const { data, error } = await client
+    .from('conversations')
+    .select('project_id')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return typeof (data as Record<string, unknown>).project_id === 'string'
+    ? ((data as Record<string, unknown>).project_id as string)
+    : null;
 }
 
 /**

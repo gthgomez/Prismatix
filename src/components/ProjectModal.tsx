@@ -2,6 +2,7 @@
 // F09: Create/edit project workspaces with scoped instructions.
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   createProject,
@@ -85,7 +86,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
     }
   };
 
-  return (
+  const modalContent = (
     <div className='knowledge-modal-backdrop' onClick={onClose}>
       <div
         className='knowledge-modal-card'
@@ -186,4 +187,6 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };
