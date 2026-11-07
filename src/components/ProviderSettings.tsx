@@ -209,13 +209,30 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                   <>
                     <div
                       className={`provider-state-line ${
-                        provider.hasKey ? (provider.enabled ? 'is-on' : 'is-off') : 'needs-setup'
+                        !provider.hasKey
+                          ? 'needs-setup'
+                          : provider.status === 'invalid_revoked'
+                          ? 'is-error'
+                          : provider.status === 'unavailable'
+                          ? 'is-warning'
+                          : provider.enabled
+                          ? 'is-on'
+                          : 'is-off'
                       }`}
                       aria-live='polite'
                     >
                       {!provider.hasKey
-                        ? 'Key required'
-                        : 'Key saved'}
+                        ? 'Not configured'
+                        : provider.status === 'invalid_revoked'
+                        ? 'Invalid / Revoked'
+                        : provider.status === 'unavailable'
+                        ? 'Unavailable'
+                        : provider.enabled
+                        ? 'Ready & Enabled'
+                        : 'Disabled'}
+                      {provider.statusMessage && (
+                        <span className='provider-status-detail'> — {provider.statusMessage}</span>
+                      )}
                     </div>
                     <div className='provider-key-row'>
                       <input
@@ -241,6 +258,29 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                       >
                         {provider.hasKey ? 'Update' : 'Connect'}
                       </button>
+                      {(provider.hasKey || draft.trim().length >= 8) && (
+                        <button
+                          type='button'
+                          className='provider-key-test'
+                          disabled={busy !== null}
+                          aria-label={`Test connection for ${provider.label}`}
+                          onClick={() =>
+                            void run(`test:${provider.id}`, async () => {
+                              const res = await plugins.validateKey(provider.id, draft.trim() || undefined);
+                              setNotice(
+                                `${provider.label}: ${
+                                  res.status === 'enabled'
+                                    ? 'Key verified successfully'
+                                    : res.message || res.status
+                                }`,
+                              );
+                              return res.status === 'enabled';
+                            })
+                          }
+                        >
+                          Test
+                        </button>
+                      )}
                       {provider.hasKey && (
                         <button
                           type='button'

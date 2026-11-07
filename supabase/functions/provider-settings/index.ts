@@ -6,7 +6,7 @@
 // service_role-only RPCs (see migration 20261010000000_px12).
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { ByokConfigError, encryptKey } from '../_shared/byok_crypto.ts';
+import { ByokConfigError, decryptKey, encryptKey } from '../_shared/byok_crypto.ts';
 import {
   PROVIDER_PLUGIN_ORDER,
   PROVIDER_PLUGINS,
@@ -48,9 +48,18 @@ export interface ProviderSettingsClient {
   ): PromiseLike<{ data?: unknown; error?: { message?: string } | null }>;
 }
 
+export type ProviderKeyStatus =
+  | 'not_configured'
+  | 'enabled'
+  | 'disabled'
+  | 'invalid_revoked'
+  | 'unavailable'
+  | 'unknown';
+
 export interface ProviderSettingsDeps {
   getEnv?: (key: string) => string | undefined;
   createClient?: (url: string, serviceRoleKey: string) => ProviderSettingsClient;
+  fetchFn?: typeof fetch;
 }
 
 interface RawUserConfig {
@@ -74,8 +83,113 @@ export interface ProviderStatePayload {
     keyLast4: string | null;
     offeredByDefault: boolean;
     defaultProvider: boolean;
+    status: ProviderKeyStatus;
+    statusMessage?: string;
   }>;
   defaultProvider: ProviderId;
+}
+
+/**
+ * Validates a provider API key using safe metadata checks without paid inference.
+ * Rejects with invalid_revoked on 401/403, unavailable on 5xx or network errors,
+ * and enabled on successful metadata retrieval.
+ */
+export async function validateProviderKeyMetadata(
+  provider: ProviderId,
+  apiKey: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<{ status: ProviderKeyStatus; message?: string }> {
+  try {
+    if (provider === 'openrouter') {
+      const res = await fetchFn('https://openrouter.ai/api/v1/auth/key', {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        return { status: 'enabled', message: 'OpenRouter key verified' };
+      }
+      if (res.status === 401 || res.status === 403) {
+        return { status: 'invalid_revoked', message: 'OpenRouter returned 401/403: Key invalid or revoked' };
+      }
+      if (res.status >= 500) {
+        return { status: 'unavailable', message: `OpenRouter metadata service unavailable (${res.status})` };
+      }
+      return { status: 'unknown', message: `OpenRouter response: HTTP ${res.status}` };
+    }
+
+    if (provider === 'openai') {
+      const res = await fetchFn('https://api.openai.com/v1/models', {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        return { status: 'enabled', message: 'OpenAI key verified' };
+      }
+      if (res.status === 401 || res.status === 403) {
+        return { status: 'invalid_revoked', message: 'OpenAI returned 401/403: Key invalid or revoked' };
+      }
+      if (res.status >= 500) {
+        return { status: 'unavailable', message: `OpenAI metadata service unavailable (${res.status})` };
+      }
+      return { status: 'unknown', message: `OpenAI response: HTTP ${res.status}` };
+    }
+
+    if (provider === 'anthropic') {
+      const res = await fetchFn('https://api.anthropic.com/v1/models', {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        return { status: 'enabled', message: 'Anthropic key verified' };
+      }
+      if (res.status === 401 || res.status === 403) {
+        return { status: 'invalid_revoked', message: 'Anthropic returned 401/403: Key invalid or revoked' };
+      }
+      if (res.status >= 500) {
+        return { status: 'unavailable', message: `Anthropic metadata service unavailable (${res.status})` };
+      }
+      return { status: 'unknown', message: `Anthropic response: HTTP ${res.status}` };
+    }
+
+    if (provider === 'google') {
+      const res = await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        return { status: 'enabled', message: 'Google Gemini key verified' };
+      }
+      if (res.status === 400 || res.status === 401 || res.status === 403) {
+        return { status: 'invalid_revoked', message: 'Google returned error: Key invalid or revoked' };
+      }
+      if (res.status >= 500) {
+        return { status: 'unavailable', message: `Google metadata service unavailable (${res.status})` };
+      }
+      return { status: 'unknown', message: `Google response: HTTP ${res.status}` };
+    }
+
+    if (provider === 'deepinfra') {
+      const res = await fetchFn('https://api.deepinfra.com/v1/models', {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) return { status: 'enabled', message: 'DeepInfra key verified' };
+      if (res.status === 401 || res.status === 403) return { status: 'invalid_revoked', message: 'DeepInfra key invalid' };
+      if (res.status >= 500) return { status: 'unavailable', message: `DeepInfra service unavailable (${res.status})` };
+      return { status: 'unknown', message: `DeepInfra response: HTTP ${res.status}` };
+    }
+
+    // Default for direct providers without a dedicated safe metadata endpoint
+    return { status: 'enabled', message: 'Key saved' };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    if (errorMsg.includes('timeout') || errorMsg.includes('abort') || errorMsg.includes('network') || errorMsg.includes('fetch')) {
+      return { status: 'unavailable', message: 'Provider metadata check unreachable' };
+    }
+    return { status: 'unknown', message: errorMsg };
+  }
 }
 
 function createServiceRoleClient(url: string, serviceRoleKey: string): ProviderSettingsClient {
@@ -120,16 +234,28 @@ export function buildProviderStates(
   const providers = PROVIDER_PLUGIN_ORDER.map((id) => {
     const plugin = PROVIDER_PLUGINS[id];
     const row = rows.get(id);
+    const hasKey = id !== 'opencode' && row?.has_key === true;
+    const enabled = enabledSet.has(id);
+    let status: ProviderKeyStatus = 'not_configured';
+    if (!hasKey) {
+      status = 'not_configured';
+    } else if (!enabled) {
+      status = 'disabled';
+    } else {
+      status = 'enabled';
+    }
+
     return {
       id,
       label: plugin.label,
-      enabled: enabledSet.has(id),
+      enabled,
       // Server secrets are never credentials in BYOK-only mode. Only the
       // caller's encrypted provider row can make a provider key-present.
-      hasKey: id !== 'opencode' && row?.has_key === true,
+      hasKey,
       keyLast4: typeof row?.key_last4 === 'string' ? row.key_last4 : null,
       offeredByDefault: plugin.offeredByDefault,
       defaultProvider: defaultProvider === id,
+      status,
     };
   });
 
@@ -280,6 +406,43 @@ export async function handleProviderSettings(
         });
         if (error) throw new Error(error.message ?? 'set_default_failed');
         return await respondWithState();
+      }
+
+      case 'validate_key': {
+        const provider = body.provider;
+        if (!isProviderId(provider) || provider === 'opencode') {
+          return jsonResponse({ error: 'invalid_provider' }, 400);
+        }
+
+        let keyToValidate: string | null = null;
+        if (typeof body.apiKey === 'string' && body.apiKey.trim().length >= MIN_KEY_LENGTH) {
+          keyToValidate = body.apiKey.trim();
+        } else {
+          const { data, error } = await supabase.rpc('get_user_provider_key_material', {
+            p_subject_id: user.id,
+            p_provider: provider,
+          });
+          if (error || typeof data !== 'string' || !data) {
+            return jsonResponse({ provider, status: 'not_configured', message: 'No key configured' }, 200);
+          }
+          try {
+            keyToValidate = await decryptKey(data);
+          } catch {
+            return jsonResponse({ provider, status: 'invalid_revoked', message: 'Failed to decrypt key' }, 200);
+          }
+        }
+
+        const validation = await validateProviderKeyMetadata(
+          provider,
+          keyToValidate,
+          deps.fetchFn ?? fetch,
+        );
+
+        return jsonResponse({
+          provider,
+          status: validation.status,
+          message: validation.message,
+        }, 200);
       }
 
       default:

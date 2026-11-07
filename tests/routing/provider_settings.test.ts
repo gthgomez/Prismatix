@@ -17,7 +17,7 @@ type Loaded = {
   };
   handleProviderSettings: (
     req: Request,
-    deps: { getEnv: (k: string) => string | undefined; createClient: () => unknown },
+    deps: { getEnv: (k: string) => string | undefined; createClient: () => unknown; fetchFn?: typeof fetch },
   ) => Promise<Response>;
 };
 
@@ -240,5 +240,70 @@ describe('provider-settings — enable / default / delete', () => {
     const mod = await loadModule(BASE_ENV);
     expect((await invoke(mod, { action: 'set_enabled', provider: 'opencode', enabled: true })).status).toBe(400);
     expect((await invoke(mod, { action: 'delete_key', provider: 'opencode' })).status).toBe(400);
+  });
+});
+
+describe('provider-settings — safe metadata key validation (F01)', () => {
+  it('validates a valid key via metadata endpoint without paid inference', async () => {
+    const mod = await loadModule(BASE_ENV);
+    const mockFetch = vi.fn(async () => new Response(JSON.stringify({ data: { label: 'my-key' } }), { status: 200 }));
+    const res = await mod.handleProviderSettings(
+      post({ action: 'validate_key', provider: 'openrouter', apiKey: 'sk-or-valid-test-key' }),
+      {
+        getEnv: (k) => BASE_ENV[k],
+        createClient: () => stubClient('user-1', []),
+        fetchFn: mockFetch as unknown as typeof fetch,
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      provider: 'openrouter',
+      status: 'enabled',
+    });
+    // Never leaks the secret in the response body!
+    expect(JSON.stringify(body)).not.toContain('sk-or-valid-test-key');
+    expect(mockFetch).toHaveBeenCalledWith('https://openrouter.ai/api/v1/auth/key', expect.anything());
+  });
+
+  it('reports invalid_revoked when metadata endpoint returns 401/403', async () => {
+    const mod = await loadModule(BASE_ENV);
+    const mockFetch = vi.fn(async () => new Response('Unauthorized', { status: 401 }));
+    const res = await mod.handleProviderSettings(
+      post({ action: 'validate_key', provider: 'openai', apiKey: 'sk-openai-invalid-key' }),
+      {
+        getEnv: (k) => BASE_ENV[k],
+        createClient: () => stubClient('user-1', []),
+        fetchFn: mockFetch as unknown as typeof fetch,
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      provider: 'openai',
+      status: 'invalid_revoked',
+    });
+  });
+
+  it('reports unavailable on network failure or 5xx outage', async () => {
+    const mod = await loadModule(BASE_ENV);
+    const mockFetch = vi.fn(async () => new Response('Service Unavailable', { status: 503 }));
+    const res = await mod.handleProviderSettings(
+      post({ action: 'validate_key', provider: 'anthropic', apiKey: 'sk-ant-test-key' }),
+      {
+        getEnv: (k) => BASE_ENV[k],
+        createClient: () => stubClient('user-1', []),
+        fetchFn: mockFetch as unknown as typeof fetch,
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      provider: 'anthropic',
+      status: 'unavailable',
+    });
   });
 });

@@ -75,3 +75,39 @@ export function deleteProviderKey(provider: ProviderId): Promise<ProviderSetting
 export function setDefaultProvider(provider: ProviderId): Promise<ProviderSettingsPayload> {
   return request('POST', { action: 'set_default', provider });
 }
+
+export interface ProviderValidationResult {
+  provider: ProviderId;
+  status: import('../types').ProviderKeyStatus;
+  message?: string;
+}
+
+export async function validateProviderKey(
+  provider: ProviderId,
+  apiKey?: string,
+): Promise<ProviderValidationResult> {
+  const token = await authedToken();
+  const response = await fetch(endpoint(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(CONFIG.SUPABASE_ANON_KEY ? { apikey: CONFIG.SUPABASE_ANON_KEY } : {}),
+    },
+    signal: AbortSignal.timeout(10_000),
+    body: JSON.stringify({ action: 'validate_key', provider, apiKey }),
+  });
+
+  if (!response.ok) {
+    let message = `validate_key_failed: ${response.status}`;
+    try {
+      const parsed = (await response.json()) as { error?: unknown };
+      if (typeof parsed?.error === 'string') message = parsed.error;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(message);
+  }
+
+  return (await response.json()) as ProviderValidationResult;
+}

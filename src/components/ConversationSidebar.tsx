@@ -26,6 +26,11 @@ export interface ConversationSidebarProps {
   disabled?: boolean;
   isOpen?: boolean;
   preferenceScope?: string | null;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  loadMoreError?: string | null;
+  onLoadMore?: () => void;
+  onOpenSearch?: () => void;
   onClose?: () => void;
   onRename?: (conversationId: string, title: string) => void;
   onSelect: (conversationId: string) => void;
@@ -38,8 +43,24 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = (props) =
   <ChatHistory key={props.preferenceScope ?? 'anonymous'} {...props} />
 );
 
-function ChatHistory({ conversations, selectedId, isLoading, disabled = false, isOpen = false,
-  preferenceScope, onClose, onRename, onSelect, onNewChat, onDelete }: ConversationSidebarProps) {
+function ChatHistory({
+  conversations,
+  selectedId,
+  isLoading,
+  disabled = false,
+  isOpen = false,
+  preferenceScope,
+  hasMore = false,
+  isLoadingMore = false,
+  loadMoreError = null,
+  onLoadMore,
+  onOpenSearch,
+  onClose,
+  onRename,
+  onSelect,
+  onNewChat,
+  onDelete,
+}: ConversationSidebarProps) {
   const [query, setQuery] = useState('');
   const [menuId, setMenuId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -419,7 +440,7 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
         <button type='button' className='conversation-new-button' disabled={disabled} onClick={() => { setMenuId(null); onNewChat(); onClose?.(); }}>+ New Chat</button>
         <div className='conversation-search-wrap'>
           <svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'><circle cx='10' cy='10' r='6' /><path d='m15 15 6 6' /></svg>
-          <input type='search' className='conversation-search' placeholder='Search chats…' aria-label='Search chats' value={query}
+          <input type='search' className='conversation-search' placeholder='Filter loaded chats…' aria-label='Filter loaded chats' value={query}
             onChange={event => { setQuery(event.target.value); setMenuId(null); }} onKeyDown={event => {
               if (event.key === 'Escape' && query) {
                 event.preventDefault();
@@ -427,6 +448,17 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
                 setQuery('');
               }
             }} />
+          {onOpenSearch && (
+            <button
+              type='button'
+              className='conversation-search-global-trigger'
+              onClick={onOpenSearch}
+              title='Full history search (Ctrl+K)'
+              aria-label='Search all past conversations and messages'
+            >
+              Full Search
+            </button>
+          )}
         </div>
         {showPreferences && <div className='conversation-display-options'>
           <label>Row density<select aria-label='Chat row density' value={preferences.density}
@@ -443,7 +475,20 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
         {isLoading && <div className='conversation-sidebar-status' role='status'>Loading…</div>}
         {!isLoading && conversations.length === 0 && <div className='conversation-sidebar-status'>No conversations yet</div>}
         {!isLoading && conversations.length > 0 && visible.length === 0 && <div className='conversation-sidebar-status' role='status'>No matching chats</div>}
-        {trimmedQuery && <div className='conversation-search-note'>Matching titles in loaded history</div>}
+        {trimmedQuery && (
+          <div className='conversation-search-note'>
+            <span>Showing {visible.length} of {conversations.length} loaded chats.</span>
+            {onOpenSearch && (
+              <button
+                type='button'
+                className='conversation-search-note-action'
+                onClick={onOpenSearch}
+              >
+                Search all messages →
+              </button>
+            )}
+          </div>
+        )}
         <ul className='conversation-list'>
           {pinnedRows.length > 0 && (
             <>
@@ -460,6 +505,32 @@ function ChatHistory({ conversations, selectedId, isLoading, disabled = false, i
             </React.Fragment>
           ))}
         </ul>
+        {hasMore && (
+          <div className='conversation-pagination-row'>
+            <button
+              type='button'
+              className='conversation-load-more-btn'
+              disabled={isLoadingMore || disabled}
+              onClick={onLoadMore}
+            >
+              {isLoadingMore ? 'Loading older chats…' : 'Load more chats'}
+            </button>
+          </div>
+        )}
+        {loadMoreError && (
+          <div className='conversation-load-more-error' role='alert'>
+            <span>{loadMoreError}</span>
+            {onLoadMore && (
+              <button
+                type='button'
+                className='conversation-load-more-retry'
+                onClick={onLoadMore}
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <div className='conversation-resize-handle' role='separator' aria-label='Resize chats sidebar' aria-orientation='vertical'
         aria-valuemin={MIN_CHAT_LIST_WIDTH} aria-valuemax={MAX_CHAT_LIST_WIDTH} aria-valuenow={preferences.width} tabIndex={0}

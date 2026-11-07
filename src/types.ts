@@ -46,6 +46,14 @@ export type RouterProvider =
   | 'deepinfra'
   | 'other';
 
+export type ProviderKeyStatus =
+  | 'not_configured'
+  | 'enabled'
+  | 'disabled'
+  | 'invalid_revoked'
+  | 'unavailable'
+  | 'unknown';
+
 /** Per-provider plug-in state resolved for the signed-in user. */
 export interface ProviderState {
   id: import('../supabase/functions/_shared/provider_registry').ProviderId;
@@ -55,6 +63,8 @@ export interface ProviderState {
   keyLast4: string | null;
   offeredByDefault: boolean;
   defaultProvider: boolean;
+  status?: ProviderKeyStatus;
+  statusMessage?: string;
 }
 
 export interface ProviderSettingsPayload {
@@ -132,6 +142,8 @@ export interface MessageCost {
 }
 
 export interface Message {
+  id?: string;
+  createdAt?: string;
   role: 'user' | 'assistant';
   content: string | unknown[]; // Supports multimodal content
   timestamp: number;
