@@ -132,6 +132,10 @@ import { ProjectModal } from './ProjectModal';
 import { ExportModal } from './ExportModal';
 import { ImportModal } from './ImportModal';
 import { PromptLibraryModal } from './PromptLibraryModal';
+import { UrlIngestionModal } from './UrlIngestionModal';
+import { DocumentComparisonModal } from './DocumentComparisonModal';
+import { executeResearchWorkflow } from '../services/researchWorkflow';
+import { searchProjectKnowledge, formatKnowledgeGroundingBlock } from '../services/projectKnowledgeSearch';
 import { branchConversation } from '../services/conversationBranching';
 import {
   archiveConversation,
@@ -415,6 +419,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isPromptLibraryOpen, setIsPromptLibraryOpen] = useState(false);
+  const [isUrlModalOpen, setIsUrlModalOpen] = useState(false);
+  const [isDocComparisonModalOpen, setIsDocComparisonModalOpen] = useState(false);
+  const [researchMode, setResearchMode] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('prismatix_research_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // PR 3: F11 Web Search, F12 Comparison, F13 Routing Profiles & Spend Caps
   const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
@@ -1480,6 +1493,38 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       const activeProject = activeProjectId ? projects.find((p) => p.id === activeProjectId) : null;
       const projectPromptContext = formatProjectContextPrompt(activeProject);
       let queryWithContext = projectPromptContext ? `${projectPromptContext}\n\n${queryText}` : queryText;
+
+      // F22: Grounded project knowledge search
+      if (activeProjectId) {
+        try {
+          const knowledgeHits = await searchProjectKnowledge(supabase, {
+            projectId: activeProjectId,
+            query: queryText,
+            limit: 3,
+          });
+          if (knowledgeHits.length > 0) {
+            const groundingBlock = formatKnowledgeGroundingBlock(knowledgeHits);
+            queryWithContext = `${groundingBlock}\n\n${queryWithContext}`;
+          }
+        } catch (err) {
+          console.warn('[ChatInterface] Project knowledge search failed:', err);
+        }
+      }
+
+      // F24: Multi-source research workflow mode
+      if (researchMode) {
+        try {
+          const researchCtx = await executeResearchWorkflow(supabase, queryText, {
+            projectId: activeProjectId,
+            includeWebSearch: webSearchEnabled,
+          });
+          if (researchCtx.groundingPrompt) {
+            queryWithContext = `${researchCtx.groundingPrompt}\n\n${queryWithContext}`;
+          }
+        } catch (err) {
+          console.warn('[ChatInterface] Research workflow failed:', err);
+        }
+      }
 
       // F11: Opt-in web search augmentation
       let citations: SearchCitation[] | undefined;
@@ -3189,6 +3234,25 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <span>Compare</span>
           </button>
 
+          <button
+            type='button'
+            className={`web-search-toggle-btn ${researchMode ? 'active' : ''}`}
+            onClick={() => {
+              const next = !researchMode;
+              setResearchMode(next);
+              try {
+                window.localStorage.setItem('prismatix_research_mode', String(next));
+              } catch {
+                // Ignore storage write failure
+              }
+            }}
+            title='Toggle multi-source research workflow mode'
+            aria-pressed={researchMode}
+          >
+            <span>🔬</span>
+            <span>Research</span>
+          </button>
+
           {comparisonMode && (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
               <select
@@ -3312,6 +3376,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         duplicateNotice={duplicateNotice}
         composerValidationView={composerValidationView}
         onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
+        onOpenUrlIngestion={() => setIsUrlModalOpen(true)}
+        onOpenDocComparison={() => setIsDocComparisonModalOpen(true)}
       />
 
       <BudgetGuard
@@ -3387,6 +3453,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onClose={() => setIsPromptLibraryOpen(false)}
         activeProjectId={activeProjectId}
         onSelectPrompt={handleInsertPromptTemplate}
+      />
+
+      <UrlIngestionModal
+        isOpen={isUrlModalOpen}
+        onClose={() => setIsUrlModalOpen(false)}
+        onInsertContent={(content) => {
+          setInput((prev) => (prev ? `${prev}\n\n${content}` : content));
+          inputRef.current?.focus();
+        }}
+      />
+
+      <DocumentComparisonModal
+        isOpen={isDocComparisonModalOpen}
+        onClose={() => setIsDocComparisonModalOpen(false)}
+        onInsertPrompt={(prompt) => {
+          setInput(prompt);
+          inputRef.current?.focus();
+        }}
       />
       </div>
     </div>

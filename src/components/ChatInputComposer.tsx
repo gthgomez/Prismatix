@@ -46,6 +46,8 @@ export interface ChatInputComposerProps {
   duplicateNotice: string | null;
   composerValidationView: ComposerSendValidationView | null;
   onOpenPromptLibrary?: () => void;
+  onOpenUrlIngestion?: () => void;
+  onOpenDocComparison?: () => void;
 }
 
 export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
@@ -84,6 +86,8 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   duplicateNotice,
   composerValidationView,
   onOpenPromptLibrary,
+  onOpenUrlIngestion,
+  onOpenDocComparison,
 }) => {
   return (
     <div className='chat-input-container'>
@@ -125,6 +129,60 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
               <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
                 <path d='M4 19.5A2.5 2.5 0 0 1 6.5 17H20' />
                 <path d='M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z' />
+              </svg>
+            </button>
+          )}
+          {onOpenUrlIngestion && (
+            <button
+              type='button'
+              className='url-ingest-btn'
+              onClick={onOpenUrlIngestion}
+              disabled={isStreaming}
+              aria-label='Read web page URL'
+              title='Read web page URL'
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--color-text-dim, #9ca3af)',
+                padding: '0.4rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 'var(--radius-sm, 6px)',
+              }}
+            >
+              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+                <path d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71' />
+                <path d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71' />
+              </svg>
+            </button>
+          )}
+          {onOpenDocComparison && (
+            <button
+              type='button'
+              className='doc-compare-btn'
+              onClick={onOpenDocComparison}
+              disabled={isStreaming}
+              aria-label='Compare two documents'
+              title='Compare two documents side-by-side'
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--color-text-dim, #9ca3af)',
+                padding: '0.4rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 'var(--radius-sm, 6px)',
+              }}
+            >
+              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+                <path d='M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8z' />
+                <polyline points='14 3 14 8 20 8' />
+                <line x1='9' y1='13' x2='15' y2='13' />
+                <line x1='9' y1='17' x2='13' y2='17' />
               </svg>
             </button>
           )}
