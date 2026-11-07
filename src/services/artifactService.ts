@@ -1,0 +1,259 @@
+// src/services/artifactService.ts
+// Extraction, editing, versioning, and sandboxed rendering for generated artifacts.
+
+export interface ArtifactVersion {
+  versionNumber: number;
+  content: string;
+  savedAt: string;
+  author: 'assistant' | 'user';
+}
+
+export interface Artifact {
+  id: string;
+  title: string;
+  language: string;
+  currentContent: string;
+  versions: ArtifactVersion[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function generateArtifactId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+export async function persistArtifactToDatabase(
+  client: any,
+  artifact: Artifact,
+  conversationId: string,
+  userId: string,
+  messageId?: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await client.from('artifacts').upsert({
+      id: artifact.id,
+      user_id: userId,
+      conversation_id: conversationId,
+      message_id: messageId || null,
+      title: artifact.title,
+      language: artifact.language,
+      current_content: artifact.currentContent,
+      versions: artifact.versions,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function getOrCreateArtifactForMessage(
+  client: any,
+  conversationId: string,
+  userId: string,
+  extracted: Artifact,
+  messageId?: string,
+): Promise<Artifact> {
+  if (!client || !conversationId) return extracted;
+  try {
+    let query = client.from('artifacts').select('*').eq('conversation_id', conversationId);
+    if (messageId) {
+      query = query.eq('message_id', messageId);
+    } else {
+      query = query.eq('title', extracted.title);
+    }
+    const { data, error } = await query.order('created_at', { ascending: false }).limit(1);
+    if (!error && data && data.length > 0) {
+      const row = data[0];
+      return {
+        id: row.id,
+        title: row.title,
+        language: row.language,
+        currentContent: row.current_content,
+        versions: Array.isArray(row.versions) ? row.versions : [],
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    }
+    // If not found in database, insert it
+    await persistArtifactToDatabase(client, extracted, conversationId, userId, messageId);
+    return extracted;
+  } catch (err) {
+    console.warn('[artifactService] getOrCreateArtifact error:', err);
+    return extracted;
+  }
+}
+
+export async function persistArtifactRevisionToDatabase(
+  client: any,
+  artifactId: string,
+  newContent: string,
+  author: 'user' | 'assistant' = 'user',
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const { data, error } = await client.rpc('px29_save_artifact_revision', {
+      p_artifact_id: artifactId,
+      p_content: newContent,
+      p_author: author,
+    });
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export function detectArtifactLanguage(codeFenceHeader: string): { language: string; filename?: string } {
+  const parts = codeFenceHeader.trim().split(/[\s:]+/);
+  const language = (parts[0] || 'text').toLowerCase();
+  const filename = parts.length > 1 ? parts[1] : undefined;
+  return { language, filename };
+}
+
+export function extractArtifactsFromText(text: string): Artifact[] {
+  const artifacts: Artifact[] = [];
+  // Regex to match markdown fenced code blocks: ```lang[:filename] \n content \n ```
+  const codeBlockRegex = /```([a-zA-Z0-9_-]+(?::[^\n\r]+)?)\n([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+  let counter = 1;
+
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    const header = match[1] ?? 'text';
+    const content = match[2] ?? '';
+    const { language, filename } = detectArtifactLanguage(header);
+
+    // Only extract substantive code blocks (> 10 chars) as artifacts
+    if (content.trim().length >= 10) {
+      const title = filename || `Artifact ${counter} (${language.toUpperCase()})`;
+      const now = new Date().toISOString();
+      artifacts.push({
+        id: generateArtifactId(),
+        title,
+        language,
+        currentContent: content,
+        versions: [
+          {
+            versionNumber: 1,
+            content,
+            savedAt: now,
+            author: 'assistant',
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      });
+      counter++;
+    }
+  }
+
+  return artifacts;
+}
+
+export function saveArtifactRevision(artifact: Artifact, newContent: string): Artifact {
+  if (artifact.currentContent === newContent) {
+    return artifact;
+  }
+  const now = new Date().toISOString();
+  const newVersion: ArtifactVersion = {
+    versionNumber: artifact.versions.length + 1,
+    content: newContent,
+    savedAt: now,
+    author: 'user',
+  };
+
+  return {
+    ...artifact,
+    currentContent: newContent,
+    versions: [...artifact.versions, newVersion],
+    updatedAt: now,
+  };
+}
+
+export function getFileExtensionForLanguage(lang: string): string {
+  const map: Record<string, string> = {
+    javascript: 'js',
+    js: 'js',
+    typescript: 'ts',
+    ts: 'ts',
+    python: 'py',
+    py: 'py',
+    html: 'html',
+    css: 'css',
+    json: 'json',
+    markdown: 'md',
+    md: 'md',
+    svg: 'svg',
+    sql: 'sql',
+    sh: 'sh',
+    bash: 'sh',
+    yaml: 'yaml',
+    yml: 'yaml',
+  };
+  return map[lang.toLowerCase()] || 'txt';
+}
+
+export function createSandboxedHtmlPreview(content: string, language: string): string {
+  if (language === 'html') {
+    // Wrap in standard HTML5 with isolation
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 1rem; color: #111; background: #fff; }
+  </style>
+</head>
+<body>
+  ${content}
+</body>
+</html>`;
+  }
+
+  if (language === 'svg') {
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; background: #f8fafc; }
+    svg { max-width: 90vw; max-height: 90vh; }
+  </style>
+</head>
+<body>
+  ${content}
+</body>
+</html>`;
+  }
+
+  // Fallback text/code display
+  const escaped = content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: monospace; padding: 1rem; background: #1e1e1e; color: #d4d4d4; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>${escaped}</body>
+</html>`;
+}

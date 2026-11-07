@@ -289,11 +289,17 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
 
   // Mock Router SSE streaming endpoint
   await page.route('**/functions/v1/router*', async (route) => {
+    const postData = route.request().postData() || '';
+    const hasCodeRequest = postData.includes('typescript') || postData.includes('function') || postData.includes('code');
+    const responseText = hasCodeRequest
+      ? 'Here is your TypeScript function:\n\n```typescript:calculateSum.ts\nexport function calculateSum(a: number, b: number): number {\n  return a + b;\n}\n```\n'
+      : 'Hello from verified Prismatix test environment!';
+
     const sseResponse = [
       'event: message\n',
       'data: {"type":"meta","model":"gemini-3.8-flash","cost":{"finalUsd":0.00032}}\n\n',
       'event: message\n',
-      'data: {"type":"content_block_delta","delta":{"text":"Hello from verified Prismatix test environment!"}}\n\n',
+      `data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: responseText } })}\n\n`,
       'event: message\n',
       'data: [DONE]\n\n',
     ].join('');
@@ -305,6 +311,31 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
         'Cache-Control': 'no-cache',
       },
       body: sseResponse,
+    });
+  });
+
+  // Mock Image Generation Edge Function
+  await page.route('**/functions/v1/image-generation*', async (route) => {
+    const postData = (route.request().postDataJSON() || {}) as Record<string, unknown>;
+    const prompt = (postData.prompt as string) || 'generated image';
+    const modelId = (postData.modelId as string) || 'flux-1-schnell';
+    const isMock = Boolean(postData.mockMode);
+    const svgData = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#4ECDC4"/><text x="256" y="256" fill="#fff" text-anchor="middle">${prompt}</text></svg>`;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        imageUrl: `data:image/svg+xml;utf8,${encodeURIComponent(svgData)}`,
+        modelId,
+        prompt,
+        size: '1024x1024',
+        costUsd: isMock ? 0 : 0.003,
+        costStatus: isMock ? 'unmetered' : 'settled',
+        isMock,
+        executionId: 'mock-exec-id-1234',
+        timestamp: new Date().toISOString(),
+      }),
     });
   });
 }

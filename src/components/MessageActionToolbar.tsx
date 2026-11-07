@@ -3,6 +3,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import type { RouterModel } from '../types';
+import { defaultTTSPlaybackService, isTTSSupported, type TTSPlaybackState } from '../services/ttsPlaybackService';
 
 export interface QuickModelOption {
   value: RouterModel | 'auto';
@@ -30,6 +31,8 @@ export interface MessageActionToolbarProps {
   onRegenerate?: (modelOverride?: RouterModel) => void;
   feedback?: 'up' | 'down';
   onFeedback?: (type: 'up' | 'down') => void;
+  onOpenArtifact?: () => void;
+  hasArtifacts?: boolean;
 }
 
 export const MessageActionToolbar: React.FC<MessageActionToolbarProps> = ({
@@ -42,17 +45,48 @@ export const MessageActionToolbar: React.FC<MessageActionToolbarProps> = ({
   onRegenerate,
   feedback,
   onFeedback,
+  onOpenArtifact,
+  hasArtifacts = false,
 }) => {
   const [copied, setCopied] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [ttsState, setTtsState] = useState<TTSPlaybackState>('idle');
   const menuRef = useRef<HTMLDivElement>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      if (role === 'assistant' && (ttsState === 'playing' || ttsState === 'paused')) {
+        defaultTTSPlaybackService.stop();
+      }
     };
-  }, []);
+  }, [role, ttsState]);
+
+  const handleTtsToggle = () => {
+    if (ttsState === 'playing') {
+      defaultTTSPlaybackService.pause();
+      setTtsState('paused');
+    } else if (ttsState === 'paused') {
+      defaultTTSPlaybackService.resume();
+      setTtsState('playing');
+    } else {
+      setTtsState('playing');
+      const success = defaultTTSPlaybackService.speak(content, {
+        onStart: () => setTtsState('playing'),
+        onPause: () => setTtsState('paused'),
+        onResume: () => setTtsState('playing'),
+        onEnd: () => setTtsState('idle'),
+        onError: () => setTtsState('idle'),
+      });
+      if (!success) setTtsState('idle');
+    }
+  };
+
+  const handleTtsStop = () => {
+    defaultTTSPlaybackService.stop();
+    setTtsState('idle');
+  };
 
   useEffect(() => {
     if (!isMenuOpen) return;
@@ -250,6 +284,79 @@ export const MessageActionToolbar: React.FC<MessageActionToolbarProps> = ({
                 </svg>
               </button>
             </div>
+          )}
+
+          {/* Read Aloud / TTS Control */}
+          {isTTSSupported() && (
+            <div className='tts-btn-group' style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+              <button
+                type='button'
+                className={`message-action-btn tts-play-btn ${ttsState === 'playing' ? 'is-playing' : ''}`}
+                onClick={handleTtsToggle}
+                disabled={isStreaming}
+                title={
+                  ttsState === 'playing'
+                    ? 'Pause read aloud'
+                    : ttsState === 'paused'
+                    ? 'Resume read aloud'
+                    : 'Read aloud response (Native TTS)'
+                }
+                aria-label={
+                  ttsState === 'playing'
+                    ? 'Pause read aloud'
+                    : ttsState === 'paused'
+                    ? 'Resume read aloud'
+                    : 'Read aloud response'
+                }
+              >
+                {ttsState === 'playing' ? (
+                  <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+                    <rect x='6' y='4' width='4' height='16' />
+                    <rect x='14' y='4' width='4' height='16' />
+                  </svg>
+                ) : (
+                  <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+                    <polygon points='11 5 6 9 2 9 2 15 6 15 11 19 11 5' />
+                    <path d='M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07' />
+                  </svg>
+                )}
+                <span className='action-btn-label'>
+                  {ttsState === 'playing' ? 'Pause' : ttsState === 'paused' ? 'Resume' : 'Listen'}
+                </span>
+              </button>
+
+              {(ttsState === 'playing' || ttsState === 'paused') && (
+                <button
+                  type='button'
+                  className='message-action-btn tts-stop-btn'
+                  onClick={handleTtsStop}
+                  title='Stop read aloud'
+                  aria-label='Stop read aloud'
+                >
+                  <svg width='11' height='11' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'>
+                    <rect x='4' y='4' width='16' height='16' rx='2' />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Artifact View Button */}
+          {hasArtifacts && onOpenArtifact && (
+            <button
+              type='button'
+              className='message-action-btn message-artifact-btn'
+              onClick={onOpenArtifact}
+              title='View and edit extracted artifacts'
+              aria-label='View and edit extracted artifacts'
+            >
+              <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+                <path d='M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z' />
+                <polyline points='3.27 6.96 12 12.01 20.73 6.96' />
+                <line x1='12' y1='22.08' x2='12' y2='12' />
+              </svg>
+              <span className='action-btn-label'>Artifact</span>
+            </button>
           )}
         </>
       )}

@@ -4,6 +4,9 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './styles/mobile.css';
+import { registerServiceWorker } from './services/pwaService';
+
+registerServiceWorker();
 
 function isPublicResumeRoute(): boolean {
   return window.location.pathname === '/demo' || window.location.pathname === '/about';

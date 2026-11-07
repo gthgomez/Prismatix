@@ -28,6 +28,7 @@ export interface ChatMessageItemProps {
   onFeedback?: (index: number, type: 'up' | 'down') => void;
   onBranch?: (index: number) => void;
   onSelectComparisonPreference?: (index: number, preferred: 'A' | 'B') => void;
+  onOpenArtifact?: (index: number, content: string) => void;
 }
 
 export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
@@ -45,26 +46,30 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   onFeedback,
   onBranch,
   onSelectComparisonPreference,
+  onOpenArtifact,
 }) => {
   if (import.meta.env.MODE === 'test') chatMessageItemRenderLog.push(index);
   const modelPillMeta = message.model ? assistantModelPillDisplay(message) : null;
   const isStreamingAssistant = isStreaming && message.role === 'assistant';
   const textContent = extractTextContent(message.content);
 
+  const storedVersions = (Array.isArray(message.metadata?.versions) ? message.metadata.versions : []) as Array<{
+    version: number;
+    content: string;
+    model?: string;
+    model_used?: string;
+    created_at?: string;
+    timestamp?: number;
+  }>;
+
   const allVersions = React.useMemo(() => {
-    const raw = message.metadata?.versions;
-    if (Array.isArray(raw)) {
-      return raw as Array<{
-        version: number;
-        content: string;
-        model?: string;
-        model_used?: string;
-        created_at?: string;
-        timestamp?: number;
-      }>;
+    if (storedVersions.length === 0) return [];
+    const last = storedVersions[storedVersions.length - 1];
+    if (last && last.content !== textContent) {
+      return [...storedVersions, { version: storedVersions.length + 1, content: textContent, model_used: message.model, model: message.model }];
     }
-    return [];
-  }, [message.metadata?.versions]);
+    return storedVersions;
+  }, [storedVersions, textContent, message.model]);
 
   const [selectedVersionIdx, setSelectedVersionIdx] = useState<number>(() =>
     allVersions.length > 0 ? allVersions.length - 1 : 0
@@ -127,6 +132,47 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
           <span className='message-role'>
             {message.role === 'user' ? 'You' : 'Assistant'}
           </span>
+          {allVersions.length > 1 && (
+            <div className='message-version-switcher' style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.75rem', color: 'var(--color-text-dim, #9ca3af)', marginLeft: '0.5rem' }}>
+              <button
+                type='button'
+                aria-label='Previous response version'
+                disabled={selectedVersionIdx <= 0}
+                onClick={() => setSelectedVersionIdx((i) => Math.max(0, i - 1))}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: selectedVersionIdx <= 0 ? 'rgba(255,255,255,0.2)' : 'var(--color-primary, #4ecdc4)',
+                  cursor: selectedVersionIdx <= 0 ? 'default' : 'pointer',
+                  padding: '0 0.2rem',
+                  fontSize: '0.85rem',
+                  fontWeight: 'bold',
+                }}
+              >
+                ‹
+              </button>
+              <span aria-label={`Version ${selectedVersionIdx + 1} of ${allVersions.length}`}>
+                {selectedVersionIdx + 1} / {allVersions.length}
+              </span>
+              <button
+                type='button'
+                aria-label='Next response version'
+                disabled={selectedVersionIdx >= allVersions.length - 1}
+                onClick={() => setSelectedVersionIdx((i) => Math.min(allVersions.length - 1, i + 1))}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: selectedVersionIdx >= allVersions.length - 1 ? 'rgba(255,255,255,0.2)' : 'var(--color-primary, #4ecdc4)',
+                  cursor: selectedVersionIdx >= allVersions.length - 1 ? 'default' : 'pointer',
+                  padding: '0 0.2rem',
+                  fontSize: '0.85rem',
+                  fontWeight: 'bold',
+                }}
+              >
+                ›
+              </button>
+            </div>
+          )}
           {message.model && (
             <div className='message-metadata-container'>
               <button
@@ -383,6 +429,61 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               />
             </div>
 
+            {(() => {
+              const imageGen = message.metadata?.imageGeneration as
+                | { imageUrl?: string; prompt?: string; modelId?: string; costUsd?: number }
+                | undefined;
+              if (!imageGen?.imageUrl) return null;
+              return (
+                <div
+                  className='generated-image-card'
+                  style={{
+                    margin: '0.75rem 0',
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    background: '#141416',
+                  }}
+                >
+                  <img
+                    src={imageGen.imageUrl}
+                    alt={imageGen.prompt || 'Generated image'}
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: '400px',
+                      objectFit: 'contain',
+                      display: 'block',
+                      background: '#09090b',
+                      margin: '0 auto',
+                    }}
+                  />
+                  <div
+                    style={{
+                      padding: '0.5rem 0.75rem',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
+                      🎨 {imageGen.modelId} • ${imageGen.costUsd?.toFixed(4) ?? '0.0000'}
+                    </span>
+                    <a
+                      href={imageGen.imageUrl}
+                      download='prismatix-generated-image.png'
+                      target='_blank'
+                      rel='noopener noreferrer'
+                      style={{ fontSize: '0.75rem', color: '#4ECDC4', textDecoration: 'none', fontWeight: 500 }}
+                    >
+                      Download
+                    </a>
+                  </div>
+                </div>
+              );
+            })()}
+
             {message.role === 'assistant' && message.debateDegraded && (
               <div
                 className='debate-degraded-banner'
@@ -531,6 +632,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 onBranch={onBranch ? () => onBranch(index) : undefined}
                 feedback={message.feedback}
                 onFeedback={(type) => onFeedback?.(index, type)}
+                hasArtifacts={message.role === 'assistant' && activeContent.includes('```')}
+                onOpenArtifact={onOpenArtifact ? () => onOpenArtifact(index, activeContent) : undefined}
               />
             )}
           </>

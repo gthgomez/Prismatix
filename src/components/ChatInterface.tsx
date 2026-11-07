@@ -134,6 +134,17 @@ import { ImportModal } from './ImportModal';
 import { PromptLibraryModal } from './PromptLibraryModal';
 import { UrlIngestionModal } from './UrlIngestionModal';
 import { DocumentComparisonModal } from './DocumentComparisonModal';
+import { ImageGenerationModal } from './ImageGenerationModal';
+import { ArtifactViewerModal } from './ArtifactViewerModal';
+import { defaultVoiceDictationService } from '../services/voiceDictationService';
+import {
+  extractArtifactsFromText,
+  persistArtifactRevisionToDatabase,
+  getOrCreateArtifactForMessage,
+  type Artifact,
+} from '../services/artifactService';
+import type { ImageGenerationResult } from '../services/imageGenerationService';
+import { subscribeToOnlineStatus, subscribeToInstallPrompt, promptPwaInstall } from '../services/pwaService';
 import { executeResearchWorkflow } from '../services/researchWorkflow';
 import { searchProjectKnowledge, formatKnowledgeGroundingBlock } from '../services/projectKnowledgeSearch';
 import { branchConversation, persistMessageVersion } from '../services/conversationBranching';
@@ -421,6 +432,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [isPromptLibraryOpen, setIsPromptLibraryOpen] = useState(false);
   const [isUrlModalOpen, setIsUrlModalOpen] = useState(false);
   const [isDocComparisonModalOpen, setIsDocComparisonModalOpen] = useState(false);
+  // Wave 2 PR 6: F26 Dictation, F28 Image Gen, F29 Artifacts, F30 PWA
+  const [isImageGenModalOpen, setIsImageGenModalOpen] = useState(false);
+  const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
+  const [isArtifactModalOpen, setIsArtifactModalOpen] = useState(false);
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+  const [canInstallPwa, setCanInstallPwa] = useState(false);
   const [researchMode, setResearchMode] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem('prismatix_research_mode') === 'true';
@@ -1251,6 +1269,96 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setIsPromptLibraryOpen(false);
     inputRef.current?.focus();
   };
+
+  // Wave 2 PR 6: PWA online & install status subscriptions (F30)
+  useEffect(() => {
+    const unsubOnline = subscribeToOnlineStatus((online) => {
+      setIsOnline(online);
+    });
+    const unsubInstall = subscribeToInstallPrompt((canInstall) => {
+      setCanInstallPwa(canInstall);
+    });
+    return () => {
+      unsubOnline();
+      unsubInstall();
+    };
+  }, []);
+
+  const handleInstallPwa = async () => {
+    const outcome = await promptPwaInstall();
+    if (outcome === 'accepted') {
+      setActionNotice({ type: 'success', message: 'Prismatix installed successfully.' });
+    }
+  };
+
+  // Wave 2 PR 6: Voice dictation (F26)
+  const handleToggleVoiceDictation = useCallback(() => {
+    if (isRecordingVoice) {
+      defaultVoiceDictationService.stopDictation();
+      setIsRecordingVoice(false);
+    } else {
+      setIsRecordingVoice(true);
+      void defaultVoiceDictationService.startDictation({
+        onTranscript: (text) => {
+          setInput((prev) => (prev ? `${prev} ${text}` : text));
+        },
+        onError: (err) => {
+          console.warn('Voice dictation error:', err);
+          setActionNotice({ type: 'error', message: err });
+          setIsRecordingVoice(false);
+        },
+        onStateChange: (state) => {
+          if (state === 'idle' || state === 'error') {
+            setIsRecordingVoice(false);
+          }
+        },
+      });
+    }
+  }, [isRecordingVoice]);
+
+  // Wave 2 PR 6: Image generation persistence (F28)
+  const handleImageGenerated = useCallback(
+    (result: ImageGenerationResult) => {
+      const isMock = result.isMock ?? Boolean(result.imageUrl?.startsWith('data:image/svg+xml'));
+      const finalCost = isMock ? 0 : (result.costUsd || 0);
+      const newMsg: Message = {
+        role: 'assistant',
+        content: result.revisedPrompt || result.prompt,
+        timestamp: Date.now(),
+        model: result.modelId as RouterModel,
+        cost: {
+          status: isMock ? 'unmetered' : (result.costStatus === 'settled' ? 'settled' : 'unmetered'),
+          finalUsd: finalCost,
+        },
+        metadata: {
+          type: 'image_generation',
+          imageGeneration: result,
+        },
+      };
+      setMessages((prev) => [...prev, newMsg]);
+      setActionNotice({ type: 'success', message: `Image generated via ${result.modelId}` });
+    },
+    []
+  );
+
+  // Wave 2 PR 6: Artifact inspection (F29)
+  const handleOpenArtifact = useCallback(
+    async (_index: number, content: string, messageId?: string) => {
+      const extracted = extractArtifactsFromText(content);
+      if (extracted.length > 0) {
+        const first = extracted[0]!;
+        const convId = selectedConversationIdRef.current;
+        if (convId && user) {
+          const durable = await getOrCreateArtifactForMessage(supabase, convId, user.id, first, messageId);
+          setActiveArtifact(durable);
+        } else {
+          setActiveArtifact(first);
+        }
+        setIsArtifactModalOpen(true);
+      }
+    },
+    [user]
+  );
 
   // Preference synchronization across devices (F20)
   useEffect(() => {
@@ -2963,6 +3071,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </svg>
             </button>
 
+            {canInstallPwa && (
+              <button
+                type='button'
+                className='header-button install-pwa-button'
+                onClick={handleInstallPwa}
+                title='Install Prismatix as web app'
+                aria-label='Install Prismatix as web app'
+                style={{
+                  color: 'var(--color-primary, #4ecdc4)',
+                  borderColor: 'rgba(78, 205, 196, 0.3)',
+                }}
+              >
+                📲 Install App
+              </button>
+            )}
+
             {/* User Menu */}
             <div className='user-menu-container' ref={userMenuRef}>
               <button
@@ -3047,6 +3171,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           </div>
         </div>
       </header>
+
+      {!isOnline && (
+        <div
+          className='offline-status-banner'
+          role='status'
+          aria-live='assertive'
+          style={{
+            padding: '0.4rem 1rem',
+            backgroundColor: '#7c2d12',
+            color: '#ffedd5',
+            fontSize: '0.85rem',
+            textAlign: 'center',
+            fontWeight: 500,
+          }}
+        >
+          ⚡ Offline Mode — Live model inference paused. You can continue reading and organizing loaded conversations.
+        </div>
+      )}
 
       {/* Global Drag Overlay */}
       {isDraggingGlobal && (
@@ -3175,6 +3317,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     onFeedback={handleFeedback}
                     onBranch={handleBranch}
                     onSelectComparisonPreference={handleSelectComparisonPreference}
+                    onOpenArtifact={handleOpenArtifact}
                   />
                 );
               })}
@@ -3418,6 +3561,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
         onOpenUrlIngestion={() => setIsUrlModalOpen(true)}
         onOpenDocComparison={() => setIsDocComparisonModalOpen(true)}
+        onOpenImageGen={() => setIsImageGenModalOpen(true)}
+        isRecordingVoice={isRecordingVoice}
+        onToggleVoiceDictation={handleToggleVoiceDictation}
       />
 
       <BudgetGuard
@@ -3510,6 +3656,49 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onInsertPrompt={(prompt) => {
           setInput(prompt);
           inputRef.current?.focus();
+        }}
+      />
+
+      <ImageGenerationModal
+        isOpen={isImageGenModalOpen}
+        onClose={() => setIsImageGenModalOpen(false)}
+        onImageGenerated={handleImageGenerated}
+        initialPrompt={input}
+        conversationId={selectedConversationIdRef.current || undefined}
+        client={supabase}
+        providerPlugins={providerPlugins}
+        onOpenProviderSettings={() => setShowProviderSettings(true)}
+      />
+
+      <ArtifactViewerModal
+        isOpen={isArtifactModalOpen}
+        artifact={activeArtifact}
+        onClose={() => setIsArtifactModalOpen(false)}
+        onUpdateArtifact={async (updated) => {
+          setActiveArtifact(updated);
+          const convId = selectedConversationIdRef.current;
+          if (convId && user) {
+            // Persist revision via atomic RPC px29_save_artifact_revision
+            // (Avoids duplicating revisions from double-saving)
+            const revRes = await persistArtifactRevisionToDatabase(supabase, updated.id, updated.currentContent, 'user');
+            if (!revRes.success || !revRes.data) {
+              console.warn('[ChatInterface] Failed to persist artifact revision via px29:', revRes.error);
+              setActionNotice({ type: 'error', message: `Failed to persist revision: ${revRes.error}` });
+            } else {
+              const row = revRes.data;
+              const synced: Artifact = {
+                id: row.id,
+                title: row.title,
+                language: row.language,
+                currentContent: row.current_content,
+                versions: Array.isArray(row.versions) ? row.versions : [],
+                createdAt: row.created_at,
+                updatedAt: row.updated_at,
+              };
+              setActiveArtifact(synced);
+              setActionNotice({ type: 'success', message: 'Artifact revision saved successfully.' });
+            }
+          }
         }}
       />
       </div>

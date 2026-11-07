@@ -48,6 +48,9 @@ export interface ChatInputComposerProps {
   onOpenPromptLibrary?: () => void;
   onOpenUrlIngestion?: () => void;
   onOpenDocComparison?: () => void;
+  onOpenImageGen?: () => void;
+  isRecordingVoice?: boolean;
+  onToggleVoiceDictation?: () => void;
 }
 
 export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
@@ -88,6 +91,9 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   onOpenPromptLibrary,
   onOpenUrlIngestion,
   onOpenDocComparison,
+  onOpenImageGen,
+  isRecordingVoice = false,
+  onToggleVoiceDictation,
 }) => {
   return (
     <div className='chat-input-container'>
@@ -183,6 +189,62 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
                 <polyline points='14 3 14 8 20 8' />
                 <line x1='9' y1='13' x2='15' y2='13' />
                 <line x1='9' y1='17' x2='13' y2='17' />
+              </svg>
+            </button>
+          )}
+          {onOpenImageGen && (
+            <button
+              type='button'
+              className='image-gen-btn'
+              onClick={onOpenImageGen}
+              disabled={isStreaming}
+              aria-label='Generate image (BYOK)'
+              title='Generate image with BYOK model'
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--color-text-dim, #9ca3af)',
+                padding: '0.4rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 'var(--radius-sm, 6px)',
+              }}
+            >
+              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+                <rect x='3' y='3' width='18' height='18' rx='2' ry='2' />
+                <circle cx='8.5' cy='8.5' r='1.5' />
+                <polyline points='21 15 16 10 5 21' />
+              </svg>
+            </button>
+          )}
+          {onToggleVoiceDictation && (
+            <button
+              type='button'
+              className={`voice-dictation-btn ${isRecordingVoice ? 'is-recording' : ''}`}
+              onClick={onToggleVoiceDictation}
+              disabled={isStreaming}
+              aria-label={isRecordingVoice ? 'Stop voice recording' : 'Voice dictation'}
+              title={isRecordingVoice ? 'Stop voice recording' : 'Voice dictation (speech to text)'}
+              style={{
+                background: isRecordingVoice ? 'rgba(239, 68, 68, 0.2)' : 'none',
+                border: isRecordingVoice ? '1px solid #ef4444' : 'none',
+                cursor: 'pointer',
+                color: isRecordingVoice ? '#ef4444' : 'var(--color-text-dim, #9ca3af)',
+                padding: '0.4rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 'var(--radius-sm, 6px)',
+                animation: isRecordingVoice ? 'pulse 1.5s infinite' : 'none',
+              }}
+            >
+              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+                <path d='M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z' />
+                <path d='M19 10v2a7 7 0 0 1-14 0v-2' />
+                <line x1='12' y1='19' x2='12' y2='23' />
+                <line x1='8' y1='23' x2='16' y2='23' />
               </svg>
             </button>
           )}
