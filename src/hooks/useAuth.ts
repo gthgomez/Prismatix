@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../config';
+import { clearLocalPreferences } from '../services/userPreferencesService';
 import type { Session, User } from '@supabase/supabase-js';
 
 interface AuthState {
@@ -162,11 +163,16 @@ export const useAuth = (): UseAuthReturn => {
 
   const signOut = useCallback(async () => {
     try {
+      const currentUserId = authState.user?.id;
+      if (currentUserId) {
+        clearLocalPreferences(currentUserId);
+      }
+      clearLocalPreferences(null);
       await supabase.auth.signOut();
     } catch (err) {
       console.error('[useAuth] Sign out error:', err);
     }
-  }, []);
+  }, [authState.user?.id]);
 
   const signInWithProvider = useCallback(async (provider: 'google' | 'github') => {
     try {

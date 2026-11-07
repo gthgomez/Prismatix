@@ -42,6 +42,11 @@ export interface ConversationSidebarProps {
   onSelectProject?: (projectId: string | null) => void;
   onOpenNewProject?: () => void;
   onOpenExport?: () => void;
+  onOpenImport?: () => void;
+  onOpenPromptLibrary?: () => void;
+  onArchiveConversation?: (conversationId: string, archived: boolean) => void;
+  onSetConversationTags?: (conversationId: string, tags: string[]) => void;
+  onBulkArchive?: (conversationIds: string[], archived: boolean) => void;
 }
 
 // Account changes reset transient UI and load only that account's display preferences.
@@ -71,11 +76,20 @@ function ChatHistory({
   onSelectProject,
   onOpenNewProject,
   onOpenExport,
+  onOpenImport,
+  onOpenPromptLibrary,
+  onArchiveConversation,
+  onSetConversationTags,
+  onBulkArchive: _onBulkArchive,
 }: ConversationSidebarProps) {
   const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'active' | 'archived' | 'all'>('active');
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTagsId, setEditingTagsId] = useState<string | null>(null);
+  const [tagInputText, setTagInputText] = useState('');
   const [editDraft, setEditDraft] = useState('');
   const editSession = useRef<{ id: string; original: string } | null>(null);
   const [showPreferences, setShowPreferences] = useState(false);
@@ -97,7 +111,40 @@ function ChatHistory({
   }, [isOpen]);
 
   const trimmedQuery = query.trim().toLowerCase();
-  const visible = useMemo(() => conversations.filter(c => !trimmedQuery || (c.title ?? 'Untitled conversation').toLowerCase().includes(trimmedQuery)), [conversations, trimmedQuery]);
+
+  // Extract all distinct tags across conversations
+  const allTags = useMemo(() => {
+    const tagsSet = new Set<string>();
+    for (const c of conversations) {
+      if (Array.isArray(c.tags)) {
+        for (const t of c.tags) {
+          if (t.trim()) tagsSet.add(t.trim());
+        }
+      }
+    }
+    return Array.from(tagsSet);
+  }, [conversations]);
+
+  const visible = useMemo(() => {
+    return conversations.filter((c) => {
+      // 1. Text search filter
+      if (trimmedQuery && !(c.title ?? 'Untitled conversation').toLowerCase().includes(trimmedQuery)) {
+        return false;
+      }
+      // 2. Archived status filter
+      if (statusFilter === 'active' && c.archived === true) {
+        return false;
+      }
+      if (statusFilter === 'archived' && c.archived !== true) {
+        return false;
+      }
+      // 3. Tag filter
+      if (selectedTag && (!Array.isArray(c.tags) || !c.tags.includes(selectedTag))) {
+        return false;
+      }
+      return true;
+    });
+  }, [conversations, trimmedQuery, statusFilter, selectedTag]);
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try {
       const key = `prismatix:pinned-chats:${preferenceScope ?? 'anonymous'}`;
@@ -295,7 +342,26 @@ function ChatHistory({
           >
             <span className='conversation-item-title'>
               {isPinned && <span className='conversation-pin-badge' aria-label='Pinned'>📌 </span>}
+              {conversation.archived && <span className='conversation-pin-badge' aria-label='Archived'>📦 </span>}
               {title}
+              {Array.isArray(conversation.tags) && conversation.tags.length > 0 && (
+                <span style={{ display: 'inline-flex', gap: '0.2rem', marginLeft: '0.35rem' }}>
+                  {conversation.tags.map((t) => (
+                    <span
+                      key={t}
+                      style={{
+                        fontSize: '0.65rem',
+                        background: 'rgba(255,255,255,0.08)',
+                        padding: '0.05rem 0.3rem',
+                        borderRadius: '3px',
+                        color: '#4ecdc4',
+                      }}
+                    >
+                      #{t}
+                    </span>
+                  ))}
+                </span>
+              )}
             </span>
             <span className='conversation-item-activity' title={activity.full}>
               {activity.label}
@@ -393,6 +459,79 @@ function ChatHistory({
                 Rename
               </button>
             )}
+            {onArchiveConversation && (
+              <button
+                type='button'
+                role='menuitem'
+                className='conversation-item-archive'
+                disabled={disabled}
+                onClick={() => {
+                  onArchiveConversation(conversation.id, !conversation.archived);
+                  setMenuId(null);
+                }}
+              >
+                {conversation.archived ? 'Unarchive chat' : 'Archive chat'}
+              </button>
+            )}
+            {editingTagsId === conversation.id ? (
+              <div className='conversation-inline-tag-editor' style={{ padding: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <input
+                  type='text'
+                  value={tagInputText}
+                  onChange={(e) => setTagInputText(e.target.value)}
+                  placeholder='Tags (comma separated)'
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const parsed = tagInputText.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean);
+                      onSetConversationTags?.(conversation.id, parsed);
+                      setEditingTagsId(null);
+                      setMenuId(null);
+                    } else if (e.key === 'Escape') {
+                      setEditingTagsId(null);
+                    }
+                  }}
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem', borderRadius: '4px', border: '1px solid var(--color-border, #444)', background: '#222', color: '#fff' }}
+                />
+                <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'flex-end' }}>
+                  <button
+                    type='button'
+                    style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', background: 'transparent', border: 'none', color: '#888', cursor: 'pointer' }}
+                    onClick={() => setEditingTagsId(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type='button'
+                    style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', background: '#4ecdc4', color: '#000', borderRadius: '3px', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                    onClick={() => {
+                      const parsed = tagInputText.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean);
+                      onSetConversationTags?.(conversation.id, parsed);
+                      setEditingTagsId(null);
+                      setMenuId(null);
+                    }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : (
+              onSetConversationTags && (
+                <button
+                  type='button'
+                  role='menuitem'
+                  className='conversation-item-tag'
+                  disabled={disabled}
+                  onClick={() => {
+                    setTagInputText((conversation.tags || []).join(', '));
+                    setEditingTagsId(conversation.id);
+                  }}
+                >
+                  Tags...
+                </button>
+              )
+            )}
             <button
               type='button'
               role='menuitem'
@@ -462,11 +601,33 @@ function ChatHistory({
             <button
               type='button'
               className='btn-secondary'
-              style={{ padding: '0 0.6rem', fontSize: '0.8rem', minHeight: '38px', borderRadius: 'var(--radius-sm)' }}
+              style={{ padding: '0 0.5rem', fontSize: '0.75rem', minHeight: '38px', borderRadius: 'var(--radius-sm)' }}
               title='Export conversation(s)'
               onClick={onOpenExport}
             >
               Export
+            </button>
+          )}
+          {onOpenImport && (
+            <button
+              type='button'
+              className='btn-secondary'
+              style={{ padding: '0 0.5rem', fontSize: '0.75rem', minHeight: '38px', borderRadius: 'var(--radius-sm)' }}
+              title='Import conversation(s)'
+              onClick={onOpenImport}
+            >
+              Import
+            </button>
+          )}
+          {onOpenPromptLibrary && (
+            <button
+              type='button'
+              className='btn-secondary'
+              style={{ padding: '0 0.5rem', fontSize: '0.75rem', minHeight: '38px', borderRadius: 'var(--radius-sm)' }}
+              title='Prompt templates'
+              onClick={onOpenPromptLibrary}
+            >
+              Prompts
             </button>
           )}
         </div>
@@ -519,6 +680,95 @@ function ChatHistory({
             </button>
           )}
         </div>
+
+        {/* F18: Status Filters (Active / Archived / All) & Tag Filters */}
+        <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.35rem', marginBottom: '0.35rem' }}>
+          <button
+            type='button'
+            style={{
+              flex: 1,
+              padding: '0.25rem 0.4rem',
+              fontSize: '0.72rem',
+              borderRadius: '4px',
+              border: 'none',
+              cursor: 'pointer',
+              background: statusFilter === 'active' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255,255,255,0.05)',
+              color: statusFilter === 'active' ? '#0f172a' : 'inherit',
+              fontWeight: statusFilter === 'active' ? 600 : 400,
+            }}
+            onClick={() => setStatusFilter('active')}
+          >
+            Active
+          </button>
+          <button
+            type='button'
+            style={{
+              flex: 1,
+              padding: '0.25rem 0.4rem',
+              fontSize: '0.72rem',
+              borderRadius: '4px',
+              border: 'none',
+              cursor: 'pointer',
+              background: statusFilter === 'archived' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255,255,255,0.05)',
+              color: statusFilter === 'archived' ? '#0f172a' : 'inherit',
+              fontWeight: statusFilter === 'archived' ? 600 : 400,
+            }}
+            onClick={() => setStatusFilter('archived')}
+          >
+            Archived
+          </button>
+          <button
+            type='button'
+            style={{
+              flex: 1,
+              padding: '0.25rem 0.4rem',
+              fontSize: '0.72rem',
+              borderRadius: '4px',
+              border: 'none',
+              cursor: 'pointer',
+              background: statusFilter === 'all' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255,255,255,0.05)',
+              color: statusFilter === 'all' ? '#0f172a' : 'inherit',
+              fontWeight: statusFilter === 'all' ? 600 : 400,
+            }}
+            onClick={() => setStatusFilter('all')}
+          >
+            All
+          </button>
+        </div>
+
+        {allTags.length > 0 && (
+          <div style={{ display: 'flex', gap: '0.25rem', overflowX: 'auto', padding: '0.2rem 0', marginBottom: '0.35rem' }}>
+            <span
+              style={{
+                fontSize: '0.7rem',
+                padding: '0.15rem 0.4rem',
+                borderRadius: '3px',
+                cursor: 'pointer',
+                background: selectedTag === null ? 'rgba(78, 205, 196, 0.2)' : 'transparent',
+                color: selectedTag === null ? '#4ecdc4' : 'var(--color-text-dim, #9ca3af)',
+              }}
+              onClick={() => setSelectedTag(null)}
+            >
+              All tags
+            </span>
+            {allTags.map((t) => (
+              <span
+                key={t}
+                style={{
+                  fontSize: '0.7rem',
+                  padding: '0.15rem 0.4rem',
+                  borderRadius: '3px',
+                  cursor: 'pointer',
+                  background: selectedTag === t ? 'rgba(78, 205, 196, 0.2)' : 'rgba(255,255,255,0.05)',
+                  color: selectedTag === t ? '#4ecdc4' : 'var(--color-text-dim, #9ca3af)',
+                }}
+                onClick={() => setSelectedTag(selectedTag === t ? null : t)}
+              >
+                #{t}
+              </span>
+            ))}
+          </div>
+        )}
         {showPreferences && <div className='conversation-display-options'>
           <label>Row density<select aria-label='Chat row density' value={preferences.density}
             onChange={event => updatePreferences({ ...preferences, density: event.target.value === 'comfortable' ? 'comfortable' : 'compact' })}>

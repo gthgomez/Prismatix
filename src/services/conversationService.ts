@@ -22,6 +22,10 @@ export interface ConversationSummary {
   title: string | null;
   lastActivityAt: string;
   projectId?: string | null;
+  archived?: boolean;
+  tags?: string[];
+  parentConversationId?: string | null;
+  forkedFromMessageId?: string | null;
 }
 
 export interface LoadedMessageCost {
@@ -218,8 +222,65 @@ export async function listConversations(
       title: (!title?.trim() || title.trim() === 'New Chat') && preview ? preview : title,
       lastActivityAt: String(row.last_activity_at),
       projectId: typeof row.project_id === 'string' ? row.project_id : null,
+      ...(row.archived !== undefined ? { archived: Boolean(row.archived) } : {}),
+      ...(Array.isArray(row.tags) ? { tags: row.tags as string[] } : {}),
+      ...(row.parent_conversation_id ? { parentConversationId: String(row.parent_conversation_id) } : {}),
+      ...(row.forked_from_message_id ? { forkedFromMessageId: String(row.forked_from_message_id) } : {}),
     };
   });
+}
+
+/**
+ * Toggles or sets conversation archived status (F18).
+ */
+export async function archiveConversation(
+  client: SupabaseClient,
+  conversationId: string,
+  archived: boolean = true,
+): Promise<boolean> {
+  const { error } = await client
+    .from('conversations')
+    .update({ archived })
+    .eq('id', conversationId);
+  return !error;
+}
+
+/**
+ * Updates a conversation's organizational tags (F18).
+ */
+export async function setConversationTags(
+  client: SupabaseClient,
+  conversationId: string,
+  tags: string[],
+): Promise<boolean> {
+  const cleanedTags = Array.from(
+    new Set(
+      tags
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0),
+    ),
+  );
+  const { error } = await client
+    .from('conversations')
+    .update({ tags: cleanedTags })
+    .eq('id', conversationId);
+  return !error;
+}
+
+/**
+ * Bulk archives or unarchives multiple conversations (F18).
+ */
+export async function bulkArchiveConversations(
+  client: SupabaseClient,
+  conversationIds: string[],
+  archived: boolean = true,
+): Promise<{ success: boolean; modifiedCount: number }> {
+  if (conversationIds.length === 0) return { success: true, modifiedCount: 0 };
+  const { error, count } = await client
+    .from('conversations')
+    .update({ archived }, { count: 'exact' })
+    .in('id', conversationIds);
+  return { success: !error, modifiedCount: count ?? (error ? 0 : conversationIds.length) };
 }
 
 /**

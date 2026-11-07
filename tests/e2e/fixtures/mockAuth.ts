@@ -249,6 +249,44 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
     });
   });
 
+  // Mock Prompt Templates REST API (Wave 2)
+  await page.route('**/rest/v1/prompt_templates*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'mock-pt-1',
+          user_id: MOCK_USER.id,
+          title: 'Code Reviewer',
+          description: 'Comprehensive code review',
+          template: 'Review the following code for security and performance:\n\n{{code}}',
+          variables: ['code'],
+          category: 'coding',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ]),
+    });
+  });
+
+  // Mock User Preferences REST API (Wave 2)
+  await page.route('**/rest/v1/user_preferences*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        user_id: MOCK_USER.id,
+        preferences: {
+          routingProfile: 'balanced',
+          theme: 'dark',
+          webSearchEnabled: false,
+        },
+        updated_at: new Date().toISOString(),
+      }),
+    });
+  });
+
   // Mock Router SSE streaming endpoint
   await page.route('**/functions/v1/router*', async (route) => {
     const sseResponse = [

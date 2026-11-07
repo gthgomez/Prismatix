@@ -130,6 +130,17 @@ import { FirstRunSetupCard } from './FirstRunSetupCard';
 import { GlobalSearchModal } from './GlobalSearchModal';
 import { ProjectModal } from './ProjectModal';
 import { ExportModal } from './ExportModal';
+import { ImportModal } from './ImportModal';
+import { PromptLibraryModal } from './PromptLibraryModal';
+import { branchConversation, persistMessageVersion } from '../services/conversationBranching';
+import {
+  archiveConversation,
+  setConversationTags,
+} from '../services/conversationService';
+import {
+  syncPreferences,
+  saveServerPreferences,
+} from '../services/userPreferencesService';
 import { listProjects, formatProjectContextPrompt, type Project } from '../services/projectService';
 import {
   fetchAllExportableConversations,
@@ -402,6 +413,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isPromptLibraryOpen, setIsPromptLibraryOpen] = useState(false);
 
   // PR 3: F11 Web Search, F12 Comparison, F13 Routing Profiles & Spend Caps
   const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
@@ -494,6 +507,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     textarea.style.height = `${Math.max(44, Math.min(textarea.scrollHeight, 200))}px`;
   }, [input]);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const modelSelectorRef = useRef<HTMLDivElement>(null);
   const chatHeaderRef = useRef<HTMLElement>(null);
   const costEstimatorHideTimeoutRef = useRef<number | null>(null);
@@ -849,6 +864,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         ...(item.debateProfile ? { debateProfile: item.debateProfile as any } : {}),
         ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
         ...(item.debateExecutionMode ? { debateExecutionMode: item.debateExecutionMode } : {}),
+        ...(item.metadata ? { metadata: item.metadata } : {}),
         ...(item.metadata?.comparisonResults
           ? { comparisonResults: item.metadata.comparisonResults as any }
           : {}),
@@ -1158,6 +1174,97 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setSidebarOpen((prev) => !prev);
   };
 
+  const handleArchiveConversation = async (id: string, archived: boolean) => {
+    try {
+      await archiveConversation(supabase, id, archived);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, archived } : c))
+      );
+      setActionNotice({
+        type: 'success',
+        message: archived ? 'Conversation archived' : 'Conversation unarchived',
+      });
+    } catch (err: any) {
+      console.error('[ChatInterface] Archive failed:', err);
+      setActionNotice({ type: 'error', message: 'Failed to update archive status.' });
+    }
+  };
+
+  const handleSetConversationTags = async (id: string, tags: string[]) => {
+    try {
+      await setConversationTags(supabase, id, tags);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, tags } : c))
+      );
+      setActionNotice({ type: 'success', message: 'Tags updated' });
+    } catch (err: any) {
+      console.error('[ChatInterface] Set tags failed:', err);
+      setActionNotice({ type: 'error', message: 'Failed to update tags.' });
+    }
+  };
+
+  const handleBranch = useCallback(async (index: number) => {
+    const currentConvId = selectedConversationIdRef.current;
+    if (!currentConvId) {
+      setActionNotice({ message: 'Save or select a conversation before branching.', type: 'error' });
+      return;
+    }
+    setActionNotice(null);
+    try {
+      let targetMessageId = messagesRef.current[index]?.id;
+      if (!targetMessageId) {
+        const loaded = await loadConversation(supabase, currentConvId, { limit: 1000 });
+        targetMessageId = loaded[index]?.id;
+      }
+      if (!targetMessageId) {
+        setActionNotice({ message: 'Target message not found for branching.', type: 'error' });
+        return;
+      }
+      const branchRes = await branchConversation(supabase, {
+        sourceConversationId: currentConvId,
+        fromMessageId: targetMessageId,
+      });
+      await refreshConversations();
+      await openConversation(branchRes.newConversationId);
+      setActionNotice({ message: `Branched into "${branchRes.newTitle}"`, type: 'success' });
+    } catch (err: any) {
+      console.error('[ChatInterface] Failed to branch conversation:', err);
+      setActionNotice({ message: `Failed to branch: ${err.message || 'unknown error'}`, type: 'error' });
+    }
+  }, []);
+
+  const handleInsertPromptTemplate = (promptText: string) => {
+    setInput(promptText);
+    setIsPromptLibraryOpen(false);
+    inputRef.current?.focus();
+  };
+
+  // Preference synchronization across devices (F20)
+  useEffect(() => {
+    if (!user) return;
+    void syncPreferences(supabase).then((prefs) => {
+      if (prefs.routingProfile) setRoutingProfile(prefs.routingProfile);
+      if (prefs.webSearchEnabled !== undefined) setWebSearchEnabled(prefs.webSearchEnabled);
+      if (prefs.maxSpendCap !== undefined) setMaxSpendCap(prefs.maxSpendCap);
+      if (prefs.defaultProjectId && !activeProjectId) setActiveProjectId(prefs.defaultProjectId);
+    });
+  }, [user?.id]);
+
+  const prefsTimeoutRef = useRef<any>(null);
+  useEffect(() => {
+    if (!user) return;
+    clearTimeout(prefsTimeoutRef.current);
+    prefsTimeoutRef.current = setTimeout(() => {
+      void saveServerPreferences(supabase, {
+        routingProfile,
+        webSearchEnabled,
+        maxSpendCap,
+        defaultProjectId: activeProjectId,
+      });
+    }, 800);
+    return () => clearTimeout(prefsTimeoutRef.current);
+  }, [user?.id, routingProfile, webSearchEnabled, maxSpendCap, activeProjectId]);
+
   // Per-account selection: restore on sign-in/account change, isolated by user.
   useEffect(() => {
     const plan = planInitialConversation(readSelectedConversation(user?.id ?? null));
@@ -1197,6 +1304,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     overrideModel,
     promptTokenEstimate: passedPromptTokenEstimate,
     skipBudgetCheck = false,
+    regenerateTargetMessageId,
   }: {
     queryText: string;
     attachmentsToProcess: FileUploadPayload[];
@@ -1204,6 +1312,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     overrideModel?: RouterModel | null;
     promptTokenEstimate?: number;
     skipBudgetCheck?: boolean;
+    regenerateTargetMessageId?: string;
   }) => {
     const estimatedModel = overrideModel || manualModelOverride || currentModel;
     const historyText = historyMessages.map((msg) => {
@@ -1809,6 +1918,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
       setSpendRefreshKey((prev) => prev + 1);
 
+      let messageVersions: any[] | undefined;
+      if (regenerateTargetMessageId && assistantContent) {
+        try {
+          const verRes = await persistMessageVersion(
+            supabase,
+            regenerateTargetMessageId,
+            assistantContent,
+            model,
+          );
+          if (verRes.success) {
+            messageVersions = verRes.versions;
+          }
+        } catch (verErr) {
+          console.warn('[ChatInterface] Failed to record message version:', verErr);
+        }
+      }
+
       if (streamUpdateApplies()) {
         setMessages((prev) => {
           const updated = [...prev];
@@ -1816,6 +1942,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           if (lastMessage?.role === 'assistant') {
             updated[updated.length - 1] = {
               ...lastMessage,
+              id: regenerateTargetMessageId || lastMessage.id,
               cost: {
                 estimatedUsd: costEstimateUsd ?? computedCost.finalUsd,
                 finalUsd: authoritativeFinalUsd,
@@ -1827,6 +1954,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               },
               thinkingLog: [...thinkingLog],
               thinkingDurationMs: Date.now() - streamStartMs,
+              metadata: {
+                ...(lastMessage.metadata || {}),
+                ...(messageVersions ? { versions: messageVersions } : {}),
+              },
               ...(debateParticipants && debateParticipants.length > 0
                 ? { debateParticipants }
                 : {}),
@@ -2073,12 +2204,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     });
   };
 
-  const messagesRef = useRef(messages);
   const isStreamingRef = useRef(isStreaming);
   const manualModelOverrideRef = useRef(manualModelOverride);
   const currentModelRef = useRef(currentModel);
   const executeTurnRef = useRef(executeTurn);
-  messagesRef.current = messages;
   isStreamingRef.current = isStreaming;
   manualModelOverrideRef.current = manualModelOverride;
   currentModelRef.current = currentModel;
@@ -2143,6 +2272,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return;
     }
 
+    const targetAssistantMsg = snapshot[index];
+    const regenerateTargetMessageId = targetAssistantMsg?.id;
+
     const executeRegenerateAction = () => {
       setMessages(snapshot.slice(0, userIndex + 1));
       resetAutoScroll();
@@ -2153,6 +2285,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         overrideModel: modelOverride !== undefined ? modelOverride : selectedOverride,
         promptTokenEstimate: preflight.promptTokens,
         skipBudgetCheck: true,
+        regenerateTargetMessageId,
       });
     };
 
@@ -2559,6 +2692,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             setIsExportModalOpen(true);
             if (window.innerWidth <= 768) setSidebarOpen(false);
           }}
+          onOpenImport={() => {
+            setIsImportModalOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+          }}
+          onOpenPromptLibrary={() => {
+            setIsPromptLibraryOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+          }}
+          onArchiveConversation={handleArchiveConversation}
+          onSetConversationTags={handleSetConversationTags}
         />
       )}
       <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>
@@ -2974,6 +3117,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     onRegenerate={handleRegenerate}
                     onEditPrompt={handleEditPrompt}
                     onFeedback={handleFeedback}
+                    onBranch={handleBranch}
                     onSelectComparisonPreference={handleSelectComparisonPreference}
                   />
                 );
@@ -3196,6 +3340,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         contextExcludedCount={contextExcludedCount}
         duplicateNotice={duplicateNotice}
         composerValidationView={composerValidationView}
+        onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
       />
 
       <BudgetGuard
@@ -3256,6 +3401,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onClose={() => setIsExportModalOpen(false)}
         currentConversation={currentConversationForExport}
         onFetchAllConversations={handleFetchAllConversations}
+      />
+
+      <ImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImportComplete={() => {
+          void refreshConversations();
+        }}
+      />
+
+      <PromptLibraryModal
+        isOpen={isPromptLibraryOpen}
+        onClose={() => setIsPromptLibraryOpen(false)}
+        activeProjectId={activeProjectId}
+        onSelectPrompt={handleInsertPromptTemplate}
       />
       </div>
     </div>
