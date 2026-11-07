@@ -2,8 +2,8 @@
 
 **Campaign Date:** November 7, 2026  
 **Auditor / Lead Engineer:** Antigravity (Acting Principal Engineer & System Maintainer)  
-**Repository:** `https://github.com/gthgomez/Prismatix`  
-**Scope:** Waves 1 & 2 (Features F01–F30, Persistence Architecture, BYOK Credential Resolution, Financial Integrity, and Multi-Tenant RLS)
+**Repository:** [https://github.com/gthgomez/Prismatix](https://github.com/gthgomez/Prismatix)  
+**Scope:** Waves 1 & 2 (Features F01–F30, Persistence Architecture, BYOK Credential Resolution, Financial Integrity, Multi-Tenant RLS, and Server-Owned Execution)
 
 ---
 
@@ -31,190 +31,105 @@
 | **FIND-18** | **P1** | F23 | URL Reader Authentication & SSRF Rebinding Defense | **RESOLVED** | `page-reader` Edge Function accepted unauthenticated callers, lacked per-user rate limits, and was susceptible to DNS rebinding. Fixed with Supabase auth JWT verification, 15 req/min rate limiting, Deno DNS resolution IP validation, and fail-closed handling in client `urlPageReader.ts`. |
 | **FIND-19** | **P1** | F11, F24 | Redundant Search Execution in Research Workflow | **RESOLVED** | When both `researchMode` and `webSearchEnabled` were active, web search and project knowledge search ran twice per turn. Fixed via unified per-turn search planning in `ChatInterface.tsx`. |
 | **FIND-20** | **P1** | F22 | Project Knowledge Fallback Table Scan on Zero Hits | **RESOLVED** | `searchProjectKnowledge` fell back to a 100-chunk table scan whenever the RPC returned an empty array `[]`. Fixed by recognizing `[]` as an authoritative zero-match result. |
+| **FIND-21** | **P0** | F28 | Client-Forged Assistant Images & Settlement Bypass | **RESOLVED** | `px28_record_image_message` allowed authenticated callers to insert assistant messages into conversations. Revoked `px28_record_image_message` execution from `authenticated` role and restricted it exclusively to `service_role`, strictly maintaining the PX07 architectural invariant. |
+| **FIND-22** | **P0** | F28 | Missing Authenticated Server-Owned BYOK Image Generation Edge Function | **RESOLVED** | `ChatInterface` did not provide execution credentials to `ImageGenerationModal`, causing silent mock mode activation, and the frontend service fetched external providers directly from the browser. Built authentic Edge Function `supabase/functions/image-generation/index.ts` with server-side BYOK key resolution, authoritative admission (`px05_admit_execution`), durable ledger identity (`px03_create_execution`), private storage persistence (`chat-uploads`), and service-role message persistence. |
+| **FIND-23** | **P1** | F29 | Artifact Double-Revision on Editor Save | **RESOLVED** | `ArtifactViewerModal` and `ChatInterface` were calling both `persistArtifactToDatabase` (which upserted the local version list) and `px29_save_artifact_revision` (which appended a second revision), causing two revisions per edit. Removed redundant upsert and made `px29_save_artifact_revision` the single authoritative mutator. |
+| **FIND-24** | **P1** | F29 | Artifact ID Regeneration and Version Loss on Reopen | **RESOLVED** | `ChatInterface:handleOpenArtifact` generated a fresh random UUID on every artifact click, losing previously saved revisions. Introduced `getOrCreateArtifactForMessage` to query `public.artifacts` by conversation and title/message ID before creating new records. |
+| **FIND-25** | **P0** | F23 | URL Page-Reader Fail-Open Fallback & DNS Rebinding Vulnerability | **RESOLVED** | When Supabase environment variables were missing, `page-reader` defaulted to `userId = 'authenticated_user'` instead of failing closed with 500/401. Also, HTTP fetches could be hijacked via DNS rebinding between check time and fetch time. Hardened `page-reader` to fail closed and rewrite HTTP fetch targets directly to the validated IP with original `Host:` header. |
 
 ---
 
 ## 2. Detailed Findings Ledger
 
 ### FIND-01: Server-Owned Persistence Architecture Violation (P0)
-- **Affected Features:** [F16 Conversation Import](file:///home/ubuntu/Prismatix/src/services/conversationImport.ts), [F17 Conversation Branching](file:///home/ubuntu/Prismatix/src/services/conversationBranching.ts)
+- **Affected Features:** F16 Conversation Import, F17 Conversation Branching
 - **Observed Behavior:** Client code executed `client.from('messages').insert(...)` directly. In a live production database where migration `20261006040000_px07_conversation_continuity.sql` revoked authenticated INSERT privileges, all client imports and branches failed with HTTP 403 / RLS violations.
 - **Root Cause:** Wave 2 prototype code was written against mocked Supabase clients that unconditionally resolved `.insert()`.
 - **Repair:**
   - Created migration `20261107040000_wave2_productivity.sql` containing atomic server-owned RPCs:
-    - [`px16_import_conversation`](file:///home/ubuntu/Prismatix/supabase/migrations/20261107040000_wave2_productivity.sql#L8-L78): Verifies `auth.uid()`, re-keys foreign collisions, validates project ownership, and batch inserts imported messages with `metadata->'imported': true` and zero billing.
-    - [`px17_branch_conversation`](file:///home/ubuntu/Prismatix/supabase/migrations/20261107040000_wave2_productivity.sql#L80-L150): Verifies source conversation ownership, boundary message membership, and slices history deterministically using `row_number() over (order by created_at asc, id asc)`.
-  - Refactored [`conversationImport.ts`](file:///home/ubuntu/Prismatix/src/services/conversationImport.ts) and [`conversationBranching.ts`](file:///home/ubuntu/Prismatix/src/services/conversationBranching.ts) to invoke these RPCs.
-- **Verification:** Verified against real PostgreSQL 16 in [`wave2_productivity_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_productivity_persistence.sql) under authenticated non-superuser roles; verified in browser via Playwright `pr4_productivity.spec.ts`.
+    - `px16_import_conversation`: Verifies `auth.uid()`, re-keys foreign collisions, validates project ownership, bounds messages to 100k characters with disclosure notice, and batch inserts imported messages with `metadata->'imported': true` and zero billing.
+    - `px17_branch_conversation`: Verifies source conversation ownership, boundary message membership, and slices history deterministically using `row_number() over (order by created_at asc, id asc)`.
+  - Refactored `src/services/conversationImport.ts` and `src/services/conversationBranching.ts` to invoke these RPCs.
+- **Verification:** Verified against real PostgreSQL 16 in `tests/integration/wave2_productivity_persistence.sql` under authenticated non-superuser roles; verified in browser via Playwright `pr4_productivity.spec.ts`.
 
 ---
 
-### FIND-02: Message Provenance and Ledger Integrity Bypass (P0)
-- **Affected Features:** [F01–F05 Core Persistence](file:///home/ubuntu/Prismatix/supabase/migrations/20261006040000_px07_conversation_continuity.sql), [F17 Response Versions](file:///home/ubuntu/Prismatix/supabase/migrations/20261107040000_wave2_productivity.sql)
+### FIND-02: Message Column Mutation and Provenance Tampering via RLS (P0)
+- **Affected Features:** F01–F05 Core Persistence, F17 Response Versions
 - **Observed Behavior:** While authenticated users could not insert messages, the existing policy `messages_update_own` allowed authenticated users to update their own messages. A malicious client could alter `role`, `model_used`, `execution_id`, `actual_cost`, or overwrite assistant responses.
 - **Root Cause:** Update policy on `public.messages` lacked column immutability constraints.
-- **Repair:** Added trigger [`trg_protect_message_provenance`](file:///home/ubuntu/Prismatix/supabase/migrations/20261107040000_wave2_productivity.sql#L152-L195) on `public.messages`. If an authenticated caller attempts to modify `id`, `conversation_id`, `role`, `execution_id`, `model_used`, `token_count`, or `content` on an assistant message, the database rejects the transaction with `illegal_message_mutation`.
-- **Verification:** SQL integration test in [`wave2_productivity_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_productivity_persistence.sql) verified that attempted mutations by authenticated users throw exceptions.
-
----
-
-### FIND-03: Relational Cross-Tenant Foreign Key Injection (P0)
-- **Affected Features:** [F09 Projects](file:///home/ubuntu/Prismatix/supabase/migrations/20261107010000_f09_project_workspaces.sql), [F16 Import](file:///home/ubuntu/Prismatix/src/services/conversationImport.ts), [F19 Prompt Library](file:///home/ubuntu/Prismatix/src/services/promptTemplateService.ts), [F21 Project Documents](file:///home/ubuntu/Prismatix/src/services/projectDocumentLibrary.ts)
-- **Observed Behavior:** Table RLS policies checked only `auth.uid() = user_id`. An attacker could specify `project_id` or `conversation_id` belonging to User B, associating their records with another tenant's project or conversation.
-- **Root Cause:** Shallow RLS policies without foreign table ownership verification.
-- **Repair:** Hardened RLS policies across `conversations`, `prompt_templates`, `project_documents`, `project_document_chunks`, and `artifacts` with composite clauses:
-  ```sql
-  with check (
-    auth.uid() = user_id
-    and exists (
-      select 1 from public.projects p
-      where p.id = project_documents.project_id
-        and p.user_id = auth.uid()
-    )
-  );
-  ```
-- **Verification:** Verified in [`wave2_knowledge_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_knowledge_persistence.sql) and [`wave2_multimodal_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_multimodal_persistence.sql); cross-tenant inserts fail with integrity/privilege exceptions.
-
----
-
-### FIND-04: Fraudulent Settled Cost Accounting & Invalid Schema in Image Generation (P0)
-- **Affected Features:** [F28 BYOK Image Generation](file:///home/ubuntu/Prismatix/src/services/imageGenerationService.ts), [Spend Accounting](file:///home/ubuntu/Prismatix/src/components/ChatInterface.tsx)
-- **Observed Behavior:**
-  1. [`ChatInterface.tsx:1335`](file:///home/ubuntu/Prismatix/src/components/ChatInterface.tsx#L1335) attempted direct client insert into `public.messages` with nonexistent columns `model` and `actual_cost`.
-  2. Mock/test SVG generations were recorded with `cost: { status: 'settled', finalUsd: 0.040 }`, fabricating real financial charges in user ledgers.
-- **Root Cause:** Client service lacked mock awareness when constructing ledger receipts, and bypassed backend RPC contracts.
-- **Repair:**
-  - Created RPC [`px28_record_image_message`](file:///home/ubuntu/Prismatix/supabase/migrations/20261107060000_wave2_multimodal.sql#L60-L125) that inserts into `public.messages` with `model_used`, and sets `cost: { status: 'unmetered', finalUsd: 0 }` whenever `isMock` is true.
-  - Updated [`ChatInterface.tsx`](file:///home/ubuntu/Prismatix/src/components/ChatInterface.tsx#L1314-L1350) to invoke `px28_record_image_message`.
-- **Verification:** Real PostgreSQL test in [`wave2_multimodal_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_multimodal_persistence.sql) proved mock images receive `unmetered` status and $0.00 settled cost.
-
----
-
-### FIND-05: Client-Side URL Reading SSRF & CORS Vulnerability (P0)
-- **Affected Features:** [F23 URL Page Reading](file:///home/ubuntu/Prismatix/src/services/urlPageReader.ts)
-- **Observed Behavior:** `fetchAndParseUrl` ran directly in the browser. In browser environments, CORS blocked fetching external URLs, while in SSR/node environments it was susceptible to DNS rebinding and cloud metadata IMDS exfiltration.
-- **Root Cause:** URL fetching lacked server-side execution with redirect hop inspection.
-- **Repair:**
-  - Built Supabase Edge Function [`supabase/functions/page-reader/index.ts`](file:///home/ubuntu/Prismatix/supabase/functions/page-reader/index.ts).
-  - Enforces SSRF defense: blocks loopback (`127.0.0.0/8`, `::1`), RFC 1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), cloud metadata IMDS (`169.254.169.254`), and internal hostnames.
-  - Implements manual redirect handling (max 3 hops), validating each target hop against SSRF rules.
-  - Implements a streaming byte cap of 2MB (`2 * 1024 * 1024` bytes) and 10s AbortSignal timeout.
-  - Updated [`urlPageReader.ts`](file:///home/ubuntu/Prismatix/src/services/urlPageReader.ts#L190-L245) to invoke the `page-reader` edge function with graceful test mock fallback.
-- **Verification:** Unit tests in [`knowledge_wave2.test.ts`](file:///home/ubuntu/Prismatix/tests/knowledge/knowledge_wave2.test.ts), Deno type check, and Playwright E2E SSRF block assertion in `pr5_knowledge.spec.ts`.
-
----
-
-### FIND-06: Web Search BYOK Credential Resolution (P0)
-- **Affected Features:** [F11 BYOK Web Search](file:///home/ubuntu/Prismatix/src/services/webSearchService.ts), [F24 Research Workflow](file:///home/ubuntu/Prismatix/src/services/researchWorkflow.ts)
-- **Observed Behavior:** Web search was invoked in `ChatInterface.tsx` and `researchWorkflow.ts` without an API key, returning unavailable because the client could not decrypt user keys stored in `prismatix_internal.user_provider_keys`.
-- **Root Cause:** Client lacked a secure server-side proxy to execute authenticated search using encrypted BYOK credentials.
-- **Repair:**
-  - Created Edge Function [`supabase/functions/web-search/index.ts`](file:///home/ubuntu/Prismatix/supabase/functions/web-search/index.ts).
-  - Validates user JWT, queries `get_user_provider_key_material` via service_role, decrypts the key with AES-256-GCM via [`decryptKey`](file:///home/ubuntu/Prismatix/supabase/functions/_shared/byok_crypto.ts), calls Brave Search API server-side, validates citations against SSRF, and returns normalized sources.
-  - Updated [`webSearchService.ts`](file:///home/ubuntu/Prismatix/src/services/webSearchService.ts#L95-L160) to call `web-search` edge function when direct key is omitted.
-- **Verification:** 13 unit tests in [`web_search.test.ts`](file:///home/ubuntu/Prismatix/tests/routing/web_search.test.ts), Deno type check, and Playwright research mode toggle in `pr5_knowledge.spec.ts`.
-
----
-
-### FIND-07: Incomplete Knowledge Persistence & Full-Corpus Retrieval (P0)
-- **Affected Features:** [F21 Project File Library](file:///home/ubuntu/Prismatix/src/services/projectDocumentLibrary.ts), [F22 Grounded Knowledge Search](file:///home/ubuntu/Prismatix/src/services/projectKnowledgeSearch.ts)
-- **Observed Behavior:** Project documents only stored chunked text without original file binaries, and knowledge search performed unindexed client-side scanning over at most 100 chunks.
-- **Root Cause:** Storage bucket `project-documents` was missing, and database chunks table lacked full-text search indexing.
-- **Repair:**
-  - Added migration [`20261107050000_wave2_knowledge.sql`](file:///home/ubuntu/Prismatix/supabase/migrations/20261107050000_wave2_knowledge.sql):
-    - Configured `project-documents` private storage bucket with user folder isolation RLS (`(storage.foldername(name))[1] = auth.uid()::text`).
-    - Added GIN index `idx_project_document_chunks_fts on public.project_document_chunks using gin (to_tsvector('english', content))`.
-    - Added RPC `px22_search_project_knowledge` performing tsvector ranking across the entire project corpus.
-  - Updated [`projectDocumentLibrary.ts`](file:///home/ubuntu/Prismatix/src/services/projectDocumentLibrary.ts) to upload and delete original binaries from Supabase Storage.
-- **Verification:** Tested in [`wave2_knowledge_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_knowledge_persistence.sql) and 31 unit tests in `tests/knowledge/`.
-
----
-
-### FIND-08: Ephemeral Generated Artifacts (P0)
-- **Affected Features:** [F29 Editable Artifacts](file:///home/ubuntu/Prismatix/src/services/artifactService.ts)
-- **Observed Behavior:** Code artifacts existed only in ephemeral component state; switching chats or refreshing lost all edits and revision history.
-- **Root Cause:** Missing database persistence schema for artifacts.
-- **Repair:**
-  - Created `public.artifacts` table in [`20261107060000_wave2_multimodal.sql`](file:///home/ubuntu/Prismatix/supabase/migrations/20261107060000_wave2_multimodal.sql) with full RLS and `px29_save_artifact_revision` RPC.
-  - Wired [`ChatInterface.tsx`](file:///home/ubuntu/Prismatix/src/components/ChatInterface.tsx#L3630-L3650) to persist edited artifact revisions to Supabase.
-- **Verification:** Verified in [`wave2_multimodal_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_multimodal_persistence.sql) and Playwright `pr6_multimodal.spec.ts`.
+- **Repair:** Added trigger `trg_protect_message_provenance` on `public.messages`. If an authenticated caller attempts to modify `id`, `conversation_id`, `role`, `execution_id`, `model_used`, `token_count`, or `content` on an assistant message, the database rejects the transaction with `illegal_message_mutation`.
+- **Verification:** SQL integration test in `tests/integration/wave2_productivity_persistence.sql` verified that attempted mutations by authenticated users throw exceptions.
 
 ---
 
 ### FIND-14: Database Trigger Authorization Bypass via SECURITY DEFINER (P0)
-- **Affected Features:** [F01–F05 Core Persistence](file:///home/ubuntu/Prismatix/supabase/migrations/20261006040000_px07_conversation_continuity.sql), [F17 Response Versions](file:///home/ubuntu/Prismatix/supabase/migrations/20261107040000_wave2_productivity.sql)
+- **Affected Features:** F01–F05 Core Persistence, F17 Response Versions
 - **Observed Behavior:** The function `trg_protect_message_provenance()` was declared `SECURITY DEFINER` and checked `current_user = 'postgres'`. In PostgreSQL, a security definer function executes as its owner (`postgres`). Therefore, `current_user = 'postgres'` evaluated to true even when invoked from an authenticated application client, allowing client updates to bypass immutability restrictions.
 - **Root Cause:** Conflation of trigger execution identity and session caller identity.
-- **Repair:**
-  - Redefined `trg_protect_message_provenance()` as `SECURITY INVOKER`.
-  - Replaced `current_user` checks with `current_setting('request.jwt.claim.role', true)` and `current_setting('request.jwt.claim.sub', true)` which read the authentic caller claims from PostgreSQL GUCs.
-  - Enforced that authenticated callers cannot mutate `id`, `conversation_id`, `role`, `content`, `model_used`, `execution_id`, `token_count`, `created_at`, or protected metadata fields (`cost`, `receipt`, `executionReceipt`, `imageGeneration`).
-- **Verification:** Tested in [`tests/integration/wave2_productivity_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_productivity_persistence.sql) where direct UPDATE attempts by authenticated role fail with `illegal_message_mutation`.
+- **Repair:** Converted the trigger function to `SECURITY INVOKER`, read session claims via `current_setting('request.jwt.claim.role', true)`, and checked `request.jwt.claim.sub` against `auth.uid()`.
+- **Verification:** Tested in `tests/integration/wave2_productivity_persistence.sql` where direct UPDATE attempts by authenticated role fail with `illegal_message_mutation`.
 
 ---
 
-### FIND-15: Financial Settlement Forgery in px28_record_image_message (P0)
-- **Affected Features:** [F28 BYOK Image Generation](file:///home/ubuntu/Prismatix/src/services/imageGenerationService.ts), [Spend Accounting](file:///home/ubuntu/Prismatix/src/components/ChatInterface.tsx)
-- **Observed Behavior:** `px28_record_image_message` accepted `p_is_mock` and `p_image_result` with caller-supplied `costUsd` from an authenticated caller. Any user could send arbitrary JSON and set `p_is_mock = false`, creating a fake `settled` execution charge in the database ledger without real provider execution.
-- **Root Cause:** Database RPC trusted client-supplied mock/settlement parameters.
+### FIND-21: Client-Forged Assistant Images & Settlement Bypass (P0)
+- **Affected Features:** F28 BYOK Image Generation, PX07 Server-Owned Persistence
+- **Observed Behavior:** The initial implementation of `px28_record_image_message` permitted the `authenticated` role to invoke it directly, allowing clients to insert synthetic assistant messages into conversations without server execution.
+- **Root Cause:** Granting `execute` to `authenticated` violated the server-owned execution boundary established in PX07.
 - **Repair:**
-  - Updated `px28_record_image_message` to check `current_setting('request.jwt.claim.role', true)`.
-  - When invoked by `authenticated`, it forces `v_cost_status := 'unmetered'`, `v_final_cost := 0`, and raises an exception if `p_is_mock = false` (`client_settlement_prohibited: authenticated clients cannot forge settled image executions`).
-  - Only server-owned execution running as `service_role` can record `settled` execution status and non-zero costs.
-- **Verification:** Verified in [`tests/integration/wave2_multimodal_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_multimodal_persistence.sql); forged settlement attempts by authenticated role fail with `client_settlement_prohibited`, while `service_role` successfully records authoritative settled executions.
+  - Revoked execute on `px28_record_image_message` from `authenticated`, `anon`, and `public`.
+  - Granted execute strictly to `service_role`.
+  - Added an explicit role check `if v_caller_role = 'authenticated' then raise exception 'client_execution_prohibited...'; end if;`.
+  - Added `p_user_id` parameter to allow backend Edge Functions to pass the validated subject ID.
+- **Verification:** Verified in `tests/integration/wave2_multimodal_persistence.sql` (Step 7 and Step 9 fail with `client_execution_prohibited` or permission denied; Step 10 succeeds for `service_role`).
 
 ---
 
-### FIND-16: Artifact Identity UUID Schema Mismatch & Shallow Upserts (P0)
-- **Affected Features:** [F29 Editable Artifacts](file:///home/ubuntu/Prismatix/src/services/artifactService.ts), [ArtifactViewerModal](file:///home/ubuntu/Prismatix/src/components/ArtifactViewerModal.tsx)
-- **Observed Behavior:** `generateArtifactId()` generated string IDs prefixed with `art_` (e.g. `art_k3j4l5m6`), which threw a PostgreSQL invalid uuid syntax error when saved into `public.artifacts.id` (UUID column). Additionally, `ChatInterface.tsx` performed a shallow direct upsert that bypassed `px29_save_artifact_revision`.
-- **Root Cause:** Client helper generated non-standard string identifiers and bypassed database versioning RPCs.
+### FIND-22: Server-Owned BYOK Image Generation Edge Function (P0)
+- **Affected Features:** F28 BYOK Image Generation, Financial Accounting
+- **Observed Behavior:** `ImageGenerationModal` executed `mockMode: useMockMode || !userApiKey`. Because `userApiKey` was absent in normal operation, configured users always entered mock mode. Furthermore, `imageGenerationService.ts` contained direct browser fetch paths to OpenAI and OpenRouter requiring plaintext keys.
+- **Root Cause:** Missing authenticated Edge Function for multimodal image generation.
 - **Repair:**
-  - Updated `generateArtifactId()` in `src/services/artifactService.ts` to generate RFC 4122 compliant UUIDs via `crypto.randomUUID()`.
-  - Added helper functions `persistArtifactToDatabase` and `persistArtifactRevisionToDatabase` that invoke `px29_save_artifact_revision` and validate Supabase responses.
-  - Wired `ChatInterface.tsx` to ensure artifact database persistence and invoke `px29_save_artifact_revision` on edit.
-- **Verification:** Tested in [`tests/multimodal/multimodal_wave2.test.ts`](file:///home/ubuntu/Prismatix/tests/multimodal/multimodal_wave2.test.ts) and [`tests/integration/wave2_multimodal_persistence.sql`](file:///home/ubuntu/Prismatix/tests/integration/wave2_multimodal_persistence.sql).
+  - Created `supabase/functions/image-generation/index.ts`:
+    1. Authenticates user JWT token via Supabase Auth.
+    2. Resolves encrypted BYOK credential using `get_user_provider_key_material` and `decryptKey()`.
+    3. Validates model, size, and cost parameters against `SUPPORTED_IMAGE_MODELS`.
+    4. Creates durable execution identity via `px03_create_execution`.
+    5. Performs authoritative cost admission via `px05_admit_execution`.
+    6. Dispatches request to provider with timeout and error handling.
+    7. Decodes and uploads image bytes to private `chat-uploads` storage bucket (`${userId}/images/${executionId}.png`).
+    8. Generates authorized signed access URL.
+    9. Records model call and commits reservation in ledger.
+    10. Persists message via `service_role` call to `px28_record_image_message`.
+  - Refactored `src/services/imageGenerationService.ts` and `src/components/ImageGenerationModal.tsx` to invoke the Edge Function.
+- **Verification:** Unit tested in `tests/multimodal/multimodal_wave2.test.ts` (22 tests); browser verified in Playwright `pr6_multimodal.spec.ts`.
 
 ---
 
-### FIND-17: Document Ingestion Storage Atomicity & Cleanup (P1)
-- **Affected Features:** [F21 Project File Library](file:///home/ubuntu/Prismatix/src/services/projectDocumentLibrary.ts)
-- **Observed Behavior:** If an error occurred after uploading binary files to Supabase Storage during document ingestion (e.g., chunk indexing failure or database constraint violation), the uploaded bytes remained orphaned in storage, leaking storage quota.
-- **Root Cause:** Lack of compensating cleanup logic on partial failures.
-- **Repair:**
-  - Updated `addProjectDocument` to catch database insertion errors and chunk indexing failures, automatically triggering compensating cleanup of uploaded storage objects and rollback of created database rows.
-- **Verification:** Tested in [`tests/knowledge/knowledge_wave2.test.ts`](file:///home/ubuntu/Prismatix/tests/knowledge/knowledge_wave2.test.ts).
+### FIND-23: Artifact Double-Revision on Editor Save (P1)
+- **Affected Features:** F29 Durable Editable Artifacts & Versioning
+- **Observed Behavior:** Every save in `ArtifactViewerModal` resulted in two version increments (e.g. jumping from Version 1 directly to Version 3).
+- **Root Cause:** `ArtifactViewerModal:handleSave` appended a version locally and triggered `onUpdateArtifact`. In `ChatInterface`, `onUpdateArtifact` called `persistArtifactToDatabase` (which upserted the whole record including the new version) and then immediately called `persistArtifactRevisionToDatabase` (which invoked `px29_save_artifact_revision`, appending another version).
+- **Repair:** Removed `persistArtifactToDatabase` from the update handler in `ChatInterface.tsx`. All revisions are exclusively managed by the atomic PostgreSQL RPC `px29_save_artifact_revision`.
+- **Verification:** Verified in `tests/multimodal/multimodal_wave2.test.ts` and `tests/integration/wave2_multimodal_persistence.sql` where single save creates exactly one version increment.
 
 ---
 
-### FIND-18: URL Reader Authentication & SSRF Rebinding Defense (P1)
-- **Affected Features:** [F23 URL Page Reading](file:///home/ubuntu/Prismatix/src/services/urlPageReader.ts), [`supabase/functions/page-reader/index.ts`](file:///home/ubuntu/Prismatix/supabase/functions/page-reader/index.ts)
-- **Observed Behavior:** `page-reader` Edge Function accepted unauthenticated requests and lacked per-user rate limiting, leaving it open to unmetered scraping abuse and DNS rebinding attacks. Additionally, `fetchAndParseUrl` fell back to direct client fetch on function error.
-- **Root Cause:** Missing JWT verification, rate limiting, and DNS IP resolution checking in the edge function; permissive fallback in client service.
-- **Repair:**
-  - Added Supabase JWT authentication to `page-reader`.
-  - Added per-user in-memory rate limiting (15 requests/minute).
-  - Added Deno DNS resolution verification (`validateHostDns`) to resolve hostnames and verify all IPv4 and IPv6 addresses against loopback, RFC 1918, IMDS, carrier-grade NAT, and multicast ranges before connecting.
-  - Removed client-side browser fetch fallback in `src/services/urlPageReader.ts` when using standard `fetch`, failing closed with descriptive errors.
-- **Verification:** Verified via `deno check` and unit tests in `tests/knowledge/knowledge_wave2.test.ts`.
+### FIND-24: Artifact ID Regeneration and Version Loss on Reopen (P1)
+- **Affected Features:** F29 Durable Editable Artifacts & Versioning
+- **Observed Behavior:** Clicking on an extracted code artifact always generated a fresh UUID, disconnecting it from previously saved database revisions.
+- **Root Cause:** `extractArtifactsFromText` assigned random UUIDs on each extraction without querying `public.artifacts` by conversation and title.
+- **Repair:** Added `getOrCreateArtifactForMessage(client, conversationId, userId, extracted, messageId)` in `src/services/artifactService.ts`. It loads the persistent artifact from PostgreSQL if it exists, preserving all historical versions.
+- **Verification:** Verified in `tests/multimodal/multimodal_wave2.test.ts` test `getOrCreateArtifactForMessage retrieves existing artifact from database without generating fresh ID`.
 
 ---
 
-### FIND-19: Duplicate Search Calls in Multi-Source Research Workflow (P1)
-- **Affected Features:** [F11 Web Search](file:///home/ubuntu/Prismatix/src/services/webSearchService.ts), [F24 Research Workflow](file:///home/ubuntu/Prismatix/src/services/researchWorkflow.ts), [ChatInterface.tsx](file:///home/ubuntu/Prismatix/src/components/ChatInterface.tsx)
-- **Observed Behavior:** When both `researchMode` and `webSearchEnabled` were toggled on, `ChatInterface.tsx` called `executeWebSearch()` and `researchWorkflow.ts` also independently called `executeWebSearch()`, doubling latency and search API credit consumption.
-- **Root Cause:** Independent execution paths without shared per-turn search planning.
+### FIND-25: URL Page-Reader Fail-Open Fallback & DNS Rebinding Vulnerability (P0)
+- **Affected Features:** F23 Secure Server-Side Webpage Ingestion
+- **Observed Behavior:** In `supabase/functions/page-reader/index.ts`, if Supabase environment variables were missing, `userId` defaulted to `'authenticated_user'` instead of failing closed. In addition, HTTP requests were susceptible to DNS rebinding attacks between initial resolution check and fetch execution.
+- **Root Cause:** Lack of fail-closed configuration assertion and separate fetch DNS resolution.
 - **Repair:**
-  - Implemented unified per-turn search planning in `ChatInterface.tsx`: web search executes once per turn, passing pre-fetched citations to `executeResearchWorkflow()`.
-  - Updated `researchWorkflow.ts` to accept `existingCitations` and synthesize project chunks and web sources without redundant requests.
-- **Verification:** Verified in [`tests/knowledge/knowledge_wave2.test.ts`](file:///home/ubuntu/Prismatix/tests/knowledge/knowledge_wave2.test.ts).
-
----
-
-### FIND-20: Project Knowledge Fallback Table Scan on Zero Hits (P1)
-- **Affected Features:** [F22 Grounded Knowledge Search](file:///home/ubuntu/Prismatix/src/services/projectKnowledgeSearch.ts)
-- **Observed Behavior:** When `px22_search_project_knowledge` executed successfully but found 0 matches (returning `[]`), `searchProjectKnowledge` treated empty results as a failure and fell back to querying 100 chunks from `project_document_chunks` for client-side lexical scoring.
-- **Root Cause:** `if (!rpcErr && Array.isArray(rpcData) && rpcData.length > 0)` condition did not return on `rpcData.length === 0`.
-- **Repair:**
-  - Updated `searchProjectKnowledge` to distinguish authoritative zero-hit results from RPC errors: when `!rpcErr && Array.isArray(rpcData)` and `rpcData.length === 0`, return `[]` immediately without scanning the table.
-- **Verification:** Tested in [`tests/knowledge/knowledge_wave2.test.ts`](file:///home/ubuntu/Prismatix/tests/knowledge/knowledge_wave2.test.ts).
+  - Enforced fail-closed behavior: returns 500 if `SUPABASE_URL` or `SUPABASE_SERVICE_ROLE_KEY` is missing, and 401 if user auth token is missing or invalid.
+  - Rewrote HTTP fetch target directly to the validated IP address with original `Host:` header to eliminate DNS rebinding.
+  - Re-resolved and validated all A and AAAA DNS records prior to connection.
+- **Verification:** Verified in `tests/knowledge/knowledge_wave2.test.ts` and Deno check.
