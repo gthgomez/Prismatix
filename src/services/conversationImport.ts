@@ -288,48 +288,43 @@ export async function executeConversationImport(
       const convTitle = conv.title?.trim() || 'Imported Chat';
       const projectId = options.assignProjectId !== undefined ? options.assignProjectId : conv.projectId || null;
 
-      // 1. Insert conversation
-      const { error: convErr } = await client.from('conversations').insert({
-        id: targetConvId,
-        user_id: user.id,
-        title: convTitle,
-        project_id: projectId && isUuid(projectId) ? projectId : null,
-        created_at: conv.createdAt || new Date().toISOString(),
-        last_activity_at: conv.lastActivityAt || new Date().toISOString(),
+      const rawMessages = Array.isArray(conv.messages) ? conv.messages : [];
+      const messagesPayload = rawMessages
+        .filter((msg) => msg && typeof msg.content === 'string' && msg.content.trim().length > 0)
+        .map((msg) => ({
+          id: msg.id && isUuid(msg.id) ? msg.id : generateUuid(),
+          role: msg.role === 'assistant' ? 'assistant' : 'user',
+          content: msg.content,
+          model: msg.model || null,
+          tokenCount: (msg.promptTokens || 0) + (msg.completionTokens || 0),
+          createdAt: msg.createdAt || new Date().toISOString(),
+          cost: msg.cost || null,
+        }));
+
+      // Call secure server RPC to persist conversation and messages atomically
+      const { data: rpcData, error: rpcErr } = await client.rpc('px16_import_conversation', {
+        p_conversation: {
+          id: targetConvId,
+          title: convTitle,
+          projectId: projectId && isUuid(projectId) ? projectId : null,
+          createdAt: conv.createdAt || new Date().toISOString(),
+          lastActivityAt: conv.lastActivityAt || new Date().toISOString(),
+          messages: messagesPayload,
+        },
       });
 
-      if (convErr) {
-        errors.push(`Failed to import conversation "${convTitle}": ${convErr.message}`);
+      if (rpcErr) {
+        errors.push(`Failed to import conversation "${convTitle}": ${rpcErr.message}`);
         continue;
       }
 
-      importedConversations++;
-      existingIds.add(targetConvId);
-
-      // 2. Insert messages
-      const msgs = Array.isArray(conv.messages) ? conv.messages : [];
-      for (const msg of msgs) {
-        if (!msg || typeof msg.content !== 'string') continue;
-
-        const msgId = msg.id && isUuid(msg.id) ? msg.id : generateUuid();
-        const { error: msgErr } = await client.from('messages').insert({
-          id: msgId,
-          conversation_id: targetConvId,
-          role: msg.role === 'assistant' ? 'assistant' : 'user',
-          content: msg.content,
-          model_used: msg.model || undefined,
-          token_count: (msg.promptTokens || 0) + (msg.completionTokens || 0),
-          created_at: msg.createdAt || new Date().toISOString(),
-          metadata: {
-            imported: true,
-            originalCost: msg.cost,
-            costStatus: 'imported', // Never billable or settled in Prismatix
-          },
-        });
-
-        if (!msgErr) {
-          importedMessages++;
-        }
+      const res = rpcData as { success?: boolean; conversation_id?: string; messages_count?: number } | null;
+      if (res?.success) {
+        importedConversations++;
+        importedMessages += (res.messages_count || 0);
+        existingIds.add(res.conversation_id || targetConvId);
+      } else {
+        errors.push(`Failed to import conversation "${convTitle}": unexpected server response`);
       }
     } catch (err) {
       errors.push(`Exception importing conversation: ${(err as Error).message}`);
@@ -337,7 +332,7 @@ export async function executeConversationImport(
   }
 
   return {
-    success: importedConversations > 0,
+    success: importedConversations > 0 && errors.length === 0,
     importedConversations,
     importedMessages,
     skippedConversations,

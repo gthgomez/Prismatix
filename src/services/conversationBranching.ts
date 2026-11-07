@@ -4,7 +4,7 @@
 // and switching response versions without duplicate billing or inference.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { loadConversation, type LoadedMessage } from './conversationService';
+import type { LoadedMessage } from './conversationService';
 
 export interface BranchResult {
   newConversationId: string;
@@ -19,20 +19,10 @@ export interface MessageVersion {
   timestamp: number;
 }
 
-function generateUuid(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
-
 /**
  * Creates a new branched conversation starting up to and including a specific message.
- * Preserves parent/branch lineage and copies prior transcript context.
+ * Executes atomically on the server via `px17_branch_conversation`, preserving parent/branch
+ * lineage, original message timestamps, and token counts without client-side insertion rights.
  */
 export async function branchConversation(
   client: SupabaseClient,
@@ -50,82 +40,68 @@ export async function branchConversation(
     throw new Error('branch_conversation_failed: not authenticated');
   }
 
-  // 1. Fetch source conversation metadata
-  const { data: sourceConv, error: sourceErr } = await client
-    .from('conversations')
-    .select('id, title, project_id')
-    .eq('id', options.sourceConversationId)
-    .single();
-
-  if (sourceErr || !sourceConv) {
-    throw new Error(`branch_conversation_failed: source conversation not found (${sourceErr?.message})`);
-  }
-
-  // 2. Fetch all messages in the source conversation
-  const messages = await loadConversation(client, options.sourceConversationId, { limit: 1000 });
-
-  // Locate the target message boundary
-  const targetIndex = messages.findIndex((m) => m.id === options.fromMessageId);
-  if (targetIndex === -1) {
-    throw new Error(`branch_conversation_failed: message ${options.fromMessageId} not found in conversation`);
-  }
-
-  // Slice messages up to and including target message
-  const messagesToCopy = messages.slice(0, targetIndex + 1);
-
-  const newConvId = generateUuid();
-  const defaultTitle = `Branch: ${sourceConv.title || 'Conversation'}`;
-  const newTitle = options.branchTitle?.trim() || defaultTitle;
-
-  // 3. Create the new branched conversation with lineage
-  const { error: insertConvErr } = await client.from('conversations').insert({
-    id: newConvId,
-    user_id: user.id,
-    title: newTitle,
-    project_id: sourceConv.project_id || null,
-    parent_conversation_id: options.sourceConversationId,
-    forked_from_message_id: options.fromMessageId,
-    created_at: new Date().toISOString(),
-    last_activity_at: new Date().toISOString(),
+  const { data, error } = await client.rpc('px17_branch_conversation', {
+    p_source_conversation_id: options.sourceConversationId,
+    p_from_message_id: options.fromMessageId,
+    p_branch_title: options.branchTitle?.trim() || null,
   });
 
-  if (insertConvErr) {
-    throw new Error(`branch_conversation_failed: failed to create branch conversation (${insertConvErr.message})`);
+  if (error || !data) {
+    throw new Error(`branch_conversation_failed: ${error?.message || 'unexpected server response'}`);
   }
 
-  // 4. Duplicate messages into the new branch with new message IDs
-  let copiedCount = 0;
-  for (const msg of messagesToCopy) {
-    const newMsgId = generateUuid();
-    const { error: msgErr } = await client.from('messages').insert({
-      id: newMsgId,
-      conversation_id: newConvId,
-      role: msg.role,
-      content: msg.content,
-      token_count: msg.tokenCount || 0,
-      model_used: msg.modelUsed,
-      attachments: msg.attachments || [],
-      created_at: msg.createdAt || new Date().toISOString(),
-      metadata: {
-        ...(msg.metadata || {}),
-        branchedFromMessageId: msg.id,
-      },
-    });
+  const res = data as {
+    success: boolean;
+    new_conversation_id: string;
+    copied_message_count: number;
+    title: string;
+  };
 
-    if (!msgErr) {
-      copiedCount++;
-    }
+  if (!res.success) {
+    throw new Error('branch_conversation_failed: operation failed on server');
   }
 
   return {
-    newConversationId: newConvId,
-    copiedMessageCount: copiedCount,
-    newTitle,
+    newConversationId: res.new_conversation_id,
+    copiedMessageCount: res.copied_message_count,
+    newTitle: res.title,
   };
 }
 
 /**
- * Adds an alternative response version to an assistant message metadata.
+ * Durably records an alternative response version to an assistant message in the database.
+ */
+export async function persistMessageVersion(
+  client: SupabaseClient,
+  messageId: string,
+  newContent: string,
+  newModel?: string,
+): Promise<{ success: boolean; versions: MessageVersion[]; currentVersion: number }> {
+  const { data, error } = await client.rpc('px17_record_message_version', {
+    p_message_id: messageId,
+    p_content: newContent,
+    p_model: newModel || null,
+  });
+
+  if (error || !data) {
+    throw new Error(`record_version_failed: ${error?.message || 'failed to persist version'}`);
+  }
+
+  const res = data as {
+    success: boolean;
+    versions: MessageVersion[];
+    current_version: number;
+  };
+
+  return {
+    success: res.success,
+    versions: res.versions,
+    currentVersion: res.current_version,
+  };
+}
+
+/**
+ * In-memory helper to append an alternative response version to an assistant message.
  */
 export function recordMessageVersion(
   currentMessage: LoadedMessage,

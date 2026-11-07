@@ -88,6 +88,8 @@ function ChatHistory({
   const [menuId, setMenuId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTagsId, setEditingTagsId] = useState<string | null>(null);
+  const [tagInputText, setTagInputText] = useState('');
   const [editDraft, setEditDraft] = useState('');
   const editSession = useRef<{ id: string; original: string } | null>(null);
   const [showPreferences, setShowPreferences] = useState(false);
@@ -471,29 +473,64 @@ function ChatHistory({
                 {conversation.archived ? 'Unarchive chat' : 'Archive chat'}
               </button>
             )}
-            {onSetConversationTags && (
-              <button
-                type='button'
-                role='menuitem'
-                className='conversation-item-tag'
-                disabled={disabled}
-                onClick={() => {
-                  const tagInput = window.prompt(
-                    'Enter tags (comma separated):',
-                    (conversation.tags || []).join(', '),
-                  );
-                  if (tagInput !== null) {
-                    const parsed = tagInput
-                      .split(',')
-                      .map((t) => t.trim().replace(/^#/, ''))
-                      .filter(Boolean);
-                    onSetConversationTags(conversation.id, parsed);
-                  }
-                  setMenuId(null);
-                }}
-              >
-                Tags...
-              </button>
+            {editingTagsId === conversation.id ? (
+              <div className='conversation-inline-tag-editor' style={{ padding: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <input
+                  type='text'
+                  value={tagInputText}
+                  onChange={(e) => setTagInputText(e.target.value)}
+                  placeholder='Tags (comma separated)'
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const parsed = tagInputText.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean);
+                      onSetConversationTags?.(conversation.id, parsed);
+                      setEditingTagsId(null);
+                      setMenuId(null);
+                    } else if (e.key === 'Escape') {
+                      setEditingTagsId(null);
+                    }
+                  }}
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem', borderRadius: '4px', border: '1px solid var(--color-border, #444)', background: '#222', color: '#fff' }}
+                />
+                <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'flex-end' }}>
+                  <button
+                    type='button'
+                    style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', background: 'transparent', border: 'none', color: '#888', cursor: 'pointer' }}
+                    onClick={() => setEditingTagsId(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type='button'
+                    style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', background: '#4ecdc4', color: '#000', borderRadius: '3px', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                    onClick={() => {
+                      const parsed = tagInputText.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean);
+                      onSetConversationTags?.(conversation.id, parsed);
+                      setEditingTagsId(null);
+                      setMenuId(null);
+                    }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : (
+              onSetConversationTags && (
+                <button
+                  type='button'
+                  role='menuitem'
+                  className='conversation-item-tag'
+                  disabled={disabled}
+                  onClick={() => {
+                    setTagInputText((conversation.tags || []).join(', '));
+                    setEditingTagsId(conversation.id);
+                  }}
+                >
+                  Tags...
+                </button>
+              )
             )}
             <button
               type='button'
