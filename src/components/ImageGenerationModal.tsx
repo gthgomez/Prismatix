@@ -8,6 +8,7 @@ import {
   executeImageGeneration,
   type ImageGenerationResult,
 } from '../services/imageGenerationService';
+import type { ProviderPlugins } from '../hooks/useProviderPlugins';
 
 export interface ImageGenerationModalProps {
   isOpen: boolean;
@@ -15,6 +16,8 @@ export interface ImageGenerationModalProps {
   onImageGenerated: (result: ImageGenerationResult) => void;
   initialPrompt?: string;
   userApiKey?: string;
+  providerPlugins?: ProviderPlugins;
+  onOpenProviderSettings?: () => void;
 }
 
 export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
@@ -23,21 +26,33 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
   onImageGenerated,
   initialPrompt = '',
   userApiKey,
+  providerPlugins,
+  onOpenProviderSettings,
 }) => {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [selectedModelId, setSelectedModelId] = useState('flux-1-schnell');
   const [selectedSize, setSelectedSize] = useState('1024x1024');
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [useMockMode, setUseMockMode] = useState(false);
 
   if (!isOpen) return null;
 
   const currentModel = SUPPORTED_IMAGE_MODELS.find((m) => m.id === selectedModelId) || SUPPORTED_IMAGE_MODELS[0];
   const estimatedCost = estimateImageCost(selectedModelId, selectedSize);
 
+  // Check provider key readiness
+  const providerState = providerPlugins?.providers.find((p) => p.id === currentModel?.provider);
+  const isKeyConfigured = Boolean(userApiKey || (providerState?.hasKey && providerState?.enabled));
+
   const handleGenerate = async () => {
     if (!prompt.trim()) {
       setErrorMessage('Please enter an image prompt.');
+      return;
+    }
+
+    if (!isKeyConfigured && !useMockMode) {
+      setErrorMessage(`Please configure your ${currentModel?.provider.toUpperCase()} API key in Provider Settings, or enable Mock Preview mode.`);
       return;
     }
 
@@ -50,7 +65,7 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
         modelId: selectedModelId,
         size: selectedSize,
         apiKey: userApiKey,
-        mockMode: !userApiKey, // If no API key configured, use safe mock generation
+        mockMode: useMockMode || !userApiKey,
       });
 
       if (result.success) {
@@ -188,23 +203,101 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
           </div>
         </div>
 
+        {/* Provider Readiness / Missing Key Notice */}
+        {!isKeyConfigured && !useMockMode && (
+          <div
+            style={{
+              backgroundColor: 'rgba(234, 179, 8, 0.1)',
+              border: '1px solid rgba(234, 179, 8, 0.3)',
+              borderRadius: 'var(--radius-md, 8px)',
+              padding: '0.75rem',
+              fontSize: '0.85rem',
+              color: '#fef08a',
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>No {currentModel?.provider.toUpperCase()} API key configured</div>
+            <div style={{ margin: '0.35rem 0', color: '#e2e8f0', fontSize: '0.8rem' }}>
+              To generate live images using your BYOK account, configure your API key in Provider Settings.
+              Alternatively, you can test with deterministic mock preview.
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+              {onOpenProviderSettings && (
+                <button
+                  type='button'
+                  onClick={() => {
+                    onClose();
+                    onOpenProviderSettings();
+                  }}
+                  style={{
+                    padding: '0.35rem 0.75rem',
+                    fontSize: '0.8rem',
+                    background: '#eab308',
+                    color: '#000',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  Open Provider Settings
+                </button>
+              )}
+              <button
+                type='button'
+                onClick={() => setUseMockMode(true)}
+                style={{
+                  padding: '0.35rem 0.75rem',
+                  fontSize: '0.8rem',
+                  background: 'transparent',
+                  color: '#fef08a',
+                  border: '1px solid #eab308',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+              >
+                Use Mock Preview (Unmetered)
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Cost & Policy Transparency Notice */}
         <div
           style={{
-            backgroundColor: 'rgba(78, 205, 196, 0.08)',
-            border: '1px solid rgba(78, 205, 196, 0.25)',
+            backgroundColor: useMockMode ? 'rgba(59, 130, 246, 0.1)' : 'rgba(78, 205, 196, 0.08)',
+            border: `1px solid ${useMockMode ? 'rgba(59, 130, 246, 0.3)' : 'rgba(78, 205, 196, 0.25)'}`,
             borderRadius: 'var(--radius-md, 8px)',
             padding: '0.75rem',
             fontSize: '0.85rem',
-            color: '#d1fae5',
+            color: useMockMode ? '#93c5fd' : '#d1fae5',
           }}
         >
           <div style={{ fontWeight: 600, marginBottom: '0.2rem' }}>
-            Estimated cost: ~${estimatedCost.toFixed(4)} USD
+            {useMockMode ? 'Deterministic Mock Preview (Unmetered)' : `Estimated cost: ~$${estimatedCost.toFixed(4)} USD`}
           </div>
           <div style={{ color: '#9ca3af', fontSize: '0.8rem' }}>
-            Charged to your {currentModel?.provider.toUpperCase()} BYOK key. No deployment markups or hidden fees.
+            {useMockMode
+              ? 'Generates local SVG placeholder without calling paid provider APIs or settling charges.'
+              : `Charged to your ${currentModel?.provider.toUpperCase()} BYOK key. No deployment markups or hidden fees.`}
           </div>
+          {useMockMode && (
+            <button
+              type='button'
+              onClick={() => setUseMockMode(false)}
+              style={{
+                marginTop: '0.4rem',
+                fontSize: '0.75rem',
+                color: '#60a5fa',
+                background: 'none',
+                border: 'none',
+                textDecoration: 'underline',
+                cursor: 'pointer',
+                padding: 0,
+              }}
+            >
+              Switch back to Live BYOK
+            </button>
+          )}
         </div>
 
         {errorMessage && (
@@ -243,19 +336,23 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
             type='button'
             className='generate-image-confirm-btn'
             onClick={handleGenerate}
-            disabled={isGenerating || !prompt.trim()}
+            disabled={isGenerating || !prompt.trim() || (!isKeyConfigured && !useMockMode)}
             style={{
               padding: '0.5rem 1.25rem',
               borderRadius: 'var(--radius-md, 8px)',
               border: 'none',
-              background: '#4ECDC4',
-              color: '#000',
+              background: useMockMode ? '#3b82f6' : '#4ECDC4',
+              color: useMockMode ? '#ffffff' : '#000',
               fontWeight: 600,
-              cursor: isGenerating || !prompt.trim() ? 'not-allowed' : 'pointer',
-              opacity: isGenerating || !prompt.trim() ? 0.6 : 1,
+              cursor: isGenerating || !prompt.trim() || (!isKeyConfigured && !useMockMode) ? 'not-allowed' : 'pointer',
+              opacity: isGenerating || !prompt.trim() || (!isKeyConfigured && !useMockMode) ? 0.6 : 1,
             }}
           >
-            {isGenerating ? 'Generating Image...' : `Generate Image ($${estimatedCost.toFixed(3)})`}
+            {isGenerating
+              ? 'Generating Image...'
+              : useMockMode
+              ? 'Generate Mock Preview ($0.00)'
+              : `Generate Image ($${estimatedCost.toFixed(3)})`}
           </button>
         </div>
       </div>

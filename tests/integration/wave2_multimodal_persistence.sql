@@ -149,5 +149,54 @@ exception
     end if;
 end $$;
 
+-- Step 9: Test Alice (authenticated) cannot forge settled cost by setting p_is_mock = false
+do $$
+begin
+  perform public.px28_record_image_message(
+    'aaaa1111-1111-4111-8111-111111111111',
+    'Forged settled image attempt',
+    'dall-e-3',
+    '{"imageUrl": "https://fake.url/image.png", "costUsd": 50.0}'::jsonb,
+    false
+  );
+  raise exception 'FAIL: Alice was able to record forged settled image message!';
+exception
+  when others then
+    if sqlerrm like '%client_settlement_prohibited%' then
+      raise notice 'PASS: Alice blocked from forging settled image execution (client_settlement_prohibited raised)';
+    else
+      raise;
+    end if;
+end $$;
+
+-- Step 10: Test service_role can record settled execution
+set local role postgres;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
+
+do $$
+declare
+  v_msg public.messages;
+begin
+  select * into v_msg
+  from public.px28_record_image_message(
+    'aaaa1111-1111-4111-8111-111111111111',
+    'Authoritative backend image generation',
+    'dall-e-3',
+    '{"imageUrl": "https://storage.prismatix.ai/images/gen1.png", "costUsd": 0.040, "isMock": false}'::jsonb,
+    false
+  );
+
+  if v_msg.metadata->'cost'->>'status' != 'settled' then
+    raise exception 'FAIL: Expected settled status from backend service_role, got %', v_msg.metadata->'cost'->>'status';
+  end if;
+
+  if (v_msg.metadata->'cost'->>'finalUsd')::numeric != 0.040 then
+    raise exception 'FAIL: Expected 0.040 final cost, got %', v_msg.metadata->'cost'->>'finalUsd';
+  end if;
+
+  raise notice 'PASS: Backend service_role successfully recorded authoritative settled image message';
+end $$;
+
 reset role;
 rollback;

@@ -24,6 +24,9 @@ import {
   saveArtifactRevision,
   getFileExtensionForLanguage,
   createSandboxedHtmlPreview,
+  generateArtifactId,
+  persistArtifactToDatabase,
+  persistArtifactRevisionToDatabase,
 } from '../../src/services/artifactService';
 import {
   subscribeToOnlineStatus,
@@ -363,5 +366,83 @@ describe('F30: Installable PWA and Mobile Continuity', () => {
     const outcome = await promptPwaInstall();
     expect(['accepted', 'dismissed', 'unsupported']).toContain(outcome);
     unsub();
+  });
+});
+
+describe('Wave 2 Multimodal Hardening: UUID Identity, RPC Revisions, Truthful Settlement', () => {
+  it('Defect 8: generateArtifactId generates valid RFC 4122 UUID matching database uuid schema', () => {
+    const id = generateArtifactId();
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(id).not.toContain('art_');
+  });
+
+  it('Defect 8: persistArtifactToDatabase inserts artifact using valid UUID schema', async () => {
+    let upsertPayload: any = null;
+    const mockClient = {
+      from: (table: string) => {
+        expect(table).toBe('artifacts');
+        return {
+          upsert: vi.fn((data) => {
+            upsertPayload = data;
+            return Promise.resolve({ error: null });
+          }),
+        };
+      },
+    };
+
+    const artifact = {
+      id: generateArtifactId(),
+      title: 'Header.tsx',
+      language: 'typescript',
+      currentContent: 'export const Header = () => <header />;',
+      versions: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const res = await persistArtifactToDatabase(mockClient, artifact, 'conv-1234', 'user-1234');
+    expect(res.success).toBe(true);
+    expect(upsertPayload.id).toBe(artifact.id);
+    expect(upsertPayload.conversation_id).toBe('conv-1234');
+    expect(upsertPayload.user_id).toBe('user-1234');
+  });
+
+  it('Defect 8: persistArtifactRevisionToDatabase invokes px29_save_artifact_revision RPC', async () => {
+    let rpcCalledWith: any = null;
+    const mockClient = {
+      rpc: vi.fn((fnName: string, params: any) => {
+        expect(fnName).toBe('px29_save_artifact_revision');
+        rpcCalledWith = params;
+        return Promise.resolve({
+          data: {
+            id: params.p_artifact_id,
+            current_content: params.p_content,
+            versions: [{ versionNumber: 1, content: 'v1' }, { versionNumber: 2, content: params.p_content }],
+          },
+          error: null,
+        });
+      }),
+    };
+
+    const artifactId = generateArtifactId();
+    const res = await persistArtifactRevisionToDatabase(mockClient, artifactId, 'updated code v2', 'user');
+
+    expect(res.success).toBe(true);
+    expect(rpcCalledWith.p_artifact_id).toBe(artifactId);
+    expect(rpcCalledWith.p_content).toBe('updated code v2');
+    expect(rpcCalledWith.p_author).toBe('user');
+  });
+
+  it('Defect 6 & 7: executeImageGeneration returns unmetered status for mock mode and does not forge paid settlement', async () => {
+    const res = await executeImageGeneration({
+      prompt: 'Isometric vector art of server racks',
+      modelId: 'flux-1-schnell',
+      mockMode: true,
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.isMock).toBe(true);
+    expect(res.costStatus).toBe('unmetered');
+    expect(res.imageUrl).toContain('data:image/svg+xml');
   });
 });

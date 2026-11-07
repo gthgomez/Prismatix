@@ -137,7 +137,12 @@ import { DocumentComparisonModal } from './DocumentComparisonModal';
 import { ImageGenerationModal } from './ImageGenerationModal';
 import { ArtifactViewerModal } from './ArtifactViewerModal';
 import { defaultVoiceDictationService } from '../services/voiceDictationService';
-import { extractArtifactsFromText, type Artifact } from '../services/artifactService';
+import {
+  extractArtifactsFromText,
+  persistArtifactToDatabase,
+  persistArtifactRevisionToDatabase,
+  type Artifact,
+} from '../services/artifactService';
 import type { ImageGenerationResult } from '../services/imageGenerationService';
 import { subscribeToOnlineStatus, subscribeToInstallPrompt, promptPwaInstall } from '../services/pwaService';
 import { executeResearchWorkflow } from '../services/researchWorkflow';
@@ -3661,6 +3666,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onClose={() => setIsImageGenModalOpen(false)}
         onImageGenerated={handleImageGenerated}
         initialPrompt={input}
+        providerPlugins={providerPlugins}
+        onOpenProviderSettings={() => setShowProviderSettings(true)}
       />
 
       <ArtifactViewerModal
@@ -3671,19 +3678,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           setActiveArtifact(updated);
           const convId = selectedConversationIdRef.current;
           if (convId && user) {
-            try {
-              await supabase.from('artifacts').upsert({
-                id: updated.id,
-                user_id: user.id,
-                conversation_id: convId,
-                title: updated.title,
-                language: updated.language,
-                current_content: updated.currentContent,
-                versions: updated.versions,
-                updated_at: new Date().toISOString(),
-              });
-            } catch (err) {
-              console.warn('[ChatInterface] Failed to persist artifact revision:', err);
+            // 1. Ensure artifact record exists in database
+            const saveRes = await persistArtifactToDatabase(supabase, updated, convId, user.id);
+            if (!saveRes.success) {
+              console.warn('[ChatInterface] Failed to persist artifact:', saveRes.error);
+              setActionNotice({ type: 'error', message: `Failed to persist artifact: ${saveRes.error}` });
+              return;
+            }
+
+            // 2. Persist revision via atomic RPC px29_save_artifact_revision
+            const revRes = await persistArtifactRevisionToDatabase(supabase, updated.id, updated.currentContent, 'user');
+            if (!revRes.success) {
+              console.warn('[ChatInterface] Failed to persist artifact revision via px29:', revRes.error);
+              setActionNotice({ type: 'error', message: `Failed to persist revision: ${revRes.error}` });
+            } else {
+              setActionNotice({ type: 'success', message: 'Artifact revision saved successfully.' });
             }
           }
         }}

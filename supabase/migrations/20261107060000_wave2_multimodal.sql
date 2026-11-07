@@ -78,11 +78,24 @@ declare
   v_user_id uuid := auth.uid();
   v_conv_owner uuid;
   v_new_message public.messages;
-  v_cost_status text := case when p_is_mock then 'unmetered' else 'settled' end;
-  v_final_cost numeric := case when p_is_mock then 0 else coalesce((p_image_result->>'costUsd')::numeric, 0) end;
+  v_cost_status text;
+  v_final_cost numeric;
 begin
   if v_user_id is null then
     raise exception 'unauthorized';
+  end if;
+
+  -- Defense-in-depth: Never allow client requests (authenticated role) to forge settled cost.
+  -- Only server-owned execution (service_role) or authoritative backend receipt can record 'settled'.
+  if coalesce(current_setting('request.jwt.claim.role', true), '') = 'authenticated' then
+    if not coalesce(p_is_mock, false) then
+      raise exception 'client_settlement_prohibited: authenticated clients cannot forge settled image executions';
+    end if;
+    v_cost_status := 'unmetered';
+    v_final_cost := 0;
+  else
+    v_cost_status := case when p_is_mock then 'unmetered' else 'settled' end;
+    v_final_cost := case when p_is_mock then 0 else coalesce((p_image_result->>'costUsd')::numeric, 0) end;
   end if;
 
   select user_id into v_conv_owner

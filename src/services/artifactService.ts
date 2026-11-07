@@ -19,7 +19,63 @@ export interface Artifact {
 }
 
 export function generateArtifactId(): string {
-  return 'art_' + Math.random().toString(36).substring(2, 10);
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+export async function persistArtifactToDatabase(
+  client: any,
+  artifact: Artifact,
+  conversationId: string,
+  userId: string,
+  messageId?: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await client.from('artifacts').upsert({
+      id: artifact.id,
+      user_id: userId,
+      conversation_id: conversationId,
+      message_id: messageId || null,
+      title: artifact.title,
+      language: artifact.language,
+      current_content: artifact.currentContent,
+      versions: artifact.versions,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function persistArtifactRevisionToDatabase(
+  client: any,
+  artifactId: string,
+  newContent: string,
+  author: 'user' | 'assistant' = 'user',
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const { data, error } = await client.rpc('px29_save_artifact_revision', {
+      p_artifact_id: artifactId,
+      p_content: newContent,
+      p_author: author,
+    });
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export function detectArtifactLanguage(codeFenceHeader: string): { language: string; filename?: string } {

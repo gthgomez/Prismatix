@@ -429,54 +429,60 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               />
             </div>
 
-            {message.metadata?.imageGeneration && (
-              <div
-                className='generated-image-card'
-                style={{
-                  margin: '0.75rem 0',
-                  borderRadius: '8px',
-                  overflow: 'hidden',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  background: '#141416',
-                }}
-              >
-                <img
-                  src={message.metadata.imageGeneration.imageUrl}
-                  alt={message.metadata.imageGeneration.prompt}
-                  style={{
-                    maxWidth: '100%',
-                    maxHeight: '400px',
-                    objectFit: 'contain',
-                    display: 'block',
-                    background: '#09090b',
-                    margin: '0 auto',
-                  }}
-                />
+            {(() => {
+              const imageGen = message.metadata?.imageGeneration as
+                | { imageUrl?: string; prompt?: string; modelId?: string; costUsd?: number }
+                | undefined;
+              if (!imageGen?.imageUrl) return null;
+              return (
                 <div
+                  className='generated-image-card'
                   style={{
-                    padding: '0.5rem 0.75rem',
-                    background: 'rgba(0, 0, 0, 0.35)',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                    margin: '0.75rem 0',
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    background: '#141416',
                   }}
                 >
-                  <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
-                    🎨 {message.metadata.imageGeneration.modelId} • ${message.metadata.imageGeneration.costUsd?.toFixed(4) ?? '0.0000'}
-                  </span>
-                  <a
-                    href={message.metadata.imageGeneration.imageUrl}
-                    download='prismatix-generated-image.png'
-                    target='_blank'
-                    rel='noopener noreferrer'
-                    style={{ fontSize: '0.75rem', color: '#4ECDC4', textDecoration: 'none', fontWeight: 500 }}
+                  <img
+                    src={imageGen.imageUrl}
+                    alt={imageGen.prompt || 'Generated image'}
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: '400px',
+                      objectFit: 'contain',
+                      display: 'block',
+                      background: '#09090b',
+                      margin: '0 auto',
+                    }}
+                  />
+                  <div
+                    style={{
+                      padding: '0.5rem 0.75rem',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                    }}
                   >
-                    Download
-                  </a>
+                    <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
+                      🎨 {imageGen.modelId} • ${imageGen.costUsd?.toFixed(4) ?? '0.0000'}
+                    </span>
+                    <a
+                      href={imageGen.imageUrl}
+                      download='prismatix-generated-image.png'
+                      target='_blank'
+                      rel='noopener noreferrer'
+                      style={{ fontSize: '0.75rem', color: '#4ECDC4', textDecoration: 'none', fontWeight: 500 }}
+                    >
+                      Download
+                    </a>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {message.role === 'assistant' && message.debateDegraded && (
               <div
