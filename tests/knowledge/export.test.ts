@@ -35,7 +35,7 @@ describe('Conversation Export Service (F10)', () => {
         role: 'assistant',
         content: 'Total expenses were $145,200 across engineering and operations.',
         createdAt: '2026-11-07T10:00:05Z',
-        model: 'gpt-4o',
+        model: 'gpt-6-sol',
         provider: 'openai',
         cost: 0.0012,
         costStatus: 'settled',
@@ -60,7 +60,7 @@ describe('Conversation Export Service (F10)', () => {
     expect(parsed.conversation.title).toBe('Financial Analysis: Q4/2026');
     expect(parsed.conversation.project.name).toBe('Tax Workspace');
     expect(parsed.conversation.messages).toHaveLength(2);
-    expect(parsed.conversation.messages[1].model).toBe('gpt-4o');
+    expect(parsed.conversation.messages[1].model).toBe('gpt-6-sol');
     expect(parsed.conversation.messages[1].cost).toBe(0.0012);
     expect(parsed.conversation.messages[1].costStatus).toBe('settled');
     expect(parsed.conversation.messages[0].attachments[0].sheetCount).toBe(2);
@@ -73,7 +73,7 @@ describe('Conversation Export Service (F10)', () => {
     expect(md).toContain('- **Project Workspace**: Tax Workspace');
     expect(md).toContain('### User');
     expect(md).toContain('📎 `expenses.xlsx` (20 KB, 2 sheets)');
-    expect(md).toContain('### Assistant (gpt-4o)');
+    expect(md).toContain('### Assistant (gpt-6-sol)');
     expect(md).toContain('> *Receipt: $0.0012 [settled]*');
   });
 
