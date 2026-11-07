@@ -197,7 +197,10 @@ export function describeStreamError(error: unknown): string {
       case 'balance_exhausted':
       case 'daily_limit_exceeded':
       case 'monthly_limit_exceeded':
+      case 'daily_spend_limit_exceeded':
         return `Usage allowance reached for this period.${retryNote} Check spend settings or wait for quota reset.`;
+      case 'request_cost_limit_exceeded':
+        return `Request cost exceeds your configured spend cap.${retryNote} Lower prompt size, increase spend cap, or select an economy model.`;
       case 'rate_limited':
       case 'rate_limit_exceeded':
       case 'too_many_requests':
@@ -846,6 +849,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         ...(item.debateProfile ? { debateProfile: item.debateProfile as any } : {}),
         ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
         ...(item.debateExecutionMode ? { debateExecutionMode: item.debateExecutionMode } : {}),
+        ...(item.metadata?.comparisonResults
+          ? { comparisonResults: item.metadata.comparisonResults as any }
+          : {}),
+        ...(item.metadata?.citations
+          ? { citations: item.metadata.citations as any }
+          : {}),
       });
     }
     return mapped;
@@ -1374,6 +1383,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           if (searchRes.citations.length > 0) {
             citations = searchRes.citations;
             queryWithContext = `${queryWithContext}${searchRes.contextPrompt}`;
+          } else if (searchRes.error) {
+            setActionNotice({ message: searchRes.error, type: 'error' });
           }
         } catch (err) {
           console.warn('[ChatInterface] Web search failed, proceeding without search:', err);
@@ -1397,8 +1408,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         setMessages((prev) => [...prev, placeholderMsg]);
 
         const [resA, resB] = await Promise.allSettled([
-          askPrismatixSync(queryWithContext, historyForRequest, attachmentsToProcess, comparisonModelA),
-          askPrismatixSync(queryWithContext, historyForRequest, attachmentsToProcess, comparisonModelB),
+          askPrismatixSync(
+            queryWithContext,
+            historyForRequest,
+            attachmentsToProcess,
+            comparisonModelA,
+            geminiFlashThinkingLevel,
+            undefined,
+            routingProfile,
+            maxSpendCap ?? undefined,
+            abortController.signal,
+          ),
+          askPrismatixSync(
+            queryWithContext,
+            historyForRequest,
+            attachmentsToProcess,
+            comparisonModelB,
+            geminiFlashThinkingLevel,
+            undefined,
+            routingProfile,
+            maxSpendCap ?? undefined,
+            abortController.signal,
+          ),
         ]);
 
         const contentA =
@@ -1418,7 +1449,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             model: comparisonModelA,
             cost: resA.value.costEstimateUsd,
             conversationId: sendConversationId,
-            costStatus: 'settled',
+            costStatus: 'estimated',
           });
         }
         if (resB.status === 'fulfilled' && resB.value?.costEstimateUsd) {
@@ -1426,8 +1457,39 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             model: comparisonModelB,
             cost: resB.value.costEstimateUsd,
             conversationId: sendConversationId,
-            costStatus: 'settled',
+            costStatus: 'estimated',
           });
+        }
+
+        const comparisonResultsData = {
+          modelA: { model: comparisonModelA, content: contentA, cost: costA },
+          modelB: { model: comparisonModelB, content: contentB, cost: costB },
+        };
+        const comparisonSummary = `Side-by-side comparison: **${comparisonModelA}** vs **${comparisonModelB}**`;
+
+        const execIdA = resA.status === 'fulfilled' ? resA.value?.executionId : undefined;
+        let persistedId: string | undefined;
+
+        if (execIdA) {
+          try {
+            const { data } = await supabase
+              .from('messages')
+              .update({
+                content: comparisonSummary,
+                metadata: {
+                  comparisonResults: comparisonResultsData,
+                  citations: citations && citations.length > 0 ? citations : undefined,
+                },
+              })
+              .eq('execution_id', execIdA)
+              .select('id')
+              .maybeSingle();
+            if (data?.id) {
+              persistedId = data.id;
+            }
+          } catch (err) {
+            console.warn('[ChatInterface] Failed to persist comparison metadata to Supabase:', err);
+          }
         }
 
         setMessages((prev) => {
@@ -1436,11 +1498,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           if (last && last.role === 'assistant') {
             updated[updated.length - 1] = {
               ...last,
-              content: `Side-by-side comparison: **${comparisonModelA}** vs **${comparisonModelB}**`,
-              comparisonResults: {
-                modelA: { model: comparisonModelA, content: contentA, cost: costA },
-                modelB: { model: comparisonModelB, content: contentB, cost: costB },
-              },
+              id: persistedId ?? last.id,
+              content: comparisonSummary,
+              comparisonResults: comparisonResultsData,
               citations,
             };
           }
@@ -1473,6 +1533,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         firstImageStorageRef,
         abortController.signal,
         attachmentRefs,
+        routingProfile,
+        maxSpendCap ?? undefined,
       );
 
       if (!result) throw new Error('Failed to get response from router');
@@ -2215,12 +2277,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       const updated = [...prev];
       const target = updated[index];
       if (target?.comparisonResults) {
+        const nextComparisonResults = {
+          ...target.comparisonResults,
+          preferred,
+        };
         updated[index] = {
           ...target,
-          comparisonResults: {
-            ...target.comparisonResults,
-            preferred,
-          },
+          comparisonResults: nextComparisonResults,
         };
         const preferredModel =
           preferred === 'A'
@@ -2228,10 +2291,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             : target.comparisonResults.modelB.model;
         void submitRoutingFeedback(supabase, {
           conversationId: selectedConversationIdRef.current,
+          messageId: target.id,
           chosenModel: preferredModel,
           feedbackType: 'comparison_preference',
           comparisonPreferredModel: preferredModel,
         });
+        if (target.id) {
+          void supabase
+            .from('messages')
+            .update({
+              metadata: {
+                comparisonResults: nextComparisonResults,
+                citations: target.citations,
+              },
+            })
+            .eq('id', target.id);
+        }
       }
       return updated;
     });

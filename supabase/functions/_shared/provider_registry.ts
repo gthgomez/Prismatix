@@ -19,7 +19,8 @@ export type ProviderId =
   | 'openai'
   | 'google'
   | 'nvidia'
-  | 'deepinfra';
+  | 'deepinfra'
+  | 'brave';
 
 export type ProviderKeyKind = 'server' | 'byok';
 
@@ -99,6 +100,15 @@ export const PROVIDER_PLUGINS: Record<ProviderId, ProviderPlugin> = {
     keyKind: 'byok',
     offeredByDefault: false,
   },
+  brave: {
+    id: 'brave',
+    label: 'Brave Search',
+    keyLabel: 'Brave Search API key',
+    keyPlaceholder: 'BSA...',
+    keyKind: 'byok',
+    offeredByDefault: false,
+    docsHint: 'BYOK search key for web search citation grounding.',
+  },
 };
 
 /** Stable display order for provider groups and settings cards. */
@@ -110,6 +120,7 @@ export const PROVIDER_PLUGIN_ORDER: ProviderId[] = [
   'google',
   'nvidia',
   'deepinfra',
+  'brave',
 ];
 
 /** The providers a user may choose as their default gateway. */

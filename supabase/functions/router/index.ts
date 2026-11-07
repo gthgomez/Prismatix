@@ -2280,6 +2280,8 @@ Deno.serve(async (req: Request) => {
       geminiFlashThinkingLevel,
       mode,
       debateProfile,
+      routingProfile,
+      spendCapUsd,
     } = normalizedBody.value;
 
     const normalizedGeminiFlashThinkingLevel = normalizeGeminiFlashThinkingLevel(
@@ -2457,7 +2459,14 @@ Deno.serve(async (req: Request) => {
         },
       );
     }
-    const normalizedOverride = normalizeModelOverride(manualModelOverride);
+    let normalizedOverride = normalizeModelOverride(manualModelOverride);
+    if (!normalizedOverride && routingProfile) {
+      if (routingProfile === 'economy') {
+        normalizedOverride = normalizeModelOverride('gemini-3.8-flash');
+      } else if (routingProfile === 'capability') {
+        normalizedOverride = normalizeModelOverride('gpt-6-sol');
+      }
+    }
     const defaultGateway = resolveDefaultProvider(userProviderConfig);
     let decision: RouteDecision;
     try {
@@ -2672,11 +2681,16 @@ Deno.serve(async (req: Request) => {
         });
       }
 
+      const effectivePerRequestLimit =
+        typeof spendCapUsd === 'number' && spendCapUsd > 0
+          ? Math.min(PER_REQUEST_COST_LIMIT_USD, spendCapUsd)
+          : PER_REQUEST_COST_LIMIT_USD;
+
       const spendGate = evaluateSpendGate({
         dailyTotalUsd: dailySpendUsd,
         estimatedRequestUsd: preFlightCost.estimatedUsd,
         dailyLimitUsd: DAILY_SPEND_LIMIT_USD,
-        perRequestLimitUsd: PER_REQUEST_COST_LIMIT_USD,
+        perRequestLimitUsd: effectivePerRequestLimit,
       });
 
       if (!spendGate.allowed) {
@@ -2686,6 +2700,7 @@ Deno.serve(async (req: Request) => {
         return new Response(
           JSON.stringify({
             error,
+            code: spendGate.reason,
             dailyLimitUsd: spendGate.dailyLimitUsd,
             projectedTotalUsd: Number(spendGate.projectedTotalUsd.toFixed(6)),
           }),

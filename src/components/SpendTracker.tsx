@@ -3,6 +3,7 @@ import { CONFIG } from '../config';
 import { supabase } from '../lib/supabase';
 import {
   downloadSpendCsv,
+  fetchAuthoritativeCostLogs,
   filterAndGroupSpend,
   getFinanceStore,
   type DateRangeFilter,
@@ -353,9 +354,9 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
             <button
               type="button"
               className="spend-csv-btn"
-              onClick={() => {
-                const store = getFinanceStore();
-                downloadSpendCsv(store.history);
+              onClick={async () => {
+                const logs = await fetchAuthoritativeCostLogs(supabase);
+                downloadSpendCsv(logs);
               }}
               style={{
                 background: 'rgba(78, 205, 196, 0.1)',

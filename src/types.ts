@@ -44,6 +44,7 @@ export type RouterProvider =
   | 'google'
   | 'nvidia'
   | 'deepinfra'
+  | 'brave'
   | 'other';
 
 export type ProviderKeyStatus =

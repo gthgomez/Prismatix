@@ -1,4 +1,5 @@
 import type { RouterModel } from '../types';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../config';
 
@@ -185,6 +186,51 @@ export async function fetchServerDailyTotal(): Promise<number> {
     return Number.isFinite(serverTotal) ? roundUsd(serverTotal) : getDailyTotal();
   } catch {
     return getDailyTotal();
+  }
+}
+
+/**
+ * Queries the authoritative `cost_logs` ledger from Supabase under RLS policy `cost_logs_select_own`.
+ * Bypasses client-side 500-item localStorage truncation to provide the complete account spend history.
+ */
+export async function fetchAuthoritativeCostLogs(
+  client: SupabaseClient,
+  options: { limit?: number; since?: string } = {},
+): Promise<FinanceEntry[]> {
+  try {
+    let query = client
+      .from('cost_logs')
+      .select('id, created_at, conversation_id, model, provider, total_cost, cost_status, input_tokens, output_tokens, pricing_version')
+      .order('created_at', { ascending: false });
+
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+    if (options.since) {
+      query = query.gte('created_at', options.since);
+    }
+
+    const { data, error } = await query;
+    if (error || !Array.isArray(data)) {
+      console.warn('[financeTracker] Authoritative cost_logs fetch failed, using local store:', error?.message);
+      return getFinanceStore().history;
+    }
+
+    return data.map((row) => ({
+      date: String(row.created_at || currentDate()),
+      model: row.model as RouterModel,
+      cost: roundUsd(Number(row.total_cost || 0)),
+      pricingVersion: row.pricing_version ? String(row.pricing_version) : undefined,
+      provider: row.provider ? String(row.provider) : undefined,
+      conversationId: row.conversation_id ? String(row.conversation_id) : undefined,
+      costStatus: (row.cost_status as FinanceEntry['costStatus']) || 'settled',
+      promptTokens: row.input_tokens !== null && row.input_tokens !== undefined ? Number(row.input_tokens) : undefined,
+      completionTokens: row.output_tokens !== null && row.output_tokens !== undefined ? Number(row.output_tokens) : undefined,
+      executionId: row.id ? String(row.id) : undefined,
+    }));
+  } catch (err) {
+    console.warn('[financeTracker] Exception fetching authoritative cost_logs:', err);
+    return getFinanceStore().history;
   }
 }
 

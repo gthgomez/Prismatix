@@ -13,7 +13,12 @@ import {
   recordCost,
   type FinanceEntry,
 } from '../../src/services/financeTracker';
-import { submitRoutingFeedback } from '../../src/services/routingFeedbackService';
+import {
+  deleteRoutingFeedback,
+  getRoutingFeedbackForMessage,
+  submitRoutingFeedback,
+  toggleRoutingFeedback,
+} from '../../src/services/routingFeedbackService';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 describe('F13 & F14: Spend Caps and Grouped Analytics', () => {
@@ -152,7 +157,7 @@ describe('F13 & F14: Spend Caps and Grouped Analytics', () => {
 
 describe('F15: Routing Quality Feedback Service', () => {
   it('submits user feedback under authenticated user session', async () => {
-    const insertMock = vi.fn().mockReturnValue({
+    const upsertMock = vi.fn().mockReturnValue({
       select: vi.fn().mockReturnValue({
         single: vi.fn().mockResolvedValue({
           data: { id: 'fb-uuid-123' },
@@ -169,7 +174,8 @@ describe('F15: Routing Quality Feedback Service', () => {
         }),
       },
       from: vi.fn().mockReturnValue({
-        insert: insertMock,
+        upsert: upsertMock,
+        insert: upsertMock,
       }),
     } as unknown as SupabaseClient;
 
@@ -182,18 +188,19 @@ describe('F15: Routing Quality Feedback Service', () => {
 
     expect(res.success).toBe(true);
     expect(res.id).toBe('fb-uuid-123');
-    expect(insertMock).toHaveBeenCalledWith(
+    expect(upsertMock).toHaveBeenCalledWith(
       expect.objectContaining({
         user_id: 'usr-123',
         conversation_id: 'conv-abc',
         chosen_model: 'gemini-3.8-flash',
         feedback_type: 'thumb_up',
       }),
+      expect.anything(),
     );
   });
 
   it('records model comparison preferences correctly', async () => {
-    const insertMock = vi.fn().mockReturnValue({
+    const upsertMock = vi.fn().mockReturnValue({
       select: vi.fn().mockReturnValue({
         single: vi.fn().mockResolvedValue({
           data: { id: 'fb-pref-456' },
@@ -209,7 +216,8 @@ describe('F15: Routing Quality Feedback Service', () => {
         }),
       },
       from: vi.fn().mockReturnValue({
-        insert: insertMock,
+        upsert: upsertMock,
+        insert: upsertMock,
       }),
     } as unknown as SupabaseClient;
 
@@ -221,11 +229,12 @@ describe('F15: Routing Quality Feedback Service', () => {
     });
 
     expect(res.success).toBe(true);
-    expect(insertMock).toHaveBeenCalledWith(
+    expect(upsertMock).toHaveBeenCalledWith(
       expect.objectContaining({
         feedback_type: 'comparison_preference',
         comparison_preferred_model: 'gpt-6-sol',
       }),
+      expect.anything(),
     );
   });
 
@@ -242,5 +251,83 @@ describe('F15: Routing Quality Feedback Service', () => {
     });
 
     expect(res.success).toBe(false);
+  });
+
+  it('deletes feedback when toggling off an existing feedback', async () => {
+    const chain = {
+      eq: vi.fn(),
+    };
+    chain.eq.mockReturnValue(chain);
+    // When awaited:
+    Object.assign(chain, {
+      then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+    });
+
+    const deleteMock = vi.fn().mockReturnValue(chain);
+
+    const mockClient = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'usr-123' } } }),
+      },
+      from: vi.fn().mockReturnValue({
+        delete: deleteMock,
+      }),
+    } as unknown as SupabaseClient;
+
+    const res = await deleteRoutingFeedback(mockClient, {
+      messageId: 'msg-456',
+      feedbackType: 'thumb_up',
+    });
+
+    expect(res.success).toBe(true);
+    expect(deleteMock).toHaveBeenCalled();
+  });
+
+  it('toggles feedback on and off', async () => {
+    // When no existing feedback, toggle submits
+    const upsertMock = vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        single: vi.fn().mockResolvedValue({ data: { id: 'fb-new-1' }, error: null }),
+      }),
+    });
+    const selectMock = vi.fn().mockReturnValue({
+      eq: vi.fn().mockResolvedValue({ data: [], error: null }),
+    });
+
+    const mockClient = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'usr-123' } } }),
+      },
+      from: vi.fn().mockReturnValue({
+        upsert: upsertMock,
+        select: selectMock,
+      }),
+    } as unknown as SupabaseClient;
+
+    const toggleOn = await toggleRoutingFeedback(mockClient, {
+      messageId: 'msg-toggle',
+      chosenModel: 'gemini-3.8-flash',
+      feedbackType: 'thumb_up',
+    });
+
+    expect(toggleOn.active).toBe(true);
+    expect(toggleOn.id).toBe('fb-new-1');
+  });
+
+  it('retrieves feedback for a message', async () => {
+    const mockClient = {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockResolvedValue({
+            data: [{ id: 'fb-1', user_id: 'usr-1', message_id: 'msg-123', feedback_type: 'thumb_up', created_at: '2026-11-07' }],
+            error: null,
+          }),
+        }),
+      }),
+    } as unknown as SupabaseClient;
+
+    const feedback = await getRoutingFeedbackForMessage(mockClient, 'msg-123');
+    expect(feedback).toHaveLength(1);
+    expect(feedback[0]?.feedbackType).toBe('thumb_up');
   });
 });

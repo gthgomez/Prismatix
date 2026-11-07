@@ -16,7 +16,8 @@ export interface WebSearchResult {
   citations: SearchCitation[];
   contextPrompt: string;
   costEstimate: number;
-  source: 'live' | 'mock';
+  source: 'live' | 'unavailable';
+  error?: string;
 }
 
 const PRIVATE_IP_PATTERNS = [
@@ -106,83 +107,106 @@ export async function executeWebSearch(
       citations: [],
       contextPrompt: '',
       costEstimate: 0,
-      source: 'mock',
+      source: 'unavailable',
     };
   }
 
   // Cost estimate: standard search API call is ~$0.003
   const SEARCH_CALL_ESTIMATE = 0.003;
 
-  if (apiKey) {
-    try {
-      const endpoint = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(trimmed)}&count=5`;
-      const res = await fetchFn(endpoint, {
-        headers: {
-          Accept: 'application/json',
-          'Accept-Encoding': 'gzip',
-          'X-Subscription-Token': apiKey,
-        },
-      });
-
-      if (res.ok) {
-        const data = (await res.json()) as {
-          web?: { results?: Array<{ title?: string; url?: string; description?: string; page_age?: string }> };
-        };
-
-        const rawResults = data.web?.results || [];
-        const citations: SearchCitation[] = [];
-
-        let id = 1;
-        for (const item of rawResults) {
-          const rawUrl = item.url || '';
-          if (isValidPublicHttpsUrl(rawUrl)) {
-            citations.push({
-              id: id++,
-              title: item.title || 'Untitled Source',
-              url: rawUrl,
-              domain: extractDomain(rawUrl),
-              snippet: item.description || '',
-              date: item.page_age,
-            });
-          }
-        }
-
-        return {
-          query: trimmed,
-          citations,
-          contextPrompt: formatSearchContextPrompt(trimmed, citations),
-          costEstimate: SEARCH_CALL_ESTIMATE,
-          source: 'live',
-        };
-      }
-    } catch (err) {
-      console.warn('[webSearchService] Live search failed, falling back:', err);
-    }
+  if (!apiKey || !apiKey.trim()) {
+    return {
+      query: trimmed,
+      citations: [],
+      contextPrompt: '',
+      costEstimate: 0,
+      source: 'unavailable',
+      error: 'Web search requires a search provider API key (e.g. Brave Search). Connect a key in Provider Settings to enable live search.',
+    };
   }
 
-  // Deterministic mock citations for tests, demo, and zero-paid-call CI
-  const mockCitations: SearchCitation[] = [
+  try {
+    const endpoint = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(trimmed)}&count=5`;
+    const res = await fetchFn(endpoint, {
+      headers: {
+        Accept: 'application/json',
+        'Accept-Encoding': 'gzip',
+        'X-Subscription-Token': apiKey.trim(),
+      },
+    });
+
+    if (!res.ok) {
+      return {
+        query: trimmed,
+        citations: [],
+        contextPrompt: '',
+        costEstimate: 0,
+        source: 'unavailable',
+        error: `Search provider error: ${res.status} ${res.statusText || 'Request failed'}`,
+      };
+    }
+
+    const data = (await res.json()) as {
+      web?: { results?: Array<{ title?: string; url?: string; description?: string; page_age?: string }> };
+    };
+
+    const rawResults = data.web?.results || [];
+    const citations: SearchCitation[] = [];
+
+    let id = 1;
+    for (const item of rawResults) {
+      const rawUrl = item.url || '';
+      if (isValidPublicHttpsUrl(rawUrl)) {
+        citations.push({
+          id: id++,
+          title: item.title || 'Untitled Source',
+          url: rawUrl,
+          domain: extractDomain(rawUrl),
+          snippet: item.description || '',
+          date: item.page_age,
+        });
+      }
+    }
+
+    return {
+      query: trimmed,
+      citations,
+      contextPrompt: formatSearchContextPrompt(trimmed, citations),
+      costEstimate: SEARCH_CALL_ESTIMATE,
+      source: 'live',
+    };
+  } catch (err) {
+    return {
+      query: trimmed,
+      citations: [],
+      contextPrompt: '',
+      costEstimate: 0,
+      source: 'unavailable',
+      error: err instanceof Error ? err.message : 'Web search connection failed',
+    };
+  }
+}
+
+/**
+ * Isolated deterministic mock fixture generator exclusively for unit/E2E test mocks.
+ * Never used in production search paths.
+ */
+export function createMockSearchCitations(query: string): SearchCitation[] {
+  const safeQuery = query.replace(/[^\w\s-]/g, '').trim();
+  return [
     {
       id: 1,
-      title: `${trimmed} — Overview & Documentation`,
-      url: `https://docs.prismatix.ai/topics/${encodeURIComponent(trimmed.slice(0, 20))}`,
-      domain: 'docs.prismatix.ai',
-      snippet: `Detailed documentation and technical references covering ${trimmed}.`,
+      title: `${safeQuery} Reference Documentation`,
+      url: `https://example.com/docs/${encodeURIComponent(safeQuery.slice(0, 30))}`,
+      domain: 'example.com',
+      snippet: `Authoritative reference documentation for ${safeQuery}.`,
     },
     {
       id: 2,
-      title: `${trimmed} — Latest Industry Research`,
-      url: `https://research.prismatix.ai/reports/${encodeURIComponent(trimmed.slice(0, 20))}`,
-      domain: 'research.prismatix.ai',
-      snippet: `Comprehensive benchmark comparisons and analysis regarding ${trimmed}.`,
+      title: `${safeQuery} Architecture Overview`,
+      url: `https://example.org/analysis/${encodeURIComponent(safeQuery.slice(0, 30))}`,
+      domain: 'example.org',
+      snippet: `Detailed engineering and architecture analysis covering ${safeQuery}.`,
     },
   ];
-
-  return {
-    query: trimmed,
-    citations: mockCitations,
-    contextPrompt: formatSearchContextPrompt(trimmed, mockCitations),
-    costEstimate: SEARCH_CALL_ESTIMATE,
-    source: 'mock',
-  };
 }

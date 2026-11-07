@@ -78,14 +78,13 @@ describe('F11: Domain Extraction & Formatting', () => {
 });
 
 describe('F11: Web Search Execution', () => {
-  it('returns deterministic mock citations when API key is omitted (zero paid calls)', async () => {
+  it('returns honest unavailable state with zero citations when API key is omitted (zero paid calls)', async () => {
     const result = await executeWebSearch('Distributed Consensus Raft');
-    expect(result.source).toBe('mock');
-    expect(result.citations.length).toBeGreaterThan(0);
-    expect(result.citations[0]?.id).toBe(1);
-    expect(result.citations[0]?.url).toContain('https://');
-    expect(result.contextPrompt).toContain('[UNTRUSTED WEB SEARCH RESULTS');
-    expect(result.costEstimate).toBeGreaterThan(0);
+    expect(result.source).toBe('unavailable');
+    expect(result.citations).toHaveLength(0);
+    expect(result.contextPrompt).toBe('');
+    expect(result.costEstimate).toBe(0);
+    expect(result.error).toContain('requires a search provider API key');
   });
 
   it('executes live search when API key provided with mock fetchFn', async () => {
@@ -117,10 +116,23 @@ describe('F11: Web Search Execution', () => {
     expect(result.citations[0]?.domain).toBe('devblogs.microsoft.com');
   });
 
-  it('falls back to mock if fetch fails or network errors', async () => {
-    const failingFetch = vi.fn().mockRejectedValue(new Error('Network error')) as unknown as typeof fetch;
-    const result = await executeWebSearch('Resilient search test', 'key', failingFetch);
-    expect(result.source).toBe('mock');
-    expect(result.citations.length).toBeGreaterThan(0);
+  it('returns unavailable error without fabricated citations if search API errors', async () => {
+    const failingFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+    }) as unknown as typeof fetch;
+    const result = await executeWebSearch('Auth failure test', 'invalid-key', failingFetch);
+    expect(result.source).toBe('unavailable');
+    expect(result.citations).toHaveLength(0);
+    expect(result.error).toContain('401');
+  });
+
+  it('returns unavailable error without fabricated citations if network fails', async () => {
+    const failingFetch = vi.fn().mockRejectedValue(new Error('Network offline')) as unknown as typeof fetch;
+    const result = await executeWebSearch('Network failure test', 'key', failingFetch);
+    expect(result.source).toBe('unavailable');
+    expect(result.citations).toHaveLength(0);
+    expect(result.error).toContain('Network offline');
   });
 });
