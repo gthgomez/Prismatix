@@ -132,7 +132,7 @@ import { ProjectModal } from './ProjectModal';
 import { ExportModal } from './ExportModal';
 import { ImportModal } from './ImportModal';
 import { PromptLibraryModal } from './PromptLibraryModal';
-import { branchConversation } from '../services/conversationBranching';
+import { branchConversation, persistMessageVersion } from '../services/conversationBranching';
 import {
   archiveConversation,
   setConversationTags,
@@ -864,6 +864,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         ...(item.debateProfile ? { debateProfile: item.debateProfile as any } : {}),
         ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
         ...(item.debateExecutionMode ? { debateExecutionMode: item.debateExecutionMode } : {}),
+        ...(item.metadata ? { metadata: item.metadata } : {}),
         ...(item.metadata?.comparisonResults
           ? { comparisonResults: item.metadata.comparisonResults as any }
           : {}),
@@ -1303,6 +1304,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     overrideModel,
     promptTokenEstimate: passedPromptTokenEstimate,
     skipBudgetCheck = false,
+    regenerateTargetMessageId,
   }: {
     queryText: string;
     attachmentsToProcess: FileUploadPayload[];
@@ -1310,6 +1312,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     overrideModel?: RouterModel | null;
     promptTokenEstimate?: number;
     skipBudgetCheck?: boolean;
+    regenerateTargetMessageId?: string;
   }) => {
     const estimatedModel = overrideModel || manualModelOverride || currentModel;
     const historyText = historyMessages.map((msg) => {
@@ -1915,6 +1918,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
       setSpendRefreshKey((prev) => prev + 1);
 
+      let messageVersions: any[] | undefined;
+      if (regenerateTargetMessageId && assistantContent) {
+        try {
+          const verRes = await persistMessageVersion(
+            supabase,
+            regenerateTargetMessageId,
+            assistantContent,
+            model,
+          );
+          if (verRes.success) {
+            messageVersions = verRes.versions;
+          }
+        } catch (verErr) {
+          console.warn('[ChatInterface] Failed to record message version:', verErr);
+        }
+      }
+
       if (streamUpdateApplies()) {
         setMessages((prev) => {
           const updated = [...prev];
@@ -1922,6 +1942,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           if (lastMessage?.role === 'assistant') {
             updated[updated.length - 1] = {
               ...lastMessage,
+              id: regenerateTargetMessageId || lastMessage.id,
               cost: {
                 estimatedUsd: costEstimateUsd ?? computedCost.finalUsd,
                 finalUsd: authoritativeFinalUsd,
@@ -1933,6 +1954,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               },
               thinkingLog: [...thinkingLog],
               thinkingDurationMs: Date.now() - streamStartMs,
+              metadata: {
+                ...(lastMessage.metadata || {}),
+                ...(messageVersions ? { versions: messageVersions } : {}),
+              },
               ...(debateParticipants && debateParticipants.length > 0
                 ? { debateParticipants }
                 : {}),
@@ -2247,6 +2272,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return;
     }
 
+    const targetAssistantMsg = snapshot[index];
+    const regenerateTargetMessageId = targetAssistantMsg?.id;
+
     const executeRegenerateAction = () => {
       setMessages(snapshot.slice(0, userIndex + 1));
       resetAutoScroll();
@@ -2257,6 +2285,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         overrideModel: modelOverride !== undefined ? modelOverride : selectedOverride,
         promptTokenEstimate: preflight.promptTokens,
         skipBudgetCheck: true,
+        regenerateTargetMessageId,
       });
     };
 

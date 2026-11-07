@@ -51,14 +51,43 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   const isStreamingAssistant = isStreaming && message.role === 'assistant';
   const textContent = extractTextContent(message.content);
 
+  const allVersions = React.useMemo(() => {
+    const raw = message.metadata?.versions;
+    if (Array.isArray(raw)) {
+      return raw as Array<{
+        version: number;
+        content: string;
+        model?: string;
+        model_used?: string;
+        created_at?: string;
+        timestamp?: number;
+      }>;
+    }
+    return [];
+  }, [message.metadata?.versions]);
+
+  const [selectedVersionIdx, setSelectedVersionIdx] = useState<number>(() =>
+    allVersions.length > 0 ? allVersions.length - 1 : 0
+  );
+
+  useEffect(() => {
+    if (allVersions.length > 0) {
+      setSelectedVersionIdx(allVersions.length - 1);
+    }
+  }, [allVersions.length]);
+
+  const activeContent = allVersions.length > 0 && allVersions[selectedVersionIdx]
+    ? allVersions[selectedVersionIdx].content
+    : textContent;
+
   const [isEditing, setIsEditing] = useState(false);
-  const [editText, setEditText] = useState(textContent);
+  const [editText, setEditText] = useState(activeContent);
 
   useEffect(() => {
     if (!isEditing) {
-      setEditText(textContent);
+      setEditText(activeContent);
     }
-  }, [textContent, isEditing]);
+  }, [activeContent, isEditing]);
 
   const handleSaveEdit = () => {
     const trimmed = editText.trim();
@@ -69,7 +98,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
   const handleCancelEdit = () => {
     setIsEditing(false);
-    setEditText(textContent);
+    setEditText(activeContent);
   };
 
   return (
@@ -204,6 +233,33 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
             promptTokens={message.cost?.promptTokens}
             completionTokens={message.cost?.completionTokens}
           />
+          {allVersions.length > 1 && (
+            <div className='message-version-nav' role='navigation' aria-label='Response versions'>
+              <button
+                type='button'
+                className='version-btn prev-version'
+                disabled={selectedVersionIdx === 0}
+                onClick={() => setSelectedVersionIdx((i) => Math.max(0, i - 1))}
+                aria-label='Previous version'
+                title='Previous version'
+              >
+                ‹
+              </button>
+              <span className='version-counter'>
+                {selectedVersionIdx + 1} / {allVersions.length}
+              </span>
+              <button
+                type='button'
+                className='version-btn next-version'
+                disabled={selectedVersionIdx === allVersions.length - 1}
+                onClick={() => setSelectedVersionIdx((i) => Math.min(allVersions.length - 1, i + 1))}
+                aria-label='Next version'
+                title='Next version'
+              >
+                ›
+              </button>
+            </div>
+          )}
           <span className='message-time'>
             {new Date(message.timestamp).toLocaleTimeString()}
           </span>
@@ -321,7 +377,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
           <>
             <div className='message-text'>
               <FormattedMessage
-                content={textContent}
+                content={activeContent}
                 isStreaming={isStreamingAssistant}
                 showCursor={isStreamingAssistant}
               />
@@ -464,11 +520,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
             {(!isWaitingFirstToken || !isStreamingAssistant) && (
               <MessageActionToolbar
                 role={message.role}
-                content={textContent}
+                content={activeContent}
                 isStreaming={isStreamingAssistant}
                 onCopy={() => onCopy?.(index)}
                 onEdit={() => {
-                  setEditText(textContent);
+                  setEditText(activeContent);
                   setIsEditing(true);
                 }}
                 onRegenerate={(override) => onRegenerate?.(index, override)}
