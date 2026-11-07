@@ -64,8 +64,12 @@ export function clearLocalPreferences(userId?: string | null): void {
   try {
     const key = getScopedStorageKey(userId);
     window.localStorage.removeItem(key);
+    if (userId) {
+      window.localStorage.removeItem(`prismatix.modelPrefs.${userId}`);
+    }
     // Also clean up any legacy un-scoped key
     window.localStorage.removeItem('prismatix_synced_user_preferences');
+    window.localStorage.removeItem('prismatix.modelPrefs.anon');
   } catch {
     // Ignore storage removal issues
   }

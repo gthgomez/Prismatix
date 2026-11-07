@@ -288,11 +288,12 @@ export async function executeConversationImport(
       const convTitle = conv.title?.trim() || 'Imported Chat';
       const projectId = options.assignProjectId !== undefined ? options.assignProjectId : conv.projectId || null;
 
+      const isReKeyed = targetConvId !== conv.id;
       const rawMessages = Array.isArray(conv.messages) ? conv.messages : [];
       const messagesPayload = rawMessages
         .filter((msg) => msg && typeof msg.content === 'string' && msg.content.trim().length > 0)
         .map((msg) => ({
-          id: msg.id && isUuid(msg.id) ? msg.id : generateUuid(),
+          id: (!isReKeyed && msg.id && isUuid(msg.id)) ? msg.id : generateUuid(),
           role: msg.role === 'assistant' ? 'assistant' : 'user',
           content: msg.content,
           model: msg.model || null,

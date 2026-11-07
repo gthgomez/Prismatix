@@ -108,12 +108,15 @@ create policy user_preferences_update_own on public.user_preferences
 create or replace function public.trg_protect_message_provenance()
 returns trigger
 language plpgsql
-security definer
+security invoker
 set search_path = public
 as $$
+declare
+  v_jwt_role text := coalesce(current_setting('request.jwt.claim.role', true), '');
+  v_jwt_sub text := coalesce(current_setting('request.jwt.claim.sub', true), '');
 begin
-  -- Allow service_role or superuser to manage records
-  if current_user = 'service_role' or auth.role() = 'service_role' or current_user = 'postgres' then
+  -- Service role and direct privileged maintenance sessions without user JWT claims are exempt
+  if v_jwt_role = 'service_role' or (v_jwt_sub = '' and session_user in ('postgres', 'ubuntu', 'supabase_admin')) then
     return new;
   end if;
 
@@ -123,10 +126,18 @@ begin
      or new.role is distinct from old.role
      or new.execution_id is distinct from old.execution_id
      or new.token_count is distinct from old.token_count
+     or new.model_used is distinct from old.model_used
      or new.created_at is distinct from old.created_at
-     or (new.model_used is distinct from old.model_used and old.execution_id is not null)
-     or (new.content is distinct from old.content and old.role = 'assistant' and old.execution_id is not null) then
+     or new.content is distinct from old.content then
     raise exception 'unauthorized_message_mutation: server-authored message fields cannot be altered' using errcode = '42501';
+  end if;
+
+  -- Disallow modifying or injecting financial and execution receipt metadata
+  if (new.metadata->'cost' is distinct from old.metadata->'cost')
+     or (new.metadata->'receipt' is distinct from old.metadata->'receipt')
+     or (new.metadata->'executionReceipt' is distinct from old.metadata->'executionReceipt')
+     or (new.metadata->'imageGeneration' is distinct from old.metadata->'imageGeneration') then
+    raise exception 'unauthorized_message_mutation: financial and execution receipt metadata cannot be altered' using errcode = '42501';
   end if;
 
   return new;
@@ -167,6 +178,9 @@ declare
   v_msg_created timestamptz;
   v_msg_meta jsonb;
   v_inserted_msgs integer := 0;
+  v_inserted_count integer := 0;
+  v_msg_idx integer := 0;
+  v_raw_id text;
 begin
   v_user_id := auth.uid();
   if v_user_id is null then
@@ -175,6 +189,12 @@ begin
 
   if p_conversation is null or jsonb_typeof(p_conversation) <> 'object' then
     raise exception 'invalid_import_payload' using errcode = '22023';
+  end if;
+
+  -- Enforce bounded message list limit (max 1000 messages)
+  v_msgs := p_conversation->'messages';
+  if v_msgs is not null and jsonb_typeof(v_msgs) = 'array' and jsonb_array_length(v_msgs) > 1000 then
+    raise exception 'import_limit_exceeded: maximum 1000 messages permitted per conversation' using errcode = '22023';
   end if;
 
   -- Validate or generate conversation id
@@ -187,9 +207,10 @@ begin
     v_conv_id := gen_random_uuid();
   end if;
 
-  v_title := coalesce(nullif(trim(p_conversation->>'title'), ''), 'Imported Conversation');
+  -- Enforce bounded title length
+  v_title := substring(coalesce(nullif(trim(p_conversation->>'title'), ''), 'Imported Conversation'), 1, 255);
   
-  -- Project verification
+  -- Project verification & detachment if unowned
   if p_conversation->>'projectId' is not null and p_conversation->>'projectId' <> '' then
     begin
       v_proj_id := (p_conversation->>'projectId')::uuid;
@@ -234,12 +255,17 @@ begin
   end if;
 
   -- Process messages
-  v_msgs := p_conversation->'messages';
   if v_msgs is not null and jsonb_typeof(v_msgs) = 'array' then
     for v_msg in select value from jsonb_array_elements(v_msgs) loop
+      v_msg_idx := v_msg_idx + 1;
       v_content := v_msg->>'content';
       if v_content is null or trim(v_content) = '' then
         continue;
+      end if;
+
+      -- Bound content length to 100,000 characters
+      if length(v_content) > 100000 then
+        v_content := substring(v_content, 1, 100000);
       end if;
 
       v_role := coalesce(v_msg->>'role', 'user');
@@ -247,13 +273,12 @@ begin
         v_role := 'user';
       end if;
 
-      begin
-        v_msg_id := (v_msg->>'id')::uuid;
-      exception when others then
-        v_msg_id := gen_random_uuid();
-      end;
-      if v_msg_id is null then
-        v_msg_id := gen_random_uuid();
+      v_raw_id := v_msg->>'id';
+      if v_raw_id is not null and v_raw_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
+        v_msg_id := v_raw_id::uuid;
+      else
+        -- Stable deterministic UUID based on conversation and message sequence for idempotent retry
+        v_msg_id := (md5(v_conv_id::text || ':' || v_msg_idx::text || ':' || coalesce(v_raw_id, substring(v_content, 1, 50))))::uuid;
       end if;
 
       v_model := nullif(trim(v_msg->>'model'), '');
@@ -264,9 +289,9 @@ begin
       end;
 
       begin
-        v_msg_created := coalesce((v_msg->>'createdAt')::timestamptz, v_created_at) + (v_inserted_msgs * interval '1 millisecond');
+        v_msg_created := coalesce((v_msg->>'createdAt')::timestamptz, v_created_at + (v_msg_idx * interval '1 millisecond'));
       exception when others then
-        v_msg_created := v_created_at + (v_inserted_msgs * interval '1 millisecond');
+        v_msg_created := v_created_at + (v_msg_idx * interval '1 millisecond');
       end;
 
       v_msg_meta := jsonb_build_object(
@@ -286,7 +311,9 @@ begin
       )
       on conflict (id) do nothing;
 
-      v_inserted_msgs := v_inserted_msgs + 1;
+      -- Truthfully count only rows actually inserted
+      get diagnostics v_inserted_count = row_count;
+      v_inserted_msgs := v_inserted_msgs + v_inserted_count;
     end loop;
   end if;
 
@@ -433,11 +460,17 @@ begin
     raise exception 'not_authenticated' using errcode = '28000';
   end if;
 
+  if p_content is null or trim(p_content) = '' then
+    raise exception 'invalid_version_content' using errcode = '22023';
+  end if;
+
+  -- Lock message row for update to serialize concurrent version increments
   select m.* into v_msg
     from public.messages m
     join public.conversations c on c.id = m.conversation_id
    where m.id = p_message_id
-     and c.user_id = v_user_id;
+     and c.user_id = v_user_id
+   for update of m;
 
   if not found then
     raise exception 'message_not_found' using errcode = '22023';
@@ -451,6 +484,7 @@ begin
       'version', 1,
       'content', v_msg.content,
       'model', v_msg.model_used,
+      'model_used', v_msg.model_used,
       'timestamp', extract(epoch from v_msg.created_at) * 1000
     ));
   end if;
@@ -460,6 +494,7 @@ begin
     'version', v_next_version,
     'content', p_content,
     'model', coalesce(p_model, v_msg.model_used),
+    'model_used', coalesce(p_model, v_msg.model_used),
     'timestamp', extract(epoch from now()) * 1000
   );
 
