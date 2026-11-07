@@ -45,6 +45,10 @@ function generateUuid(): string {
   });
 }
 
+function sanitizeFileName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || 'document.txt';
+}
+
 /**
  * Splits text into overlapping chunks for search indexing (~1500 chars per chunk).
  */
@@ -120,7 +124,8 @@ export async function listProjectDocuments(
 }
 
 /**
- * Ingests a new document into a project, extracts chunks, and persists both.
+ * Ingests a new document into a project, uploads original file bytes to Storage,
+ * extracts chunks, and persists both.
  */
 export async function addProjectDocument(
   client: SupabaseClient,
@@ -130,6 +135,7 @@ export async function addProjectDocument(
     fileType?: string;
     sizeBytes?: number;
     extractedText: string;
+    fileBytes?: Blob | Uint8Array | ArrayBuffer | string;
     metadata?: Record<string, unknown>;
   },
 ): Promise<{ success: boolean; document?: ProjectDocument; error?: string }> {
@@ -143,7 +149,32 @@ export async function addProjectDocument(
     }
 
     const docId = generateUuid();
+    const cleanName = options.name.trim();
     const chunks = chunkDocumentText(options.extractedText);
+    let filePath: string | null = null;
+
+    // 1. Upload original file bytes to Supabase Storage if provided
+    if (options.fileBytes) {
+      const safeFilename = sanitizeFileName(cleanName);
+      const storageKey = `${user.id}/${options.projectId}/${docId}/${safeFilename}`;
+
+      try {
+        const { error: uploadErr } = await client.storage
+          .from('project-documents')
+          .upload(storageKey, options.fileBytes, {
+            contentType: options.fileType || 'application/octet-stream',
+            upsert: true,
+          });
+
+        if (!uploadErr) {
+          filePath = storageKey;
+        } else {
+          console.warn('[projectDocumentLibrary] Storage upload warning:', uploadErr.message);
+        }
+      } catch (uploadEx) {
+        console.warn('[projectDocumentLibrary] Storage upload exception:', uploadEx);
+      }
+    }
 
     const docMetadata = {
       ...(options.metadata || {}),
@@ -151,12 +182,13 @@ export async function addProjectDocument(
       charCount: options.extractedText.length,
     };
 
-    // 1. Insert document record
+    // 2. Insert document record
     const { error: docErr } = await client.from('project_documents').insert({
       id: docId,
       project_id: options.projectId,
       user_id: user.id,
-      name: options.name.trim(),
+      name: cleanName,
+      file_path: filePath,
       file_type: options.fileType || 'text/plain',
       size_bytes: options.sizeBytes || options.extractedText.length,
       extracted_text: options.extractedText,
@@ -167,7 +199,7 @@ export async function addProjectDocument(
       return { success: false, error: docErr.message };
     }
 
-    // 2. Insert chunks for grounding search
+    // 3. Insert chunks for grounding search
     if (chunks.length > 0) {
       const chunkRows = chunks.map((content, idx) => ({
         id: generateUuid(),
@@ -178,9 +210,10 @@ export async function addProjectDocument(
         content,
         token_count: Math.ceil(content.length / 4),
         metadata: {
-          docName: options.name,
+          docName: cleanName,
           chunkIndex: idx,
           totalChunks: chunks.length,
+          ...(options.metadata?.pageNumber ? { pageNumber: options.metadata.pageNumber } : {}),
         },
       }));
 
@@ -196,7 +229,8 @@ export async function addProjectDocument(
         id: docId,
         projectId: options.projectId,
         userId: user.id,
-        name: options.name.trim(),
+        name: cleanName,
+        filePath,
         fileType: options.fileType || 'text/plain',
         sizeBytes: options.sizeBytes || options.extractedText.length,
         extractedText: options.extractedText,
@@ -211,13 +245,56 @@ export async function addProjectDocument(
 }
 
 /**
- * Deletes a project document (cascades chunks automatically via foreign key).
+ * Downloads the original project document file from storage.
+ */
+export async function downloadProjectDocumentFile(
+  client: SupabaseClient,
+  filePath: string,
+): Promise<{ data: Blob | null; error?: string }> {
+  try {
+    const { data, error } = await client.storage.from('project-documents').download(filePath);
+    if (error || !data) {
+      return { data: null, error: error?.message || 'Download failed' };
+    }
+    return { data, error: undefined };
+  } catch (err: any) {
+    return { data: null, error: err.message || 'Download exception' };
+  }
+}
+
+/**
+ * Deletes a project document (cascades chunks automatically via foreign key)
+ * and purges original storage object if present.
  */
 export async function deleteProjectDocument(
   client: SupabaseClient,
   documentId: string,
 ): Promise<boolean> {
   try {
+    // 1. Fetch file_path before deleting if storage lookup is supported
+    let filePath: string | null = null;
+    try {
+      if (typeof client?.from === 'function') {
+        const query = client.from('project_documents');
+        if (typeof query?.select === 'function') {
+          const res = await query.select('file_path').eq('id', documentId);
+          const data = res?.data as any;
+          filePath = (Array.isArray(data) ? data[0]?.file_path : data?.file_path) || null;
+        }
+      }
+    } catch {
+      // Ignore if mock client does not support select
+    }
+
+    if (filePath && client?.storage) {
+      try {
+        await client.storage.from('project-documents').remove([filePath]);
+      } catch (storageErr) {
+        console.warn('[projectDocumentLibrary] Storage file remove warning:', storageErr);
+      }
+    }
+
+    // 2. Delete database record
     const { error } = await client.from('project_documents').delete().eq('id', documentId);
     return !error;
   } catch {

@@ -3,6 +3,8 @@
 // Validates URLs against internal/loopback/cloud metadata ranges, strips scripts/styles,
 // and extracts clean readable markdown text for ingestion.
 
+import { supabase } from '../lib/supabase';
+
 export interface ParsedUrlContent {
   url: string;
   title: string;
@@ -187,14 +189,38 @@ export function extractCleanTextFromHtml(html: string): { title: string; descrip
 
 /**
  * Ingests and parses a web page securely.
+ * Prefers the server-side edge function with SSRF filtering and streaming caps;
+ * falls back to direct client fetch when a custom fetchFn is provided (e.g. tests)
+ * or if the edge function is unreachable.
  */
 export async function fetchAndParseUrl(
   url: string,
   fetchFn: typeof fetch = fetch,
+  client: any = supabase,
 ): Promise<{ success: boolean; data?: ParsedUrlContent; error?: string }> {
   const check = validateUrlForSsrf(url);
   if (!check.valid) {
     return { success: false, error: `SSRF Security Violation: ${check.reason}` };
+  }
+
+  // If running with standard fetch in an environment with the edge function available, use server-side reader
+  if (fetchFn === fetch && client?.functions?.invoke) {
+    try {
+      const { data, error } = await client.functions.invoke('page-reader', {
+        body: { url },
+      });
+      if (!error && data?.success && data?.data) {
+        return {
+          success: true,
+          data: data.data,
+        };
+      }
+      if (error && error.message && !error.message.includes('FunctionsFetchError')) {
+        return { success: false, error: error.message };
+      }
+    } catch {
+      // Fall through to direct fetch
+    }
   }
 
   try {

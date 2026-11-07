@@ -2,6 +2,8 @@
 // F11: Explicit citation-backed web search with user BYOK.
 // Enforces SSRF defense, prompt injection isolation, and citation formatting.
 
+import { supabase } from '../lib/supabase';
+
 export interface SearchCitation {
   id: number;
   title: string;
@@ -93,12 +95,14 @@ export function formatSearchContextPrompt(query: string, citations: SearchCitati
 
 /**
  * Performs web search using Brave Search API with BYOK credentials.
- * Falls back to deterministic safe mock when key is not provided (e.g. tests / demo).
+ * Resolves user credentials server-side via the web-search edge function
+ * when no direct apiKey is passed, or uses the direct key if provided.
  */
 export async function executeWebSearch(
   query: string,
   apiKey?: string | null,
   fetchFn: typeof fetch = fetch,
+  client: any = supabase,
 ): Promise<WebSearchResult> {
   const trimmed = query.trim();
   if (!trimmed) {
@@ -115,6 +119,30 @@ export async function executeWebSearch(
   const SEARCH_CALL_ESTIMATE = 0.003;
 
   if (!apiKey || !apiKey.trim()) {
+    // If no direct key provided, attempt resolving user's BYOK key via server edge function
+    if (fetchFn === fetch && client?.functions?.invoke) {
+      try {
+        const { data, error } = await client.functions.invoke('web-search', {
+          body: { query: trimmed },
+        });
+        if (!error && data) {
+          return data as WebSearchResult;
+        }
+        if (data?.error) {
+          return {
+            query: trimmed,
+            citations: [],
+            contextPrompt: '',
+            costEstimate: 0,
+            source: 'unavailable',
+            error: data.error,
+          };
+        }
+      } catch {
+        // Fall through to standard unavailable response
+      }
+    }
+
     return {
       query: trimmed,
       citations: [],

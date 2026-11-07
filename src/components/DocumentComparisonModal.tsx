@@ -184,8 +184,15 @@ export const DocumentComparisonModal: React.FC<DocumentComparisonModalProps> = (
                 </div>
               </div>
 
-              {comparisonResult.metrics.docAUniqueKeywords.length > 0 && (
+              {comparisonResult.metrics.sharedKeywords.length > 0 && (
                 <div style={{ marginTop: '0.75rem', fontSize: '0.75rem' }}>
+                  <span style={{ color: 'var(--color-text-dim, #9ca3af)' }}>Shared themes: </span>
+                  <code>{comparisonResult.metrics.sharedKeywords.join(', ')}</code>
+                </div>
+              )}
+
+              {comparisonResult.metrics.docAUniqueKeywords.length > 0 && (
+                <div style={{ marginTop: '0.4rem', fontSize: '0.75rem' }}>
                   <span style={{ color: 'var(--color-text-dim, #9ca3af)' }}>Unique to {comparisonResult.metrics.docAName}: </span>
                   <code>{comparisonResult.metrics.docAUniqueKeywords.join(', ')}</code>
                 </div>
