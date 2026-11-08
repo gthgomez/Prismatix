@@ -4,6 +4,7 @@
 # Environment variables — never commit real values
 .env*
 !.env.example
+!.env.staging.example
 
 # Build outputs
 dist/
