@@ -40,7 +40,7 @@ export function AuthenticatedApp() {
     return (
       <div className="app app--chat loading-screen">
         <div className="loading-content">
-          <div className="loading-logo">🤖</div>
+          <img className="loading-logo loading-logo-mark" src="/prismatix-icon-draft.svg" alt="" />
           <div className="loading-spinner-large" />
           <p>Initializing Prismatix...</p>
         </div>

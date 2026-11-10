@@ -18,6 +18,9 @@
 .conversation-display-toggle, .conversation-sidebar-close { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; padding: 0.25rem; color: var(--color-text-dim); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer; opacity: 1; }
 .conversation-sidebar-close { display: none; }
 .conversation-display-toggle:hover, .conversation-sidebar-close:hover { background: var(--color-surface-hover); color: var(--color-text); }
+.conversation-sidebar-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: var(--spacing-xs, 0.25rem); }
+.conversation-sidebar-actions .conversation-new-button { flex: 1 1 100%; }
+.conversation-sidebar-actions .btn-secondary { flex: 1 1 4.5rem; min-width: 0; min-height: 36px; padding: 0.4rem 0.45rem; font-size: 0.75rem; border-radius: var(--radius-sm); white-space: nowrap; }
 .conversation-new-button { display: block; width: 100%; min-height: 40px; padding: 0.5rem 0.75rem; font-size: 0.875rem; font-weight: 500; border-radius: var(--radius-md); background: var(--color-surface); border: 1px solid var(--color-border-strong); color: var(--color-text); cursor: pointer; }
 .conversation-new-button:disabled { opacity: 0.45; cursor: not-allowed; }
 .conversation-new-button:hover:not(:disabled) { background: var(--color-surface-hover); border-color: var(--color-primary); }
@@ -75,7 +78,7 @@
 }
 @media (hover: none), (pointer: coarse), (max-width: 768px) {
   .conversation-display-toggle, .conversation-sidebar-close { min-width: 44px; min-height: 44px; }
-  .conversation-new-button, .conversation-search, .conversation-actions-menu button, .conversation-display-options select { min-height: 44px; }
+  .conversation-new-button, .conversation-sidebar-actions .btn-secondary, .conversation-search, .conversation-actions-menu button, .conversation-display-options select { min-height: 44px; }
   .conversation-search { font-size: 1rem; }
   .conversation-item { grid-template-columns: minmax(0, 1fr) 44px; }
   .conversation-actions-trigger { width: 44px; min-height: 44px; margin: 0; }

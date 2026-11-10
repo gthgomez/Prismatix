@@ -5,6 +5,7 @@
 
 .resume-demo-shell {
   min-height: 100dvh;
+  min-width: 0;
   background-color: var(--color-bg, #03070b);
   background-image: 
     radial-gradient(circle at 50% -20%, rgba(78, 205, 196, 0.07) 0%, transparent 60%),
@@ -386,7 +387,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.75rem;
+  min-width: 0;
   padding: 0.75rem 1.25rem;
   background: rgba(8, 12, 16, 0.95);
   border-bottom: 1px solid var(--color-border);
@@ -429,6 +431,8 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .live-indicator {
@@ -444,6 +448,10 @@
   font-weight: 700;
   letter-spacing: 0.06em;
   font-size: 0.72rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Strip inner margins/borders when InteractivePublicDemo is inside the Bento frame */
@@ -798,6 +806,12 @@
 @media (max-width: 768px) {
   .resume-demo-shell {
     padding: 1rem 0.75rem 3rem;
+    overflow-x: clip;
+  }
+
+  .resume-demo-nav-links a {
+    min-height: 44px;
+    flex: 1 1 auto;
   }
 
   .resume-demo-nav {
@@ -809,6 +823,12 @@
 
   .resume-demo-nav-brand-group {
     justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .resume-demo-nav-pill {
+    white-space: nowrap;
+    max-width: 100%;
   }
 
   .resume-demo-nav-links {

@@ -147,7 +147,7 @@ export const Auth: React.FC<AuthProps> = ({
       <div className="auth-card">
         {/* Header */}
         <div className="auth-header">
-          <div className="auth-logo">🤖</div>
+          <img className="auth-logo" src="/prismatix-icon-draft.svg" alt="" />
           <h1>Prismatix</h1>
           <p>Adaptive Model Selection</p>
         </div>
