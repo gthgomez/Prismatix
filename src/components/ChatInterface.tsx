@@ -3201,7 +3201,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           role='status'
           aria-live='assertive'
         >
-          Offline — live model inference is paused. You can keep reading and organizing loaded conversations.
+          Offline mode — live model inference is paused. You can keep reading and organizing loaded conversations.
         </div>
       )}
 
