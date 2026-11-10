@@ -587,11 +587,10 @@ function ChatHistory({
           </button>
           {onClose && <button type='button' className='conversation-sidebar-close' onClick={onClose} aria-label='Close sidebar'>✕</button>}
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: 'var(--spacing-xs)' }}>
+        <div className='conversation-sidebar-actions'>
           <button
             type='button'
             className='conversation-new-button'
-            style={{ flex: 1 }}
             disabled={disabled}
             onClick={() => { setMenuId(null); onNewChat(); onClose?.(); }}
           >
@@ -601,7 +600,6 @@ function ChatHistory({
             <button
               type='button'
               className='btn-secondary'
-              style={{ padding: '0 0.5rem', fontSize: '0.75rem', minHeight: '38px', borderRadius: 'var(--radius-sm)' }}
               title='Export conversation(s)'
               onClick={onOpenExport}
             >
@@ -612,7 +610,6 @@ function ChatHistory({
             <button
               type='button'
               className='btn-secondary'
-              style={{ padding: '0 0.5rem', fontSize: '0.75rem', minHeight: '38px', borderRadius: 'var(--radius-sm)' }}
               title='Import conversation(s)'
               onClick={onOpenImport}
             >
@@ -623,7 +620,6 @@ function ChatHistory({
             <button
               type='button'
               className='btn-secondary'
-              style={{ padding: '0 0.5rem', fontSize: '0.75rem', minHeight: '38px', borderRadius: 'var(--radius-sm)' }}
               title='Prompt templates'
               onClick={onOpenPromptLibrary}
             >

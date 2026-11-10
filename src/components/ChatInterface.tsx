@@ -2940,6 +2940,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             </div>
           </div>
           <div className='header-actions'>
+          {catalogSkewed && (
+            <span
+              className='catalog-skew-hint'
+              title={`Server model catalog (${getServerTariffVersion()}) differs from this client's (${CLIENT_TARIFF_VERSION}); prices and availability may not match.`}
+            >
+              catalog may be outdated
+            </span>
+          )}
+          <div className='header-utility-bar header-utility-bar-leading'>
           {contextStatus && (
             <details className='context-disclosure'>
               <summary title='View conversation context usage' aria-label='Conversation context usage'>
@@ -2949,14 +2958,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <div className='context-popover'><ContextStatus contextStatus={contextStatus} /></div>
             </details>
           )}
-            {catalogSkewed && (
-              <span
-                className='catalog-skew-hint'
-                title={`Server model catalog (${getServerTariffVersion()}) differs from this client's (${CLIENT_TARIFF_VERSION}); prices and availability may not match.`}
-              >
-                catalog may be outdated
-              </span>
-            )}
             <SpendTracker refreshKey={spendRefreshKey} />
             <button
               type='button'
@@ -2970,6 +2971,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 <path d='M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8' />
               </svg>
             </button>
+          </div>
 
             {/* Model Selector - CLICKABLE */}
             <div className='model-selector-container' ref={modelSelectorRef}>
@@ -3037,6 +3039,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               )}
             </div>
 
+            <div className='header-utility-bar header-utility-bar-trailing'>
             <button
               type='button'
               onClick={() => setIsGlobalSearchOpen(true)}
@@ -3096,12 +3099,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 onClick={handleInstallPwa}
                 title='Install Prismatix as web app'
                 aria-label='Install Prismatix as web app'
-                style={{
-                  color: 'var(--color-primary, #4ecdc4)',
-                  borderColor: 'rgba(78, 205, 196, 0.3)',
-                }}
               >
-                📲 Install App
+                <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'>
+                  <path d='M12 3v12' />
+                  <path d='m7 10 5 5 5-5' />
+                  <path d='M5 21h14' />
+                </svg>
+                <span className='install-pwa-label'>Install</span>
               </button>
             )}
 
@@ -3159,7 +3163,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     </svg>
                     Provider plug-ins
                   </button>
-                  <button type='button' onClick={handleSignOut} className='dropdown-item'>
+                  <button type='button' onClick={handleSignOut} className='dropdown-item dropdown-item-danger'>
                     <svg
                       width='16'
                       height='16'
@@ -3176,6 +3180,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   </button>
                 </div>
               )}
+            </div>
             </div>
 
             {showMemorySettings && <MemorySettings onClose={() => setShowMemorySettings(false)} onOpenConversation={handleSelectConversation} />}
@@ -3195,16 +3200,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           className='offline-status-banner'
           role='status'
           aria-live='assertive'
-          style={{
-            padding: '0.4rem 1rem',
-            backgroundColor: '#7c2d12',
-            color: '#ffedd5',
-            fontSize: '0.85rem',
-            textAlign: 'center',
-            fontWeight: 500,
-          }}
         >
-          ⚡ Offline Mode — Live model inference paused. You can continue reading and organizing loaded conversations.
+          Offline mode — live model inference is paused. You can keep reading and organizing loaded conversations.
         </div>
       )}
 
@@ -3456,7 +3453,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           </button>
 
           {comparisonMode && (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+            <div className='routing-comparison-pair'>
               <select
                 aria-label='Select comparison model A'
                 value={comparisonModelA}
@@ -3487,9 +3484,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         </div>
 
         <div className='routing-controls-group'>
-          <label htmlFor='routing-profile-select' style={{ fontSize: '0.75rem', color: 'var(--color-text-dim, #9ca3af)' }}>
-            Profile:
-          </label>
+          <label className='routing-field' htmlFor='routing-profile-select'>
+            <span>Profile</span>
           <select
             id='routing-profile-select'
             aria-label='Select routing profile'
@@ -3510,10 +3506,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <option value='economy'>Economy</option>
             <option value='capability'>Capability</option>
           </select>
-
-          <label htmlFor='spend-cap-select' style={{ fontSize: '0.75rem', color: 'var(--color-text-dim, #9ca3af)', marginLeft: '0.25rem' }}>
-            Cap:
           </label>
+
+          <label className='routing-field' htmlFor='spend-cap-select'>
+            <span>Cap</span>
           <select
             id='spend-cap-select'
             aria-label='Select per-turn spend cap'
@@ -3537,6 +3533,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <option value='0.10'>$0.10</option>
             <option value='0.25'>$0.25</option>
           </select>
+          </label>
         </div>
       </div>
 

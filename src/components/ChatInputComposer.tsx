@@ -106,148 +106,13 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
 
         {/* Input Row */}
         <div className='input-row glass-surface' data-glass-variant='floating' data-glass-mode='glass'>
+          <div className='composer-primary-row'>
           <FileUpload
             onFileContent={onFileSelect}
             onMultipleFiles={onMultipleFiles}
             disabled={isStreaming}
             maxFiles={10}
           />
-          {onOpenPromptLibrary && (
-            <button
-              type='button'
-              className='prompt-library-btn'
-              onClick={onOpenPromptLibrary}
-              disabled={isStreaming}
-              aria-label='Prompt templates library'
-              title='Prompt templates library'
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: 'var(--color-text-dim, #9ca3af)',
-                padding: '0.4rem',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: 'var(--radius-sm, 6px)',
-              }}
-            >
-              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
-                <path d='M4 19.5A2.5 2.5 0 0 1 6.5 17H20' />
-                <path d='M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z' />
-              </svg>
-            </button>
-          )}
-          {onOpenUrlIngestion && (
-            <button
-              type='button'
-              className='url-ingest-btn'
-              onClick={onOpenUrlIngestion}
-              disabled={isStreaming}
-              aria-label='Read web page URL'
-              title='Read web page URL'
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: 'var(--color-text-dim, #9ca3af)',
-                padding: '0.4rem',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: 'var(--radius-sm, 6px)',
-              }}
-            >
-              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
-                <path d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71' />
-                <path d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71' />
-              </svg>
-            </button>
-          )}
-          {onOpenDocComparison && (
-            <button
-              type='button'
-              className='doc-compare-btn'
-              onClick={onOpenDocComparison}
-              disabled={isStreaming}
-              aria-label='Compare two documents'
-              title='Compare two documents side-by-side'
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: 'var(--color-text-dim, #9ca3af)',
-                padding: '0.4rem',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: 'var(--radius-sm, 6px)',
-              }}
-            >
-              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
-                <path d='M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8z' />
-                <polyline points='14 3 14 8 20 8' />
-                <line x1='9' y1='13' x2='15' y2='13' />
-                <line x1='9' y1='17' x2='13' y2='17' />
-              </svg>
-            </button>
-          )}
-          {onOpenImageGen && (
-            <button
-              type='button'
-              className='image-gen-btn'
-              onClick={onOpenImageGen}
-              disabled={isStreaming}
-              aria-label='Generate image (BYOK)'
-              title='Generate image with BYOK model'
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: 'var(--color-text-dim, #9ca3af)',
-                padding: '0.4rem',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: 'var(--radius-sm, 6px)',
-              }}
-            >
-              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
-                <rect x='3' y='3' width='18' height='18' rx='2' ry='2' />
-                <circle cx='8.5' cy='8.5' r='1.5' />
-                <polyline points='21 15 16 10 5 21' />
-              </svg>
-            </button>
-          )}
-          {onToggleVoiceDictation && (
-            <button
-              type='button'
-              className={`voice-dictation-btn ${isRecordingVoice ? 'is-recording' : ''}`}
-              onClick={onToggleVoiceDictation}
-              disabled={isStreaming}
-              aria-label={isRecordingVoice ? 'Stop voice recording' : 'Voice dictation'}
-              title={isRecordingVoice ? 'Stop voice recording' : 'Voice dictation (speech to text)'}
-              style={{
-                background: isRecordingVoice ? 'rgba(239, 68, 68, 0.2)' : 'none',
-                border: isRecordingVoice ? '1px solid #ef4444' : 'none',
-                cursor: 'pointer',
-                color: isRecordingVoice ? '#ef4444' : 'var(--color-text-dim, #9ca3af)',
-                padding: '0.4rem',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: 'var(--radius-sm, 6px)',
-                animation: isRecordingVoice ? 'pulse 1.5s infinite' : 'none',
-              }}
-            >
-              <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
-                <path d='M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z' />
-                <path d='M19 10v2a7 7 0 0 1-14 0v-2' />
-                <line x1='12' y1='19' x2='12' y2='23' />
-                <line x1='8' y1='23' x2='16' y2='23' />
-              </svg>
-            </button>
-          )}
           <textarea
             ref={inputRef}
             value={input}
@@ -309,6 +174,92 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
                 <rect x='6' y='6' width='12' height='12' rx='2' />
               </svg>
             </button>
+          )}
+          </div>
+          {(onOpenPromptLibrary || onOpenUrlIngestion || onOpenDocComparison || onOpenImageGen || onToggleVoiceDictation) && (
+            <div className='composer-tool-row' role='toolbar' aria-label='Composer tools'>
+              {onOpenPromptLibrary && (
+                <button
+                  type='button'
+                  className='composer-tool-btn prompt-library-btn'
+                  onClick={onOpenPromptLibrary}
+                  disabled={isStreaming}
+                  aria-label='Prompt templates library'
+                  title='Prompt templates library'
+                >
+                  <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+                    <path d='M4 19.5A2.5 2.5 0 0 1 6.5 17H20' />
+                    <path d='M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z' />
+                  </svg>
+                </button>
+              )}
+              {onOpenUrlIngestion && (
+                <button
+                  type='button'
+                  className='composer-tool-btn url-ingest-btn'
+                  onClick={onOpenUrlIngestion}
+                  disabled={isStreaming}
+                  aria-label='Read web page URL'
+                  title='Read web page URL'
+                >
+                  <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+                    <path d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71' />
+                    <path d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71' />
+                  </svg>
+                </button>
+              )}
+              {onOpenDocComparison && (
+                <button
+                  type='button'
+                  className='composer-tool-btn doc-compare-btn'
+                  onClick={onOpenDocComparison}
+                  disabled={isStreaming}
+                  aria-label='Compare two documents'
+                  title='Compare two documents side-by-side'
+                >
+                  <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+                    <path d='M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8z' />
+                    <polyline points='14 3 14 8 20 8' />
+                    <line x1='9' y1='13' x2='15' y2='13' />
+                    <line x1='9' y1='17' x2='13' y2='17' />
+                  </svg>
+                </button>
+              )}
+              {onOpenImageGen && (
+                <button
+                  type='button'
+                  className='composer-tool-btn image-gen-btn'
+                  onClick={onOpenImageGen}
+                  disabled={isStreaming}
+                  aria-label='Generate image (BYOK)'
+                  title='Generate image with BYOK model'
+                >
+                  <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+                    <rect x='3' y='3' width='18' height='18' rx='2' ry='2' />
+                    <circle cx='8.5' cy='8.5' r='1.5' />
+                    <polyline points='21 15 16 10 5 21' />
+                  </svg>
+                </button>
+              )}
+              {onToggleVoiceDictation && (
+                <button
+                  type='button'
+                  className={`composer-tool-btn voice-dictation-btn ${isRecordingVoice ? 'is-recording' : ''}`}
+                  onClick={onToggleVoiceDictation}
+                  disabled={isStreaming}
+                  aria-label={isRecordingVoice ? 'Stop voice recording' : 'Voice dictation'}
+                  title={isRecordingVoice ? 'Stop voice recording' : 'Voice dictation (speech to text)'}
+                  aria-pressed={isRecordingVoice}
+                >
+                  <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+                    <path d='M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z' />
+                    <path d='M19 10v2a7 7 0 0 1-14 0v-2' />
+                    <line x1='12' y1='19' x2='12' y2='23' />
+                    <line x1='8' y1='23' x2='16' y2='23' />
+                  </svg>
+                </button>
+              )}
+            </div>
           )}
         </div>
 

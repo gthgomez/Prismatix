@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="description" content="Prismatix - Adaptive multi-model AI orchestration" />
-    <meta name="theme-color" content="#101014" />
+    <meta name="theme-color" content="#03070b" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Prismatix</title>
@@ -17,17 +17,16 @@
     <!-- Preload fonts for better performance -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <style>
-      /* Prevent FOUC (Flash of Unstyled Content) */
+      /* Prevent FOUC. Document scroll stays available; the chat shell locks itself. */
       html, body {
         margin: 0;
         padding: 0;
-        height: 100%;
-        overflow: hidden;
-        background: #0a0a0a;
-        color: #e0e0e0;
+        min-height: 100%;
+        background: #03070b;
+        color: #e8eef2;
       }
 
       #root {
