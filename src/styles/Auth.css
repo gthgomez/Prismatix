@@ -152,6 +152,18 @@
   box-shadow: 0 0 0 3px rgba(78, 205, 196, 0.1);
 }
 
+.form-group input[aria-invalid='true'],
+.reset-form input[aria-invalid='true'] {
+  border-color: var(--color-danger);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
+}
+
+.auth-message.error:focus,
+.reset-message.error:focus {
+  outline: 2px solid var(--color-danger);
+  outline-offset: 2px;
+}
+
 .form-group input::placeholder,
 .reset-form input::placeholder {
   color: var(--color-text-muted);

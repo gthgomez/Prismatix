@@ -1,17 +1,25 @@
 // ResetPassword.tsx - Password recovery UI for Supabase email links
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import '../styles/Auth.css';
 
 type Status = 'idle' | 'loading' | 'success' | 'error' | 'invalid';
+type ResetField = 'newPassword' | 'confirmPassword';
+
+const RESET_ERROR_ID = 'reset-field-error';
 
 export const ResetPassword: React.FC = () => {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [status, setStatus] = useState<Status>('idle');
   const [message, setMessage] = useState<string | null>(null);
+  const [errorField, setErrorField] = useState<ResetField | null>(null);
   const [checking, setChecking] = useState(true);
+
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const confirmPasswordRef = useRef<HTMLInputElement>(null);
+  const formErrorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -64,18 +72,38 @@ export const ResetPassword: React.FC = () => {
     return () => { mounted = false; };
   }, []);
 
+  const focusField = (field: ResetField | null) => {
+    queueMicrotask(() => {
+      if (field === 'newPassword') {
+        passwordRef.current?.focus();
+        return;
+      }
+      if (field === 'confirmPassword') {
+        confirmPasswordRef.current?.focus();
+        return;
+      }
+      formErrorRef.current?.focus();
+    });
+  };
+
+  const reportError = (text: string, field: ResetField | null = null) => {
+    setStatus('error');
+    setMessage(text);
+    setErrorField(field);
+    focusField(field);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
+    setErrorField(null);
 
     if (!password || password.length < 6) {
-      setStatus('error');
-      setMessage('Password must be at least 6 characters.');
+      reportError('Password must be at least 6 characters.', 'newPassword');
       return;
     }
     if (password !== confirmPassword) {
-      setStatus('error');
-      setMessage('Passwords do not match.');
+      reportError('Passwords do not match.', 'confirmPassword');
       return;
     }
 
@@ -83,13 +111,13 @@ export const ResetPassword: React.FC = () => {
     const { error } = await supabase.auth.updateUser({ password });
 
     if (error) {
-      setStatus('error');
-      setMessage(error.message);
+      reportError(error.message, 'newPassword');
       return;
     }
 
     setStatus('success');
     setMessage('Password updated. You can sign in now.');
+    setErrorField(null);
     await supabase.auth.signOut();
   };
 
@@ -121,24 +149,33 @@ export const ResetPassword: React.FC = () => {
         )}
 
         {!checking && message && status !== 'invalid' && (
-          <div className={`reset-message ${status === 'success' ? 'success' : 'error'}`} role={status === 'success' ? 'status' : 'alert'}>
+          <div
+            id={status === 'error' ? RESET_ERROR_ID : undefined}
+            ref={status === 'error' ? formErrorRef : undefined}
+            className={`reset-message ${status === 'success' ? 'success' : 'error'}`}
+            role={status === 'success' ? 'status' : 'alert'}
+            tabIndex={status === 'error' ? -1 : undefined}
+          >
             <span className="reset-message-icon" aria-hidden="true">{status === 'success' ? 'OK' : '!'}</span>
             <span>{message}</span>
           </div>
         )}
 
         {!checking && status !== 'invalid' && (
-          <form onSubmit={handleSubmit} className="reset-form">
+          <form onSubmit={handleSubmit} className="reset-form" noValidate>
             <div className="form-group">
               <label htmlFor="newPassword">New Password</label>
               <input
                 id="newPassword"
+                ref={passwordRef}
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="********"
                 disabled={status === 'loading'}
                 autoComplete="new-password"
+                aria-invalid={errorField === 'newPassword' ? true : undefined}
+                aria-describedby={errorField === 'newPassword' ? RESET_ERROR_ID : undefined}
               />
             </div>
 
@@ -146,16 +183,19 @@ export const ResetPassword: React.FC = () => {
               <label htmlFor="confirmPassword">Confirm Password</label>
               <input
                 id="confirmPassword"
+                ref={confirmPasswordRef}
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="********"
                 disabled={status === 'loading'}
                 autoComplete="new-password"
+                aria-invalid={errorField === 'confirmPassword' ? true : undefined}
+                aria-describedby={errorField === 'confirmPassword' ? RESET_ERROR_ID : undefined}
               />
             </div>
 
-            <button type="submit" className="reset-submit" disabled={status === 'loading'}>
+            <button type="submit" className="reset-submit" disabled={status === 'loading'} aria-label="Update password">
               {status === 'loading' ? 'Updating...' : 'Update Password'}
             </button>
           </form>
