@@ -243,6 +243,10 @@ export function describeStreamError(error: unknown): string {
       case 'no_available_provider':
       case 'provider_unavailable':
         return 'No active provider is currently available for this model. Check Provider Settings to enable a provider.';
+      case 'provider_key_required':
+        return 'No usable provider credential is available for this route. Check Provider Settings to choose an enabled provider and review its saved key.';
+      case 'provider_key_unavailable':
+        return 'The saved provider credential could not be retrieved. Your prompt is preserved; try again later or review Provider Settings.';
       case 'provider_disabled':
         return 'The provider required for this model is currently disabled in your Provider Settings.';
       case 'unknown_pricing':
@@ -403,6 +407,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // PX07 conversation continuity state.
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(true);
+  const conversationsRefreshSeqRef = useRef(0);
   const [hasMoreConversations, setHasMoreConversations] = useState(false);
   const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
   const [loadMoreConversationsError, setLoadMoreConversationsError] = useState<string | null>(null);
@@ -493,6 +498,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     } catch {
       // Keep the in-memory mode usable when storage is unavailable.
     }
+  }, []);
+
+  useEffect(() => {
+    const closeCompactDrawerAtWideBreakpoint = () => {
+      if (window.innerWidth > 1200) setRoutingPanelOpen(false);
+    };
+    window.addEventListener('resize', closeCompactDrawerAtWideBreakpoint);
+    return () => window.removeEventListener('resize', closeCompactDrawerAtWideBreakpoint);
   }, []);
 
   useEffect(() => {
@@ -965,7 +978,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return mapped;
   };
 
-  const refreshConversations = async (projectId?: string | null) => {
+  const refreshConversations = useCallback(async (projectId?: string | null) => {
+    const requestSeq = ++conversationsRefreshSeqRef.current;
     setConversationsLoading(true);
     setConversationsError(null);
     const targetProjectId = projectId !== undefined ? projectId : activeProjectId;
@@ -974,16 +988,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         limit: 50,
         projectId: targetProjectId ?? undefined,
       });
+      if (requestSeq !== conversationsRefreshSeqRef.current) return;
       setConversations(list);
       setHasMoreConversations(list.length === 50);
       void listProjects(supabase).then(setProjects);
     } catch (error) {
+      if (requestSeq !== conversationsRefreshSeqRef.current) return;
       console.warn('[ChatInterface] Failed to list conversations:', error);
       setConversationsError('Failed to load conversations.');
     } finally {
-      setConversationsLoading(false);
+      if (requestSeq === conversationsRefreshSeqRef.current) setConversationsLoading(false);
     }
-  };
+  }, [activeProjectId]);
 
   const handleLoadMoreConversations = async () => {
     if (isLoadingMoreConversations || !hasMoreConversations || conversations.length === 0) return;
@@ -1466,6 +1482,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return () => clearTimeout(prefsTimeoutRef.current);
   }, [user?.id, routingProfile, webSearchEnabled, maxSpendCap, activeProjectId]);
 
+  // Refresh history whenever the authenticated account or server-side project filter changes.
+  useEffect(() => {
+    if (!user?.id) return;
+    void refreshConversations(activeProjectId);
+  }, [user?.id, activeProjectId, refreshConversations]);
+
   // Per-account selection: restore on sign-in/account change, isolated by user.
   useEffect(() => {
     const plan = planInitialConversation(readSelectedConversation(user?.id ?? null));
@@ -1474,7 +1496,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (plan.resetGlobalConversation) {
       resetConversation();
     }
-    void refreshConversations();
     if (plan.conversationId) {
       void openConversation(plan.conversationId);
     } else {
@@ -2251,16 +2272,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       } else {
         console.error('Stream error:', error);
         const errorDesc = describeStreamError(error);
+        const routerCode = error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code)
+          : '';
+        const routeUnavailable = ['provider_key_required', 'provider_key_unavailable', 'no_available_provider', 'provider_unavailable', 'provider_disabled'].includes(routerCode);
         setStreamOutcome({
           status: 'error',
           executionId: executionIdRef.current,
           error: errorDesc,
         });
-        setMessages((prev) => [...prev, {
-          role: 'assistant',
-          content: `⚠️ ${errorDesc}`,
-          timestamp: Date.now(),
-        }]);
+        if (routeUnavailable) {
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            return last?.role === 'user' && extractTextContent(last.content) === (queryText || '')
+              ? prev.slice(0, -1)
+              : prev;
+          });
+        } else {
+          setMessages((prev) => [...prev, {
+            role: 'assistant',
+            content: `⚠️ ${errorDesc}`,
+            timestamp: Date.now(),
+          }]);
+        }
         scheduleCostEstimatorHide(1500);
 
         // F02: Preserve user prompt and attachments safely in session memory
@@ -2292,8 +2326,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       setSendValidationError('Attachments are still processing. Please wait for completion before sending.');
       return;
     }
-    if (enabledProviders.size === 0) {
-      setSendValidationError('No AI providers configured. Open Provider Settings to connect your OpenRouter or direct provider key.');
+    if (providerPlugins.loading || providerPlugins.error || providerPlugins.isConfigured === false || enabledProviders.size === 0) {
+      setSendValidationError(providerPlugins.error
+        ? 'Provider setup could not be checked. Retry the check or open Provider Settings.'
+        : providerPlugins.loading
+          ? 'Provider setup is still being checked. Please wait before sending.'
+          : 'No enabled provider with a saved key is available. Open Provider Settings to connect or enable a provider.');
       return;
     }
     if (debateSelection === 'video_ui' && !hasReadyVideo) {
@@ -2900,6 +2938,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       ? 'video'
       : sendValidationError
         ? 'invalid'
+        : providerPlugins.loading || providerPlugins.error || providerPlugins.isConfigured === false
+          ? 'invalid'
         : !input.trim() && draftAttachments.length === 0
           ? 'empty'
           : null;
@@ -3262,7 +3302,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   );
 
   return (
-    <div className={`app-with-sidebar arctic-workbench ${messages.length === 0 && !selectedConversationId ? 'arctic-new-chat' : ''} ${chatsHidden ? 'chats-hidden' : ''}`}>
+    <div className={`app-with-sidebar arctic-workbench arctic-new-chat ${messages.length > 0 || selectedConversationId ? 'arctic-has-history' : ''} ${chatsHidden ? 'chats-hidden' : ''}`}>
       {!chatsHidden && (
         <ConversationSidebar
           preferenceScope={user?.id ?? null}
@@ -3275,7 +3315,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           isLoadingMore={isLoadingMoreConversations}
           loadMoreError={loadMoreConversationsError}
           loadError={conversationsError}
-          onRetry={() => void refreshConversations()}
+          onRetry={() => void refreshConversations(activeProjectId)}
           onLoadMore={() => void handleLoadMoreConversations()}
           onOpenSearch={() => {
             setIsGlobalSearchOpen(true);
@@ -3310,10 +3350,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           onSetConversationTags={handleSetConversationTags}
         />
       )}
-      {messages.length === 0 && !selectedConversationId && chatHeader}
+      {chatHeader}
       <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>
       <ChatBackdrop />
-      {(messages.length > 0 || selectedConversationId) && chatHeader}
       {/* Header */}
 
 
@@ -3393,18 +3432,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   </button>
                 ))}
               </div>
-              {!providerPlugins.isConfigured && !providerPlugins.loading && (
+              {providerPlugins.loading ? (
+                <div className='provider-setup-state' role='status'>Checking provider setup…</div>
+              ) : providerPlugins.error ? (
+                <div className='provider-setup-state error' role='alert'>
+                  <strong>Could not check provider setup.</strong>
+                  <span>Provider settings could not be loaded. Your draft remains available.</span>
+                  <button type='button' onClick={() => void providerPlugins.refresh()}>Retry provider check</button>
+                  <button type='button' onClick={() => setShowProviderSettings(true)}>Open Provider Settings</button>
+                </div>
+              ) : !providerPlugins.isConfigured ? (
                 <FirstRunSetupCard
                   plugins={providerPlugins}
                   onOpenSettings={() => setShowProviderSettings(true)}
                   onSaved={(message, verified) => setFirstRunOutcome({ message, verified })}
                 />
-              )}
+              ) : (
+                <>
                   <img className='arctic-hero-mark' src='/prismatix-arctic-mark.svg' alt='' />
-              <h2>What can I help you with?</h2>
-              <p>Ask anything. Prismatix chooses a suitable model automatically, or let you choose the workflow.</p>
-
-              <div className='empty-state-capabilities'>
+                  <h2>What can I help you with?</h2>
+                  <p>Ask anything. Prismatix chooses a suitable model automatically, or let you choose the workflow.</p>
+                  <div className='empty-state-capabilities'>
                 {CAPABILITY_PILLARS.map((card) => (
                   <button
                     key={card.title}
@@ -3425,7 +3473,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     <span className='capability-card-action'>{card.isUpload ? 'Choose a file →' : 'Prepare a draft →'}</span>
                   </button>
                 ))}
-              </div>
+                  </div>
+                </>
+              )}
             </div>
           )
           : (
@@ -3695,6 +3745,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         </div>
       </div>
 
+      {/* Saved chats need the same provider readiness and recovery controls as New Chat. */}
+      {messages.length > 0 && providerPlugins.loading && (
+        <div className='provider-readiness-banner' role='status'>Checking provider setup…</div>
+      )}
+      {messages.length > 0 && providerPlugins.error && (
+        <div className='provider-readiness-banner' role='alert'>
+          <span>Could not check provider setup. Sending is paused and your draft is preserved.</span>
+          <button type='button' onClick={() => void providerPlugins.refresh()}>Retry check</button>
+          <button type='button' onClick={() => setShowProviderSettings(true)}>Provider Settings</button>
+        </div>
+      )}
+      {messages.length > 0 && !providerPlugins.loading && !providerPlugins.error && !providerPlugins.isConfigured && (
+        <div className='provider-readiness-banner' role='alert'>
+          <span>Connect or enable a provider to send. Your draft is preserved.</span>
+          <button type='button' onClick={() => setShowProviderSettings(true)}>Connect a provider</button>
+        </div>
+      )}
+
       {/* Input Area */}
       <ChatInputComposer
         input={input}
@@ -3891,9 +3959,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           <h2>Routing details</h2>
           <button type='button' className='arctic-routing-close' onClick={() => setRoutingPanelOpen(false)} aria-label='Close routing details'>×</button>
         </div>
-        <div className={`arctic-route-status ${isStreaming ? 'running' : providerPlugins.loading ? 'checking' : providerPlugins.isConfigured ? 'ready' : 'setup'}`} role='status'>
-          <span className='arctic-status-icon' aria-hidden='true'>{isStreaming ? '◌' : providerPlugins.loading ? '…' : providerPlugins.isConfigured ? '✓' : '!'}</span>
-          <span><small>Route status</small><strong>{isStreaming ? 'Request in progress' : providerPlugins.loading ? 'Checking provider setup' : firstRunOutcome && !firstRunOutcome.verified ? 'Key saved · not verified' : !providerPlugins.isConfigured ? 'Connect a provider' : messages.length ? 'Ready for next prompt' : 'Waiting for prompt'}</strong></span>
+        <div className={`arctic-route-status ${isStreaming ? 'running' : providerPlugins.loading ? 'checking' : providerPlugins.error || !providerPlugins.isConfigured || (firstRunOutcome && !firstRunOutcome.verified) ? 'setup' : 'ready'}`} role='status'>
+          <span className='arctic-status-icon' aria-hidden='true'>{isStreaming ? '◌' : providerPlugins.loading ? '…' : providerPlugins.error || !providerPlugins.isConfigured || (firstRunOutcome && !firstRunOutcome.verified) ? '!' : '✓'}</span>
+          <span><small>Route status</small><strong>{isStreaming ? 'Request in progress' : providerPlugins.loading ? 'Checking provider setup' : providerPlugins.error ? 'Provider status unavailable' : firstRunOutcome && !firstRunOutcome.verified ? 'Key saved · not verified' : !providerPlugins.isConfigured ? 'Connect a provider' : 'Provider configured · route checked on send'}</strong></span>
         </div>
         <section className='arctic-route-field'>
           <h3>Selected model</h3>

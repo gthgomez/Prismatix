@@ -193,7 +193,7 @@ test('compact header measurements follow New Chat, first send, saved history and
   await page.getByRole('textbox', { name: 'Message Prismatix' }).fill('Header measurement fixture');
   await page.getByRole('textbox', { name: 'Message Prismatix' }).press('Enter');
   await expect(page.getByText('Reply to Header measurement fixture')).toBeVisible();
-  await expect(page.locator('.arctic-workbench')).not.toHaveClass(/arctic-new-chat/);
+  await expect(page.locator('.arctic-workbench')).toHaveClass(/arctic-new-chat/);
   await expectHeaderMeasurement();
   await page.getByRole('button', { name: 'Choose routing mode: automatic' }).click();
   await expect(page.locator('.model-dropdown')).toBeVisible();
@@ -303,7 +303,7 @@ for (const viewport of [
     await signInAsMockUser(page);
     if (viewport.width <= 768) await page.getByRole('button', { name: 'Toggle conversations sidebar' }).click();
     await page.getByRole('button', { name: /^Architectural Discussion/ }).click();
-    await expect(page.locator('.arctic-workbench')).not.toHaveClass(/arctic-new-chat/);
+    await expect(page.locator('.arctic-workbench')).toHaveClass(/arctic-new-chat/);
 
     const toggle = page.getByRole('button', { name: 'Routing details' });
     await expect(toggle).toBeVisible();
