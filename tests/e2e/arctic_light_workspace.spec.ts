@@ -119,7 +119,7 @@ test('New Chat Stop cancels one mocked stream without a second dispatch', async 
   const requests: RequestRecord[] = [];
   await page.route('**/functions/v1/router*', async (route) => {
     requests.push(route.request().postDataJSON() as RequestRecord);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await new Promise((resolve) => setTimeout(resolve, 10000));
     await route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: [DONE]\n\n' });
   });
   await signInAsMockUser(page);
@@ -173,6 +173,62 @@ test('New Chat keeps local profile, web search and spend cap edits over late ser
   await expect(profile).toHaveValue('capability');
   await expect(cap).toHaveValue('0.05');
   await expect(webSearch).toBeChecked();
+});
+
+for (const viewport of [
+  { name: 'compact', width: 1024, height: 600 },
+  { name: 'mobile', width: 390, height: 844 },
+]) {
+  test(`${viewport.name} Routing details stays reachable in a saved conversation and returns focus on close`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await setupAuthenticatedMock(page, { hasProviderKey: true });
+    await signInAsMockUser(page);
+    if (viewport.width <= 768) await page.getByRole('button', { name: 'Toggle conversations sidebar' }).click();
+    await page.getByRole('button', { name: /^Architectural Discussion/ }).click();
+    await expect(page.locator('.arctic-workbench')).not.toHaveClass(/arctic-new-chat/);
+
+    const toggle = page.getByRole('button', { name: 'Routing details' });
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+    const panel = page.locator('.arctic-routing-panel');
+    await expect(panel).toBeVisible();
+    const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
+    await mkdir(evidenceDir, { recursive: true });
+    await page.screenshot({ path: `${evidenceDir}/${testInfo.project.name}-history-routing-open-${viewport.width}x${viewport.height}.png`, fullPage: true });
+    await panel.getByRole('button', { name: 'Close routing details' }).click();
+    await expect(panel).toBeHidden();
+    await expect(toggle).toBeFocused();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+}
+
+test('desktop New Chat can restore the past-chats sidebar when hidden by preference', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.addInitScript(() => localStorage.setItem('prismatix.sidebar.chatsHidden', '1'));
+  await signInAsMockUser(page);
+
+  const showChats = page.getByRole('button', { name: 'Show past chats' });
+  await expect(showChats).toBeVisible();
+  await showChats.click();
+  await expect(page.locator('.conversation-sidebar')).toBeVisible();
+  await expect(page.getByRole('button', { name: '+ New Chat' })).toBeFocused();
+});
+
+test('Arctic spend cap keeps $0.10 selected and persisted after controlled rerenders', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await signInAsMockUser(page);
+
+  const routingPanel = page.locator('.arctic-routing-panel');
+  await routingPanel.getByText('Routing profile & tools', { exact: true }).click();
+  const cap = routingPanel.locator('#arctic-spend-cap');
+  await cap.selectOption('0.10');
+  await expect(cap).toHaveValue('0.10');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('prismatix_max_spend_cap'))).toBe('0.1');
+  await routingPanel.locator('#arctic-routing-profile').selectOption('economy');
+  await expect(cap).toHaveValue('0.10');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('prismatix_max_spend_cap'))).toBe('0.1');
 });
 
 for (const viewport of [

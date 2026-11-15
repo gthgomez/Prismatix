@@ -187,6 +187,7 @@ interface ChatInterfaceProps {
 const DAILY_BUDGET_LIMIT_USD = 2.0;
 const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
 const CHATS_HIDDEN_KEY = 'prismatix.sidebar.chatsHidden';
+const spendCapSelectValue = (value: number | null) => value === null ? 'none' : value.toFixed(2);
 
 const PROMPT_STARTERS: PromptStarter[] = [
   {
@@ -1228,6 +1229,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const toggleChatsHidden = () => {
+    const restoringChats = chatsHidden;
     setChatsHidden((prev) => {
       const next = !prev;
       try {
@@ -1238,6 +1240,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return next;
     });
     if (!chatsHidden) setSidebarOpen(false);
+    else if (restoringChats && window.innerWidth > 768) {
+      window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('.conversation-new-button')?.focus());
+    }
   };
 
   const handleSidebarToggle = () => {
@@ -2925,7 +2930,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   return (
-    <div className={`app-with-sidebar arctic-workbench ${messages.length === 0 && !selectedConversationId ? 'arctic-new-chat' : ''}`}>
+    <div className={`app-with-sidebar arctic-workbench ${messages.length === 0 && !selectedConversationId ? 'arctic-new-chat' : ''} ${chatsHidden ? 'chats-hidden' : ''}`}>
       {!chatsHidden && (
         <ConversationSidebar
           preferenceScope={user?.id ?? null}
@@ -3650,7 +3655,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           <select
             id='spend-cap-select'
             aria-label='Select per-turn spend cap'
-            value={maxSpendCap === null ? 'none' : String(maxSpendCap)}
+            value={spendCapSelectValue(maxSpendCap)}
             onChange={(e) => {
               userInteractedPrefsRef.current.maxSpendCap = true;
               const val = e.target.value === 'none' ? null : Number(e.target.value);
@@ -3966,7 +3971,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           <label htmlFor='arctic-spend-cap'>Per-turn spend cap</label>
           <select
             id='arctic-spend-cap'
-            value={maxSpendCap === null ? 'none' : String(maxSpendCap)}
+            value={spendCapSelectValue(maxSpendCap)}
             onChange={(event) => {
               userInteractedPrefsRef.current.maxSpendCap = true;
               const value = event.target.value === 'none' ? null : Number(event.target.value);

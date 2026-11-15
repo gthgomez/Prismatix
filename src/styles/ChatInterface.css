@@ -4319,7 +4319,7 @@
 .arctic-new-chat .header-content { max-width: none; }
 .arctic-new-chat .header-title { display: none; }
 .arctic-new-chat .header-actions { margin-left: auto; }
-.arctic-new-chat .chats-toggle-button,
+.arctic-new-chat:not(.chats-hidden) .chats-toggle-button,
 .arctic-new-chat .header-utility-bar-leading > .context-disclosure,
 .arctic-new-chat .shortcuts-toggle-button,
 .arctic-new-chat .model-selector-container,
@@ -4327,6 +4327,7 @@
 .arctic-new-chat .memory-trigger,
 .arctic-new-chat .provider-plugins-button,
 .arctic-new-chat .install-pwa-button { display: none !important; }
+.arctic-new-chat.chats-hidden .chats-toggle-button { display: inline-flex !important; }
 .arctic-new-chat .spend-pill {
   min-height: 48px;
   padding: 0 1rem;
@@ -4560,7 +4561,7 @@
   overflow-y: auto;
   color: #101828;
 }
-.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel { display: none; }
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel:not(.is-open) { display: none; }
 .arctic-routing-heading {
   display: flex;
   align-items: center;
@@ -4630,6 +4631,42 @@
 .arctic-route-accordion .arctic-route-check { display: flex; align-items: center; gap: 0.55rem; min-height: 40px; color: #172338; font-size: 0.86rem; }
 .arctic-route-check input { width: 18px; height: 18px; accent-color: #079bb3; }
 
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel {
+  border-left-color: var(--color-border, rgba(255,255,255,.1));
+  background: var(--color-bg, #03070b);
+  color: var(--color-text, #fff);
+}
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-routing-heading,
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-accordion {
+  border-color: var(--color-border, rgba(255,255,255,.1));
+  background: var(--color-surface, #0d141b);
+}
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-routing-heading h2,
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-status strong,
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-field p,
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-accordion summary {
+  color: var(--color-text, #fff);
+}
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-status { background: var(--color-surface-hover, #17212b); }
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-status.setup { background: var(--color-surface-warning, #292313); }
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-status.running { background: var(--color-surface, #0d141b); }
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-routing-close { color: var(--color-text, #fff); }
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-field { border-bottom-color: var(--color-border, rgba(255,255,255,.1)); }
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-field h3,
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-field small,
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-status small,
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-comparison-models > label,
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-accordion > label:not(.arctic-route-check) {
+  color: var(--color-text-dim, #aab4c0);
+}
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-accordion > button,
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-accordion > select {
+  border-color: var(--color-border, rgba(255,255,255,.1));
+  background: var(--color-bg, #03070b);
+  color: var(--color-text, #fff);
+}
+.arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-accordion .arctic-route-check { color: var(--color-text, #fff); }
+
 @media (max-width: 1200px) {
   .arctic-new-chat.app-with-sidebar { grid-template-columns: minmax(200px, 23vw) minmax(0, 1fr); }
   .arctic-new-chat > .chat-container { grid-column: 2; }
@@ -4646,6 +4683,11 @@
     font: inherit;
     font-size: 0.8rem;
     cursor: pointer;
+  }
+  .arctic-workbench:not(.arctic-new-chat) .arctic-routing-toggle {
+    border-color: var(--color-border, rgba(255,255,255,.1));
+    background: var(--color-surface, #0d141b);
+    color: var(--color-text, #fff);
   }
   .arctic-routing-panel { display: none; }
   .arctic-routing-panel.is-open {
@@ -4677,6 +4719,7 @@
 }
 
 @media (max-width: 768px) {
+  .arctic-new-chat.chats-hidden .chats-toggle-button { display: none !important; }
   .arctic-new-chat.app-with-sidebar { display: block; }
   .arctic-new-chat .conversation-sidebar { width: min(296px, 90vw) !important; min-width: 0 !important; }
   .arctic-new-chat > .chat-container { width: 100%; height: 100%; }
