@@ -597,7 +597,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const modelSelectorRef = useRef<HTMLDivElement>(null);
-  const chatHeaderRef = useRef<HTMLElement>(null);
+  const [chatHeaderElement, setChatHeaderElement] = useState<HTMLElement | null>(null);
   const costEstimatorHideTimeoutRef = useRef<number | null>(null);
   // PX06: the in-flight request's abort controller (Stop control) and the
   // terminal outcome surfaced to the user (cancelled, or the receipt state).
@@ -839,8 +839,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // so it clears notches, safe areas, and #root overflow without clipping the menu header.
   useLayoutEffect(() => {
     const root = document.documentElement;
-    const el = chatHeaderRef.current;
+    const el = chatHeaderElement;
     if (!el || typeof ResizeObserver === 'undefined') {
+      root.style.removeProperty('--prismatix-model-dropdown-top');
+      root.style.removeProperty('--prismatix-chat-header-h');
       return;
     }
     const apply = () => {
@@ -861,7 +863,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       root.style.removeProperty('--prismatix-model-dropdown-top');
       root.style.removeProperty('--prismatix-chat-header-h');
     };
-  }, []);
+  }, [chatHeaderElement]);
 
   // ── PX07 conversation continuity ─────────────────────────────────────────
   const mapLoadedMessages = async (loaded: LoadedMessage[]): Promise<Message[]> => {
@@ -2938,7 +2940,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const chatHeader = (
-      <header className='chat-header' ref={chatHeaderRef}>
+      <header className='chat-header' ref={setChatHeaderElement}>
         <div className='header-content'>
           <div className='header-left'>
             <button

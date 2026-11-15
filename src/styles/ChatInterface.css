@@ -4787,6 +4787,12 @@
   .arctic-new-chat.app-with-sidebar:not(:has(.conversation-sidebar)) > .arctic-routing-panel { grid-column: 2; }
 }
 
+@media (min-width: 769px) and (max-width: 1200px) and (max-height: 680px) {
+  .arctic-new-chat .arctic-mode-switch { min-height: 52px; margin-top: 0.85rem; }
+  .arctic-new-chat .arctic-hero-mark { width: 76px; height: 62px; margin: 0.75rem auto 0.35rem; }
+  .arctic-new-chat .empty-state-capabilities { margin-top: 1rem; }
+}
+
 @media (max-width: 768px) {
   .arctic-new-chat.chats-hidden .chats-toggle-button { display: none !important; }
   .arctic-new-chat.app-with-sidebar { display: block; }

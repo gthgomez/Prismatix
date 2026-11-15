@@ -155,6 +155,102 @@ test('New Chat Stop cancels one mocked stream without a second dispatch', async 
   expect(requests).toHaveLength(1);
 });
 
+test('compact header measurements follow New Chat, first send, saved history and model picker remounts', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let execution = 0;
+  await page.route('**/functions/v1/router*', async (route) => {
+    execution += 1;
+    const body = route.request().postDataJSON() as RequestRecord;
+    await route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': `header-remount-${execution}` },
+      body: [
+        { type: 'meta', model: 'gemini-3.8-flash', cost: { finalUsd: 0.0001 } },
+        { type: 'content_block_delta', delta: { text: `Reply to ${body.query}` } },
+        { type: 'receipt', executionId: `header-remount-${execution}`, status: 'completed' },
+      ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
+    });
+  });
+  await signInAsMockUser(page);
+
+  const expectHeaderMeasurement = async () => {
+    await expect.poll(async () => page.locator('.chat-header').evaluate((header) => {
+      const box = header.getBoundingClientRect();
+      const root = getComputedStyle(document.documentElement);
+      return root.getPropertyValue('--prismatix-chat-header-h').trim() === `${Math.ceil(box.height)}px`
+        && root.getPropertyValue('--prismatix-model-dropdown-top').trim() === `${Math.ceil(box.bottom) + 6}px`;
+    })).toBe(true);
+  };
+
+  await expectHeaderMeasurement();
+  const newChatPicker = page.locator('.composer-model-pill');
+  await newChatPicker.click();
+  await expect(page.locator('.composer-model-popover')).toBeVisible();
+  await expectHeaderMeasurement();
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('textbox', { name: 'Message Prismatix' }).fill('Header measurement fixture');
+  await page.getByRole('textbox', { name: 'Message Prismatix' }).press('Enter');
+  await expect(page.getByText('Reply to Header measurement fixture')).toBeVisible();
+  await expect(page.locator('.arctic-workbench')).not.toHaveClass(/arctic-new-chat/);
+  await expectHeaderMeasurement();
+  await page.getByRole('button', { name: 'Choose routing mode: automatic' }).click();
+  await expect(page.locator('.model-dropdown')).toBeVisible();
+  await expectHeaderMeasurement();
+  const savedPickerTop = await page.locator('.model-dropdown').evaluate((menu) => menu.getBoundingClientRect().top);
+  const savedHeaderBottom = await page.locator('.chat-header').evaluate((header) => header.getBoundingClientRect().bottom);
+  expect(savedPickerTop).toBeGreaterThan(savedHeaderBottom);
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: 'Toggle conversations sidebar' }).click();
+  await page.getByRole('button', { name: '+ New Chat' }).click();
+  await expect(page.locator('.arctic-workbench')).toHaveClass(/arctic-new-chat/);
+  await expectHeaderMeasurement();
+  await page.locator('.composer-model-pill').click();
+  await expect(page.locator('.composer-model-popover')).toBeVisible();
+  await expectHeaderMeasurement();
+  expect(execution).toBe(1);
+});
+
+test('compact-height New Chat keeps the welcome heading intact and starter cards scroll-reachable', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1024, height: 600 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await signInAsMockUser(page);
+  const heading = page.getByRole('heading', { name: 'What can I help you with?' });
+  const cards = page.locator('.empty-state-capabilities');
+  const viewport = page.locator('.chat-messages');
+  await expect(heading).toBeVisible();
+  const initial = await page.evaluate(() => {
+    const heading = document.querySelector('.empty-state h2')!.getBoundingClientRect();
+    const messages = document.querySelector('.chat-messages')!.getBoundingClientRect();
+    const composer = document.querySelector('.chat-input-container')!.getBoundingClientRect();
+    return { headingTop: heading.top, headingBottom: heading.bottom, messagesBottom: messages.bottom, composerTop: composer.top };
+  });
+  expect(initial.headingBottom).toBeLessThanOrEqual(initial.messagesBottom + 1);
+  expect(initial.headingBottom).toBeLessThanOrEqual(initial.composerTop + 1);
+  await cards.scrollIntoViewIfNeeded();
+  await expect(cards).toBeInViewport();
+  await expect(cards.getByText('Analyze a file', { exact: true })).toBeVisible();
+  expect(await viewport.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
+  await mkdir(evidenceDir, { recursive: true });
+  await page.screenshot({ path: `${evidenceDir}/${testInfo.project.name}-compact-1024x600-cards-reachable.png` });
+  await viewport.evaluate((node) => { node.scrollTop = 0; });
+  await expect(heading).toBeInViewport();
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  await cards.scrollIntoViewIfNeeded();
+  await expect(cards).toBeInViewport();
+  await page.screenshot({ path: `${evidenceDir}/${testInfo.project.name}-mobile-320x844-cards-reachable.png` });
+  const buildApp = cards.getByRole('button', { name: /Build an app/ });
+  await expect(buildApp).toBeVisible();
+  await buildApp.click();
+  await expect(page.getByRole('textbox', { name: 'Message Prismatix' })).toHaveValue('Help me plan an app. Ask about the idea, users, and platform before suggesting an implementation.');
+  await expect(page.locator('.messages-list .message')).toHaveCount(0);
+});
+
 test('New Chat keeps local profile, web search and spend cap edits over late server preferences', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
