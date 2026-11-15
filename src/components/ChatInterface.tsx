@@ -127,6 +127,7 @@ import { useModelPickerPreferences } from '../hooks/useModelPickerPreferences';
 import { ProviderSettings } from './ProviderSettings';
 import { MemorySettings } from './MemorySettings';
 import { FirstRunSetupCard } from './FirstRunSetupCard';
+import { reconcileFirstRunOutcome, type FirstRunOutcome } from './firstRunOutcome';
 import { GlobalSearchModal } from './GlobalSearchModal';
 import { ProjectModal } from './ProjectModal';
 import { ExportModal } from './ExportModal';
@@ -345,13 +346,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
   const [showProviderSettings, setShowProviderSettings] = useState(false);
-  const [firstRunOutcome, setFirstRunOutcome] = useState<{ message: string; verified: boolean } | null>(null);
+  const [firstRunOutcome, setFirstRunOutcome] = useState<FirstRunOutcome | null>(null);
   const [showMemorySettings, setShowMemorySettings] = useState(false);
   const [lastRecall, setLastRecall] = useState<{ conversationId: string; hits: number } | null>(null);
 
   // Provider plug-ins (PX12): which providers are on for this user.
   const providerPlugins = useProviderPlugins(user?.id);
   const enabledProviders = providerPlugins.enabledProviders;
+  const openRouterProvider = providerPlugins.providers.find((provider) => provider.id === 'openrouter');
+  useEffect(() => {
+    setFirstRunOutcome((current) => reconcileFirstRunOutcome(current, openRouterProvider));
+  }, [openRouterProvider]);
 
   // Single authoritative model preferences store (favorites, hidden models, provider tabs)
   const modelPreferences = useModelPickerPreferences(user?.id);

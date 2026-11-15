@@ -27,7 +27,7 @@ for (const viewport of viewports) {
 
     if (viewport.width === 1024) {
       const connectBox = await page.getByRole('button', { name: 'Connect & Start' }).boundingBox();
-      const toolbarBox = await page.getByRole('toolbar', { name: 'Composer tools' }).boundingBox();
+      const toolbarBox = await page.getByRole('toolbar', { name: 'Routing and research controls' }).boundingBox();
       expect(connectBox).not.toBeNull();
       expect(toolbarBox).not.toBeNull();
       expect(connectBox!.y + connectBox!.height).toBeLessThan(toolbarBox!.y);
