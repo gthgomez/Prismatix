@@ -30,7 +30,9 @@ export interface ConversationSidebarProps {
   hasMore?: boolean;
   isLoadingMore?: boolean;
   loadMoreError?: string | null;
+  loadError?: string | null;
   onLoadMore?: () => void;
+  onRetry?: () => void;
   onOpenSearch?: () => void;
   onClose?: () => void;
   onRename?: (conversationId: string, title: string) => void;
@@ -64,7 +66,9 @@ function ChatHistory({
   hasMore = false,
   isLoadingMore = false,
   loadMoreError = null,
+  loadError = null,
   onLoadMore,
+  onRetry,
   onOpenSearch,
   onClose,
   onRename,
@@ -778,7 +782,13 @@ function ChatHistory({
       </div>
       <div className='conversation-history-scroll'>
         {isLoading && <div className='conversation-sidebar-status' role='status'>Loading…</div>}
-        {!isLoading && conversations.length === 0 && <div className='conversation-sidebar-status'>No conversations yet</div>}
+        {!isLoading && loadError && (
+          <div className='conversation-sidebar-error' role='alert'>
+            <span>{conversations.length > 0 ? 'Could not refresh conversations. Your loaded history is still available.' : 'Could not load conversations.'}</span>
+            {onRetry && <button type='button' onClick={onRetry}>Retry</button>}
+          </div>
+        )}
+        {!isLoading && !loadError && conversations.length === 0 && <div className='conversation-sidebar-status'>No conversations yet</div>}
         {!isLoading && conversations.length > 0 && visible.length === 0 && <div className='conversation-sidebar-status' role='status'>No matching chats</div>}
         {trimmedQuery && (
           <div className='conversation-search-note'>

@@ -4361,6 +4361,12 @@
   text-align: left;
 }
 
+@media (max-height: 680px) {
+  .first-run-card { margin: 0.2rem auto 0.65rem; padding: 1rem; }
+  .first-run-badge { margin-bottom: 0.45rem; }
+  .first-run-form { margin-bottom: 0.65rem; }
+}
+
 .first-run-badge {
   display: inline-block;
   padding: 0.2rem 0.6rem;
@@ -4404,6 +4410,12 @@
   background: rgba(78, 205, 196, 0.12);
   border: 1px solid rgba(78, 205, 196, 0.4);
   color: #4ecdc4;
+}
+
+.first-run-status.pending {
+  background: rgba(78, 205, 196, 0.08);
+  border: 1px solid rgba(78, 205, 196, 0.35);
+  color: var(--color-text, #f1f5f9);
 }
 
 .first-run-status.error {

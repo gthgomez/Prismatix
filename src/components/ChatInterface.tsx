@@ -345,6 +345,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
   const [showProviderSettings, setShowProviderSettings] = useState(false);
+  const [firstRunOutcome, setFirstRunOutcome] = useState<{ message: string; verified: boolean } | null>(null);
   const [showMemorySettings, setShowMemorySettings] = useState(false);
   const [lastRecall, setLastRecall] = useState<{ conversationId: string; hits: number } | null>(null);
 
@@ -391,7 +392,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   // PX07 conversation continuity state.
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [conversationsLoading, setConversationsLoading] = useState(true);
   const [hasMoreConversations, setHasMoreConversations] = useState(false);
   const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
   const [loadMoreConversationsError, setLoadMoreConversationsError] = useState<string | null>(null);
@@ -2851,7 +2852,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           isOpen={sidebarOpen}
           hasMore={hasMoreConversations}
           isLoadingMore={isLoadingMoreConversations}
-          loadMoreError={loadMoreConversationsError || conversationsError}
+          loadMoreError={loadMoreConversationsError}
+          loadError={conversationsError}
+          onRetry={() => void refreshConversations()}
           onLoadMore={() => void handleLoadMoreConversations()}
           onOpenSearch={() => {
             setIsGlobalSearchOpen(true);
@@ -3237,6 +3240,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onTouchMove={markUserInterruption}
         onWheel={markUserInterruption}
       >
+        {firstRunOutcome && (providerPlugins.isConfigured || messages.length > 0) && (
+          <div className={`first-run-status ${firstRunOutcome.verified ? 'success' : 'pending'}`} role="status">
+            {firstRunOutcome.verified ? '✓ ' : 'ℹ️ '}{firstRunOutcome.message}
+          </div>
+        )}
         {messages.length === 0
           ? (
             <div className='empty-state'>
@@ -3244,6 +3252,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 <FirstRunSetupCard
                   plugins={providerPlugins}
                   onOpenSettings={() => setShowProviderSettings(true)}
+                  onSaved={(message, verified) => setFirstRunOutcome({ message, verified })}
                 />
               )}
               <div className='empty-state-badge'>Adaptive AI Router</div>

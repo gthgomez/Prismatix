@@ -8,15 +8,18 @@ import type { ProviderPlugins } from '../hooks/useProviderPlugins';
 interface FirstRunSetupCardProps {
   plugins: ProviderPlugins;
   onOpenSettings: () => void;
+  onSaved?: (message: string, verified: boolean) => void;
 }
 
 export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
   plugins,
   onOpenSettings,
+  onSaved,
 }) => {
   const [apiKey, setApiKey] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusTone, setStatusTone] = useState<'success' | 'pending' | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleQuickConnect = async (e: React.FormEvent) => {
@@ -24,28 +27,38 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
     if (!apiKey.trim()) return;
 
     setIsSubmitting(true);
-    setStatusMessage('Validating key with OpenRouter metadata endpoint…');
+    setStatusMessage('Checking your OpenRouter key…');
+    setStatusTone('pending');
     setErrorMessage(null);
 
     try {
       const validation = await plugins.validateKey('openrouter', apiKey.trim());
       if (validation.status === 'invalid_revoked') {
+        setStatusMessage(null);
+        setStatusTone(null);
         setErrorMessage('Key rejected: OpenRouter reported this key is invalid or revoked.');
         setIsSubmitting(false);
         return;
       }
-      if (validation.status === 'unavailable') {
-        setErrorMessage('Notice: OpenRouter metadata endpoint was unreachable. Saving key anyway…');
-      }
+      const verified = validation.status === 'enabled';
 
       const saved = await plugins.setKey('openrouter', apiKey.trim());
       if (saved) {
-        setStatusMessage('OpenRouter key connected and verified! You are ready to chat.');
+        const message = verified
+          ? 'Key saved and verified. You are ready to chat.'
+          : 'Key saved, but could not be verified. You can try it now or check it again in Provider Settings.';
+        setStatusMessage(message);
+        setStatusTone(verified ? 'success' : 'pending');
+        onSaved?.(message, verified);
         setApiKey('');
       } else {
+        setStatusMessage(null);
+        setStatusTone(null);
         setErrorMessage('Failed to save provider key. Please check Provider Settings.');
       }
     } catch (err) {
+      setStatusMessage(null);
+      setStatusTone(null);
       setErrorMessage(err instanceof Error ? err.message : 'Failed to connect key');
     } finally {
       setIsSubmitting(false);
@@ -56,15 +69,8 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
     <div className='first-run-card' role='region' aria-label='AI Provider Setup Guide'>
       <div className='first-run-badge'>First-Run Setup</div>
       <h2 className='first-run-title'>Connect an AI Provider to Start Chatting</h2>
-      <p className='first-run-desc'>
-        Prismatix is a <strong>bring-your-own-key (BYOK)</strong> personal multi-model workspace.
-        Your API keys are encrypted at rest with AES-256-GCM and never shared. We recommend
-        connecting <strong>OpenRouter</strong> for automatic routing across top models, or you can
-        connect Anthropic, OpenAI, or Google directly.
-      </p>
-
       {statusMessage && (
-        <div className='first-run-status success' role='status'>
+        <div className={`first-run-status ${statusTone ?? 'pending'}`} role='status'>
           ✓ {statusMessage}
         </div>
       )}
@@ -95,7 +101,7 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
               className='first-run-submit'
               disabled={isSubmitting || apiKey.trim().length < 8}
             >
-              {isSubmitting ? 'Connecting…' : 'Connect & Start'}
+              {isSubmitting ? 'Checking…' : 'Connect & Start'}
             </button>
           </div>
           <span className='first-run-hint'>
@@ -111,6 +117,13 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
           </span>
         </div>
       </form>
+
+      <p className='first-run-desc'>
+        Prismatix is a <strong>bring-your-own-key (BYOK)</strong> personal multi-model workspace.
+        Your API keys are encrypted at rest with AES-256-GCM and never shared. We recommend
+        connecting <strong>OpenRouter</strong> for automatic routing across top models, or you can
+        connect Anthropic, OpenAI, or Google directly.
+      </p>
 
       <div className='first-run-actions'>
         <button

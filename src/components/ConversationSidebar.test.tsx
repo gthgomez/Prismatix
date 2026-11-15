@@ -391,6 +391,25 @@ describe('ConversationSidebar', () => {
     act(() => root.unmount());
   });
 
+  it('shows a retryable load error instead of the successful empty state', () => {
+    const onRetry = vi.fn();
+    const container = document.createElement('div');
+    const root = renderInto(container, <ConversationSidebar conversations={[]} selectedId={null} isLoading={false} loadError='Failed to load conversations.' onRetry={onRetry} onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    expect(container.textContent).toContain('Could not load conversations.');
+    expect(container.textContent).not.toContain('No conversations yet');
+    act(() => container.querySelector<HTMLButtonElement>('.conversation-sidebar-error button')!.click());
+    expect(onRetry).toHaveBeenCalledOnce();
+    act(() => root.unmount());
+  });
+
+  it('keeps loaded history visible when refresh fails', () => {
+    const container = document.createElement('div');
+    const root = renderInto(container, <ConversationSidebar conversations={CONVERSATIONS} selectedId={null} isLoading={false} loadError='Failed to load conversations.' onRetry={noop} onSelect={noop} onNewChat={noop} onDelete={noop} />);
+    expect(container.textContent).toContain('Could not refresh conversations.');
+    expect(container.textContent).toContain('First chat');
+    act(() => root.unmount());
+  });
+
   it('renders open drawer class, close button, and backdrop when isOpen is true', () => {
     const onClose = vi.fn();
     const container = document.createElement('div');
