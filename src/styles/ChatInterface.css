@@ -4333,7 +4333,7 @@
   color: #233a5a;
   box-shadow: none;
 }
-.arctic-new-chat .spend-pill-value { color: #079bb3; font-size: 1.1rem; }
+.arctic-new-chat .spend-pill-value { color: #00758d; font-size: 1.1rem; }
 .arctic-new-chat .user-avatar { background: linear-gradient(135deg, #12b8c0, #0089aa); color: #fff; }
 .arctic-new-chat .header-button,
 .arctic-new-chat .sidebar-toggle-button,
@@ -4540,7 +4540,7 @@
 }
 .arctic-new-chat .composer-model-pill-wrapper { background: #fff; border-color: #d7e3f2; box-shadow: 0 2px 8px rgb(32 76 125 / 8%); }
 .arctic-new-chat .composer-model-pill { min-height: 40px; padding: 0.35rem 0.7rem; color: #172338; font-size: 0.82rem; }
-.arctic-new-chat .composer-pill-badge.auto { background: #e6f5f4; color: #087d7b; }
+.arctic-new-chat .composer-pill-badge.auto { background: #e6f5f4; color: #067673; }
 .arctic-new-chat .prompt-starters-section { display: none; }
 .arctic-new-chat .routing-intelligence-bar { display: none; }
 .arctic-routing-toggle { display: none; }
