@@ -1,7 +1,7 @@
 // src/components/Auth.tsx
 // Authentication UI component with L3 Safety Gates
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { CONFIG } from '../config';
 import '../styles/Auth.css';
 
@@ -17,10 +17,13 @@ interface AuthProps {
 }
 
 type AuthMode = 'signin' | 'signup';
+type AuthField = 'email' | 'password' | 'confirmPassword';
 
-export const Auth: React.FC<AuthProps> = ({ 
-  onSignIn, 
-  onSignUp, 
+const AUTH_ERROR_ID = 'auth-field-error';
+
+export const Auth: React.FC<AuthProps> = ({
+  onSignIn,
+  onSignUp,
   onSignInWithProvider,
   onResetPassword
 }) => {
@@ -29,40 +32,77 @@ export const Auth: React.FC<AuthProps> = ({
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [errorField, setErrorField] = useState<AuthField | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const confirmPasswordRef = useRef<HTMLInputElement>(null);
+  const formErrorRef = useRef<HTMLDivElement>(null);
+
+  const clearMessages = () => {
+    setError(null);
+    setErrorField(null);
+    setSuccessMessage(null);
+  };
+
+  const focusField = (field: AuthField | null) => {
+    queueMicrotask(() => {
+      if (field === 'email') {
+        emailRef.current?.focus();
+        return;
+      }
+      if (field === 'password') {
+        passwordRef.current?.focus();
+        return;
+      }
+      if (field === 'confirmPassword') {
+        confirmPasswordRef.current?.focus();
+        return;
+      }
+      formErrorRef.current?.focus();
+    });
+  };
+
+  const reportError = (message: string, field: AuthField | null = null) => {
+    setSuccessMessage(null);
+    setError(message);
+    setErrorField(field);
+    focusField(field);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setSuccessMessage(null);
+    clearMessages();
 
     // PX01 gate: never submit a signup while signups are disabled.
     if (mode === 'signup' && !ALLOW_SIGNUP) {
-      setError('Signups are currently disabled');
+      reportError('Signups are currently disabled');
       setMode('signin');
       return;
     }
 
-    // L3 Gate: Validate inputs
+    // L3 Gate: Validate inputs — associate errors with the failing field and
+    // recover keyboard focus there so assistive tech and keyboard users can fix.
     if (!email.trim()) {
-      setError('Email is required');
+      reportError('Email is required', 'email');
       return;
     }
 
     if (!password) {
-      setError('Password is required');
+      reportError('Password is required', 'password');
       return;
     }
 
     if (mode === 'signup') {
       if (password.length < 6) {
-        setError('Password must be at least 6 characters');
+        reportError('Password must be at least 6 characters', 'password');
         return;
       }
       if (password !== confirmPassword) {
-        setError('Passwords do not match');
+        reportError('Passwords do not match', 'confirmPassword');
         return;
       }
     }
@@ -70,18 +110,18 @@ export const Auth: React.FC<AuthProps> = ({
     setIsLoading(true);
 
     try {
-      const result = mode === 'signin' 
+      const result = mode === 'signin'
         ? await onSignIn(email, password)
         : await onSignUp(email, password);
 
       if (result.error) {
-        setError(result.error.message);
+        reportError(result.error.message, 'email');
       } else if (mode === 'signup') {
         setSuccessMessage('Check your email to confirm your account!');
         setMode('signin');
       }
     } catch (err) {
-      setError('An unexpected error occurred');
+      reportError('An unexpected error occurred');
     } finally {
       setIsLoading(false);
     }
@@ -89,17 +129,17 @@ export const Auth: React.FC<AuthProps> = ({
 
   const handleProviderSignIn = async (provider: 'google' | 'github') => {
     if (!onSignInWithProvider) return;
-    
-    setError(null);
+
+    clearMessages();
     setIsLoading(true);
 
     try {
       const result = await onSignInWithProvider(provider);
       if (result.error) {
-        setError(result.error.message);
+        reportError(result.error.message);
       }
     } catch (err) {
-      setError('An unexpected error occurred');
+      reportError('An unexpected error occurred');
     } finally {
       setIsLoading(false);
     }
@@ -111,19 +151,17 @@ export const Auth: React.FC<AuthProps> = ({
       return;
     }
     setMode(mode === 'signin' ? 'signup' : 'signin');
-    setError(null);
-    setSuccessMessage(null);
+    clearMessages();
     setConfirmPassword('');
   };
 
   const handleForgotPassword = async () => {
     if (!onResetPassword) return;
 
-    setError(null);
-    setSuccessMessage(null);
+    clearMessages();
 
     if (!email.trim()) {
-      setError('Enter your email above first, then click "Forgot password?"');
+      reportError('Enter your email above first, then click "Forgot password?"', 'email');
       return;
     }
 
@@ -131,12 +169,12 @@ export const Auth: React.FC<AuthProps> = ({
     try {
       const result = await onResetPassword(email);
       if (result.error) {
-        setError(result.error.message);
+        reportError(result.error.message, 'email');
       } else {
         setSuccessMessage('Password reset email sent — check your inbox.');
       }
     } catch (err) {
-      setError('An unexpected error occurred');
+      reportError('An unexpected error occurred');
     } finally {
       setIsLoading(false);
     }
@@ -147,7 +185,7 @@ export const Auth: React.FC<AuthProps> = ({
       <div className="auth-card">
         {/* Header */}
         <div className="auth-header">
-          <img className="auth-logo" src="/prismatix-icon-draft.svg" alt="" />
+          <div className="auth-logo">🤖</div>
           <h1>Prismatix</h1>
           <p>Adaptive Model Selection</p>
         </div>
@@ -156,7 +194,7 @@ export const Auth: React.FC<AuthProps> = ({
             a single-tab pill is a dead control and reads as a rendering bug */}
         {ALLOW_SIGNUP && (
           <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
-            <button 
+            <button
               type="button"
               role="tab"
               aria-selected={mode === 'signin'}
@@ -165,7 +203,7 @@ export const Auth: React.FC<AuthProps> = ({
             >
               Sign In
             </button>
-            <button 
+            <button
               type="button"
               role="tab"
               aria-selected={mode === 'signup'}
@@ -179,7 +217,13 @@ export const Auth: React.FC<AuthProps> = ({
 
         {/* Messages */}
         {error && (
-          <div className="auth-message error" role="alert">
+          <div
+            id={AUTH_ERROR_ID}
+            ref={formErrorRef}
+            className="auth-message error"
+            role="alert"
+            tabIndex={-1}
+          >
             <span>⚠️</span> {error}
           </div>
         )}
@@ -190,17 +234,20 @@ export const Auth: React.FC<AuthProps> = ({
         )}
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="auth-form">
+        <form onSubmit={handleSubmit} className="auth-form" noValidate>
           <div className="form-group">
             <label htmlFor="email">Email</label>
             <input
               id="email"
+              ref={emailRef}
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
               disabled={isLoading}
               autoComplete="email"
+              aria-invalid={errorField === 'email' ? true : undefined}
+              aria-describedby={errorField === 'email' ? AUTH_ERROR_ID : undefined}
             />
           </div>
 
@@ -209,12 +256,15 @@ export const Auth: React.FC<AuthProps> = ({
             <div className="password-wrap">
               <input
                 id="password"
+                ref={passwordRef}
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 disabled={isLoading}
                 autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                aria-invalid={errorField === 'password' ? true : undefined}
+                aria-describedby={errorField === 'password' ? AUTH_ERROR_ID : undefined}
               />
               <button
                 type="button"
@@ -233,18 +283,21 @@ export const Auth: React.FC<AuthProps> = ({
               <label htmlFor="confirmPassword">Confirm Password</label>
               <input
                 id="confirmPassword"
+                ref={confirmPasswordRef}
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="••••••••"
                 disabled={isLoading}
                 autoComplete="new-password"
+                aria-invalid={errorField === 'confirmPassword' ? true : undefined}
+                aria-describedby={errorField === 'confirmPassword' ? AUTH_ERROR_ID : undefined}
               />
             </div>
           )}
 
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             className="auth-submit"
             disabled={isLoading}
             aria-label={mode === 'signin' ? 'Sign in to Prismatix' : 'Create Prismatix account'}
@@ -271,7 +324,7 @@ export const Auth: React.FC<AuthProps> = ({
             </div>
 
             <div className="auth-providers">
-              <button 
+              <button
                 type="button"
                 className="provider-button google"
                 onClick={() => handleProviderSignIn('google')}
@@ -286,7 +339,7 @@ export const Auth: React.FC<AuthProps> = ({
                 Google
               </button>
 
-              <button 
+              <button
                 type="button"
                 className="provider-button github"
                 onClick={() => handleProviderSignIn('github')}

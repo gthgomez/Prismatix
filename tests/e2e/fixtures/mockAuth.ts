@@ -17,6 +17,9 @@ export const MOCK_SESSION = {
   access_token: 'mock-playwright-token-xyz',
   token_type: 'bearer',
   expires_in: 3600,
+  // supabase-js treats missing/expired expires_at as a stale session and clears
+  // local auth on reload — keep synthetic sessions valid for journey coverage.
+  expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
   refresh_token: 'mock-playwright-refresh',
   user: MOCK_USER,
 };
@@ -24,7 +27,14 @@ export const MOCK_SESSION = {
 export interface MockAppOptions {
   hasProviderKey?: boolean;
   conversations?: Array<{ id: string; title: string; last_activity_at: string; project_id?: string | null }>;
-  messages?: Array<{ id: string; conversation_id: string; role: 'user' | 'assistant'; content: string; created_at: string }>;
+  messages?: Array<{
+    id: string;
+    conversation_id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    created_at: string;
+    metadata?: Record<string, unknown>;
+  }>;
   projects?: Array<{ id: string; name: string; description: string; instructions: string; archived: boolean; created_at: string }>;
   costLogs?: Array<{
     id: string;
@@ -84,12 +94,22 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
     },
   ];
 
-  // Inject session into all common Supabase storage keys before page scripts run
+  // Inject session into all common Supabase storage keys before page scripts run.
+  // Include host-derived local keys so reload keeps the authorized shell without
+  // requiring another interactive sign-in.
   await page.addInitScript((sessionData) => {
     const raw = JSON.stringify(sessionData);
-    window.localStorage.setItem('sb-mock-auth-token', raw);
-    window.localStorage.setItem('supabase.auth.token', raw);
-    window.localStorage.setItem('sb-test-prismatix-auth-token', raw);
+    const seedKeys = [
+      'sb-mock-auth-token',
+      'supabase.auth.token',
+      'sb-test-prismatix-auth-token',
+      'sb-127-auth-token',
+      'sb-127.0.0.1-auth-token',
+      'sb-localhost-auth-token',
+    ];
+    for (const key of seedKeys) {
+      window.localStorage.setItem(key, raw);
+    }
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i);
       if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
@@ -342,11 +362,23 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
 
 export async function signInAsMockUser(page: Page) {
   await page.goto('/');
-  // Wait for React lazy suspense to load the auth form
   const emailInput = page.locator('#email');
+  const composer = page.getByRole('textbox', { name: /message prismatix/i });
+
+  // Prefer the authorized chat shell when the synthetic session is already
+  // hydrated (including after reload). Fall back to interactive sign-in only
+  // when the auth form is what actually rendered.
+  try {
+    await composer.waitFor({ state: 'visible', timeout: 10000 });
+    return;
+  } catch {
+    // Continue to form sign-in below.
+  }
+
   await emailInput.waitFor({ state: 'visible', timeout: 10000 });
   await emailInput.fill(MOCK_USER.email);
   await page.locator('#password').fill('ValidPassword123!');
   await page.locator('button[type="submit"]').click();
+  await composer.waitFor({ state: 'visible', timeout: 10000 });
 }
 
