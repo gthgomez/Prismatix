@@ -36,33 +36,37 @@ interface CapabilityPillar {
   description: string;
   prompt: string;
   isDebate?: boolean;
+  isCompare?: boolean;
+  isUpload?: boolean;
 }
 
 const CAPABILITY_PILLARS: CapabilityPillar[] = [
   {
-    icon: '⚡',
-    title: 'Code & Architecture',
-    description: 'Auto-routes complex logic to deep-reasoning models.',
-    prompt: 'Design a high-throughput event processing architecture in TypeScript with backpressure handling.',
+    icon: '〈〉',
+    title: 'Build an app',
+    description: 'Plan, design, and iterate on an app.',
+    prompt: 'Help me plan an app. Ask about the idea, users, and platform before suggesting an implementation.',
   },
   {
-    icon: '⚖️',
-    title: 'Tradeoff Debate',
-    description: 'Compares perspectives across two models in parallel.',
-    prompt: 'Debate the tradeoffs between event-sourcing vs. traditional relational schemas for financial auditing.',
+    icon: '▤',
+    title: 'Analyze a file',
+    description: 'Summarize, extract, and get insights.',
+    prompt: 'Analyze the attached file and summarize its key points.',
+    isUpload: true,
+  },
+  {
+    icon: '⚖',
+    title: 'Compare ideas',
+    description: 'Evaluate options with multiple models.',
+    prompt: 'Compare the tradeoffs between event sourcing and a relational design for financial auditing.',
+    isCompare: true,
+  },
+  {
+    icon: '☏',
+    title: 'Debate a topic',
+    description: 'Explore different perspectives in depth.',
+    prompt: 'Debate the tradeoffs between event sourcing and a relational design for financial auditing.',
     isDebate: true,
-  },
-  {
-    icon: '🔍',
-    title: 'Systems Analysis',
-    description: 'Examines distributed consensus protocols and failure recovery.',
-    prompt: 'Analyze the consensus algorithms Raft vs. Paxos, highlighting edge cases in network partition recovery.',
-  },
-  {
-    icon: '💡',
-    title: 'Technical Roadmap',
-    description: 'Drafts phased milestones with concrete deliverables and risks.',
-    prompt: 'Create a 3-phase technical roadmap for building a real-time collaborative whiteboard.',
   },
 ];
 import {
@@ -470,6 +474,43 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   });
   const [comparisonModelA, setComparisonModelA] = useState<RouterModel>('gemini-3.8-flash');
   const [comparisonModelB, setComparisonModelB] = useState<RouterModel>('gpt-6-sol');
+  const [routingPanelOpen, setRoutingPanelOpen] = useState(false);
+  const routingPanelRef = useRef<HTMLElement>(null);
+  const routingToggleRef = useRef<HTMLButtonElement>(null);
+  const filePickerRef = useRef<(() => void) | null>(null);
+  const registerFilePicker = useCallback((openPicker: () => void) => {
+    filePickerRef.current = openPicker;
+  }, []);
+  const workspaceMode = comparisonMode ? 'compare' : debateSelection !== 'off' ? 'debate' : 'chat';
+
+  const selectWorkspaceMode = useCallback((mode: 'chat' | 'compare' | 'debate') => {
+    const compare = mode === 'compare';
+    setComparisonMode(compare);
+    setDebateSelection((current) => mode === 'debate' ? (current === 'off' ? 'general' : current) : 'off');
+    try {
+      window.localStorage.setItem('prismatix_comparison_mode', String(compare));
+    } catch {
+      // Keep the in-memory mode usable when storage is unavailable.
+    }
+  }, []);
+
+  useEffect(() => {
+    const toggle = routingToggleRef.current;
+    if (!routingPanelOpen || window.innerWidth > 1200) return;
+    const closeButton = routingPanelRef.current?.querySelector<HTMLButtonElement>('.arctic-routing-close');
+    closeButton?.focus();
+    const handleRoutingKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault();
+        setRoutingPanelOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleRoutingKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleRoutingKeyDown);
+      if (toggle?.isConnected) toggle.focus();
+    };
+  }, [routingPanelOpen]);
   const [routingProfile, setRoutingProfile] = useState<RoutingProfile>(() => {
     try {
       return (window.localStorage.getItem('prismatix_routing_profile') as RoutingProfile) || 'balanced';
@@ -1479,11 +1520,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           imageCount,
         );
     const promptTokenEstimate = passedPromptTokenEstimate ?? preflight.promptTokens;
+    const comparisonBudgetEstimate = comparisonMode
+      ? calculatePreFlightCost(comparisonModelA, `${historyText}\nuser: ${queryText}`, imageCount).estimatedUsd
+        + calculatePreFlightCost(comparisonModelB, `${historyText}\nuser: ${queryText}`, imageCount).estimatedUsd
+      : preflight.estimatedUsd;
 
     if (!skipBudgetCheck) {
       const dailyTotalUsd = await fetchServerDailyTotal();
       const budgetDecision = evaluateBudget({
-        estimateUsd: preflight.estimatedUsd,
+        estimateUsd: comparisonBudgetEstimate,
         dailyTotalUsd,
         dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
       });
@@ -1510,7 +1555,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           skipBudgetCheck: true,
         });
         setBudgetConfirm({
-          estimateUsd: preflight.estimatedUsd,
+          estimateUsd: comparisonBudgetEstimate,
           dailyTotalUsd,
         });
         return;
@@ -2289,6 +2334,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           imageCount,
         );
     const promptTokenEstimate = preflight.promptTokens;
+    const budgetEstimateUsd = comparisonMode
+      ? calculatePreFlightCost(comparisonModelA, `${historyText}\nuser: ${queryText}`, imageCount).estimatedUsd
+        + calculatePreFlightCost(comparisonModelB, `${historyText}\nuser: ${queryText}`, imageCount).estimatedUsd
+      : preflight.estimatedUsd;
 
     // F13: Spend cap enforcement
     if (comparisonMode) {
@@ -2321,7 +2370,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       // Falls back to localStorage total if the server is unreachable.
       const dailyTotalUsd = await fetchServerDailyTotal();
       const budgetDecision = evaluateBudget({
-        estimateUsd: preflight.estimatedUsd,
+        estimateUsd: budgetEstimateUsd,
         dailyTotalUsd,
         dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
       });
@@ -2341,7 +2390,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       if (budgetDecision.requiresConfirm) {
         pendingActionRef.current = () => void handleSend(true);
         setBudgetConfirm({
-          estimateUsd: preflight.estimatedUsd,
+          estimateUsd: budgetEstimateUsd,
           dailyTotalUsd,
         });
         return;
@@ -2661,8 +2710,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const handleCapabilityCardClick = (card: CapabilityPillar) => {
     setInput(card.prompt);
-    if (card.isDebate) {
-      setDebateSelection('general');
+    if (card.isDebate) selectWorkspaceMode('debate');
+    else if (card.isCompare) selectWorkspaceMode('compare');
+    else selectWorkspaceMode('chat');
+    if (card.isUpload) {
+      filePickerRef.current?.();
+      return;
     }
     inputRef.current?.focus();
   };
@@ -2797,6 +2850,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   // Server-selected IDs can be ahead of the deployed catalog; degrade, never crash.
   const modelConfig = getCatalogEntry(currentModel);
+  const routingDraftText = [
+    ...messages.map((message) => `${message.role}: ${extractTextContent(message.content)}`),
+    `user: ${input.trim() || (draftAttachments.length ? 'Analyze the attached files.' : '')}`,
+  ].filter(Boolean).join('\n');
+  const routingImageCount = draftAttachments.filter((file) => file.isImage).length;
+  const routingDraftEstimate = input.trim() || draftAttachments.length > 0
+    ? comparisonMode
+      ? (() => {
+          const estimateA = calculatePreFlightCost(comparisonModelA, routingDraftText, routingImageCount);
+          const estimateB = calculatePreFlightCost(comparisonModelB, routingDraftText, routingImageCount);
+          return { hasUnknownRate: estimateA.hasUnknownRate || estimateB.hasUnknownRate, estimatedUsd: estimateA.estimatedUsd + estimateB.estimatedUsd, combined: true };
+        })()
+      : (() => {
+          const estimate = debateSelection !== 'off' && debateSelection !== 'auto'
+            ? calculateDebatePreFlightCost(debateSelection, manualModelOverride || currentModel, routingDraftText, routingImageCount)
+            : calculatePreFlightCost(manualModelOverride || currentModel, routingDraftText, routingImageCount);
+          return { hasUnknownRate: estimate.hasUnknownRate, estimatedUsd: estimate.estimatedUsd, combined: false };
+        })()
+    : null;
+  const routingCostLabel = routingDraftEstimate
+    ? routingDraftEstimate.hasUnknownRate
+      ? 'Estimate unavailable for selected model pricing'
+      : `About $${routingDraftEstimate.estimatedUsd.toFixed(4)}${routingDraftEstimate.combined ? ' combined for both models' : ' before sending'}`
+    : finalMessageCost !== null
+      ? `$${finalMessageCost.toFixed(4)} for the last completed response`
+      : 'Shown after you add a draft or attachment.';
   const composerValidationView = getComposerSendValidationView(sendValidationError);
   // Why the composer cannot send right now, surfaced on the send control itself
   // so its disabled state is self-explanatory and never looks actionable.
@@ -2846,7 +2925,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   return (
-    <div className='app-with-sidebar'>
+    <div className={`app-with-sidebar arctic-workbench ${messages.length === 0 && !selectedConversationId ? 'arctic-new-chat' : ''}`}>
       {!chatsHidden && (
         <ConversationSidebar
           preferenceScope={user?.id ?? null}
@@ -2948,6 +3027,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             </div>
           </div>
           <div className='header-actions'>
+          <button
+            type='button'
+            className='arctic-routing-toggle'
+            ref={routingToggleRef}
+            aria-expanded={routingPanelOpen}
+            aria-controls='arctic-routing-panel'
+            onClick={() => setRoutingPanelOpen((open) => !open)}
+          >
+            Routing details
+          </button>
           {catalogSkewed && (
             <span
               className='catalog-skew-hint'
@@ -3035,6 +3124,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   onGeminiThinkingChange={setGeminiFlashThinkingLevel}
                   onDebateChange={(sel) => {
                     setDebateSelection(sel);
+                    if (sel !== 'off') {
+                      setComparisonMode(false);
+                      try { window.localStorage.setItem('prismatix_comparison_mode', 'false'); } catch { /* optional persistence */ }
+                    }
                     if (sendValidationError) setSendValidationError(null);
                   }}
                   onClearValidationError={() => setSendValidationError(null)}
@@ -3253,6 +3346,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         {messages.length === 0
           ? (
             <div className='empty-state'>
+              <div className='arctic-mode-switch' role='group' aria-label='Chat workflow'>
+                {([
+                  { id: 'chat', label: 'Chat' },
+                  { id: 'compare', label: 'Compare' },
+                  { id: 'debate', label: 'Debate' },
+                ] as const).map((mode) => (
+                  <button
+                    key={mode.id}
+                    type='button'
+                    className={`arctic-mode-button ${workspaceMode === mode.id ? 'active' : ''}`}
+                    aria-pressed={workspaceMode === mode.id}
+                    onClick={() => selectWorkspaceMode(mode.id)}
+                  >
+                    <span className='arctic-mode-icon' aria-hidden='true'>
+                      {mode.id === 'chat' ? (
+                        <svg viewBox='0 0 24 24'><path d='M4 5.5h16v12H9l-5 3v-15Z' /></svg>
+                      ) : mode.id === 'compare' ? (
+                        <svg viewBox='0 0 24 24'><path d='M12 3v17M5 6h14M5 6l-3 7h6L5 6Zm14 0-3 7h6l-3-7ZM8 20h8' /></svg>
+                      ) : (
+                        <svg viewBox='0 0 24 24'><path d='M3 5.5A2.5 2.5 0 0 1 5.5 3h8A2.5 2.5 0 0 1 16 5.5v5a2.5 2.5 0 0 1-2.5 2.5H8l-4 3v-4.3A2.5 2.5 0 0 1 3 9.5v-4Z' /><path d='M8 16.5A2.5 2.5 0 0 0 10.5 19H16l4 3v-4.3a2.5 2.5 0 0 0 1-2.2v-4A2.5 2.5 0 0 0 18.5 9H18' /></svg>
+                      )}
+                    </span>
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
               {!providerPlugins.isConfigured && !providerPlugins.loading && (
                 <FirstRunSetupCard
                   plugins={providerPlugins}
@@ -3260,11 +3379,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   onSaved={(message, verified) => setFirstRunOutcome({ message, verified })}
                 />
               )}
-              <div className='empty-state-badge'>Adaptive AI Router</div>
-              <h2>What would you like to<br /><span>build or explore?</span></h2>
-              <p>
-                Type a prompt below and let Auto select the best model, or click a starter prompt:
-              </p>
+                  <img className='arctic-hero-mark' src='/prismatix-arctic-mark.svg' alt='' />
+              <h2>What can I help you with?</h2>
+              <p>Ask anything. Prismatix chooses a suitable model automatically, or let you choose the workflow.</p>
 
               <div className='empty-state-capabilities'>
                 {CAPABILITY_PILLARS.map((card) => (
@@ -3275,11 +3392,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     onClick={() => handleCapabilityCardClick(card)}
                   >
                     <div className='capability-card-header'>
-                      <span className='capability-card-icon' aria-hidden='true'>{card.icon}</span>
+                      <span className='capability-card-icon' aria-hidden='true'>
+                        {card.title === 'Build an app' ? <svg viewBox='0 0 24 24'><path d='m8 5-6 7 6 7M16 5l6 7-6 7' /></svg>
+                          : card.title === 'Analyze a file' ? <svg viewBox='0 0 24 24'><path d='M6 2h9l5 5v15H6zM15 2v6h5M9 13h8M9 17h8' /></svg>
+                            : card.title === 'Compare ideas' ? <svg viewBox='0 0 24 24'><path d='M12 3v17M5 6h14M5 6l-3 7h6L5 6Zm14 0-3 7h6l-3-7ZM8 20h8' /></svg>
+                              : <svg viewBox='0 0 24 24'><path d='M3 5.5A2.5 2.5 0 0 1 5.5 3h8A2.5 2.5 0 0 1 16 5.5v5a2.5 2.5 0 0 1-2.5 2.5H8l-4 3v-4.3A2.5 2.5 0 0 1 3 9.5v-4ZM8 16.5A2.5 2.5 0 0 0 10.5 19H16l4 3v-4.3a2.5 2.5 0 0 0 1-2.2v-4A2.5 2.5 0 0 0 18.5 9H18' /></svg>}
+                      </span>
                       <span className='capability-card-title'>{card.title}</span>
                     </div>
                     <p className='capability-card-desc'>{card.description}</p>
-                    <span className='capability-card-action'>Try this prompt →</span>
+                    <span className='capability-card-action'>{card.isUpload ? 'Choose a file →' : 'Prepare a draft →'}</span>
                   </button>
                 ))}
               </div>
@@ -3434,6 +3556,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             onClick={() => {
               const next = !comparisonMode;
               setComparisonMode(next);
+              if (next) setDebateSelection('off');
               try {
                 window.localStorage.setItem('prismatix_comparison_mode', String(next));
               } catch {
@@ -3569,6 +3692,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onClearAllAttachments={clearAllAttachments}
         onFileSelect={handleFileSelect}
         onMultipleFiles={handleMultipleFiles}
+        onFilePickerReady={registerFilePicker}
         manualModelOverride={manualModelOverride}
         currentModel={currentModel}
         debateSelection={debateSelection}
@@ -3734,6 +3858,143 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         }}
       />
       </div>
+      <aside
+        ref={routingPanelRef}
+        className={`arctic-routing-panel ${routingPanelOpen ? 'is-open' : ''}`}
+        id='arctic-routing-panel'
+        aria-label='Routing details'
+      >
+        <div className='arctic-routing-heading'>
+          <span aria-hidden='true'>✦</span>
+          <h2>Routing details</h2>
+          <button type='button' className='arctic-routing-close' onClick={() => setRoutingPanelOpen(false)} aria-label='Close routing details'>×</button>
+        </div>
+        <div className={`arctic-route-status ${isStreaming ? 'running' : providerPlugins.loading ? 'checking' : providerPlugins.isConfigured ? 'ready' : 'setup'}`} role='status'>
+          <span className='arctic-status-icon' aria-hidden='true'>{isStreaming ? '◌' : providerPlugins.loading ? '…' : providerPlugins.isConfigured ? '✓' : '!'}</span>
+          <span><small>Route status</small><strong>{isStreaming ? 'Request in progress' : providerPlugins.loading ? 'Checking provider setup' : firstRunOutcome && !firstRunOutcome.verified ? 'Key saved · not verified' : !providerPlugins.isConfigured ? 'Connect a provider' : messages.length ? 'Ready for next prompt' : 'Waiting for prompt'}</strong></span>
+        </div>
+        <section className='arctic-route-field'>
+          <h3>Selected model</h3>
+          <p>{workspaceMode === 'compare'
+            ? 'Two selected models'
+            : manualModelOverride ? getCatalogEntry(manualModelOverride).shortName : messages.length ? getCatalogEntry(currentModel).shortName : 'Not chosen yet'}</p>
+          {workspaceMode === 'compare' && <small>A · {getCatalogEntry(comparisonModelA).shortName}<br />B · {getCatalogEntry(comparisonModelB).shortName}</small>}
+        </section>
+        <section className='arctic-route-field'>
+          <h3>Why?</h3>
+          <p>{workspaceMode === 'compare'
+            ? 'Each selected model receives the same prompt independently. The estimate includes both requests.'
+            : workspaceMode === 'debate'
+              ? debateSelection === 'auto'
+                ? 'Debate is set to auto; Prismatix can activate it for a high-complexity request.'
+                : `Debate is enabled with the ${debateSelection} profile.`
+              : manualModelOverride
+            ? `You selected ${getCatalogEntry(manualModelOverride).shortName} manually.`
+            : providerPlugins.isConfigured
+              ? 'Prismatix selects a model after you enter a request, based on task complexity, available providers, and attachments.'
+              : 'Connect an AI provider before sending a request.'}</p>
+        </section>
+        <section className='arctic-route-field'>
+          <h3>Estimated cost</h3>
+          <p>{routingCostLabel}</p>
+        </section>
+        <details className='arctic-route-accordion'>
+          <summary>Model options</summary>
+          {workspaceMode === 'compare' && <div className='arctic-comparison-models'>
+            <label htmlFor='arctic-model-a'>Model A</label>
+            <select id='arctic-model-a' value={comparisonModelA} onChange={(event) => setComparisonModelA(event.target.value as RouterModel)}>
+              <option value='gemini-3.8-flash'>Gemini 3.8 Flash</option>
+              <option value='gpt-6-sol'>GPT-6 Sol</option>
+              <option value='deepseek-v4-pro'>DeepSeek V4 Pro</option>
+              <option value='grok-4.6'>Grok 4.6</option>
+              <option value='qwen-3.8-flash'>Qwen 3.8 Flash</option>
+            </select>
+            <label htmlFor='arctic-model-b'>Model B</label>
+            <select id='arctic-model-b' value={comparisonModelB} onChange={(event) => setComparisonModelB(event.target.value as RouterModel)}>
+              <option value='gpt-6-sol'>GPT-6 Sol</option>
+              <option value='gemini-3.8-flash'>Gemini 3.8 Flash</option>
+              <option value='deepseek-v4-pro'>DeepSeek V4 Pro</option>
+              <option value='grok-4.6'>Grok 4.6</option>
+              <option value='qwen-3.8-flash'>Qwen 3.8 Flash</option>
+            </select>
+          </div>}
+          <button type='button' onClick={() => { setRoutingPanelOpen(false); document.querySelector<HTMLButtonElement>('.composer-model-pill')?.click(); }}>Choose a model or routing profile</button>
+          <button type='button' onClick={() => { setShowProviderSettings(true); setRoutingPanelOpen(false); }}>Provider settings</button>
+          <button type='button' onClick={() => { setShowMemorySettings(true); setRoutingPanelOpen(false); }}>Memory settings</button>
+          <button type='button' onClick={() => { setIsShortcutsOpen(true); setRoutingPanelOpen(false); }}>Keyboard shortcuts</button>
+          {canInstallPwa && <button type='button' onClick={() => { setRoutingPanelOpen(false); void handleInstallPwa(); }}>Install Prismatix</button>}
+        </details>
+        <details className='arctic-route-accordion'>
+          <summary>Debate mode</summary>
+          <label htmlFor='arctic-debate-profile'>Debate profile</label>
+          <select
+            id='arctic-debate-profile'
+            value={debateSelection}
+            onChange={(event) => {
+              const selection = event.target.value as DebateSelection;
+              setDebateSelection(selection);
+              if (selection !== 'off') {
+                setComparisonMode(false);
+                try { window.localStorage.setItem('prismatix_comparison_mode', 'false'); } catch { /* optional persistence */ }
+              }
+            }}
+          >
+            <option value='off'>Off</option>
+            <option value='auto'>Auto (high complexity)</option>
+            <option value='general'>General</option>
+            <option value='code'>Code</option>
+            <option value='video_ui'>Video UI</option>
+          </select>
+        </details>
+        <details className='arctic-route-accordion'>
+          <summary>Routing profile &amp; tools</summary>
+          <label htmlFor='arctic-routing-profile'>Routing profile</label>
+          <select
+            id='arctic-routing-profile'
+            value={routingProfile}
+            onChange={(event) => {
+              const value = event.target.value as RoutingProfile;
+              setRoutingProfile(value);
+              try { window.localStorage.setItem('prismatix_routing_profile', value); } catch { /* optional persistence */ }
+            }}
+          >
+            <option value='balanced'>Balanced</option>
+            <option value='economy'>Economy</option>
+            <option value='capability'>Capability</option>
+          </select>
+          <label htmlFor='arctic-spend-cap'>Per-turn spend cap</label>
+          <select
+            id='arctic-spend-cap'
+            value={maxSpendCap === null ? 'none' : String(maxSpendCap)}
+            onChange={(event) => {
+              const value = event.target.value === 'none' ? null : Number(event.target.value);
+              setMaxSpendCap(value);
+              try {
+                if (value === null) window.localStorage.removeItem('prismatix_max_spend_cap');
+                else window.localStorage.setItem('prismatix_max_spend_cap', String(value));
+              } catch { /* optional persistence */ }
+            }}
+          >
+            <option value='none'>No cap</option>
+            <option value='0.01'>$0.01</option>
+            <option value='0.05'>$0.05</option>
+            <option value='0.10'>$0.10</option>
+            <option value='0.25'>$0.25</option>
+          </select>
+          <label className='arctic-route-check'><input type='checkbox' checked={webSearchEnabled} onChange={(event) => {
+            setWebSearchEnabled(event.target.checked);
+            try { window.localStorage.setItem('prismatix_web_search_enabled', String(event.target.checked)); } catch { /* optional persistence */ }
+          }} /> Search web (BYOK)</label>
+          <label className='arctic-route-check'><input type='checkbox' checked={researchMode} onChange={(event) => {
+            setResearchMode(event.target.checked);
+            try { window.localStorage.setItem('prismatix_research_mode', String(event.target.checked)); } catch { /* optional persistence */ }
+          }} /> Multi-source research</label>
+          {contextStatus && <details className='arctic-context-details'>
+            <summary>Conversation context</summary>
+            <ContextStatus contextStatus={contextStatus} />
+          </details>}
+        </details>
+      </aside>
     </div>
   );
 };

@@ -583,8 +583,12 @@ function ChatHistory({
         }
       }}>
       <div className='conversation-sidebar-controls'>
+        <div className='arctic-sidebar-brand'>
+          <img src='/prismatix-arctic-mark.svg' alt='' />
+          <span>Prismatix</span>
+        </div>
         <div className='conversation-sidebar-heading'>
-          <h2>Chats</h2>
+          <h2>Recent chats</h2>
           <button type='button' className='conversation-display-toggle' aria-label='Chat display options'
             aria-expanded={showPreferences} onClick={() => setShowPreferences(previous => !previous)}>
             <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'><path d='M4 7h16M4 17h16M9 4v6m6 4v6' /></svg>

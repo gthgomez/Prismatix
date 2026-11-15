@@ -27,6 +27,7 @@ export interface ChatInputComposerProps {
   onClearAllAttachments: () => void;
   onFileSelect: (payload: FileUploadPayload) => void;
   onMultipleFiles: (payloads: FileUploadPayload[]) => void;
+  onFilePickerReady?: (openPicker: () => void) => void;
   currentModel: RouterModel;
   manualModelOverride: RouterModel | null;
   debateSelection: DebateSelection;
@@ -70,6 +71,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   onClearAllAttachments,
   onFileSelect,
   onMultipleFiles,
+  onFilePickerReady,
   currentModel,
   manualModelOverride,
   debateSelection,
@@ -110,6 +112,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
           <FileUpload
             onFileContent={onFileSelect}
             onMultipleFiles={onMultipleFiles}
+            onPickerReady={onFilePickerReady}
             disabled={isStreaming}
             maxFiles={10}
           />
