@@ -177,6 +177,20 @@ test.describe('first-run setup journey', () => {
     await expect(send).toBeEnabled();
   });
 
+  test('history loading is distinct from successfully empty', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'chromium', 'desktop history check');
+    await setupControlledJourney(page, {
+      listResponses: ['ok'],
+      listDelayMs: 1500,
+      conversations: [],
+    });
+    await signInAsMockUser(page);
+    const sidebar = await openChatsIfNeeded(page);
+    await expect(sidebar.getByText('Loading chats…')).toBeVisible();
+    await expect(sidebar.getByText('No conversations yet')).toHaveCount(0);
+    await expect(sidebar.getByText('No conversations yet')).toBeVisible();
+  });
+
   test('failed history load never fabricates an empty list; Retry recovers', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'chromium', 'desktop history check');
     const fixture = await openJourney(page, {

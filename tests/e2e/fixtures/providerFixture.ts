@@ -15,6 +15,7 @@ export interface ControlledJourneyOptions extends MockAppOptions {
   validationDelayMs?: number;
   initialProvider?: { hasKey?: boolean; enabled?: boolean };
   listResponses?: ListResponse[];
+  listDelayMs?: number;
   conversations?: Array<{
     id: string;
     title: string;
@@ -46,6 +47,7 @@ interface JourneyState {
   conversations: NonNullable<ControlledJourneyOptions['conversations']>;
   messages: NonNullable<ControlledJourneyOptions['messages']>;
   listResponses: ListResponse[];
+  listDelayMs: number;
   validation: ValidationMode;
   rejectFirstValidation: boolean;
   validationDelayMs: number;
@@ -110,6 +112,7 @@ export async function setupControlledJourney(
     conversations: options.conversations ?? [],
     messages: options.messages ?? [],
     listResponses: options.listResponses ?? ['ok'],
+    listDelayMs: options.listDelayMs ?? 0,
     validation: options.validation ?? 'verified',
     rejectFirstValidation: options.rejectFirstValidation ?? false,
     validationDelayMs: options.validationDelayMs ?? 0,
@@ -232,6 +235,9 @@ export async function setupControlledJourney(
       return;
     }
     state.conversationListCalls += 1;
+    if (state.listDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, state.listDelayMs));
+    }
     if (nextListResponse() === 'fail') {
       await route.fulfill({
         status: 500,
