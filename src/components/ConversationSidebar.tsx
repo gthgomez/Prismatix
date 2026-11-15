@@ -30,7 +30,9 @@ export interface ConversationSidebarProps {
   hasMore?: boolean;
   isLoadingMore?: boolean;
   loadMoreError?: string | null;
+  loadError?: string | null;
   onLoadMore?: () => void;
+  onRetry?: () => void;
   onOpenSearch?: () => void;
   onClose?: () => void;
   onRename?: (conversationId: string, title: string) => void;
@@ -64,7 +66,9 @@ function ChatHistory({
   hasMore = false,
   isLoadingMore = false,
   loadMoreError = null,
+  loadError = null,
   onLoadMore,
+  onRetry,
   onOpenSearch,
   onClose,
   onRename,
@@ -579,8 +583,12 @@ function ChatHistory({
         }
       }}>
       <div className='conversation-sidebar-controls'>
+        <div className='arctic-sidebar-brand'>
+          <img src='/prismatix-arctic-mark.svg' alt='' />
+          <span>Prismatix</span>
+        </div>
         <div className='conversation-sidebar-heading'>
-          <h2>Chats</h2>
+          <h2>Recent chats</h2>
           <button type='button' className='conversation-display-toggle' aria-label='Chat display options'
             aria-expanded={showPreferences} onClick={() => setShowPreferences(previous => !previous)}>
             <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' aria-hidden='true'><path d='M4 7h16M4 17h16M9 4v6m6 4v6' /></svg>
@@ -596,35 +604,15 @@ function ChatHistory({
           >
             + New Chat
           </button>
-          {onOpenExport && (
-            <button
-              type='button'
-              className='btn-secondary'
-              title='Export conversation(s)'
-              onClick={onOpenExport}
-            >
-              Export
-            </button>
-          )}
-          {onOpenImport && (
-            <button
-              type='button'
-              className='btn-secondary'
-              title='Import conversation(s)'
-              onClick={onOpenImport}
-            >
-              Import
-            </button>
-          )}
-          {onOpenPromptLibrary && (
-            <button
-              type='button'
-              className='btn-secondary'
-              title='Prompt templates'
-              onClick={onOpenPromptLibrary}
-            >
-              Prompts
-            </button>
+          {(onOpenExport || onOpenImport || onOpenPromptLibrary) && (
+            <details className='conversation-secondary-actions'>
+              <summary>More</summary>
+              <div className='conversation-secondary-action-list'>
+                {onOpenExport && <button type='button' className='btn-secondary' title='Export conversation(s)' onClick={onOpenExport}>Export</button>}
+                {onOpenImport && <button type='button' className='btn-secondary' title='Import conversation(s)' onClick={onOpenImport}>Import</button>}
+                {onOpenPromptLibrary && <button type='button' className='btn-secondary' title='Prompt templates' onClick={onOpenPromptLibrary}>Prompts</button>}
+              </div>
+            </details>
           )}
         </div>
 
@@ -778,7 +766,13 @@ function ChatHistory({
       </div>
       <div className='conversation-history-scroll'>
         {isLoading && <div className='conversation-sidebar-status' role='status'>Loading…</div>}
-        {!isLoading && conversations.length === 0 && <div className='conversation-sidebar-status'>No conversations yet</div>}
+        {!isLoading && loadError && (
+          <div className='conversation-sidebar-error' role='alert'>
+            <span>{conversations.length > 0 ? 'Could not refresh conversations. Your loaded history is still available.' : 'Could not load conversations.'}</span>
+            {onRetry && <button type='button' onClick={onRetry}>Retry</button>}
+          </div>
+        )}
+        {!isLoading && !loadError && conversations.length === 0 && <div className='conversation-sidebar-status'>No conversations yet</div>}
         {!isLoading && conversations.length > 0 && visible.length === 0 && <div className='conversation-sidebar-status' role='status'>No matching chats</div>}
         {trimmedQuery && (
           <div className='conversation-search-note'>

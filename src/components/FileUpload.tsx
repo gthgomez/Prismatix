@@ -2,7 +2,7 @@
 // Multi-file upload component with L3 Safety Gates
 // Supports multiple simultaneous file uploads with progress tracking
 
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { CONFIG } from '../config';
 import type { FileUploadPayload } from '../types';
 import { parseDocumentFile } from '../utils/documentParsers';
@@ -13,6 +13,7 @@ interface FileUploadProps {
   disabled?: boolean;
   maxFiles?: number; // Default: 5
   maxTotalSize?: number; // Default: 50MB total
+  onPickerReady?: (openPicker: () => void) => void;
 }
 
 interface ProcessingState {
@@ -134,17 +135,22 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   onFileContent, 
   onMultipleFiles,
   disabled,
+  onPickerReady,
   maxFiles = 5,
   maxTotalSize = 50 * 1024 * 1024 // 50MB
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [processing, setProcessing] = useState<ProcessingState | null>(null);
 
-  const handleClick = () => {
+  const handleClick = useCallback(() => {
     if (!disabled && fileInputRef.current) {
       fileInputRef.current.click();
     }
-  };
+  }, [disabled]);
+
+  useEffect(() => {
+    onPickerReady?.(handleClick);
+  }, [handleClick, onPickerReady]);
 
   /**
    * Process a single file and return a FileUploadPayload

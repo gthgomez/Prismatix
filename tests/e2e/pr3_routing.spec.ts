@@ -4,37 +4,48 @@
 import { test, expect } from '@playwright/test';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
+async function ensureDetailsOpen(details: import('@playwright/test').Locator) {
+  if (!await details.evaluate((element) => element instanceof HTMLDetailsElement && element.open)) {
+    await details.locator(':scope > summary').click();
+  }
+}
+
 test.describe('PR 3 Research and Routing Intelligence (E2E)', () => {
-  test('F11, F12, F13: routing intelligence bar renders search toggle, compare toggle, profiles, and spend caps', async ({ page }) => {
+  test('F11, F12, F13: routing disclosure exposes search, compare, profile, and spend cap controls', async ({ page }) => {
     await setupAuthenticatedMock(page, { hasProviderKey: true });
     await signInAsMockUser(page);
 
-    // Routing intelligence toolbar must be visible
-    const routingBar = page.locator('.routing-intelligence-bar');
-    await expect(routingBar).toBeVisible();
+    const routingToggle = page.getByRole('button', { name: 'Routing details' });
+    if (await routingToggle.isVisible()) await routingToggle.click();
+    const routingPanel = page.locator('.arctic-routing-panel');
+    await expect(routingPanel).toBeVisible();
 
-    // Check Search web button
-    const searchBtn = routingBar.getByRole('button', { name: /search web/i });
-    await expect(searchBtn).toBeVisible();
-    await searchBtn.click();
-    await expect(searchBtn).toHaveClass(/active/);
-    await expect(searchBtn).toHaveAttribute('aria-pressed', 'true');
+    const modelOptions = routingPanel.locator('.arctic-routing-card > details').filter({ hasText: 'Model options' });
+    await ensureDetailsOpen(modelOptions);
+    const routingTools = modelOptions.locator('details.arctic-route-nested');
+    await ensureDetailsOpen(routingTools);
+    const searchToggle = routingPanel.getByLabel('Search web (BYOK)');
+    await expect(searchToggle).toBeVisible();
+    await expect(searchToggle).not.toBeChecked();
+    await searchToggle.check();
+    await expect(searchToggle).toBeChecked();
 
-    // Check Compare button
-    const compareBtn = routingBar.getByRole('button', { name: /compare/i });
+    const closeRouting = routingPanel.getByRole('button', { name: 'Close routing details' });
+    if (await closeRouting.isVisible()) await closeRouting.click();
+    const compareBtn = page.getByRole('group', { name: 'Chat workflow' }).getByRole('button', { name: 'Compare' });
     await expect(compareBtn).toBeVisible();
     await compareBtn.click();
-    await expect(compareBtn).toHaveClass(/active/);
     await expect(compareBtn).toHaveAttribute('aria-pressed', 'true');
 
-    // Check comparison model selects are shown
-    const modelASelect = page.getByLabel('Select comparison model A');
+    if (await routingToggle.isVisible()) await routingToggle.click();
+    await ensureDetailsOpen(modelOptions);
+    const modelASelect = routingPanel.getByLabel('Model A');
     await expect(modelASelect).toBeVisible();
-    const modelBSelect = page.getByLabel('Select comparison model B');
+    const modelBSelect = routingPanel.getByLabel('Model B');
     await expect(modelBSelect).toBeVisible();
 
     // Check profile select
-    const profileSelect = page.locator('#routing-profile-select');
+    const profileSelect = routingPanel.locator('#arctic-routing-profile');
     await expect(profileSelect).toBeVisible();
     const profileOptions = await profileSelect.locator('option').allTextContents();
     expect(profileOptions).toContain('Balanced');
@@ -45,10 +56,10 @@ test.describe('PR 3 Research and Routing Intelligence (E2E)', () => {
     expect(await profileSelect.inputValue()).toBe('economy');
 
     // Check spend cap select
-    const capSelect = page.locator('#spend-cap-select');
+    const capSelect = routingPanel.locator('#arctic-spend-cap');
     await expect(capSelect).toBeVisible();
     const capOptions = await capSelect.locator('option').allTextContents();
-    expect(capOptions).toContain('No Cap');
+    expect(capOptions).toContain('No cap');
     expect(capOptions).toContain('$0.01');
     expect(capOptions).toContain('$0.05');
 
@@ -76,9 +87,18 @@ test.describe('PR 3 Research and Routing Intelligence (E2E)', () => {
     await signInAsMockUser(page);
 
     // Select low spend cap
-    const capSelect = page.locator('#spend-cap-select');
+    const routingToggle = page.getByRole('button', { name: 'Routing details' });
+    if (await routingToggle.isVisible()) await routingToggle.click();
+    const routingPanel = page.locator('.arctic-routing-panel');
+    await expect(routingPanel).toBeVisible();
+    const modelOptions = routingPanel.locator('.arctic-routing-card > details').filter({ hasText: 'Model options' });
+    await ensureDetailsOpen(modelOptions);
+    await ensureDetailsOpen(modelOptions.locator('details.arctic-route-nested'));
+    const capSelect = routingPanel.locator('#arctic-spend-cap');
     await expect(capSelect).toBeVisible();
     await capSelect.selectOption('0.01');
+    const closeRouting = routingPanel.getByRole('button', { name: 'Close routing details' });
+    if (await closeRouting.isVisible()) await closeRouting.click();
 
     // Send a message using chat input composer
     const textarea = page.locator('.chat-input');

@@ -114,7 +114,7 @@ test.describe('PR 1 Daily-Use Foundation (E2E)', () => {
     }
 
     // Sidebar must render loaded conversations
-    const sidebar = page.locator('.conversation-sidebar, aside');
+    const sidebar = page.locator('.conversation-sidebar');
     await expect(sidebar).toBeVisible();
     await expect(page.getByText('Distributed Consensus In Depth')).toBeVisible();
 
