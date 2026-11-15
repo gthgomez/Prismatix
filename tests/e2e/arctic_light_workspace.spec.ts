@@ -139,13 +139,16 @@ for (const viewport of [
   { name: 'mobile-390x844', width: 390, height: 844 },
   { name: 'mobile-320x844', width: 320, height: 844 },
 ]) {
-  test(`New Chat layout fits ${viewport.name}`, async ({ page }) => {
+  test(`New Chat layout fits ${viewport.name}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
     await signInAsMockUser(page);
     await expect(page.getByRole('group', { name: 'Chat workflow' })).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     expect(overflow, `${viewport.name} should not overflow horizontally`).toBe(false);
+    const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
+    await mkdir(evidenceDir, { recursive: true });
+    await page.screenshot({ path: `${evidenceDir}/${testInfo.project.name}-${viewport.name}-${viewport.width}x${viewport.height}.png`, fullPage: true });
     if (viewport.width <= 1200) {
       const toggle = page.getByRole('button', { name: 'Routing details' });
       await toggle.click();
