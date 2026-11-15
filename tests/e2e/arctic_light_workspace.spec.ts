@@ -7,6 +7,7 @@ type RequestRecord = {
   mode?: string;
   debateProfile?: string;
   modelOverride?: string;
+  routingProfile?: string;
 };
 
 test('New Chat reference composition at 1672x941', async ({ page }, testInfo) => {
@@ -72,8 +73,10 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
 
   const workflow = page.getByRole('group', { name: 'Chat workflow' });
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
-  const sendPrompt = async (prompt: string) => {
+  const sendPrompt = async (prompt: string, isCompare = false) => {
     await composer.fill(prompt);
+    const routingDetails = page.locator('.arctic-routing-panel');
+    await expect(routingDetails).toContainText(isCompare ? 'combined for both models' : 'before sending');
     await composer.press('Enter');
   };
 
@@ -89,13 +92,14 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
   await workflow.getByRole('button', { name: 'Compare' }).click();
   await expect(workflow.getByRole('button', { name: 'Compare' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByLabel('Debate profile')).toHaveValue('off');
-  await sendPrompt('Compare fixture prompt');
+  await sendPrompt('Compare fixture prompt', true);
   await expect(page.getByText('Mock reply 2')).toBeVisible();
   await expect(page.getByText('Mock reply 3')).toBeVisible();
   expect(routerRequests).toHaveLength(3);
   expect(routerRequests.slice(1).map((request) => request.query)).toEqual(['Compare fixture prompt', 'Compare fixture prompt']);
   expect(routerRequests.slice(1).map((request) => request.modelOverride)).toEqual(['gemini-3.8-flash', 'gpt-6-sol']);
   expect(routerRequests.slice(1).every((request) => !request.mode || request.mode === 'off')).toBe(true);
+  expect(routerRequests.slice(1).every((request) => request.routingProfile === 'balanced')).toBe(true);
 
   await page.getByRole('button', { name: /New Chat/i }).click();
   await workflow.getByRole('button', { name: 'Chat', exact: true }).click();
@@ -106,6 +110,7 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
   expect(routerRequests).toHaveLength(4);
   expect(routerRequests[3]).toMatchObject({ query: 'Chat fixture prompt', mode: 'off', debateProfile: 'off' });
   expect(routerRequests[3]?.modelOverride).toBeUndefined();
+  expect(routerRequests[3]?.routingProfile).toBe('balanced');
 });
 
 test('New Chat Stop cancels one mocked stream without a second dispatch', async ({ page }) => {
