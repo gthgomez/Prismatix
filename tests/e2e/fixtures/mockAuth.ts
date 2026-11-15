@@ -148,6 +148,17 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
     const req = route.request();
     if (req.method() === 'POST') {
       const postData = req.postDataJSON() as Record<string, unknown> | null;
+      if (postData?.action === 'validate_key') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            provider: postData.provider,
+            status: 'enabled',
+            message: 'Mock provider key verified',
+          }),
+        });
+      }
       if (postData?.action === 'set_key' || postData?.action === 'set_enabled') {
         return route.fulfill({
           status: 200,

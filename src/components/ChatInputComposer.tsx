@@ -51,6 +51,7 @@ export interface ChatInputComposerProps {
   onOpenImageGen?: () => void;
   isRecordingVoice?: boolean;
   onToggleVoiceDictation?: () => void;
+  setupRequired?: boolean;
 }
 
 export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
@@ -94,7 +95,55 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   onOpenImageGen,
   isRecordingVoice = false,
   onToggleVoiceDictation,
+  setupRequired = false,
 }) => {
+  if (setupRequired) {
+    return (
+      <div className='chat-input-container chat-input-container--setup'>
+        <div
+          className='setup-composer-lock'
+          role='note'
+          aria-label='Chat unavailable until a provider is connected'
+        >
+          <span className='setup-composer-lock-text'>Chat unlocks after you connect a provider.</span>
+          <button type='button' className='setup-composer-connect' onClick={onOpenProviderSettings}>
+            Connect a provider
+          </button>
+        </div>
+        <div className='input-row glass-surface setup-input-row' data-glass-variant='floating' data-glass-mode='glass'>
+          <textarea
+            className='chat-input'
+            placeholder='Connect a provider to start chatting'
+            aria-label='Message Prismatix — connect a provider first'
+            disabled
+            rows={1}
+          />
+          <button
+            type='button'
+            className='send-button'
+            data-state='setup'
+            disabled
+            aria-label='Send message — connect a provider first'
+            title='Send message — connect a provider first'
+          >
+            <svg
+              width='20'
+              height='20'
+              viewBox='0 0 24 24'
+              fill='none'
+              stroke='currentColor'
+              strokeWidth='2'
+              aria-hidden='true'
+            >
+              <line x1='22' y1='2' x2='11' y2='13' />
+              <polygon points='22 2 15 22 11 13 2 9 22 2' />
+            </svg>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className='chat-input-container'>
       <div className='input-wrapper'>

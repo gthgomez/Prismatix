@@ -37,13 +37,21 @@ const providerPlugins = vi.hoisted(() => ({
   providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }],
   defaultProvider: 'openrouter',
   enabledProviders: new Set(['openrouter']),
+  isConfigured: true,
   loading: false,
+  loaded: true,
   error: null,
+  verifications: {},
+  setupOutcome: null,
   refresh: vi.fn(async () => {}),
   setEnabled: vi.fn(async () => true),
   setKey: vi.fn(async () => true),
   removeKey: vi.fn(async () => true),
   setDefault: vi.fn(async () => true),
+  validateKey: vi.fn(async () => ({ provider: 'openrouter' as const, status: 'enabled' as const })),
+  recordVerification: vi.fn(),
+  reportSetupOutcome: vi.fn(),
+  dismissSetupOutcome: vi.fn(),
 }));
 
 vi.mock('../hooks/useProviderPlugins', () => ({

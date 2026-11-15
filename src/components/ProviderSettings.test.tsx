@@ -32,13 +32,19 @@ function makePlugins(provider: ProviderState): ProviderPlugins {
     enabledProviders: new Set(['openrouter']),
     isConfigured: true,
     loading: false,
+    loaded: true,
     error: null,
+    verifications: {},
+    setupOutcome: null,
     refresh: vi.fn(async () => {}),
     setEnabled: vi.fn(async () => true),
     setKey: vi.fn(async () => true),
     removeKey: vi.fn(async () => true),
     setDefault: vi.fn(async () => true),
     validateKey: vi.fn(async () => ({ provider: 'openrouter' as const, status: 'enabled' as const })),
+    recordVerification: vi.fn(),
+    reportSetupOutcome: vi.fn(),
+    dismissSetupOutcome: vi.fn(),
   };
 }
 

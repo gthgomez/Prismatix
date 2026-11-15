@@ -182,6 +182,7 @@ interface ChatInterfaceProps {
 const DAILY_BUDGET_LIMIT_USD = 2.0;
 const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
 const CHATS_HIDDEN_KEY = 'prismatix.sidebar.chatsHidden';
+const NO_PROVIDER_SEND_ERROR = 'No AI providers configured. Open Provider Settings to connect your OpenRouter or direct provider key.';
 
 const PROMPT_STARTERS: PromptStarter[] = [
   {
@@ -351,6 +352,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // Provider plug-ins (PX12): which providers are on for this user.
   const providerPlugins = useProviderPlugins(user?.id);
   const enabledProviders = providerPlugins.enabledProviders;
+  const setupMode = !providerPlugins.isConfigured;
+  const setupState: 'checking' | 'error' | 'required' | 'ready' = providerPlugins.isConfigured
+    ? 'ready'
+    : providerPlugins.loading && !providerPlugins.loaded
+      ? 'checking'
+      : providerPlugins.error && !providerPlugins.loaded
+        ? 'error'
+        : 'required';
+  const setupNoticeRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!providerPlugins.setupOutcome) return;
+    const frame = requestAnimationFrame(() => setupNoticeRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [providerPlugins.setupOutcome]);
+
+  // A provider-related block is stale as soon as a provider becomes usable.
+  useEffect(() => {
+    if (!providerPlugins.isConfigured) return;
+    setSendValidationError((prev) => prev === NO_PROVIDER_SEND_ERROR ? null : prev);
+  }, [providerPlugins.isConfigured]);
 
   // Single authoritative model preferences store (favorites, hidden models, provider tabs)
   const modelPreferences = useModelPickerPreferences(user?.id);
@@ -392,10 +414,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // PX07 conversation continuity state.
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [conversationsLoaded, setConversationsLoaded] = useState(false);
   const [hasMoreConversations, setHasMoreConversations] = useState(false);
   const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
   const [loadMoreConversationsError, setLoadMoreConversationsError] = useState<string | null>(null);
   const [conversationsError, setConversationsError] = useState<string | null>(null);
+  const conversationsSeqRef = useRef(0);
 
   // PR 1: F04 older message pagination state
   const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
@@ -908,6 +932,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const refreshConversations = async (projectId?: string | null) => {
+    const seq = ++conversationsSeqRef.current;
     setConversationsLoading(true);
     setConversationsError(null);
     const targetProjectId = projectId !== undefined ? projectId : activeProjectId;
@@ -916,16 +941,36 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         limit: 50,
         projectId: targetProjectId ?? undefined,
       });
+      if (seq !== conversationsSeqRef.current) return;
       setConversations(list);
       setHasMoreConversations(list.length === 50);
+      setConversationsLoaded(true);
       void listProjects(supabase).then(setProjects);
     } catch (error) {
+      if (seq !== conversationsSeqRef.current) return;
       console.warn('[ChatInterface] Failed to list conversations:', error);
-      setConversationsError('Failed to load conversations.');
+      setConversationsError('Could not load conversations.');
+      setConversationsLoaded(true);
     } finally {
-      setConversationsLoading(false);
+      if (seq === conversationsSeqRef.current) setConversationsLoading(false);
     }
   };
+
+  // Re-query the visible workspace when the project filter changes. The first
+  // mount is handled by the account/session effect below.
+  const refreshConversationsRef = useRef(refreshConversations);
+  refreshConversationsRef.current = refreshConversations;
+  const projectFilterRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!user) return;
+    if (projectFilterRef.current === undefined) {
+      projectFilterRef.current = activeProjectId;
+      return;
+    }
+    if (projectFilterRef.current === activeProjectId) return;
+    projectFilterRef.current = activeProjectId;
+    void refreshConversationsRef.current(activeProjectId);
+  }, [activeProjectId, user?.id]);
 
   const handleLoadMoreConversations = async () => {
     if (isLoadingMoreConversations || !hasMoreConversations || conversations.length === 0) return;
@@ -2227,7 +2272,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return;
     }
     if (enabledProviders.size === 0) {
-      setSendValidationError('No AI providers configured. Open Provider Settings to connect your OpenRouter or direct provider key.');
+      setSendValidationError(NO_PROVIDER_SEND_ERROR);
       return;
     }
     if (debateSelection === 'video_ui' && !hasReadyVideo) {
@@ -2776,6 +2821,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     await onSignOut();
   };
 
+  const closeProviderSettings = () => {
+    setShowProviderSettings(false);
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active instanceof HTMLElement && active.isConnected) {
+        return;
+      }
+      if (setupMode) {
+        document.getElementById('first-run-openrouter-key')?.focus();
+      } else {
+        inputRef.current?.focus();
+      }
+    });
+  };
+
   const getUserDisplay = () => {
     if (!user) return '';
     return user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
@@ -2847,11 +2907,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           conversations={conversations}
           selectedId={selectedConversationId}
           isLoading={conversationsLoading}
+          hasLoaded={conversationsLoaded}
           disabled={isStreaming}
           isOpen={sidebarOpen}
           hasMore={hasMoreConversations}
           isLoadingMore={isLoadingMoreConversations}
-          loadMoreError={loadMoreConversationsError || conversationsError}
+          loadMoreError={loadMoreConversationsError}
+          loadError={conversationsError}
+          onRetryLoad={() => void refreshConversations(activeProjectId)}
           onLoadMore={() => void handleLoadMoreConversations()}
           onOpenSearch={() => {
             setIsGlobalSearchOpen(true);
@@ -2886,7 +2949,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           onSetConversationTags={handleSetConversationTags}
         />
       )}
-      <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>
+      <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''} ${setupMode ? 'setup-required' : ''}`}>
       <ChatBackdrop />
       {/* Header */}
       <header className='chat-header' ref={chatHeaderRef}>
@@ -2948,6 +3011,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               catalog may be outdated
             </span>
           )}
+          {!setupMode && (
           <div className='header-utility-bar header-utility-bar-leading'>
           {contextStatus && (
             <details className='context-disclosure'>
@@ -2972,8 +3036,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </svg>
             </button>
           </div>
+          )}
 
             {/* Model Selector - CLICKABLE */}
+            {!setupMode && (
             <div className='model-selector-container' ref={modelSelectorRef}>
               <button
                 type='button'
@@ -3038,6 +3104,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 />
               )}
             </div>
+            )}
 
             <div className='header-utility-bar header-utility-bar-trailing'>
             <button
@@ -3061,11 +3128,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 <line x1='21' y1='21' x2='16.65' y2='16.65' />
               </svg>
             </button>
+            {!setupMode && (
             <button type='button' className='header-button memory-trigger' aria-label={lastRecall?.conversationId === selectedConversationId ? `Memory: ${lastRecall.hits} recalled` : 'Memory'} aria-haspopup='dialog' aria-expanded={showMemorySettings} onClick={() => setShowMemorySettings(true)}>
               <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'><rect x='5' y='5' width='14' height='14' rx='3' /><path d='M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4' /></svg>
               <span className='memory-trigger-label'>Memory</span>
               {lastRecall?.conversationId === selectedConversationId && <span className='memory-recall-count' aria-hidden='true'>{lastRecall.hits}</span>}
             </button>
+            )}
             <button
               type='button'
               onClick={() => setShowProviderSettings(true)}
@@ -3092,7 +3161,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               </svg>
             </button>
 
-            {canInstallPwa && (
+            {!setupMode && canInstallPwa && (
               <button
                 type='button'
                 className='header-button install-pwa-button'
@@ -3188,7 +3257,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               <ProviderSettings
                 plugins={providerPlugins}
                 preferences={modelPreferences}
-                onClose={() => setShowProviderSettings(false)}
+                onClose={closeProviderSettings}
               />
             )}
           </div>
@@ -3202,6 +3271,45 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           aria-live='assertive'
         >
           Offline mode — live model inference is paused. You can keep reading and organizing loaded conversations.
+        </div>
+      )}
+
+      {providerPlugins.setupOutcome && (
+        <div
+          ref={setupNoticeRef}
+          className={`provider-setup-notice ${providerPlugins.setupOutcome.state}`}
+          role='status'
+          aria-label='Provider setup status'
+          tabIndex={-1}
+        >
+          <span className='provider-setup-notice-text'>{providerPlugins.setupOutcome.message}</span>
+          <span className='provider-setup-notice-actions'>
+            {providerPlugins.setupOutcome.state === 'verified' ? (
+              <button
+                type='button'
+                className='provider-setup-notice-action'
+                onClick={() => inputRef.current?.focus()}
+              >
+                Start chatting
+              </button>
+            ) : (
+              <button
+                type='button'
+                className='provider-setup-notice-action'
+                onClick={() => setShowProviderSettings(true)}
+              >
+                Review in Provider Settings
+              </button>
+            )}
+            <button
+              type='button'
+              className='provider-setup-notice-dismiss'
+              onClick={providerPlugins.dismissSetupOutcome}
+              aria-label='Dismiss provider setup status'
+            >
+              ✕
+            </button>
+          </span>
         </div>
       )}
 
@@ -3238,14 +3346,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onWheel={markUserInterruption}
       >
         {messages.length === 0
-          ? (
-            <div className='empty-state'>
-              {!providerPlugins.isConfigured && !providerPlugins.loading && (
+          ? setupState !== 'ready'
+            ? (
+              <div className='empty-state empty-state--setup'>
                 <FirstRunSetupCard
                   plugins={providerPlugins}
                   onOpenSettings={() => setShowProviderSettings(true)}
                 />
-              )}
+              </div>
+            )
+            : (
+            <div className='empty-state'>
               <div className='empty-state-badge'>Adaptive AI Router</div>
               <h2>What would you like to<br /><span>build or explore?</span></h2>
               <p>
@@ -3392,6 +3503,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       )}
 
       {/* PR 3 Routing Intelligence Bar (F11, F12, F13) */}
+      {!setupMode && (
       <div className='routing-intelligence-bar' role='toolbar' aria-label='Routing and research controls'>
         <div className='routing-controls-group'>
           <button
@@ -3536,6 +3648,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           </label>
         </div>
       </div>
+      )}
 
       {/* Input Area */}
       <ChatInputComposer
@@ -3582,6 +3695,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onOpenImageGen={() => setIsImageGenModalOpen(true)}
         isRecordingVoice={isRecordingVoice}
         onToggleVoiceDictation={handleToggleVoiceDictation}
+        setupRequired={setupMode}
       />
 
       <BudgetGuard

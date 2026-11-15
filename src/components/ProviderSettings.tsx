@@ -10,6 +10,7 @@ import { MODEL_ORDER, formatModelPriceLabel, getCatalogEntry } from '../modelCat
 import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
 import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
 import { hasOpenRouterRoute, providerForModel } from '../providerRegistry';
+import { describeProviderSettingsError, describeProviderState, providerStateClass } from '../providerSetupPresentation';
 
 interface ProviderSettingsProps {
   plugins: ProviderPlugins;
@@ -143,13 +144,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
 
         <p className='provider-settings-intro'>
           Connect your own provider key and turn it on to make its models available. Prismatix uses
-          BYOK for all provider calls.
+          BYOK for all provider calls. A saved key is not the same as a verified key; use Test to
+          check a key before relying on it.
         </p>
 
         {loading && <div className='provider-settings-note'>Loading providers…</div>}
         {error && (
-          <div className='provider-settings-error' role='alert'>
-            {error}
+          <div className='provider-settings-error' role='alert' title={error}>
+            {describeProviderSettingsError(error)}
             <button type='button' className='provider-settings-close' onClick={() => void refresh()}>
               Retry
             </button>
@@ -164,6 +166,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
             const isOpencode = provider.id === 'opencode';
             const canToggle = !isOpencode && provider.hasKey;
             const draft = drafts[provider.id] ?? '';
+            const presentation = describeProviderState(provider, plugins.verifications?.[provider.id]);
 
             return (
               <div key={provider.id} className='provider-card'>
@@ -208,30 +211,12 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                 ) : (
                   <>
                     <div
-                      className={`provider-state-line ${
-                        !provider.hasKey
-                          ? 'needs-setup'
-                          : provider.status === 'invalid_revoked'
-                          ? 'is-error'
-                          : provider.status === 'unavailable'
-                          ? 'is-warning'
-                          : provider.enabled
-                          ? 'is-on'
-                          : 'is-off'
-                      }`}
+                      className={`provider-state-line ${providerStateClass(presentation.tone)}`}
                       aria-live='polite'
                     >
-                      {!provider.hasKey
-                        ? 'Not configured'
-                        : provider.status === 'invalid_revoked'
-                        ? 'Invalid / Revoked'
-                        : provider.status === 'unavailable'
-                        ? 'Unavailable'
-                        : provider.enabled
-                        ? 'Ready & Enabled'
-                        : 'Disabled'}
-                      {provider.statusMessage && (
-                        <span className='provider-status-detail'> — {provider.statusMessage}</span>
+                      {presentation.label}
+                      {presentation.detail && (
+                        <span className='provider-status-detail'> — {presentation.detail}</span>
                       )}
                     </div>
                     <div className='provider-key-row'>
@@ -267,14 +252,16 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                           onClick={() =>
                             void run(`test:${provider.id}`, async () => {
                               const res = await plugins.validateKey(provider.id, draft.trim() || undefined);
-                              setNotice(
-                                `${provider.label}: ${
-                                  res.status === 'enabled'
-                                    ? 'Key verified successfully'
-                                    : res.message || res.status
-                                }`,
-                              );
-                              return res.status === 'enabled';
+                              const label =
+                                res.status === 'enabled'
+                                  ? 'Key verified successfully'
+                                  : res.status === 'invalid_revoked'
+                                    ? 'Key rejected by provider'
+                                    : res.status === 'unavailable'
+                                      ? 'Saved key, but verification is unavailable'
+                                      : res.message || res.status;
+                              setNotice(`${provider.label}: ${label}`);
+                              return true;
                             })
                           }
                         >

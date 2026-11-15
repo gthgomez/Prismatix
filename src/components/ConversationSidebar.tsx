@@ -24,12 +24,15 @@ export interface ConversationSidebarProps {
   conversations: ConversationSummary[];
   selectedId: string | null;
   isLoading: boolean;
+  hasLoaded?: boolean;
   disabled?: boolean;
   isOpen?: boolean;
   preferenceScope?: string | null;
   hasMore?: boolean;
   isLoadingMore?: boolean;
   loadMoreError?: string | null;
+  loadError?: string | null;
+  onRetryLoad?: () => void;
   onLoadMore?: () => void;
   onOpenSearch?: () => void;
   onClose?: () => void;
@@ -58,12 +61,15 @@ function ChatHistory({
   conversations,
   selectedId,
   isLoading,
+  hasLoaded = true,
   disabled = false,
   isOpen = false,
   preferenceScope,
   hasMore = false,
   isLoadingMore = false,
   loadMoreError = null,
+  loadError = null,
+  onRetryLoad,
   onLoadMore,
   onOpenSearch,
   onClose,
@@ -777,9 +783,34 @@ function ChatHistory({
         </div>}
       </div>
       <div className='conversation-history-scroll'>
-        {isLoading && <div className='conversation-sidebar-status' role='status'>Loading…</div>}
-        {!isLoading && conversations.length === 0 && <div className='conversation-sidebar-status'>No conversations yet</div>}
-        {!isLoading && conversations.length > 0 && visible.length === 0 && <div className='conversation-sidebar-status' role='status'>No matching chats</div>}
+        {isLoading && conversations.length === 0 && (
+          <div className='conversation-sidebar-status' role='status'>Loading chats…</div>
+        )}
+        {!isLoading && !hasLoaded && conversations.length === 0 && (
+          <div className='conversation-sidebar-status' role='status'>Loading chats…</div>
+        )}
+        {loadError && conversations.length === 0 && (
+          <div className='conversation-load-error' role='alert'>
+            <span>{loadError}</span>
+            <button type='button' className='conversation-load-error-retry' onClick={onRetryLoad}>
+              Retry
+            </button>
+          </div>
+        )}
+        {loadError && conversations.length > 0 && (
+          <div className='conversation-load-error conversation-load-error--stale' role='status'>
+            <span>{loadError} Showing the last loaded chats.</span>
+            <button type='button' className='conversation-load-error-retry' onClick={onRetryLoad}>
+              Retry
+            </button>
+          </div>
+        )}
+        {!isLoading && hasLoaded && !loadError && conversations.length === 0 && (
+          <div className='conversation-sidebar-status'>No conversations yet</div>
+        )}
+        {!isLoading && conversations.length > 0 && visible.length === 0 && (
+          <div className='conversation-sidebar-status' role='status'>No matching chats</div>
+        )}
         {trimmedQuery && (
           <div className='conversation-search-note'>
             <span>Showing {visible.length} of {conversations.length} loaded chats.</span>
