@@ -78,6 +78,12 @@ test.describe('first-run setup journey', () => {
       expect(box!.y + box!.height, `connect bottom at ${viewport.width}x${viewport.height}`)
         .toBeLessThanOrEqual(viewport.height);
       await assertNotCovered(page, '.first-run-card .first-run-submit');
+
+      // Alternate providers and the demo stay reachable in the same scroll region.
+      const otherProviders = card.getByRole('button', { name: /configure other providers/i });
+      await otherProviders.scrollIntoViewIfNeeded();
+      await expect(otherProviders).toBeVisible();
+      await expect(card.getByRole('link', { name: /demo/i })).toBeVisible();
     }
   });
 
@@ -139,6 +145,10 @@ test.describe('first-run setup journey', () => {
     const notice = page.getByRole('status', { name: 'Provider setup status' });
     await expect(notice).toContainText(/verified/i);
     await expect(notice).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('button', { name: 'Start chatting' })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('textarea.chat-input')).toBeFocused();
     expect(fixture.state.validateCalls).toBe(2);
     expect(fixture.state.setKeyCalls).toBe(1);
   });
@@ -353,6 +363,13 @@ test.describe('first-run setup journey', () => {
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth) + 1);
     await assertNotCovered(page, '.first-run-card .first-run-submit');
+
+    // The same scroll region reaches alternate providers and the demo.
+    const otherProviders = card.getByRole('button', { name: /configure other providers/i });
+    await otherProviders.scrollIntoViewIfNeeded();
+    await expect(otherProviders).toBeVisible();
+    await expect(card.getByRole('link', { name: /demo/i })).toBeVisible();
+    await assertNoHorizontalOverflow(page);
 
     // The setup content lives in one scroll region, not the page as a whole.
     const pageScroll = await page.evaluate(() => document.scrollingElement?.scrollHeight ?? 0);
