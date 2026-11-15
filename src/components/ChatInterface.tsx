@@ -3953,6 +3953,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             id='arctic-routing-profile'
             value={routingProfile}
             onChange={(event) => {
+              userInteractedPrefsRef.current.routingProfile = true;
               const value = event.target.value as RoutingProfile;
               setRoutingProfile(value);
               try { window.localStorage.setItem('prismatix_routing_profile', value); } catch { /* optional persistence */ }
@@ -3967,6 +3968,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             id='arctic-spend-cap'
             value={maxSpendCap === null ? 'none' : String(maxSpendCap)}
             onChange={(event) => {
+              userInteractedPrefsRef.current.maxSpendCap = true;
               const value = event.target.value === 'none' ? null : Number(event.target.value);
               setMaxSpendCap(value);
               try {
@@ -3982,6 +3984,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <option value='0.25'>$0.25</option>
           </select>
           <label className='arctic-route-check'><input type='checkbox' checked={webSearchEnabled} onChange={(event) => {
+            userInteractedPrefsRef.current.webSearchEnabled = true;
             setWebSearchEnabled(event.target.checked);
             try { window.localStorage.setItem('prismatix_web_search_enabled', String(event.target.checked)); } catch { /* optional persistence */ }
           }} /> Search web (BYOK)</label>

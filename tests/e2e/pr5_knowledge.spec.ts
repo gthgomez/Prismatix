@@ -5,25 +5,25 @@ import { test, expect } from '@playwright/test';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 test.describe('PR 5 Knowledge & Grounded Research (E2E)', () => {
-  test('F24: toggles Research mode in routing bar', async ({ page }) => {
+  test('F24: toggles Research mode in routing details', async ({ page }) => {
     await setupAuthenticatedMock(page, { hasProviderKey: true });
     await signInAsMockUser(page);
 
-    const routingBar = page.getByRole('toolbar', { name: /routing and research controls/i });
-    await expect(routingBar).toBeVisible();
+    const routingToggle = page.getByRole('button', { name: 'Routing details' });
+    if (await routingToggle.isVisible()) await routingToggle.click();
+    const routingPanel = page.locator('.arctic-routing-panel');
+    await expect(routingPanel).toBeVisible();
+    await routingPanel.getByText('Routing profile & tools', { exact: true }).click();
 
-    // Research mode toggle button
-    const researchBtn = routingBar.getByRole('button', { name: /research/i });
+    const researchBtn = routingPanel.getByLabel('Multi-source research');
     await expect(researchBtn).toBeVisible();
-    await expect(researchBtn).toHaveAttribute('aria-pressed', 'false');
+    await expect(researchBtn).not.toBeChecked();
 
-    // Click to toggle on
-    await researchBtn.click();
-    await expect(researchBtn).toHaveAttribute('aria-pressed', 'true');
+    await researchBtn.check();
+    await expect(researchBtn).toBeChecked();
 
-    // Click to toggle off
-    await researchBtn.click();
-    await expect(researchBtn).toHaveAttribute('aria-pressed', 'false');
+    await researchBtn.uncheck();
+    await expect(researchBtn).not.toBeChecked();
   });
 
   test('F23: opens URL ingestion modal, blocks SSRF target, and handles valid fetch', async ({ page }) => {

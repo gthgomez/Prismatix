@@ -133,6 +133,48 @@ test('New Chat Stop cancels one mocked stream without a second dispatch', async 
   expect(requests).toHaveLength(1);
 });
 
+test('New Chat keeps local profile, web search and spend cap edits over late server preferences', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let releasePreferences!: () => void;
+  const preferenceGate = new Promise<void>((resolve) => { releasePreferences = resolve; });
+  let preferenceReadStarted = false;
+  let preferenceReadReturned = false;
+  await page.route('**/rest/v1/user_preferences*', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    preferenceReadStarted = true;
+    await preferenceGate;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        user_id: '11111111-1111-4111-8111-111111111111',
+        preferences: { routingProfile: 'economy', webSearchEnabled: false, maxSpendCap: 0.01 },
+        updated_at: new Date().toISOString(),
+      }),
+    });
+    preferenceReadReturned = true;
+  });
+  await signInAsMockUser(page);
+  await expect.poll(() => preferenceReadStarted).toBe(true);
+
+  const routingPanel = page.locator('.arctic-routing-panel');
+  await routingPanel.getByText('Routing profile & tools', { exact: true }).click();
+  const profile = routingPanel.locator('#arctic-routing-profile');
+  const cap = routingPanel.locator('#arctic-spend-cap');
+  const webSearch = routingPanel.getByLabel('Search web (BYOK)');
+  await profile.selectOption('capability');
+  await cap.selectOption('0.05');
+  await webSearch.check();
+
+  releasePreferences();
+  await expect.poll(() => preferenceReadReturned).toBe(true);
+  await page.waitForTimeout(100);
+  await expect(profile).toHaveValue('capability');
+  await expect(cap).toHaveValue('0.05');
+  await expect(webSearch).toBeChecked();
+});
+
 for (const viewport of [
   { name: 'desktop-1440x900', width: 1440, height: 900 },
   { name: 'compact-1024x600', width: 1024, height: 600 },

@@ -4288,6 +4288,9 @@
 .arctic-new-chat .conversation-sidebar-controls,
 .arctic-new-chat .conversation-history-scroll { background: transparent; }
 .arctic-new-chat .conversation-sidebar-heading h2 { color: #415577; font-size: 0.9rem; }
+.arctic-new-chat .project-filter-row { min-width: 0; }
+.arctic-new-chat .project-select { width: 0; min-width: 0; }
+.arctic-new-chat .project-add-btn { flex: 0 0 28px; }
 .arctic-new-chat .conversation-new-button {
   min-height: 56px;
   border: 0;
@@ -4695,6 +4698,7 @@
   .arctic-new-chat .capability-card-desc { font-size: 0.72rem; }
   .arctic-new-chat .chat-input-container { padding: 0 0.65rem calc(0.6rem + env(safe-area-inset-bottom)); }
   .arctic-new-chat .input-row { min-height: 106px; border-radius: 18px; }
+  .arctic-new-chat .composer-model-bar { position: static; justify-content: flex-end; margin: 0.35rem 0 0; }
   .arctic-routing-panel.is-open { width: min(370px, 92vw); }
 }
 
