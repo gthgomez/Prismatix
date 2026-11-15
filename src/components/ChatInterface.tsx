@@ -532,6 +532,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [actionNotice, setActionNotice] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
 
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!routingPanelOpen || (!selectedConversationId && messages.length === 0)) return;
+    const closeCompactRoutingPanel = () => {
+      if (window.innerWidth > 1200) setRoutingPanelOpen(false);
+    };
+    window.addEventListener('resize', closeCompactRoutingPanel);
+    return () => window.removeEventListener('resize', closeCompactRoutingPanel);
+  }, [routingPanelOpen, selectedConversationId, messages.length]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Past-chats visibility, persisted per browser. Hidden means the list is
   // collapsed; the header history button brings it back.
@@ -2929,58 +2937,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return fetchAllExportableConversations(supabase, { onProgress, signal });
   };
 
-  return (
-    <div className={`app-with-sidebar arctic-workbench ${messages.length === 0 && !selectedConversationId ? 'arctic-new-chat' : ''} ${chatsHidden ? 'chats-hidden' : ''}`}>
-      {!chatsHidden && (
-        <ConversationSidebar
-          preferenceScope={user?.id ?? null}
-          conversations={conversations}
-          selectedId={selectedConversationId}
-          isLoading={conversationsLoading}
-          disabled={isStreaming}
-          isOpen={sidebarOpen}
-          hasMore={hasMoreConversations}
-          isLoadingMore={isLoadingMoreConversations}
-          loadMoreError={loadMoreConversationsError}
-          loadError={conversationsError}
-          onRetry={() => void refreshConversations()}
-          onLoadMore={() => void handleLoadMoreConversations()}
-          onOpenSearch={() => {
-            setIsGlobalSearchOpen(true);
-            if (window.innerWidth <= 768) setSidebarOpen(false);
-          }}
-          onClose={() => setSidebarOpen(false)}
-          onRename={(id, title) => void handleRenameConversation(id, title)}
-          onSelect={handleSelectConversation}
-          onNewChat={handleNewChat}
-          onDelete={(id) => void handleDeleteConversation(id)}
-          projects={projects}
-          activeProjectId={activeProjectId}
-          onSelectProject={(projId) => setActiveProjectId(projId)}
-          onOpenNewProject={() => {
-            setEditingProject(null);
-            setIsProjectModalOpen(true);
-            if (window.innerWidth <= 768) setSidebarOpen(false);
-          }}
-          onOpenExport={() => {
-            setIsExportModalOpen(true);
-            if (window.innerWidth <= 768) setSidebarOpen(false);
-          }}
-          onOpenImport={() => {
-            setIsImportModalOpen(true);
-            if (window.innerWidth <= 768) setSidebarOpen(false);
-          }}
-          onOpenPromptLibrary={() => {
-            setIsPromptLibraryOpen(true);
-            if (window.innerWidth <= 768) setSidebarOpen(false);
-          }}
-          onArchiveConversation={handleArchiveConversation}
-          onSetConversationTags={handleSetConversationTags}
-        />
-      )}
-      <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>
-      <ChatBackdrop />
-      {/* Header */}
+  const chatHeader = (
       <header className='chat-header' ref={chatHeaderRef}>
         <div className='header-content'>
           <div className='header-left'>
@@ -3300,6 +3257,63 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           </div>
         </div>
       </header>
+  );
+
+  return (
+    <div className={`app-with-sidebar arctic-workbench ${messages.length === 0 && !selectedConversationId ? 'arctic-new-chat' : ''} ${chatsHidden ? 'chats-hidden' : ''}`}>
+      {!chatsHidden && (
+        <ConversationSidebar
+          preferenceScope={user?.id ?? null}
+          conversations={conversations}
+          selectedId={selectedConversationId}
+          isLoading={conversationsLoading}
+          disabled={isStreaming}
+          isOpen={sidebarOpen}
+          hasMore={hasMoreConversations}
+          isLoadingMore={isLoadingMoreConversations}
+          loadMoreError={loadMoreConversationsError}
+          loadError={conversationsError}
+          onRetry={() => void refreshConversations()}
+          onLoadMore={() => void handleLoadMoreConversations()}
+          onOpenSearch={() => {
+            setIsGlobalSearchOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+          }}
+          onClose={() => setSidebarOpen(false)}
+          onRename={(id, title) => void handleRenameConversation(id, title)}
+          onSelect={handleSelectConversation}
+          onNewChat={handleNewChat}
+          onDelete={(id) => void handleDeleteConversation(id)}
+          projects={projects}
+          activeProjectId={activeProjectId}
+          onSelectProject={(projId) => setActiveProjectId(projId)}
+          onOpenNewProject={() => {
+            setEditingProject(null);
+            setIsProjectModalOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+          }}
+          onOpenExport={() => {
+            setIsExportModalOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+          }}
+          onOpenImport={() => {
+            setIsImportModalOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+          }}
+          onOpenPromptLibrary={() => {
+            setIsPromptLibraryOpen(true);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+          }}
+          onArchiveConversation={handleArchiveConversation}
+          onSetConversationTags={handleSetConversationTags}
+        />
+      )}
+      {messages.length === 0 && !selectedConversationId && chatHeader}
+      <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>
+      <ChatBackdrop />
+      {(messages.length > 0 || selectedConversationId) && chatHeader}
+      {/* Header */}
+
 
       {!isOnline && (
         <div
@@ -3869,6 +3883,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         id='arctic-routing-panel'
         aria-label='Routing details'
       >
+        <div className='arctic-routing-card'>
         <div className='arctic-routing-heading'>
           <span aria-hidden='true'>✦</span>
           <h2>Routing details</h2>
@@ -3928,30 +3943,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           <button type='button' onClick={() => { setShowMemorySettings(true); setRoutingPanelOpen(false); }}>Memory settings</button>
           <button type='button' onClick={() => { setIsShortcutsOpen(true); setRoutingPanelOpen(false); }}>Keyboard shortcuts</button>
           {canInstallPwa && <button type='button' onClick={() => { setRoutingPanelOpen(false); void handleInstallPwa(); }}>Install Prismatix</button>}
-        </details>
-        <details className='arctic-route-accordion'>
-          <summary>Debate mode</summary>
-          <label htmlFor='arctic-debate-profile'>Debate profile</label>
-          <select
-            id='arctic-debate-profile'
-            value={debateSelection}
-            onChange={(event) => {
-              const selection = event.target.value as DebateSelection;
-              setDebateSelection(selection);
-              if (selection !== 'off') {
-                setComparisonMode(false);
-                try { window.localStorage.setItem('prismatix_comparison_mode', 'false'); } catch { /* optional persistence */ }
-              }
-            }}
-          >
-            <option value='off'>Off</option>
-            <option value='auto'>Auto (high complexity)</option>
-            <option value='general'>General</option>
-            <option value='code'>Code</option>
-            <option value='video_ui'>Video UI</option>
-          </select>
-        </details>
-        <details className='arctic-route-accordion'>
+        <details className='arctic-route-accordion arctic-route-nested'>
           <summary>Routing profile &amp; tools</summary>
           <label htmlFor='arctic-routing-profile'>Routing profile</label>
           <select
@@ -4002,6 +3994,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <ContextStatus contextStatus={contextStatus} />
           </details>}
         </details>
+        </details>
+        <details className='arctic-route-accordion'>
+          <summary>Debate mode</summary>
+          <label htmlFor='arctic-debate-profile'>Debate profile</label>
+          <select
+            id='arctic-debate-profile'
+            value={debateSelection}
+            onChange={(event) => {
+              const selection = event.target.value as DebateSelection;
+              setDebateSelection(selection);
+              if (selection !== 'off') {
+                setComparisonMode(false);
+                try { window.localStorage.setItem('prismatix_comparison_mode', 'false'); } catch { /* optional persistence */ }
+              }
+            }}
+          >
+            <option value='off'>Off</option>
+            <option value='auto'>Auto (high complexity)</option>
+            <option value='general'>General</option>
+            <option value='code'>Code</option>
+            <option value='video_ui'>Video UI</option>
+          </select>
+        </details>
+
+        </div>
       </aside>
     </div>
   );

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
@@ -10,14 +10,36 @@ type RequestRecord = {
   routingProfile?: string;
 };
 
+async function openRoutingTools(panel: Locator) {
+  const modelOptions = panel.locator('.arctic-routing-card > details').filter({ hasText: 'Model options' });
+  await modelOptions.locator(':scope > summary').click();
+  const routingTools = modelOptions.locator('details.arctic-route-nested');
+  await routingTools.locator(':scope > summary').click();
+}
+
 test('New Chat reference composition at 1672x941', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1672, height: 941 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await setupAuthenticatedMock(page, {
+    hasProviderKey: true,
+    conversations: [
+      { id: 'visual-app-architecture', title: 'App architecture', last_activity_at: '2026-11-15T10:00:00.000Z', project_id: null },
+      { id: 'visual-research-summary', title: 'Research summary', last_activity_at: '2026-11-14T10:00:00.000Z', project_id: null },
+      { id: 'visual-code-review', title: 'Code review', last_activity_at: '2026-11-13T10:00:00.000Z', project_id: null },
+    ],
+    messages: [],
+  });
   await signInAsMockUser(page);
   await expect(page.getByRole('group', { name: 'Chat workflow' }).getByRole('button', { name: 'Chat', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('heading', { name: 'Routing details' })).toBeVisible();
   await expect(page.getByRole('button', { name: '+ New Chat' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^App architecture/ })).toBeVisible();
+  const unnamedIconActions = await page.locator('button').evaluateAll((buttons) => buttons.filter((button) => {
+    const style = window.getComputedStyle(button);
+    const visible = style.display !== 'none' && style.visibility !== 'hidden' && button.getClientRects().length > 0;
+    return visible && !button.getAttribute('aria-label') && !button.getAttribute('title') && !button.textContent?.trim();
+  }).map((button) => button.outerHTML.slice(0, 180)));
+  expect(unnamedIconActions, 'visible icon-only actions need an accessible name').toEqual([]);
   const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
   await mkdir(evidenceDir, { recursive: true });
   await page.screenshot({ path: `${evidenceDir}/arctic-new-chat-1672x941.png`, fullPage: true });
@@ -159,7 +181,7 @@ test('New Chat keeps local profile, web search and spend cap edits over late ser
   await expect.poll(() => preferenceReadStarted).toBe(true);
 
   const routingPanel = page.locator('.arctic-routing-panel');
-  await routingPanel.getByText('Routing profile & tools', { exact: true }).click();
+  await openRoutingTools(routingPanel);
   const profile = routingPanel.locator('#arctic-routing-profile');
   const cap = routingPanel.locator('#arctic-spend-cap');
   const webSearch = routingPanel.getByLabel('Search web (BYOK)');
@@ -215,13 +237,34 @@ test('desktop New Chat can restore the past-chats sidebar when hidden by prefere
   await expect(page.getByRole('button', { name: '+ New Chat' })).toBeFocused();
 });
 
+test('saved-chat Routing details closes when widening past the compact drawer breakpoint', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 600 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true });
+  await signInAsMockUser(page);
+  await page.getByRole('button', { name: /^Architectural Discussion/ }).click();
+  const toggle = page.getByRole('button', { name: 'Routing details' });
+  await toggle.click();
+  await expect(page.locator('.arctic-routing-panel')).toBeVisible();
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(page.locator('.arctic-routing-panel')).toBeHidden();
+  await expect(page.locator('.arctic-routing-toggle')).toHaveAttribute('aria-expanded', 'false');
+
+  await page.setViewportSize({ width: 1024, height: 600 });
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+  await expect(page.locator('.arctic-routing-panel')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(toggle).toBeFocused();
+});
+
 test('Arctic spend cap keeps $0.10 selected and persisted after controlled rerenders', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   await signInAsMockUser(page);
 
   const routingPanel = page.locator('.arctic-routing-panel');
-  await routingPanel.getByText('Routing profile & tools', { exact: true }).click();
+  await openRoutingTools(routingPanel);
   const cap = routingPanel.locator('#arctic-spend-cap');
   await cap.selectOption('0.10');
   await expect(cap).toHaveValue('0.10');
@@ -248,11 +291,23 @@ for (const viewport of [
     await mkdir(evidenceDir, { recursive: true });
     await page.screenshot({ path: `${evidenceDir}/${testInfo.project.name}-${viewport.name}-${viewport.width}x${viewport.height}.png`, fullPage: true });
     if (viewport.width <= 1200) {
+      await expect(page.locator('.routing-intelligence-bar').getByRole('button', { name: 'Compare', exact: true })).toHaveCount(0);
+      if (viewport.width <= 768) {
+        await expect(page.locator('#routing-profile-select')).toBeHidden();
+        await expect(page.locator('#spend-cap-select')).toBeHidden();
+        await expect(page.locator('.routing-intelligence-bar')).toContainText('Search web');
+        await expect(page.locator('.routing-intelligence-bar')).toContainText('Research');
+      }
       const toggle = page.getByRole('button', { name: 'Routing details' });
       await toggle.click();
       await expect(page.locator('.arctic-routing-panel')).toBeVisible();
       await page.keyboard.press('Escape');
       await expect(toggle).toBeFocused();
+    }
+    if (viewport.width <= 768) {
+      const composerBox = await page.locator('.chat-input-container').boundingBox();
+      expect(composerBox).not.toBeNull();
+      expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(viewport.height + 1);
     }
   });
 }

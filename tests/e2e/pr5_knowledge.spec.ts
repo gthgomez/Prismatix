@@ -13,6 +13,7 @@ test.describe('PR 5 Knowledge & Grounded Research (E2E)', () => {
     if (await routingToggle.isVisible()) await routingToggle.click();
     const routingPanel = page.locator('.arctic-routing-panel');
     await expect(routingPanel).toBeVisible();
+    await routingPanel.getByText('Model options', { exact: true }).click();
     await routingPanel.getByText('Routing profile & tools', { exact: true }).click();
 
     const researchBtn = routingPanel.getByLabel('Multi-source research');

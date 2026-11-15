@@ -604,35 +604,15 @@ function ChatHistory({
           >
             + New Chat
           </button>
-          {onOpenExport && (
-            <button
-              type='button'
-              className='btn-secondary'
-              title='Export conversation(s)'
-              onClick={onOpenExport}
-            >
-              Export
-            </button>
-          )}
-          {onOpenImport && (
-            <button
-              type='button'
-              className='btn-secondary'
-              title='Import conversation(s)'
-              onClick={onOpenImport}
-            >
-              Import
-            </button>
-          )}
-          {onOpenPromptLibrary && (
-            <button
-              type='button'
-              className='btn-secondary'
-              title='Prompt templates'
-              onClick={onOpenPromptLibrary}
-            >
-              Prompts
-            </button>
+          {(onOpenExport || onOpenImport || onOpenPromptLibrary) && (
+            <details className='conversation-secondary-actions'>
+              <summary>More</summary>
+              <div className='conversation-secondary-action-list'>
+                {onOpenExport && <button type='button' className='btn-secondary' title='Export conversation(s)' onClick={onOpenExport}>Export</button>}
+                {onOpenImport && <button type='button' className='btn-secondary' title='Import conversation(s)' onClick={onOpenImport}>Import</button>}
+                {onOpenPromptLibrary && <button type='button' className='btn-secondary' title='Prompt templates' onClick={onOpenPromptLibrary}>Prompts</button>}
+              </div>
+            </details>
           )}
         </div>
 

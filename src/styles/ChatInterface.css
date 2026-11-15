@@ -4258,11 +4258,13 @@
   color-scheme: light;
   display: grid;
   grid-template-columns: minmax(224px, 15.9vw) minmax(0, 1fr) minmax(320px, 21.8vw);
+  grid-template-rows: 84px minmax(0, 1fr);
   background: #f7faff;
   color: #101828;
 }
 
 .arctic-new-chat .conversation-sidebar {
+  grid-row: 1 / -1;
   width: 15.9vw !important;
   min-width: 224px !important;
   max-width: 300px;
@@ -4270,14 +4272,15 @@
   border-right-color: #d8e5f3;
   color: #101828;
 }
+.arctic-new-chat .conversation-sidebar-controls { padding: 1.05rem 0.85rem 0.65rem 1.2rem; }
 .arctic-sidebar-brand { display: none; }
 .arctic-new-chat .arctic-sidebar-brand {
   display: flex;
   align-items: center;
   gap: 0.65rem;
   min-height: 50px;
-  padding: 0 0.85rem 0.85rem;
-  margin-bottom: 0.65rem;
+  padding: 0 0.85rem;
+  margin-bottom: 0;
   border-bottom: 1px solid #e1eaf5;
   color: #0f172a;
   font-size: 1.25rem;
@@ -4287,6 +4290,7 @@
 .arctic-sidebar-brand img { width: 32px; height: 32px; object-fit: contain; }
 .arctic-new-chat .conversation-sidebar-controls,
 .arctic-new-chat .conversation-history-scroll { background: transparent; }
+.arctic-new-chat .conversation-sidebar-heading { margin-bottom: 0.75rem; }
 .arctic-new-chat .conversation-sidebar-heading h2 { color: #415577; font-size: 0.9rem; }
 .arctic-new-chat .project-filter-row { min-width: 0; }
 .arctic-new-chat .project-select { width: 0; min-width: 0; }
@@ -4307,8 +4311,14 @@
 .arctic-new-chat .conversation-item-activity { color: #65748a; }
 .arctic-new-chat .conversation-search { background: #fff; color: #101828; border-color: #d3dfed; }
 
-.arctic-new-chat > .chat-container { grid-column: 2; min-width: 0; background: #f7faff; }
+.arctic-new-chat > .chat-container { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; height: auto; background: #f7faff; }
 .arctic-new-chat .chat-header {
+  display: flex;
+  align-items: center;
+  position: relative;
+  grid-column: 2 / 4;
+  grid-row: 1;
+  width: auto;
   height: 84px;
   min-height: 84px;
   padding: 0 1.35rem;
@@ -4316,7 +4326,9 @@
   border-bottom-color: #dce7f3;
   backdrop-filter: blur(14px);
 }
+.arctic-new-chat > .chat-container { padding-top: 0; }
 .arctic-new-chat .header-content { max-width: none; }
+.arctic-new-chat .header-content { width: 100%; }
 .arctic-new-chat .header-title { display: none; }
 .arctic-new-chat .header-actions { margin-left: auto; }
 .arctic-new-chat:not(.chats-hidden) .chats-toggle-button,
@@ -4357,9 +4369,21 @@
 .arctic-new-chat .chat-backdrop-horizon {
   opacity: 0.8;
   background:
+    radial-gradient(ellipse 56% 24% at 0% 34%, rgb(190 233 249 / 34%), transparent 100%),
+    radial-gradient(ellipse 60% 25% at 100% 22%, rgb(184 229 249 / 36%), transparent 100%),
     radial-gradient(ellipse 70% 24% at 95% 99%, rgb(168 223 250 / 70%), transparent 83%),
     radial-gradient(ellipse 60% 21% at 10% 72%, rgb(195 236 251 / 58%), transparent 88%),
     linear-gradient(180deg, transparent 70%, rgb(227 241 252 / 75%));
+}
+.arctic-new-chat .chat-backdrop-horizon::before {
+  content: '';
+  position: absolute;
+  top: 38px;
+  left: -2%;
+  right: -2%;
+  height: 300px;
+  background: linear-gradient(180deg, rgb(199 237 251 / 48%), rgb(218 240 251 / 14%));
+  clip-path: polygon(0 54%, 11% 47%, 22% 51%, 35% 70%, 48% 89%, 60% 91%, 72% 76%, 84% 55%, 94% 28%, 100% 18%, 100% 100%, 0 100%);
 }
 .arctic-new-chat .chat-backdrop-horizon::after {
   content: '';
@@ -4436,15 +4460,16 @@
   max-width: none;
   margin: 0;
   color: #405575;
-  font-size: 1.06rem;
+  font-size: 1.17rem;
   line-height: 1.5;
 }
 .arctic-new-chat .empty-state-capabilities {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1.25rem;
-  width: 100%;
+  width: min(966px, calc(100% + 15px));
   max-width: 966px;
-  margin: 47px auto 0;
+  margin: 49px auto 0;
+  transform: translateX(2px);
 }
 .arctic-new-chat .capability-card {
   min-height: 183px;
@@ -4485,7 +4510,7 @@
   padding: 0 1.75rem calc(2.5rem + env(safe-area-inset-bottom));
   overflow: visible;
 }
-.arctic-new-chat .input-wrapper { max-width: 976px; }
+.arctic-new-chat .input-wrapper { max-width: 974px; }
 .arctic-new-chat .input-row {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) 52px;
@@ -4550,14 +4575,18 @@
 .arctic-routing-toggle { display: none; }
 .arctic-routing-panel {
   grid-column: 3;
+  grid-row: 2;
   display: flex;
   flex-direction: column;
   align-self: stretch;
   min-width: 0;
   max-height: calc(100 * var(--app-vh, 1vh));
-  padding: 97px 10px 16px 13px;
+  position: relative;
+  padding: 13px 10px 16px 13px;
   border-left: 1px solid #d9e5f3;
-  background: rgb(250 252 255 / 75%);
+  background:
+    radial-gradient(ellipse 110% 24% at 100% 100%, rgb(194 232 250 / 68%), transparent 100%),
+    rgb(250 252 255 / 82%);
   overflow-y: auto;
   color: #101828;
 }
@@ -4574,6 +4603,26 @@
 }
 .arctic-routing-heading > span { color: #06a9b7; font-size: 1.6rem; }
 .arctic-routing-heading h2 { margin: 0; color: #101828; font-size: 1.25rem; letter-spacing: -0.025em; }
+.arctic-new-chat .arctic-routing-heading,
+.arctic-new-chat .arctic-route-status,
+.arctic-new-chat .arctic-route-field,
+.arctic-new-chat .arctic-route-accordion { position: relative; z-index: 1; }
+.arctic-new-chat .arctic-routing-card { position: relative; z-index: 1; padding: 0 0 1.5rem; border: 1px solid #e0eaf5; border-radius: 22px; background: rgb(255 255 255 / 86%); }
+.arctic-new-chat .arctic-routing-heading { min-height: 80px; padding: 1.25rem 1.65rem 1.15rem; gap: 1.25rem; border: 0; border-radius: 0; background: transparent; }
+.arctic-new-chat .arctic-route-status { min-height: 82px; margin: 0 17px .25rem; padding: 1rem .95rem; border: 1px solid #e0eaf5; border-radius: 16px; }
+.arctic-new-chat .arctic-route-field { padding-inline: 1.6rem; background: transparent; }
+.arctic-new-chat .arctic-routing-panel::after {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  left: -1px;
+  right: -1px;
+  bottom: 0;
+  height: 190px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgb(218 242 252 / 0%), rgb(202 235 249 / 65%));
+  clip-path: polygon(0 74%, 18% 59%, 35% 39%, 53% 28%, 71% 35%, 86% 27%, 100% 18%, 100% 100%, 0 100%);
+}
 .arctic-routing-close { display: none; }
 .arctic-route-status {
   display: flex;
@@ -4604,6 +4653,8 @@
   border-radius: 15px;
   background: #fff;
 }
+.arctic-new-chat .arctic-route-accordion { margin-inline: 17px; background: #fff; }
+.arctic-new-chat .arctic-routing-card > .arctic-route-accordion:first-of-type { margin-top: 1.55rem; }
 .arctic-route-accordion summary {
   display: flex;
   align-items: center;
@@ -4670,6 +4721,7 @@
 @media (max-width: 1200px) {
   .arctic-new-chat.app-with-sidebar { grid-template-columns: minmax(200px, 23vw) minmax(0, 1fr); }
   .arctic-new-chat > .chat-container { grid-column: 2; }
+  .arctic-new-chat .chat-header { grid-column: 2 / 3; width: 100%; }
   .arctic-routing-toggle {
     display: inline-flex;
     align-items: center;
@@ -4706,14 +4758,31 @@
   }
   .arctic-routing-close { display: inline-flex; margin-left: auto; border: 0; background: transparent; color: #172338; font-size: 1.5rem; cursor: pointer; }
   .arctic-new-chat .routing-intelligence-bar { display: flex; }
+  .arctic-new-chat .routing-intelligence-bar .web-search-toggle-btn[title='Toggle side-by-side model comparison'],
+  .arctic-new-chat .routing-intelligence-bar .routing-comparison-pair { display: none; }
+  .arctic-new-chat .routing-intelligence-bar .routing-controls-group:has(#routing-profile-select) { display: none; }
   .arctic-new-chat .empty-state-capabilities { gap: 0.75rem; margin-top: 2rem; }
+  .arctic-new-chat .empty-state-capabilities { width: 100%; transform: none; }
+  .arctic-new-chat .arctic-mode-switch,
+  .arctic-new-chat .arctic-hero-mark,
+  .arctic-new-chat .empty-state h2,
+  .arctic-new-chat .empty-state > p,
+  .arctic-new-chat .input-wrapper { left: 0; }
   .arctic-new-chat .capability-card { padding: 0.8rem; }
   .arctic-new-chat .capability-card-title { font-size: 0.98rem; }
   .arctic-new-chat .capability-card-desc { font-size: 0.84rem; }
 }
 
 @media (min-width: 1201px) {
+  .arctic-new-chat .arctic-mode-switch { position: relative; left: 33px; }
+  .arctic-new-chat .arctic-hero-mark,
+  .arctic-new-chat .empty-state h2,
+  .arctic-new-chat .empty-state > p { position: relative; left: 16px; }
+  .arctic-new-chat .arctic-hero-mark { width: 114px; height: 88px; margin-top: 54px; }
+  .arctic-new-chat .input-wrapper { position: relative; left: 6px; }
   .arctic-new-chat.app-with-sidebar:not(:has(.conversation-sidebar)) { grid-template-columns: minmax(0, 1fr) minmax(320px, 21.8vw); }
+  .arctic-new-chat.chats-hidden .chat-header { grid-column: 1 / 3; }
+  .arctic-new-chat.app-with-sidebar:not(:has(.conversation-sidebar)) > .chat-header { grid-column: 1 / 3; }
   .arctic-new-chat.app-with-sidebar:not(:has(.conversation-sidebar)) > .chat-container { grid-column: 1; }
   .arctic-new-chat.app-with-sidebar:not(:has(.conversation-sidebar)) > .arctic-routing-panel { grid-column: 2; }
 }
@@ -4722,7 +4791,9 @@
   .arctic-new-chat.chats-hidden .chats-toggle-button { display: none !important; }
   .arctic-new-chat.app-with-sidebar { display: block; }
   .arctic-new-chat .conversation-sidebar { width: min(296px, 90vw) !important; min-width: 0 !important; }
-  .arctic-new-chat > .chat-container { width: 100%; height: 100%; }
+  .arctic-new-chat > .chat-container { width: 100%; height: calc(100dvh - var(--prismatix-chat-header-h, 60px)); }
+  .arctic-new-chat > .chat-container { padding-top: 0; }
+  .arctic-new-chat .chat-header { position: relative; left: auto; right: auto; width: 100%; }
   .arctic-new-chat .chat-header { height: auto; min-height: 60px; padding: max(0.45rem, env(safe-area-inset-top)) 0.65rem 0.45rem; }
   .arctic-new-chat .header-actions { flex: 1 1 auto; gap: 0.3rem; }
   .arctic-new-chat .header-button { width: 38px; height: 38px; }

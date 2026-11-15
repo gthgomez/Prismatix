@@ -4,6 +4,12 @@
 import { test, expect } from '@playwright/test';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
+async function ensureDetailsOpen(details: import('@playwright/test').Locator) {
+  if (!await details.evaluate((element) => element instanceof HTMLDetailsElement && element.open)) {
+    await details.locator(':scope > summary').click();
+  }
+}
+
 test.describe('PR 3 Research and Routing Intelligence (E2E)', () => {
   test('F11, F12, F13: routing disclosure exposes search, compare, profile, and spend cap controls', async ({ page }) => {
     await setupAuthenticatedMock(page, { hasProviderKey: true });
@@ -14,7 +20,10 @@ test.describe('PR 3 Research and Routing Intelligence (E2E)', () => {
     const routingPanel = page.locator('.arctic-routing-panel');
     await expect(routingPanel).toBeVisible();
 
-    await routingPanel.getByText('Routing profile & tools', { exact: true }).click();
+    const modelOptions = routingPanel.locator('.arctic-routing-card > details').filter({ hasText: 'Model options' });
+    await ensureDetailsOpen(modelOptions);
+    const routingTools = modelOptions.locator('details.arctic-route-nested');
+    await ensureDetailsOpen(routingTools);
     const searchToggle = routingPanel.getByLabel('Search web (BYOK)');
     await expect(searchToggle).toBeVisible();
     await expect(searchToggle).not.toBeChecked();
@@ -29,7 +38,7 @@ test.describe('PR 3 Research and Routing Intelligence (E2E)', () => {
     await expect(compareBtn).toHaveAttribute('aria-pressed', 'true');
 
     if (await routingToggle.isVisible()) await routingToggle.click();
-    await routingPanel.getByText('Model options', { exact: true }).click();
+    await ensureDetailsOpen(modelOptions);
     const modelASelect = routingPanel.getByLabel('Model A');
     await expect(modelASelect).toBeVisible();
     const modelBSelect = routingPanel.getByLabel('Model B');
@@ -82,7 +91,9 @@ test.describe('PR 3 Research and Routing Intelligence (E2E)', () => {
     if (await routingToggle.isVisible()) await routingToggle.click();
     const routingPanel = page.locator('.arctic-routing-panel');
     await expect(routingPanel).toBeVisible();
-    await routingPanel.getByText('Routing profile & tools', { exact: true }).click();
+    const modelOptions = routingPanel.locator('.arctic-routing-card > details').filter({ hasText: 'Model options' });
+    await ensureDetailsOpen(modelOptions);
+    await ensureDetailsOpen(modelOptions.locator('details.arctic-route-nested'));
     const capSelect = routingPanel.locator('#arctic-spend-cap');
     await expect(capSelect).toBeVisible();
     await capSelect.selectOption('0.01');

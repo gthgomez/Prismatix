@@ -133,6 +133,7 @@ trailer
     }
 
     // Open Export Modal via export button in sidebar
+    await page.locator('.conversation-sidebar').getByText('More', { exact: true }).click();
     const exportBtn = page.getByRole('button', { name: 'Export', exact: true });
     await expect(exportBtn).toBeVisible();
     await exportBtn.click();

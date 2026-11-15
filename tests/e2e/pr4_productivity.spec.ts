@@ -20,6 +20,7 @@ test.describe('PR 4 Productivity & Workflow (E2E)', () => {
     await expect(sidebar).toBeVisible();
 
     // Click Import button in sidebar
+    await sidebar.getByText('More', { exact: true }).click();
     const importBtn = sidebar.getByRole('button', { name: /^import$/i });
     await expect(importBtn).toBeVisible();
     await importBtn.click();
@@ -96,6 +97,7 @@ test.describe('PR 4 Productivity & Workflow (E2E)', () => {
 
     // Click Prompts button in sidebar
     const sidebar = page.locator('.conversation-sidebar');
+    await sidebar.getByText('More', { exact: true }).click();
     const promptsBtn = sidebar.getByRole('button', { name: /^prompts$/i });
     await expect(promptsBtn).toBeVisible();
     await promptsBtn.click();
