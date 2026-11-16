@@ -466,7 +466,7 @@ test('saved history exposes provider-check retry and keeps drafts blocked until 
   expect(sends).toBe(1);
 });
 
-test('first-run unverified provider blocks; a returning configured key is router-authorized after reload', async ({ page }) => {
+test('first-run unverified provider blocks; a returning configured key is router-authorized after reload', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [] });
   let validationCalls = 0;
@@ -511,10 +511,14 @@ test('first-run unverified provider blocks; a returning configured key is router
 
   await page.reload();
   await signInAsMockUser(page, { verifyConfiguredProviders: false });
+  await page.setViewportSize({ width: 1024, height: 600 });
   await expect(routeStatus).toContainText('Key saved · not checked this session');
   const verifyAfterReload = page.getByRole('button', { name: 'Verify provider keys' });
   await expect(verifyAfterReload).toHaveCount(0);
   await expect(page.locator('.first-run-status.success')).toHaveCount(0);
+  const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
+  await mkdir(evidenceDir, { recursive: true });
+  await page.screenshot({ path: `${evidenceDir}/returning-key-1024x600.png`, animations: 'disabled' });
   const validationCountAfterReload = validationCalls;
   await composer.fill('Router authorizes returning configured key');
   await composer.press('Enter');
@@ -523,6 +527,7 @@ test('first-run unverified provider blocks; a returning configured key is router
   expect(validationCalls).toBe(validationCountAfterReload);
   await expect(routeStatus).toContainText('Key saved · not checked this session');
   await expect(page.getByRole('button', { name: 'Verify provider keys', exact: true })).toHaveCount(0);
+  await page.screenshot({ path: `${evidenceDir}/returning-key-reply-1024x600.png`, animations: 'disabled' });
 });
 
 test('attachment-only route rejection removes only its optimistic turn and retry restores one row', async ({ page }) => {
