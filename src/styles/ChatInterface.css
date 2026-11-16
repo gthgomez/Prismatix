@@ -162,6 +162,8 @@
   flex-shrink: 1;
 }
 
+.compact-cost-details-button { display: none; }
+
 .header-utility-bar {
   display: contents;
 }
@@ -4756,6 +4758,25 @@
 .arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-accordion .arctic-route-check { color: var(--color-text, #fff); }
 
 @media (max-width: 1200px) {
+  .compact-cost-details-button { display: inline-flex; }
+  .compact-cost-details-button {
+    min-height: 40px;
+    padding: 0.45rem 0.65rem;
+    border: 1px solid #d5e2f1;
+    border-radius: 10px;
+    background: #fff;
+    color: #172338;
+    font: inherit;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .compact-cost-details-button:focus-visible { outline: 2px solid #1570ef; outline-offset: 2px; }
+  .arctic-workbench:not(.arctic-new-chat) .compact-cost-details-button {
+    border-color: var(--color-border, rgba(255,255,255,.1));
+    background: var(--color-surface, #0d141b);
+    color: var(--color-text, #fff);
+  }
   .arctic-new-chat.app-with-sidebar {
     grid-template-columns: minmax(200px, 23vw) minmax(0, 1fr);
     grid-template-rows: max-content minmax(0, 1fr);
@@ -4856,6 +4877,17 @@
   .arctic-new-chat .capability-card { padding: 0.8rem; }
   .arctic-new-chat .capability-card-title { font-size: 0.98rem; }
   .arctic-new-chat .capability-card-desc { font-size: 0.84rem; }
+}
+
+@media (max-width: 768px) {
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .chat-header {
+    min-height: 0;
+    padding: max(0.45rem, env(safe-area-inset-top)) 0.65rem 0.45rem;
+  }
+}
+
+@media (min-width: 1201px) {
+  .compact-cost-details-button { display: none; }
 }
 
 @media (min-width: 1201px) {
@@ -5155,6 +5187,39 @@
 @media (max-width: 640px) {
   .first-run-input-row { flex-direction: column; }
   .first-run-submit { width: 100%; }
+}
+
+/* Keep compact history headers on one row; the action rail can scroll horizontally. */
+@media (max-width: 1200px) {
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-content {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions {
+    flex: 0 1 auto;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions::-webkit-scrollbar { display: none; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions > *,
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar > * { flex: 0 0 auto; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions .model-selector-container {
+    flex: 0 0 auto;
+    order: initial;
+    min-width: 0;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions .model-indicator-button { width: auto; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .memory-trigger-label { display: none; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-button.memory-trigger {
+    min-width: 40px;
+    width: 40px;
+    padding: 0.5rem;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar { flex-wrap: nowrap; flex: 0 0 auto; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar-trailing { flex: 0 0 auto; }
 }
 
 .first-run-input {

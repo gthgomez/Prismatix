@@ -349,6 +349,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [sessionCostTotal, setSessionCostTotal] = useState(0);
   const [spendRefreshKey, setSpendRefreshKey] = useState(0);
   const [showCostEstimator, setShowCostEstimator] = useState(false);
+  const costEstimatorPanelRef = useRef<HTMLDivElement>(null);
+  const costEstimatorDetailsButtonRef = useRef<HTMLButtonElement>(null);
   const [finalMessageCost, setFinalMessageCost] = useState<number | null>(null);
   const [routerPricingVersion, setRouterPricingVersion] = useState<string | undefined>(undefined);
   const [debateSelection, setDebateSelection] = useState<DebateSelection>('off');
@@ -3223,6 +3225,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             </div>
           </div>
           <div className='header-actions'>
+          {showCostEstimator && !showProviderSettings && (
+            <button
+              type='button'
+              className='compact-cost-details-button'
+              aria-label='View cost details'
+              onClick={() => {
+                const panel = costEstimatorPanelRef.current;
+                const detailsButton = costEstimatorDetailsButtonRef.current;
+                if (!panel || !detailsButton) return;
+                const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+                const messageViewport = panel.closest<HTMLElement>('.chat-messages');
+                if (messageViewport) {
+                  const offset = panel.getBoundingClientRect().top - messageViewport.getBoundingClientRect().top;
+                  messageViewport.scrollBy({ top: offset, behavior });
+                }
+                detailsButton.focus({ preventScroll: true });
+              }}
+            >
+              Cost details
+            </button>
+          )}
           <button
             type='button'
             className='arctic-routing-toggle'
@@ -3756,6 +3779,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 routerPricingVersion={routerPricingVersion}
                 onInteractionStart={clearCostEstimatorHideTimer}
                 onInteractionEnd={() => scheduleCostEstimatorHide(3000)}
+                panelRef={costEstimatorPanelRef}
+                detailsButtonRef={costEstimatorDetailsButtonRef}
               />
               <div ref={messagesEndRef} />
             </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, type Ref } from 'react';
 import { calculateCostBreakdown, type UsageEstimate } from '../costEngine';
 import { PRICING_VERSION } from '../pricingRegistry';
 import type { RouterModel } from '../types';
@@ -25,6 +25,8 @@ interface CostEstimatorProps {
   routerPricingVersion?: string | null;
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
+  panelRef?: Ref<HTMLDivElement>;
+  detailsButtonRef?: Ref<HTMLButtonElement>;
 }
 
 export const CostEstimator: React.FC<CostEstimatorProps> = ({
@@ -37,6 +39,8 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   routerPricingVersion,
   onInteractionStart,
   onInteractionEnd,
+  panelRef,
+  detailsButtonRef,
 }) => {
   const [detailsOpen, setDetailsOpen] = useState(readDetailsExpanded);
 
@@ -86,6 +90,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
 
   return (
     <div
+      ref={panelRef}
       className={`cost-estimator ${isStreaming ? 'streaming' : 'final'}`}
       aria-live='polite'
       onFocusCapture={onInteractionStart}
@@ -140,6 +145,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
       </div>
 
       <button
+        ref={detailsButtonRef}
         type='button'
         className='cost-estimator-details-toggle'
         aria-expanded={detailsOpen}
