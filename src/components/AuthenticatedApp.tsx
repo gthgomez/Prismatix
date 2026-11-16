@@ -1,7 +1,9 @@
-import { ChatInterface } from './ChatInterface';
+import React, { Suspense, lazy } from 'react';
 import { Auth } from './Auth';
 import { ResetPassword } from './ResetPassword';
 import { useAuth } from '../hooks/useAuth';
+
+const ChatInterface = lazy(() => import('./ChatInterface').then((module) => ({ default: module.ChatInterface })));
 
 function isRecoveryFlow(): boolean {
   const { pathname, search, hash } = window.location;
@@ -63,7 +65,15 @@ export function AuthenticatedApp() {
 
   return (
     <div className="app app--chat">
-      <ChatInterface user={user} onSignOut={signOut} />
+      <Suspense fallback={(
+        <div className="loading-content" role="status" aria-live="polite">
+          <img className="loading-logo loading-logo-mark" src="/prismatix-icon-draft.svg" alt="" />
+          <div className="loading-spinner-large" />
+          <p>Loading your workspace...</p>
+        </div>
+      )}>
+        <ChatInterface user={user} onSignOut={signOut} />
+      </Suspense>
     </div>
   );
 }
