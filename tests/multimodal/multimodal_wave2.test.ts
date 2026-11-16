@@ -262,13 +262,14 @@ describe('F28: BYOK Image Generation', () => {
   });
 
   it('requires API key for live external providers without fabrication', async () => {
-    // When mockMode is false and no apiKey is passed
+    // In test mode, inject a client without an edge-function transport so this
+    // fixture proves the safe local mock path without a real Supabase request.
     const res = await executeImageGeneration({
       prompt: 'A sunset over the Pacific ocean',
       modelId: 'dall-e-3',
       apiKey: '',
       mockMode: false,
-    });
+    }, {});
 
     // In NODE_ENV=test, executeImageGeneration uses mock mode for test safety unless forced
     expect(res.imageUrl || res.error).toBeDefined();
