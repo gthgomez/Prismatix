@@ -6,6 +6,12 @@ import App from './App';
 import './styles/mobile.css';
 import { registerServiceWorker } from './services/pwaService';
 
+type StartupRecoveryWindow = Window & { __prismatixStartupReady?: () => void };
+
+// This module only evaluates once its entry dependencies have loaded. Remove
+// any pre-React stalled-entry affordance now that startup has made progress.
+(window as StartupRecoveryWindow).__prismatixStartupReady?.();
+
 try {
   // Clear the bounded recovery marker only after this release's entry bundle
   // has loaded successfully.

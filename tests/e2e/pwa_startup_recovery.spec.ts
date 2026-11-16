@@ -247,6 +247,40 @@ test('the inline shell offers recovery when the entry module fails before React 
   expect(entryRequests).toBe(2);
 });
 
+test('a stalled entry shows manual recovery and still mounts when the late response arrives', async ({ page }) => {
+  const html = await readFile(path.join(distDir, 'index.html'), 'utf8');
+  const entry = html.match(/<script type="module" crossorigin src="([^"]+\.js)"><\/script>/)?.[1]
+    ?? html.match(/<script type="module" src="([^"]+\.js)"><\/script>/)?.[1];
+  expect(entry).toBeTruthy();
+
+  let mainFrameNavigations = 0;
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) mainFrameNavigations += 1;
+  });
+  let releaseEntry!: () => void;
+  let entryRequested!: () => void;
+  const requested = new Promise<void>((resolve) => { entryRequested = resolve; });
+  await page.route(`**${entry}`, async (route) => {
+    entryRequested();
+    await new Promise<void>((resolve) => { releaseEntry = resolve; });
+    await route.continue();
+  });
+
+  // DOMContentLoaded waits for module scripts; commit lets the harness control
+  // the deliberately stalled entry response.
+  await page.goto('/', { waitUntil: 'commit' });
+  await requested;
+  await page.waitForTimeout(10100);
+  const recovery = page.getByRole('alert');
+  await expect(recovery.getByText('Startup is taking longer than expected.')).toBeVisible();
+  await expect(recovery.getByRole('button', { name: 'Reload Prismatix' })).toBeVisible();
+  expect(mainFrameNavigations).toBe(1);
+
+  releaseEntry();
+  await expect(page.locator('.startup-recovery')).toHaveCount(0);
+  await expect(page.getByText('Loading Prismatix...')).toHaveCount(0);
+});
+
 test('the React boundary offers recovery when the authenticated app chunk fails', async ({ page }) => {
   const assets = await readdir(path.join(distDir, 'assets'));
   const appChunk = assets.find((name) => name.startsWith('AuthenticatedApp-') && name.endsWith('.js'));
@@ -266,4 +300,35 @@ test('the React boundary offers recovery when the authenticated app chunk fails'
   await expect(recovery.getByRole('heading', { name: 'Prismatix could not finish loading' })).toBeVisible();
   await expect(recovery.getByRole('button', { name: 'Reload Prismatix' })).toBeVisible();
   expect(chunkRequests).toBeGreaterThan(0);
+});
+
+test('a stalled authenticated-app import gets a manual retry and can still resolve late', async ({ page }) => {
+  const assets = await readdir(path.join(distDir, 'assets'));
+  const appChunk = assets.find((name) => name.startsWith('AuthenticatedApp-') && name.endsWith('.js'));
+  expect(appChunk).toBeTruthy();
+
+  await page.clock.install();
+  let mainFrameNavigations = 0;
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) mainFrameNavigations += 1;
+  });
+  let releaseChunk!: () => void;
+  let chunkRequested!: () => void;
+  const requested = new Promise<void>((resolve) => { chunkRequested = resolve; });
+  await page.route(`**/assets/${appChunk}`, async (route) => {
+    chunkRequested();
+    await new Promise<void>((resolve) => { releaseChunk = resolve; });
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await requested;
+  await page.clock.fastForward(10000);
+  const retry = page.getByRole('button', { name: 'Retry loading Prismatix' });
+  await expect(retry).toBeVisible();
+  expect(mainFrameNavigations).toBe(1);
+
+  releaseChunk();
+  await expect(retry).toHaveCount(0);
+  await expect(page.getByText('Loading Prismatix...')).toHaveCount(0);
 });

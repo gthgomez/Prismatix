@@ -1,6 +1,6 @@
 // App.tsx - Root route switch for public resume pages and auth-gated app
 
-import React, { Suspense } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { ResumeDemo } from './components/ResumeDemo';
 import { useViewportHeight } from './hooks/useViewportHeight';
 
@@ -58,6 +58,37 @@ function isPublicResumeRoute(): boolean {
   return window.location.pathname === '/demo' || window.location.pathname === '/about';
 }
 
+function StartupLoadingFallback() {
+  const [isTakingLonger, setIsTakingLonger] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setIsTakingLonger(true), 10000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className="loading" role={isTakingLonger ? 'status' : undefined}>
+      <div className="loading-spinner" />
+      <div>Loading Prismatix...</div>
+      {isTakingLonger && (
+        <div className="loading-recovery">
+          <p>Sign-in is taking longer than expected. It may still finish loading.</p>
+          <button
+            type="button"
+            onClick={() => {
+              const retry = (window as StartupRecoveryWindow).__prismatixStartupRetry;
+              if (retry) retry();
+              else window.location.reload();
+            }}
+          >
+            Retry loading Prismatix
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   useViewportHeight();
 
@@ -68,12 +99,7 @@ function App() {
   return (
     <StartupErrorBoundary>
       <Suspense
-        fallback={
-          <div className="loading">
-            <div className="loading-spinner" />
-            <div>Loading Prismatix...</div>
-          </div>
-        }
+        fallback={<StartupLoadingFallback />}
       >
         <AuthenticatedApp />
       </Suspense>
