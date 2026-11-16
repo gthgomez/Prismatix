@@ -357,17 +357,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [showProviderSettings, setShowProviderSettings] = useState(false);
   const [firstRunOutcome, setFirstRunOutcome] = useState<FirstRunOutcome | null>(null);
   const activeUserIdRef = useRef(user?.id);
+  const accountGenerationRef = useRef(0);
   const [showMemorySettings, setShowMemorySettings] = useState(false);
   const [lastRecall, setLastRecall] = useState<{ conversationId: string; hits: number } | null>(null);
 
   // Provider plug-ins (PX12): which providers are on for this user.
   const providerPlugins = useProviderPlugins(user?.id);
-  useLayoutEffect(() => {
-    if (activeUserIdRef.current !== user?.id) {
-      activeUserIdRef.current = user?.id;
-      setFirstRunOutcome(null);
-    }
-  }, [user?.id]);
   const enabledProviders = providerPlugins.enabledProviders;
   const providerVerified = providerPlugins.isVerified && !(firstRunOutcome && !firstRunOutcome.verified);
   const openRouterProvider = providerPlugins.providers.find((provider) => provider.id === 'openrouter');
@@ -598,6 +593,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const activeStreamRef = useRef<{
     conversationId: string;
     clientRequestId: string | null;
+    accountGeneration: number;
   } | null>(null);
 
   // Context Manager
@@ -642,6 +638,44 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const abortControllerRef = useRef<AbortController | null>(null);
   const executionIdRef = useRef<string | undefined>(undefined);
   const [streamOutcome, setStreamOutcome] = useState<StreamOutcomeState | null>(null);
+
+  // Account-owned drafts and transport state must not survive an account
+  // switch. Abort best-effort; generation guards below also protect against
+  // transports or mocks that settle after ignoring their AbortSignal.
+  useLayoutEffect(() => {
+    if (activeUserIdRef.current === user?.id) return;
+    activeUserIdRef.current = user?.id;
+    accountGenerationRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    activeStreamRef.current = null;
+    executionIdRef.current = undefined;
+    activeDraftRef.current = null;
+    pendingActionRef.current = null;
+    waitingFirstTokenRef.current = false;
+    if (costEstimatorHideTimeoutRef.current !== null) {
+      window.clearTimeout(costEstimatorHideTimeoutRef.current);
+      costEstimatorHideTimeoutRef.current = null;
+    }
+    setInput('');
+    setDraftAttachments([]);
+    setFailedTurnDraft(null);
+    setFirstRunOutcome(null);
+    setSendValidationError(null);
+    setStreamOutcome(null);
+    setDuplicateNotice(null);
+    setActionNotice(null);
+    setBudgetConfirm(null);
+    setIsStreaming(false);
+    setIsWaitingFirstToken(false);
+    setShowCostEstimator(false);
+    setCurrentUsage(null);
+    setFinalMessageCost(null);
+    setRouterPricingVersion(undefined);
+    setSessionCostTotal(0);
+    setLastRecall(null);
+    setContextExcludedCount(0);
+  }, [user?.id]);
 
   // Scroll only when a new message bubble is created, and only if user is near bottom.
   useEffect(() => {
@@ -1562,8 +1596,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  const streamUpdateApplies = (): boolean => {
+  const streamUpdateApplies = (accountGeneration: number): boolean => {
+    if (accountGeneration !== accountGenerationRef.current) return false;
     const active = activeStreamRef.current;
+    if (active?.accountGeneration !== accountGeneration) return false;
     return streamUpdateAppliesToActive({
       activeConversationId: selectedConversationIdRef.current,
       activeClientRequestId: active?.clientRequestId ?? null,
@@ -1591,6 +1627,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     regenerateTargetMessageId?: string;
     optimisticMessageId?: string;
   }) => {
+    const requestAccountGeneration = accountGenerationRef.current;
+    const requestUserId = user?.id;
+    const requestStillCurrent = () => requestAccountGeneration === accountGenerationRef.current
+      && activeUserIdRef.current === requestUserId;
+    if (!requestStillCurrent()) return;
     const estimatedModel = overrideModel || manualModelOverride || currentModel;
     const historyText = historyMessages.map((msg) => {
       const content = extractTextContent(msg.content);
@@ -1618,6 +1659,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
     if (!skipBudgetCheck) {
       const dailyTotalUsd = await fetchServerDailyTotal();
+      if (!requestStillCurrent()) return;
       const budgetDecision = evaluateBudget({
         estimateUsd: comparisonBudgetEstimate,
         dailyTotalUsd,
@@ -1637,14 +1679,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
 
       if (budgetDecision.requiresConfirm) {
-        pendingActionRef.current = () => void executeTurn({
-          queryText,
-          attachmentsToProcess,
-          historyMessages,
-          overrideModel,
-          promptTokenEstimate,
-          skipBudgetCheck: true,
-        });
+        pendingActionRef.current = () => {
+          if (!requestStillCurrent()) return;
+          void executeTurn({
+            queryText,
+            attachmentsToProcess,
+            historyMessages,
+            overrideModel,
+            promptTokenEstimate,
+            skipBudgetCheck: true,
+          });
+        };
         setBudgetConfirm({
           estimateUsd: comparisonBudgetEstimate,
           dailyTotalUsd,
@@ -1692,6 +1737,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setStreamOutcome(null);
 
     const restoreComposerSafely = () => {
+      if (!requestStillCurrent()) return;
       if (queryText) {
         setInput((current) => {
           // Only restore if user hasn't typed a newer distinct draft
@@ -1722,6 +1768,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             : Promise.resolve(null),
         ),
       );
+      if (!requestStillCurrent()) return;
       const attachmentRefs: AttachmentRef[] = [];
       let firstImageStorageRef: string | undefined;
       attachmentsToProcess.forEach((file, ordinal) => {
@@ -1773,6 +1820,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       if (webSearchEnabled) {
         try {
           const searchRes = await executeWebSearch(queryText);
+          if (!requestStillCurrent()) return;
           if (searchRes.citations.length > 0) {
             citations = searchRes.citations;
           } else if (searchRes.error) {
@@ -1781,6 +1829,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         } catch (err) {
           console.warn('[ChatInterface] Web search failed, proceeding without search:', err);
         }
+        if (!requestStillCurrent()) return;
       }
 
       // 2. F24: Multi-source research workflow mode incorporates project knowledge and web results
@@ -1791,6 +1840,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             includeWebSearch: !(citations && citations.length > 0),
             existingCitations: citations,
           });
+          if (!requestStillCurrent()) return;
           if (researchCtx.citations && researchCtx.citations.length > 0) {
             citations = researchCtx.citations;
           }
@@ -1800,6 +1850,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         } catch (err) {
           console.warn('[ChatInterface] Research workflow failed:', err);
         }
+        if (!requestStillCurrent()) return;
       } else {
         // Standard mode: project knowledge search and/or web search augmentation
         if (activeProjectId) {
@@ -1809,6 +1860,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               query: queryText,
               limit: 3,
             });
+            if (!requestStillCurrent()) return;
             if (knowledgeHits.length > 0) {
               const groundingBlock = formatKnowledgeGroundingBlock(knowledgeHits);
               queryWithContext = `${groundingBlock}\n\n${queryWithContext}`;
@@ -1816,6 +1868,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           } catch (err) {
             console.warn('[ChatInterface] Project knowledge search failed:', err);
           }
+          if (!requestStillCurrent()) return;
         }
 
         if (citations && citations.length > 0) {
@@ -1864,6 +1917,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             abortController.signal,
           ),
         ]);
+        if (!requestStillCurrent()) return;
 
         const contentA =
           resA.status === 'fulfilled' && resA.value?.content
@@ -1917,12 +1971,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               .eq('execution_id', execIdA)
               .select('id')
               .maybeSingle();
+            if (!requestStillCurrent()) return;
             if (data?.id) {
               persistedId = data.id;
             }
           } catch (err) {
             console.warn('[ChatInterface] Failed to persist comparison metadata to Supabase:', err);
           }
+          if (!requestStillCurrent()) return;
         }
 
         setMessages((prev) => {
@@ -1970,6 +2026,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         maxSpendCap ?? undefined,
       );
 
+      if (!requestStillCurrent()) return;
+
       if (!result) throw new Error('Failed to get response from router');
 
       const {
@@ -2002,6 +2060,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       activeStreamRef.current = {
         conversationId: sendConversationId,
         clientRequestId: clientRequestId ?? null,
+        accountGeneration: requestAccountGeneration,
       };
       // A New Chat becomes a real, selected conversation once its first send
       // creates the durable execution, so reload reopens it.
@@ -2064,14 +2123,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         promptTokenEstimate,
         {
           onFirstToken: () => {
+            if (!requestStillCurrent()) return;
             waitingFirstTokenRef.current = false;
             setIsWaitingFirstToken(false);
           },
           onUsageUpdate: (usage) => {
+            if (!requestStillCurrent()) return;
             setCurrentUsage(usage);
           },
           onContentUpdate: (content, log) => {
-            if (!streamUpdateApplies()) return;
+            if (!streamUpdateApplies(requestAccountGeneration)) return;
             setMessages((prev) => {
               const updated = [...prev];
               const lastMessage = updated[updated.length - 1];
@@ -2098,6 +2159,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         },
         abortController.signal,
       );
+
+      if (!requestStillCurrent()) return;
 
       // PX06: an abort mid-stream makes readRouterStream resolve with the
       // partial content; surface the cancellation instead of a completion.
@@ -2167,7 +2230,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           setFinalMessageCost(null);
         }
 
-        if (streamUpdateApplies()) {
+        if (streamUpdateApplies(requestAccountGeneration)) {
           setMessages((prev) => {
             const updated = [...prev];
             const lastMessage = updated[updated.length - 1];
@@ -2251,15 +2314,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             assistantContent,
             model,
           );
+          if (!requestStillCurrent()) return;
           if (verRes.success) {
             messageVersions = verRes.versions;
           }
         } catch (verErr) {
           console.warn('[ChatInterface] Failed to record message version:', verErr);
         }
+        if (!requestStillCurrent()) return;
       }
 
-      if (streamUpdateApplies()) {
+      if (streamUpdateApplies(requestAccountGeneration)) {
         setMessages((prev) => {
           const updated = [...prev];
           const lastMessage = updated[updated.length - 1];
@@ -2296,6 +2361,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       // PX07: the list/title changed server-side; refresh in the background.
       void refreshConversations();
     } catch (error) {
+      if (!requestStillCurrent()) return;
       if (error instanceof DuplicateRequestError) {
         // PX07: the same logical send already created an execution. Load/show
         // the existing turn; never auto-dispatch a new paid request.
@@ -2307,6 +2373,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         );
         if (selectedConversationIdRef.current) {
           await openConversation(selectedConversationIdRef.current);
+          if (!requestStillCurrent()) return;
         }
         scheduleCostEstimatorHide(1500);
       } else if (abortController.signal.aborted) {
@@ -2372,11 +2439,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         }
       }
     } finally {
-      abortControllerRef.current = null;
-      activeStreamRef.current = null;
-      setIsStreaming(false);
-      setIsWaitingFirstToken(false);
-      waitingFirstTokenRef.current = false;
+      if (requestStillCurrent()) {
+        if (abortControllerRef.current === abortController) abortControllerRef.current = null;
+        if (activeStreamRef.current?.accountGeneration === requestAccountGeneration) activeStreamRef.current = null;
+        setIsStreaming(false);
+        setIsWaitingFirstToken(false);
+        waitingFirstTokenRef.current = false;
+      }
     }
   };
 
