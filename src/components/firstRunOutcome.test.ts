@@ -14,12 +14,9 @@ describe('reconcileFirstRunOutcome', () => {
     expect(reconcileFirstRunOutcome(verified, { ...enabledProvider, hasKey: false })).toBeNull();
   });
 
-  it('upgrades an unverified notice when a later provider check verifies the key', () => {
+  it('does not upgrade an unverified notice from saved/enabled settings metadata alone', () => {
     const unverified = { message: 'Key saved, but could not be verified.', verified: false };
-    expect(reconcileFirstRunOutcome(unverified, enabledProvider)).toEqual({
-      message: 'Key saved and verified. You are ready to chat.',
-      verified: true,
-    });
+    expect(reconcileFirstRunOutcome(unverified, enabledProvider)).toBe(unverified);
   });
 
   it('does not call a key verified while its current provider status is unavailable', () => {

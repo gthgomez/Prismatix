@@ -46,6 +46,9 @@ export interface ChatInputComposerProps {
   contextExcludedCount: number;
   duplicateNotice: string | null;
   composerValidationView: ComposerSendValidationView | null;
+  providerSetupBlocked?: boolean;
+  providerSetupVerifyAvailable?: boolean;
+  onVerifyProviderKeys?: () => void;
   onOpenPromptLibrary?: () => void;
   onOpenUrlIngestion?: () => void;
   onOpenDocComparison?: () => void;
@@ -90,6 +93,9 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   contextExcludedCount,
   duplicateNotice,
   composerValidationView,
+  providerSetupBlocked = false,
+  providerSetupVerifyAvailable = false,
+  onVerifyProviderKeys,
   onOpenPromptLibrary,
   onOpenUrlIngestion,
   onOpenDocComparison,
@@ -100,6 +106,17 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   return (
     <div className='chat-input-container'>
       <div className='input-wrapper'>
+        {providerSetupBlocked && (
+          <div className='provider-setup-composer-status' role='status'>
+            <span>{providerSetupVerifyAvailable ? 'Sending is paused. Verify your saved provider key to continue; your draft stays here.' : 'Sending is paused. Your draft stays here until a provider is connected.'}</span>
+            {providerSetupVerifyAvailable && onVerifyProviderKeys ? (
+              <button type='button' onClick={onVerifyProviderKeys}>Verify provider keys</button>
+            ) : (
+              <button type='button' onClick={onOpenProviderSettings}>Connect a provider</button>
+            )}
+            {providerSetupVerifyAvailable && <button type='button' className='provider-setup-settings-button' onClick={onOpenProviderSettings}>Provider Settings</button>}
+          </div>
+        )}
         <AttachmentPreview
           attachments={draftAttachments}
           onRemove={onRemoveAttachment}

@@ -33,7 +33,7 @@ describe('FirstRunSetupCard connection status', () => {
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     });
     expect(validateKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key');
-    expect(plugins.setKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key');
+    expect(plugins.setKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key', { provider: 'openrouter', status: 'enabled' });
     expect(container.textContent).toContain('Key saved and verified');
     expect(container.querySelector('.first-run-status')?.classList.contains('success')).toBe(true);
     expect(onSaved).toHaveBeenCalledWith('Key saved and verified. You are ready to chat.', true);
@@ -51,7 +51,7 @@ describe('FirstRunSetupCard connection status', () => {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     });
-    expect(plugins.setKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key');
+    expect(plugins.setKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key', { provider: 'openrouter', status: 'unavailable' });
     expect(container.textContent).toContain('could not be verified');
     expect(container.querySelector('.first-run-status')?.classList.contains('pending')).toBe(true);
     expect(container.textContent).not.toContain('You are ready to chat.');
@@ -79,6 +79,27 @@ describe('FirstRunSetupCard connection status', () => {
     await submit('sk-or-corrected');
     expect(plugins.setKey).toHaveBeenCalledOnce();
     expect(container.textContent).toContain('Key saved and verified');
+    await act(async () => root.unmount());
+  });
+
+  it('does not save a key when its deferred check belongs to a previous account', async () => {
+    const validateKey = vi.fn().mockResolvedValue({
+      provider: 'openrouter',
+      status: 'unavailable',
+      stale: true,
+    });
+    const { container, root, plugins, onSaved } = renderCard(validateKey as ProviderPlugins['validateKey']);
+    const input = container.querySelector<HTMLInputElement>('#first-run-openrouter-key')!;
+    const form = container.querySelector('form')!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(input, 'sk-or-stale-account-key');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    expect(plugins.setKey).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('The key was not saved');
     await act(async () => root.unmount());
   });
 });

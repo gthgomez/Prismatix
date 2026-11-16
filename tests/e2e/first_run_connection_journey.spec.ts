@@ -6,7 +6,7 @@ const GENERATED_REPLY = 'Fixture generated reply: your synthetic request complet
 const EXECUTION_ID = '00000000-0000-4000-8000-000000000701';
 
 test('verified first-run connection sends once and reloads fixture-persisted output', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.setViewportSize({ width: 1024, height: 600 });
   await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [], costLogs: [] });
 
   // Independent, stateful fixture. The router call creates its own conversation
@@ -18,6 +18,10 @@ test('verified first-run connection sends once and reloads fixture-persisted out
     messages: [] as Array<Record<string, unknown>>,
     routerRequests: [] as Array<Record<string, unknown>>,
   };
+  let signalRouterStarted!: () => void;
+  let releaseRouterResponse!: () => void;
+  const routerStarted = new Promise<void>((resolve) => { signalRouterStarted = resolve; });
+  const routerResponseReleased = new Promise<void>((resolve) => { releaseRouterResponse = resolve; });
 
   await page.route('**/functions/v1/provider-settings*', async (route) => {
     const body = route.request().method() === 'POST'
@@ -89,6 +93,8 @@ test('verified first-run connection sends once and reloads fixture-persisted out
       { type: 'receipt', executionId: EXECUTION_ID, status: 'completed', settlement: { state: 'settled', committedUsd: 0, pendingCalls: 0 }, calls: [] },
     ];
     const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n';
+    signalRouterStarted();
+    await routerResponseReleased;
     return route.fulfill({
       status: 200,
       headers: {
@@ -105,9 +111,30 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   const outputDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
   await mkdir(outputDir, { recursive: true });
   const tracePath = `${outputDir}/connection-journey.zip`;
+  const capture = async (name: string) => page.screenshot({ path: `${outputDir}/${name}.png` });
+  const assertAccountControlFits = async () => {
+    await expect.poll(() => page.evaluate(() => {
+      const header = document.querySelector<HTMLElement>('.chat-header')!;
+      const messages = document.querySelector<HTMLElement>('.chat-messages')!;
+      const account = document.querySelector<HTMLElement>('.user-button')!;
+      const headerBox = header.getBoundingClientRect();
+      const accountBox = account.getBoundingClientRect();
+      const hit = document.elementFromPoint(accountBox.left + accountBox.width / 2, accountBox.top + accountBox.height / 2);
+      return headerBox.left >= -1 && headerBox.right <= window.innerWidth + 1
+        && header.scrollWidth <= header.clientWidth + 1
+        && headerBox.bottom <= messages.getBoundingClientRect().top + 1
+        && accountBox.left >= -1 && accountBox.right <= window.innerWidth + 1
+        && (hit === account || account.contains(hit)) ? 'ok' : JSON.stringify({headerBox: {left: headerBox.left, right: headerBox.right, top: headerBox.top, bottom: headerBox.bottom, clientHeight: header.clientHeight, scrollHeight: header.scrollHeight}, messagesTop: messages.getBoundingClientRect().top, accountBox: {left: accountBox.left, right: accountBox.right}, hit: (hit as HTMLElement | null)?.className});
+    })).toBe('ok');
+    const accountMenu = page.getByRole('button', { name: 'Account menu' });
+    await accountMenu.click();
+    await expect(page.locator('.user-dropdown')).toBeVisible();
+    await accountMenu.click();
+  };
   await page.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
   await signInAsMockUser(page);
   await expect(page.locator('.first-run-card')).toBeVisible();
+  await capture('transition-first-run-1024x600');
 
   // Settings dialog restores focus to the first-run trigger when closed.
   const settingsTrigger = page.getByRole('button', { name: /Configure Other Providers/i });
@@ -123,11 +150,17 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await page.getByRole('button', { name: 'Connect & Start' }).click();
   await expect(page.getByRole('status').filter({ hasText: /Key saved and verified/ })).toBeVisible();
   await expect(page.locator('.first-run-card')).toHaveCount(0);
+  await capture('transition-configured-1024x600');
 
   const prompt = 'Return a short synthetic confirmation.';
   await page.getByRole('textbox', { name: /message prismatix/i }).fill(prompt);
   await page.getByRole('button', { name: 'Send message' }).click();
+  await routerStarted;
+  await capture('transition-streaming-1024x600');
+  releaseRouterResponse();
   await expect(page.getByText(GENERATED_REPLY)).toBeVisible({ timeout: 15000 });
+  await assertAccountControlFits();
+  await capture('transition-reply-1024x600');
   expect(fixture.routerRequests).toHaveLength(1);
   expect(fixture.routerRequests[0]?.query).toBe(prompt);
   expect(fixture.conversation).not.toBeNull();
@@ -144,6 +177,8 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await page.reload();
   await expect(page.getByRole('textbox', { name: /message prismatix/i })).toBeVisible({ timeout: 15000 });
   await expect(page.getByText(GENERATED_REPLY)).toBeVisible({ timeout: 15000 });
+  await assertAccountControlFits();
+  await capture('transition-reload-1024x600');
   expect(fixture.routerRequests).toHaveLength(1);
   expect(fixture.messages[0]?.conversation_id).toBe(fixture.conversation?.id);
   expect(fixture.conversation?.id).toMatch(/^[0-9a-f-]{36}$/i);

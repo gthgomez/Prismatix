@@ -243,6 +243,10 @@ export function describeStreamError(error: unknown): string {
       case 'no_available_provider':
       case 'provider_unavailable':
         return 'No active provider is currently available for this model. Check Provider Settings to enable a provider.';
+      case 'provider_key_required':
+        return 'No usable provider credential is available for this route. Check Provider Settings to choose an enabled provider and review its saved key.';
+      case 'provider_key_unavailable':
+        return 'The saved provider credential could not be retrieved. Your prompt is preserved; try again later or review Provider Settings.';
       case 'provider_disabled':
         return 'The provider required for this model is currently disabled in your Provider Settings.';
       case 'unknown_pricing':
@@ -352,13 +356,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
   const [showProviderSettings, setShowProviderSettings] = useState(false);
   const [firstRunOutcome, setFirstRunOutcome] = useState<FirstRunOutcome | null>(null);
+  const [rejectedRoute, setRejectedRoute] = useState<{
+    mode: 'chat' | 'compare' | 'debate';
+    manualModel: RouterModel | null;
+  } | null>(null);
+  const activeUserIdRef = useRef(user?.id);
+  const accountGenerationRef = useRef(0);
   const [showMemorySettings, setShowMemorySettings] = useState(false);
   const [lastRecall, setLastRecall] = useState<{ conversationId: string; hits: number } | null>(null);
 
   // Provider plug-ins (PX12): which providers are on for this user.
   const providerPlugins = useProviderPlugins(user?.id);
   const enabledProviders = providerPlugins.enabledProviders;
+  const providerVerified = providerPlugins.isVerified && !(firstRunOutcome && !firstRunOutcome.verified);
   const openRouterProvider = providerPlugins.providers.find((provider) => provider.id === 'openrouter');
+  const providerChecksNeedAttention = providerPlugins.verificationStatus === 'invalid'
+    || providerPlugins.verificationStatus === 'unavailable'
+    || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked' || provider.status === 'unavailable');
   useEffect(() => {
     setFirstRunOutcome((current) => reconcileFirstRunOutcome(current, openRouterProvider));
   }, [openRouterProvider]);
@@ -403,6 +417,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // PX07 conversation continuity state.
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(true);
+  const conversationsRefreshSeqRef = useRef(0);
   const [hasMoreConversations, setHasMoreConversations] = useState(false);
   const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
   const [loadMoreConversationsError, setLoadMoreConversationsError] = useState<string | null>(null);
@@ -422,12 +437,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     error?: string;
     failedUserIndex?: number;
     overrideModel?: RouterModel;
+    optimisticMessageId?: string;
+    optimisticMessageContent?: string;
   } | null>(null);
   const activeDraftRef = useRef<{
     rawInput: string;
     queryText: string;
     attachments: FileUploadPayload[];
     overrideModel?: RouterModel;
+    optimisticMessageId?: string;
+    optimisticMessageContent?: string;
   } | null>(null);
 
   // PR 1: F05 global full-text chat search state
@@ -483,6 +502,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     filePickerRef.current = openPicker;
   }, []);
   const workspaceMode = comparisonMode ? 'compare' : debateSelection !== 'off' ? 'debate' : 'chat';
+  const routeRecoveryApplies = Boolean(rejectedRoute
+    && rejectedRoute.mode === workspaceMode
+    && rejectedRoute.manualModel === (workspaceMode === 'chat' ? manualModelOverride : null));
+  // A failed status for one saved provider must not veto unrelated routes.
+  // Explicit first-run verification and recovery for this same rejected route
+  // remain blocked; ordinary route choice stays with the router.
+  const providerVerificationRequiresAction = providerPlugins.verificationLoading
+    || Boolean(firstRunOutcome && !firstRunOutcome.verified)
+    || routeRecoveryApplies;
+  const providerCanAttemptRouterSend = !providerPlugins.loading
+    && !providerPlugins.error
+    && providerPlugins.isConfigured
+    && enabledProviders.size > 0
+    && !providerVerificationRequiresAction;
 
   const selectWorkspaceMode = useCallback((mode: 'chat' | 'compare' | 'debate') => {
     const compare = mode === 'compare';
@@ -493,6 +526,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     } catch {
       // Keep the in-memory mode usable when storage is unavailable.
     }
+  }, []);
+
+  useEffect(() => {
+    const closeCompactDrawerAtWideBreakpoint = () => {
+      if (window.innerWidth > 1200) setRoutingPanelOpen(false);
+    };
+    window.addEventListener('resize', closeCompactDrawerAtWideBreakpoint);
+    return () => window.removeEventListener('resize', closeCompactDrawerAtWideBreakpoint);
   }, []);
 
   useEffect(() => {
@@ -560,6 +601,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const activeStreamRef = useRef<{
     conversationId: string;
     clientRequestId: string | null;
+    accountGeneration: number;
   } | null>(null);
 
   // Context Manager
@@ -605,10 +647,53 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const executionIdRef = useRef<string | undefined>(undefined);
   const [streamOutcome, setStreamOutcome] = useState<StreamOutcomeState | null>(null);
 
+  // Account-owned drafts and transport state must not survive an account
+  // switch. Abort best-effort; generation guards below also protect against
+  // transports or mocks that settle after ignoring their AbortSignal.
+  useLayoutEffect(() => {
+    if (activeUserIdRef.current === user?.id) return;
+    activeUserIdRef.current = user?.id;
+    accountGenerationRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    activeStreamRef.current = null;
+    executionIdRef.current = undefined;
+    activeDraftRef.current = null;
+    pendingActionRef.current = null;
+    waitingFirstTokenRef.current = false;
+    if (costEstimatorHideTimeoutRef.current !== null) {
+      window.clearTimeout(costEstimatorHideTimeoutRef.current);
+      costEstimatorHideTimeoutRef.current = null;
+    }
+    setInput('');
+    setDraftAttachments([]);
+    setFailedTurnDraft(null);
+    setFirstRunOutcome(null);
+    setRejectedRoute(null);
+    setSendValidationError(null);
+    setStreamOutcome(null);
+    setDuplicateNotice(null);
+    setActionNotice(null);
+    setBudgetConfirm(null);
+    setIsStreaming(false);
+    setIsWaitingFirstToken(false);
+    setShowCostEstimator(false);
+    setCurrentUsage(null);
+    setFinalMessageCost(null);
+    setRouterPricingVersion(undefined);
+    setSessionCostTotal(0);
+    setLastRecall(null);
+    setContextExcludedCount(0);
+  }, [user?.id]);
+
   // Scroll only when a new message bubble is created, and only if user is near bottom.
   useEffect(() => {
     if (messages.length === 0) return;
-    if (!shouldStickToBottomRef.current) return;
+    if (!shouldStickToBottomRef.current && !isStreaming) return;
+    if (isStreaming) {
+      messagesEndRef.current?.scrollIntoView?.({ behavior: 'auto', block: 'end' });
+      return;
+    }
     const lastMessage = messageRefs.current[messages.length - 1];
     if (lastMessage) {
       if (typeof lastMessage.scrollIntoView === 'function') {
@@ -617,7 +702,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return;
     }
     messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' });
-  }, [messages.length]);
+  }, [messages.length, isStreaming, shouldStickToBottomRef]);
+
+  // The responsive cost summary participates in message flow. When it first
+  // appears, keep the transcript pinned to its end so the summary and its
+  // Details control are not clipped beneath the fixed composer while a stream
+  // is in flight.
+  useLayoutEffect(() => {
+    if (!showCostEstimator || !shouldStickToBottomRef.current) return;
+    messagesEndRef.current?.scrollIntoView?.({ behavior: 'auto', block: 'end' });
+  }, [showCostEstimator, messages.length, shouldStickToBottomRef]);
 
   // Keep attachment preview visible when user is already at bottom.
   useEffect(() => {
@@ -824,6 +918,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const scheduleCostEstimatorHide = (delayMs = 3000) => {
     clearCostEstimatorHideTimer();
     costEstimatorHideTimeoutRef.current = window.setTimeout(() => {
+      const focusedElement = document.activeElement;
+      const focusedEstimator = document.querySelector('.cost-estimator');
+      if (focusedElement instanceof Node && focusedEstimator?.contains(focusedElement)) {
+        costEstimatorHideTimeoutRef.current = null;
+        return;
+      }
       setShowCostEstimator(false);
       setCurrentUsage(null);
       setFinalMessageCost(null);
@@ -965,7 +1065,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return mapped;
   };
 
-  const refreshConversations = async (projectId?: string | null) => {
+  const refreshConversations = useCallback(async (projectId?: string | null) => {
+    const requestSeq = ++conversationsRefreshSeqRef.current;
     setConversationsLoading(true);
     setConversationsError(null);
     const targetProjectId = projectId !== undefined ? projectId : activeProjectId;
@@ -974,16 +1075,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         limit: 50,
         projectId: targetProjectId ?? undefined,
       });
+      if (requestSeq !== conversationsRefreshSeqRef.current) return;
       setConversations(list);
       setHasMoreConversations(list.length === 50);
       void listProjects(supabase).then(setProjects);
     } catch (error) {
+      if (requestSeq !== conversationsRefreshSeqRef.current) return;
       console.warn('[ChatInterface] Failed to list conversations:', error);
       setConversationsError('Failed to load conversations.');
     } finally {
-      setConversationsLoading(false);
+      if (requestSeq === conversationsRefreshSeqRef.current) setConversationsLoading(false);
     }
-  };
+  }, [activeProjectId]);
 
   const handleLoadMoreConversations = async () => {
     if (isLoadingMoreConversations || !hasMoreConversations || conversations.length === 0) return;
@@ -1145,7 +1248,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const handleRetryTurn = async () => {
     if (!failedTurnDraft || isStreaming) return;
-    const { queryText, attachments, overrideModel } = failedTurnDraft;
+    if (providerPlugins.loading || providerPlugins.error || !providerPlugins.isConfigured || enabledProviders.size === 0 || providerVerificationRequiresAction) {
+      setSendValidationError(providerPlugins.error
+        ? 'Provider setup could not be checked. Retry the check or open Provider Settings.'
+        : providerPlugins.loading
+          ? 'Provider setup is still being checked. Please wait before retrying.'
+          : providerVerificationRequiresAction
+            ? routeRecoveryApplies
+              ? 'The router rejected this route. Verify or update its provider before retrying.'
+              : 'A recent provider check needs attention. Verify or update the provider before retrying.'
+            : 'No enabled provider with a saved key is available. Your draft is preserved.');
+      return;
+    }
+    const { rawInput, queryText, attachments, overrideModel, optimisticMessageId, optimisticMessageContent } = failedTurnDraft;
     setFailedTurnDraft(null);
 
     // Remove the failed assistant message if present
@@ -1157,12 +1272,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return prev;
     });
 
-    const historyForRequest = [...messages];
-    const lastUserIdx = messages.length - 1;
-    const historyBeforeUser =
-      lastUserIdx >= 0 && messages[lastUserIdx]?.role === 'user'
-        ? messages.slice(0, lastUserIdx)
-        : historyForRequest;
+    const optimisticIndex = optimisticMessageId
+      ? messages.findIndex((message) => message.id === optimisticMessageId)
+      : -1;
+    const historyBeforeUser = optimisticIndex >= 0
+      ? messages.slice(0, optimisticIndex)
+      : messages.filter((message, index) => !(index === messages.length - 1 && message.role === 'assistant' && typeof message.content === 'string' && message.content.startsWith('⚠️')));
+
+    if (optimisticMessageId && optimisticIndex < 0) {
+      const attachmentSummary = attachments.length > 0
+        ? `[${attachments.length} file${attachments.length > 1 ? 's' : ''} attached]`
+        : '';
+      setMessages((prev) => prev.some((message) => message.id === optimisticMessageId)
+        ? prev
+        : [...prev, {
+            id: optimisticMessageId,
+            role: 'user',
+            content: optimisticMessageContent ?? (rawInput.trim() || attachmentSummary),
+            timestamp: Date.now(),
+            attachments: attachments.length > 0 ? attachments : undefined,
+          }]);
+    }
+    setInput('');
+    setDraftAttachments([]);
 
     await executeTurn({
       queryText,
@@ -1170,6 +1302,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       historyMessages: historyBeforeUser,
       overrideModel: overrideModel || undefined,
       skipBudgetCheck: true,
+      optimisticMessageId,
     });
   };
 
@@ -1466,6 +1599,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     return () => clearTimeout(prefsTimeoutRef.current);
   }, [user?.id, routingProfile, webSearchEnabled, maxSpendCap, activeProjectId]);
 
+  // Refresh history whenever the authenticated account or server-side project filter changes.
+  useEffect(() => {
+    if (!user?.id) return;
+    void refreshConversations(activeProjectId);
+  }, [user?.id, activeProjectId, refreshConversations]);
+
   // Per-account selection: restore on sign-in/account change, isolated by user.
   useEffect(() => {
     const plan = planInitialConversation(readSelectedConversation(user?.id ?? null));
@@ -1474,7 +1613,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (plan.resetGlobalConversation) {
       resetConversation();
     }
-    void refreshConversations();
     if (plan.conversationId) {
       void openConversation(plan.conversationId);
     } else {
@@ -1488,8 +1626,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  const streamUpdateApplies = (): boolean => {
+  const streamUpdateApplies = (accountGeneration: number): boolean => {
+    if (accountGeneration !== accountGenerationRef.current) return false;
     const active = activeStreamRef.current;
+    if (active?.accountGeneration !== accountGeneration) return false;
     return streamUpdateAppliesToActive({
       activeConversationId: selectedConversationIdRef.current,
       activeClientRequestId: active?.clientRequestId ?? null,
@@ -1506,6 +1646,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     promptTokenEstimate: passedPromptTokenEstimate,
     skipBudgetCheck = false,
     regenerateTargetMessageId,
+    optimisticMessageId,
   }: {
     queryText: string;
     attachmentsToProcess: FileUploadPayload[];
@@ -1514,7 +1655,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     promptTokenEstimate?: number;
     skipBudgetCheck?: boolean;
     regenerateTargetMessageId?: string;
+    optimisticMessageId?: string;
   }) => {
+    const requestAccountGeneration = accountGenerationRef.current;
+    const requestUserId = user?.id;
+    const requestRoute: { mode: 'chat' | 'compare' | 'debate'; manualModel: RouterModel | null } = {
+      mode: workspaceMode,
+      manualModel: workspaceMode === 'chat' ? manualModelOverride : null,
+    };
+    const requestStillCurrent = () => requestAccountGeneration === accountGenerationRef.current
+      && activeUserIdRef.current === requestUserId;
+    if (!requestStillCurrent()) return;
     const estimatedModel = overrideModel || manualModelOverride || currentModel;
     const historyText = historyMessages.map((msg) => {
       const content = extractTextContent(msg.content);
@@ -1542,6 +1693,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
     if (!skipBudgetCheck) {
       const dailyTotalUsd = await fetchServerDailyTotal();
+      if (!requestStillCurrent()) return;
       const budgetDecision = evaluateBudget({
         estimateUsd: comparisonBudgetEstimate,
         dailyTotalUsd,
@@ -1561,14 +1713,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       }
 
       if (budgetDecision.requiresConfirm) {
-        pendingActionRef.current = () => void executeTurn({
-          queryText,
-          attachmentsToProcess,
-          historyMessages,
-          overrideModel,
-          promptTokenEstimate,
-          skipBudgetCheck: true,
-        });
+        pendingActionRef.current = () => {
+          if (!requestStillCurrent()) return;
+          void executeTurn({
+            queryText,
+            attachmentsToProcess,
+            historyMessages,
+            overrideModel,
+            promptTokenEstimate,
+            skipBudgetCheck: true,
+          });
+        };
         setBudgetConfirm({
           estimateUsd: comparisonBudgetEstimate,
           dailyTotalUsd,
@@ -1616,6 +1771,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setStreamOutcome(null);
 
     const restoreComposerSafely = () => {
+      if (!requestStillCurrent()) return;
       if (queryText) {
         setInput((current) => {
           // Only restore if user hasn't typed a newer distinct draft
@@ -1646,6 +1802,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             : Promise.resolve(null),
         ),
       );
+      if (!requestStillCurrent()) return;
       const attachmentRefs: AttachmentRef[] = [];
       let firstImageStorageRef: string | undefined;
       attachmentsToProcess.forEach((file, ordinal) => {
@@ -1697,6 +1854,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       if (webSearchEnabled) {
         try {
           const searchRes = await executeWebSearch(queryText);
+          if (!requestStillCurrent()) return;
           if (searchRes.citations.length > 0) {
             citations = searchRes.citations;
           } else if (searchRes.error) {
@@ -1705,6 +1863,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         } catch (err) {
           console.warn('[ChatInterface] Web search failed, proceeding without search:', err);
         }
+        if (!requestStillCurrent()) return;
       }
 
       // 2. F24: Multi-source research workflow mode incorporates project knowledge and web results
@@ -1715,6 +1874,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             includeWebSearch: !(citations && citations.length > 0),
             existingCitations: citations,
           });
+          if (!requestStillCurrent()) return;
           if (researchCtx.citations && researchCtx.citations.length > 0) {
             citations = researchCtx.citations;
           }
@@ -1724,6 +1884,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         } catch (err) {
           console.warn('[ChatInterface] Research workflow failed:', err);
         }
+        if (!requestStillCurrent()) return;
       } else {
         // Standard mode: project knowledge search and/or web search augmentation
         if (activeProjectId) {
@@ -1733,6 +1894,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               query: queryText,
               limit: 3,
             });
+            if (!requestStillCurrent()) return;
             if (knowledgeHits.length > 0) {
               const groundingBlock = formatKnowledgeGroundingBlock(knowledgeHits);
               queryWithContext = `${groundingBlock}\n\n${queryWithContext}`;
@@ -1740,6 +1902,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           } catch (err) {
             console.warn('[ChatInterface] Project knowledge search failed:', err);
           }
+          if (!requestStillCurrent()) return;
         }
 
         if (citations && citations.length > 0) {
@@ -1788,6 +1951,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             abortController.signal,
           ),
         ]);
+        if (!requestStillCurrent()) return;
 
         const contentA =
           resA.status === 'fulfilled' && resA.value?.content
@@ -1841,12 +2005,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               .eq('execution_id', execIdA)
               .select('id')
               .maybeSingle();
+            if (!requestStillCurrent()) return;
             if (data?.id) {
               persistedId = data.id;
             }
           } catch (err) {
             console.warn('[ChatInterface] Failed to persist comparison metadata to Supabase:', err);
           }
+          if (!requestStillCurrent()) return;
         }
 
         setMessages((prev) => {
@@ -1894,6 +2060,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         maxSpendCap ?? undefined,
       );
 
+      if (!requestStillCurrent()) return;
+
       if (!result) throw new Error('Failed to get response from router');
 
       const {
@@ -1926,6 +2094,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       activeStreamRef.current = {
         conversationId: sendConversationId,
         clientRequestId: clientRequestId ?? null,
+        accountGeneration: requestAccountGeneration,
       };
       // A New Chat becomes a real, selected conversation once its first send
       // creates the durable execution, so reload reopens it.
@@ -1988,14 +2157,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         promptTokenEstimate,
         {
           onFirstToken: () => {
+            if (!requestStillCurrent()) return;
             waitingFirstTokenRef.current = false;
             setIsWaitingFirstToken(false);
           },
           onUsageUpdate: (usage) => {
+            if (!requestStillCurrent()) return;
             setCurrentUsage(usage);
           },
           onContentUpdate: (content, log) => {
-            if (!streamUpdateApplies()) return;
+            if (!streamUpdateApplies(requestAccountGeneration)) return;
             setMessages((prev) => {
               const updated = [...prev];
               const lastMessage = updated[updated.length - 1];
@@ -2022,6 +2193,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         },
         abortController.signal,
       );
+
+      if (!requestStillCurrent()) return;
 
       // PX06: an abort mid-stream makes readRouterStream resolve with the
       // partial content; surface the cancellation instead of a completion.
@@ -2091,7 +2264,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           setFinalMessageCost(null);
         }
 
-        if (streamUpdateApplies()) {
+        if (streamUpdateApplies(requestAccountGeneration)) {
           setMessages((prev) => {
             const updated = [...prev];
             const lastMessage = updated[updated.length - 1];
@@ -2175,15 +2348,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             assistantContent,
             model,
           );
+          if (!requestStillCurrent()) return;
           if (verRes.success) {
             messageVersions = verRes.versions;
           }
         } catch (verErr) {
           console.warn('[ChatInterface] Failed to record message version:', verErr);
         }
+        if (!requestStillCurrent()) return;
       }
 
-      if (streamUpdateApplies()) {
+      if (streamUpdateApplies(requestAccountGeneration)) {
         setMessages((prev) => {
           const updated = [...prev];
           const lastMessage = updated[updated.length - 1];
@@ -2220,6 +2395,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       // PX07: the list/title changed server-side; refresh in the background.
       void refreshConversations();
     } catch (error) {
+      if (!requestStillCurrent()) return;
       if (error instanceof DuplicateRequestError) {
         // PX07: the same logical send already created an execution. Load/show
         // the existing turn; never auto-dispatch a new paid request.
@@ -2231,6 +2407,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         );
         if (selectedConversationIdRef.current) {
           await openConversation(selectedConversationIdRef.current);
+          if (!requestStillCurrent()) return;
         }
         scheduleCostEstimatorHide(1500);
       } else if (abortController.signal.aborted) {
@@ -2242,45 +2419,64 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         setStreamOutcome({ status: 'cancelled', executionId: executionIdRef.current });
         scheduleCostEstimatorHide(1500);
         setFailedTurnDraft({
-          rawInput: activeDraftRef.current?.rawInput || queryText,
+          rawInput: activeDraftRef.current?.rawInput ?? queryText,
           queryText,
           attachments: attachmentsToProcess,
           error: 'Generation cancelled',
           overrideModel: overrideModel || undefined,
+          optimisticMessageId,
+          optimisticMessageContent: activeDraftRef.current?.optimisticMessageContent,
         });
       } else {
         console.error('Stream error:', error);
         const errorDesc = describeStreamError(error);
+        const routerCode = error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code)
+          : '';
+        const routeUnavailable = ['provider_key_required', 'provider_key_unavailable', 'no_available_provider', 'provider_unavailable', 'provider_disabled'].includes(routerCode);
+        setShowCostEstimator(false);
         setStreamOutcome({
           status: 'error',
           executionId: executionIdRef.current,
           error: errorDesc,
         });
-        setMessages((prev) => [...prev, {
-          role: 'assistant',
-          content: `⚠️ ${errorDesc}`,
-          timestamp: Date.now(),
-        }]);
+        if (routeUnavailable) {
+          providerPlugins.invalidateVerification();
+          setRejectedRoute(requestRoute);
+          if (optimisticMessageId) {
+            setMessages((prev) => prev.filter((message) => message.id !== optimisticMessageId));
+          }
+        } else {
+          setMessages((prev) => [...prev, {
+            role: 'assistant',
+            content: `⚠️ ${errorDesc}`,
+            timestamp: Date.now(),
+          }]);
+        }
         scheduleCostEstimatorHide(1500);
 
         // F02: Preserve user prompt and attachments safely in session memory
         setFailedTurnDraft({
-          rawInput: activeDraftRef.current?.rawInput || queryText,
+          rawInput: activeDraftRef.current?.rawInput ?? queryText,
           queryText,
           attachments: attachmentsToProcess,
           error: errorDesc,
           overrideModel: overrideModel || undefined,
+          optimisticMessageId,
+          optimisticMessageContent: activeDraftRef.current?.optimisticMessageContent,
         });
         if (waitingFirstTokenRef.current) {
           restoreComposerSafely();
         }
       }
     } finally {
-      abortControllerRef.current = null;
-      activeStreamRef.current = null;
-      setIsStreaming(false);
-      setIsWaitingFirstToken(false);
-      waitingFirstTokenRef.current = false;
+      if (requestStillCurrent()) {
+        if (abortControllerRef.current === abortController) abortControllerRef.current = null;
+        if (activeStreamRef.current?.accountGeneration === requestAccountGeneration) activeStreamRef.current = null;
+        setIsStreaming(false);
+        setIsWaitingFirstToken(false);
+        waitingFirstTokenRef.current = false;
+      }
     }
   };
 
@@ -2292,8 +2488,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       setSendValidationError('Attachments are still processing. Please wait for completion before sending.');
       return;
     }
-    if (enabledProviders.size === 0) {
-      setSendValidationError('No AI providers configured. Open Provider Settings to connect your OpenRouter or direct provider key.');
+    if (!providerCanAttemptRouterSend) {
+      setSendValidationError(providerPlugins.error
+        ? 'Provider setup could not be checked. Retry the check or open Provider Settings.'
+        : providerPlugins.loading
+          ? 'Provider setup is still being checked. Please wait before sending.'
+          : providerVerificationRequiresAction
+            ? routeRecoveryApplies
+              ? 'The router recently rejected this route. Verify or update its provider before retrying.'
+              : providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked')
+              ? 'A saved provider key was rejected. Update it in Provider Settings, then verify it before sending.'
+              : providerPlugins.verificationLoading
+                ? 'Provider verification is in progress. Please wait before sending.'
+                : 'A recent provider check or router request could not confirm this key. Verify or update it before sending.'
+            : !providerPlugins.isConfigured
+              ? 'No enabled provider with a saved key is available. Open Provider Settings to connect or enable a provider.'
+              : 'No enabled provider is available for this route. Open Provider Settings to review your providers.');
       return;
     }
     if (debateSelection === 'video_ui' && !hasReadyVideo) {
@@ -2418,7 +2628,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       : '';
 
     const firstImage = draftAttachments.find((f) => f.isImage);
+    const optimisticMessageId = `optimistic-${crypto.randomUUID()}`;
     const userMessage: Message = {
+      id: optimisticMessageId,
       role: 'user',
       content: input.trim() || attachmentSummary,
       timestamp: Date.now(),
@@ -2438,6 +2650,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       queryText,
       attachments: [...draftAttachments],
       overrideModel: manualModelOverride || undefined,
+      optimisticMessageId,
+      optimisticMessageContent: String(userMessage.content),
     };
 
     // Clear inputs
@@ -2453,7 +2667,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       overrideModel: manualModelOverride || undefined,
       promptTokenEstimate,
       skipBudgetCheck: true,
+      optimisticMessageId,
     });
+  };
+
+  const handleVerifyProviders = async () => {
+    const requestUserId = user?.id;
+    const resolvingFirstRun = Boolean(firstRunOutcome && !firstRunOutcome.verified);
+    const verified = await providerPlugins.verifyEnabledProviders();
+    if (activeUserIdRef.current !== requestUserId) return;
+    // A user-driven provider check resolves the UI's route-recovery pause;
+    // the router remains authoritative if this route still cannot dispatch.
+    setRejectedRoute(null);
+    if (resolvingFirstRun) {
+      setFirstRunOutcome(verified
+        ? { message: 'Provider key verified. You are ready to chat.', verified: true }
+        : { message: 'Provider key could not be verified yet. Check the key or retry the verification.', verified: false });
+    }
   };
 
   const isStreamingRef = useRef(isStreaming);
@@ -2900,6 +3130,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       ? 'video'
       : sendValidationError
         ? 'invalid'
+        : !providerCanAttemptRouterSend
+          ? 'invalid'
         : !input.trim() && draftAttachments.length === 0
           ? 'empty'
           : null;
@@ -2999,7 +3231,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             aria-controls='arctic-routing-panel'
             onClick={() => setRoutingPanelOpen((open) => !open)}
           >
-            Routing details
+            {routingPanelOpen ? 'Close routing details' : 'Routing details'}
           </button>
           {catalogSkewed && (
             <span
@@ -3262,7 +3494,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   );
 
   return (
-    <div className={`app-with-sidebar arctic-workbench ${messages.length === 0 && !selectedConversationId ? 'arctic-new-chat' : ''} ${chatsHidden ? 'chats-hidden' : ''}`}>
+    <div className={`app-with-sidebar arctic-workbench arctic-new-chat ${messages.length > 0 || selectedConversationId ? 'arctic-has-history' : ''} ${failedTurnDraft ? 'arctic-recovering' : ''} ${chatsHidden ? 'chats-hidden' : ''}`}>
       {!chatsHidden && (
         <ConversationSidebar
           preferenceScope={user?.id ?? null}
@@ -3275,7 +3507,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           isLoadingMore={isLoadingMoreConversations}
           loadMoreError={loadMoreConversationsError}
           loadError={conversationsError}
-          onRetry={() => void refreshConversations()}
+          onRetry={() => void refreshConversations(activeProjectId)}
           onLoadMore={() => void handleLoadMoreConversations()}
           onOpenSearch={() => {
             setIsGlobalSearchOpen(true);
@@ -3310,10 +3542,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           onSetConversationTags={handleSetConversationTags}
         />
       )}
-      {messages.length === 0 && !selectedConversationId && chatHeader}
-      <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>
+      {chatHeader}
+      <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''} ${messages.length === 0 && !providerCanAttemptRouterSend ? 'provider-setup-blocked' : ''}`}>
       <ChatBackdrop />
-      {(messages.length > 0 || selectedConversationId) && chatHeader}
       {/* Header */}
 
 
@@ -3393,18 +3624,38 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   </button>
                 ))}
               </div>
-              {!providerPlugins.isConfigured && !providerPlugins.loading && (
+              {providerPlugins.loading ? (
+                <div className='provider-setup-state' role='status'>Checking provider setup…</div>
+              ) : providerPlugins.error ? (
+                <div className='provider-setup-state error' role='alert'>
+                  <strong>Could not check provider setup.</strong>
+                  <span>Provider settings could not be loaded. Your draft remains available.</span>
+                  <button type='button' onClick={() => void providerPlugins.refresh()}>Retry provider check</button>
+                  <button type='button' onClick={() => setShowProviderSettings(true)}>Open Provider Settings</button>
+                </div>
+              ) : providerVerificationRequiresAction && !failedTurnDraft ? (
+                <div className={`provider-setup-state ${routeRecoveryApplies || providerPlugins.verificationStatus === 'invalid' || providerPlugins.verificationStatus === 'unavailable' ? 'error' : ''}`} role={providerVerificationRequiresAction ? 'alert' : 'status'}>
+                  <strong>{routeRecoveryApplies ? 'This route needs attention' : providerPlugins.verificationLoading ? 'Checking provider key' : providerPlugins.verificationStatus === 'invalid' ? 'Provider key needs attention' : providerPlugins.verificationStatus === 'unavailable' ? 'Could not verify provider key' : 'Verify your saved provider key'}</strong>
+                  <span>{routeRecoveryApplies ? 'The router rejected a previous request for this route. Verify or update its provider before retrying; other routes remain subject to router authorization.' : providerPlugins.verificationLoading ? 'A provider check is in progress. Sending is paused until it completes.' : providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'A provider rejected this saved key. Update it in Provider Settings, then verify again.' : providerPlugins.verificationStatus === 'unavailable' || providerPlugins.providers.some((provider) => provider.status === 'unavailable') ? 'Verification was unavailable. Your draft is preserved; retry the check when the provider is reachable.' : 'A recent first-run check could not confirm this key. Verify or update it before sending.'}</span>
+                  <button type='button' disabled={providerPlugins.verificationLoading} onClick={() => void handleVerifyProviders()}>{providerPlugins.verificationLoading ? 'Verifying…' : 'Verify provider keys'}</button>
+                  <button type='button' onClick={() => setShowProviderSettings(true)}>Open Provider Settings</button>
+                </div>
+              ) : !providerPlugins.isConfigured ? (
                 <FirstRunSetupCard
+                  key={user?.id ?? 'anonymous'}
                   plugins={providerPlugins}
                   onOpenSettings={() => setShowProviderSettings(true)}
                   onSaved={(message, verified) => setFirstRunOutcome({ message, verified })}
                 />
-              )}
+              ) : (
+                <>
+                  {!providerVerified && (
+                    <p className='arctic-provider-unknown-status' role='status'>{providerChecksNeedAttention ? 'One or more saved provider checks need attention. The router evaluates each route when you send.' : 'A saved key has not been checked this session. The router will authorize each send.'}</p>
+                  )}
                   <img className='arctic-hero-mark' src='/prismatix-arctic-mark.svg' alt='' />
-              <h2>What can I help you with?</h2>
-              <p>Ask anything. Prismatix chooses a suitable model automatically, or let you choose the workflow.</p>
-
-              <div className='empty-state-capabilities'>
+                  <h2>What can I help you with?</h2>
+                  <p>Ask anything. Prismatix chooses a suitable model automatically, or let you choose the workflow.</p>
+                  <div className='empty-state-capabilities'>
                 {CAPABILITY_PILLARS.map((card) => (
                   <button
                     key={card.title}
@@ -3425,7 +3676,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     <span className='capability-card-action'>{card.isUpload ? 'Choose a file →' : 'Prepare a draft →'}</span>
                   </button>
                 ))}
-              </div>
+                  </div>
+                </>
+              )}
             </div>
           )
           : (
@@ -3493,6 +3746,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   />
                 );
               })}
+              <CostEstimator
+                model={costModel}
+                usage={currentUsage}
+                isVisible={showCostEstimator && !showProviderSettings}
+                isStreaming={isStreaming}
+                totalCost={sessionCostTotal}
+                finalCostUsd={finalMessageCost}
+                routerPricingVersion={routerPricingVersion}
+                onInteractionStart={clearCostEstimatorHideTimer}
+                onInteractionEnd={() => scheduleCostEstimatorHide(3000)}
+              />
               <div ref={messagesEndRef} />
             </div>
           )}
@@ -3695,6 +3959,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         </div>
       </div>
 
+      {/* Saved chats need the same provider readiness and recovery controls as New Chat. */}
+      {messages.length > 0 && providerPlugins.loading && (
+        <div className='provider-readiness-banner' role='status'>Checking provider setup…</div>
+      )}
+      {messages.length > 0 && providerPlugins.error && (
+        <div className='provider-readiness-banner' role='alert'>
+          <span>Could not check provider setup. Sending is paused and your draft is preserved.</span>
+          <button type='button' onClick={() => void providerPlugins.refresh()}>Retry check</button>
+          <button type='button' onClick={() => setShowProviderSettings(true)}>Provider Settings</button>
+        </div>
+      )}
+      {messages.length > 0 && !providerPlugins.loading && !providerPlugins.error && !providerPlugins.isConfigured && (
+        <div className='provider-readiness-banner' role='alert'>
+          <span>Connect or enable a provider to send. Your draft is preserved.</span>
+          <button type='button' onClick={() => setShowProviderSettings(true)}>Connect a provider</button>
+        </div>
+      )}
+      {messages.length > 0 && !providerPlugins.loading && !providerPlugins.error && providerPlugins.isConfigured && !providerVerified && (
+        <div className='provider-readiness-banner' role={providerVerificationRequiresAction ? 'alert' : 'status'}>
+          <span>{routeRecoveryApplies ? 'The router recently rejected this route. Verify or update its provider before retrying it.' : providerVerificationRequiresAction ? providerPlugins.verificationLoading ? 'Provider verification is in progress. Sending is paused.' : 'A recent first-run check could not confirm this key. Verify or update it before sending.' : providerChecksNeedAttention ? 'One or more provider keys need attention. The router evaluates each route when you send.' : 'Saved provider keys have not been checked this session. The router will authorize each send.'}</span>
+          {providerVerificationRequiresAction && <button type='button' disabled={providerPlugins.verificationLoading} onClick={() => void handleVerifyProviders()}>{providerPlugins.verificationLoading ? 'Verifying…' : 'Verify provider keys'}</button>}
+          <button type='button' onClick={() => setShowProviderSettings(true)}>Provider Settings</button>
+        </div>
+      )}
+
       {/* Input Area */}
       <ChatInputComposer
         input={input}
@@ -3735,6 +4024,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         contextExcludedCount={contextExcludedCount}
         duplicateNotice={duplicateNotice}
         composerValidationView={composerValidationView}
+        providerSetupBlocked={messages.length === 0 && !providerCanAttemptRouterSend}
+        providerSetupVerifyAvailable={messages.length === 0 && Boolean(failedTurnDraft) && providerPlugins.isConfigured && !providerPlugins.loading && !providerPlugins.error && !providerVerified}
+        onVerifyProviderKeys={() => void handleVerifyProviders()}
         onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
         onOpenUrlIngestion={() => setIsUrlModalOpen(true)}
         onOpenDocComparison={() => setIsDocComparisonModalOpen(true)}
@@ -3750,16 +4042,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         dailyLimitUsd={DAILY_BUDGET_LIMIT_USD}
         onCancel={handleBudgetCancel}
         onConfirm={handleBudgetConfirmSend}
-      />
-
-      <CostEstimator
-        model={costModel}
-        usage={currentUsage}
-        isVisible={showCostEstimator && !showProviderSettings}
-        isStreaming={isStreaming}
-        totalCost={sessionCostTotal}
-        finalCostUsd={finalMessageCost}
-        routerPricingVersion={routerPricingVersion}
       />
 
       <KeyboardShortcutsModal
@@ -3889,11 +4171,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         <div className='arctic-routing-heading'>
           <span aria-hidden='true'>✦</span>
           <h2>Routing details</h2>
-          <button type='button' className='arctic-routing-close' onClick={() => setRoutingPanelOpen(false)} aria-label='Close routing details'>×</button>
+          <button type='button' className='arctic-routing-close' onClick={() => { setRoutingPanelOpen(false); routingToggleRef.current?.focus(); }} aria-label='Close routing details'>×</button>
         </div>
-        <div className={`arctic-route-status ${isStreaming ? 'running' : providerPlugins.loading ? 'checking' : providerPlugins.isConfigured ? 'ready' : 'setup'}`} role='status'>
-          <span className='arctic-status-icon' aria-hidden='true'>{isStreaming ? '◌' : providerPlugins.loading ? '…' : providerPlugins.isConfigured ? '✓' : '!'}</span>
-          <span><small>Route status</small><strong>{isStreaming ? 'Request in progress' : providerPlugins.loading ? 'Checking provider setup' : firstRunOutcome && !firstRunOutcome.verified ? 'Key saved · not verified' : !providerPlugins.isConfigured ? 'Connect a provider' : messages.length ? 'Ready for next prompt' : 'Waiting for prompt'}</strong></span>
+        <div className={`arctic-route-status ${isStreaming ? 'running' : providerPlugins.loading || providerPlugins.verificationLoading ? 'checking' : providerPlugins.error || !providerPlugins.isConfigured || providerVerificationRequiresAction || !providerVerified ? 'setup' : 'ready'}`} role='status'>
+          <span className='arctic-status-icon' aria-hidden='true'>{isStreaming ? '◌' : providerPlugins.loading || providerPlugins.verificationLoading ? '…' : providerPlugins.error || !providerPlugins.isConfigured || providerVerificationRequiresAction || !providerVerified ? '!' : '✓'}</span>
+          <span><small>Route status</small><strong>{isStreaming ? 'Request in progress' : providerPlugins.loading ? 'Checking provider setup' : providerPlugins.error ? 'Provider status unavailable' : !providerPlugins.isConfigured ? providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'Saved key rejected' : 'Connect a provider' : routeRecoveryApplies ? 'This route needs verification' : providerVerificationRequiresAction ? providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'Saved key rejected' : providerPlugins.verificationStatus === 'unavailable' || providerPlugins.providers.some((provider) => provider.status === 'unavailable') ? 'Verification unavailable' : 'Verification required' : providerChecksNeedAttention ? 'A provider key needs attention' : !providerVerified ? 'Key saved · not checked this session' : 'Provider verified · route ready'}</strong></span>
         </div>
         <section className='arctic-route-field'>
           <h3>Selected model</h3>
@@ -3912,9 +4194,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 : `Debate is enabled with the ${debateSelection} profile.`
               : manualModelOverride
             ? `You selected ${getCatalogEntry(manualModelOverride).shortName} manually.`
-            : providerPlugins.isConfigured
+              : providerPlugins.isConfigured && providerVerified
               ? 'Prismatix selects a model after you enter a request, based on task complexity, available providers, and attachments.'
-              : 'Connect an AI provider before sending a request.'}</p>
+                : providerPlugins.isConfigured
+                  ? routeRecoveryApplies
+                    ? 'The router rejected this route recently. Verify or update its provider before retrying it.'
+                    : providerVerificationRequiresAction
+                      ? 'Verify the saved provider key before sending this first-run request.'
+                      : providerChecksNeedAttention
+                        ? 'Some saved provider checks need attention. The router determines which provider can handle each request.'
+                        : 'The saved key has not been checked this session. The router authorizes each request.'
+                  : 'Connect an AI provider before sending a request.'}</p>
         </section>
         <section className='arctic-route-field'>
           <h3>Estimated cost</h3>

@@ -33,6 +33,12 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
 
     try {
       const validation = await plugins.validateKey('openrouter', apiKey.trim());
+      if (validation.stale) {
+        setStatusMessage(null);
+        setStatusTone(null);
+        setErrorMessage('The signed-in account changed while this key was being checked. The key was not saved; retry the check for the current account.');
+        return;
+      }
       if (validation.status === 'invalid_revoked') {
         setStatusMessage(null);
         setStatusTone(null);
@@ -42,7 +48,7 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
       }
       const verified = validation.status === 'enabled';
 
-      const saved = await plugins.setKey('openrouter', apiKey.trim());
+      const saved = await plugins.setKey('openrouter', apiKey.trim(), validation);
       if (saved) {
         const message = verified
           ? 'Key saved and verified. You are ready to chat.'

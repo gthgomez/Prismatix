@@ -37,6 +37,12 @@ const providerPlugins = vi.hoisted(() => ({
   providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }],
   defaultProvider: 'openrouter',
   enabledProviders: new Set(['openrouter']),
+  isConfigured: true,
+  isVerified: true,
+  verificationStatus: 'verified',
+  verificationLoading: false,
+  verifyEnabledProviders: vi.fn(async () => true),
+  invalidateVerification: vi.fn(),
   loading: false,
   error: null,
   refresh: vi.fn(async () => {}),
@@ -60,6 +66,12 @@ const TEST_USER = {
   user_metadata: {},
 } as User;
 
+const OTHER_TEST_USER = {
+  id: 'user-5555-6666-7777-888888888888',
+  email: 'other@example.com',
+  user_metadata: {},
+} as User;
+
 function renderInto(container: HTMLElement, ui: ReactNode): Root {
   const root = createRoot(container);
   act(() => {
@@ -70,6 +82,16 @@ function renderInto(container: HTMLElement, ui: ReactNode): Root {
 
 function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 30));
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function openStream() {
@@ -140,6 +162,119 @@ describe('ChatInterface message memo', () => {
     host.remove();
     root = null;
     vi.clearAllMocks();
+  });
+
+  it('discards a late successful response from the prior account without clearing the new account stream', async () => {
+    const priorRequest = deferred<ReturnType<typeof routeResult>>();
+    const currentRequest = deferred<ReturnType<typeof routeResult>>();
+    const currentStream = openStream();
+    (askPrismatix as unknown as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(priorRequest.promise)
+      .mockReturnValueOnce(currentRequest.promise);
+    root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);
+    await act(async () => { await flushPromises(); });
+
+    const setComposer = (value: string) => {
+      const input = host.querySelector<HTMLTextAreaElement>('textarea')!;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      act(() => {
+        setter.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+    const send = async () => act(async () => {
+      host.querySelector<HTMLButtonElement>('.send-button')!.click();
+      await flushPromises();
+      await flushPromises();
+    });
+
+    setComposer('Prior account private prompt');
+    await send();
+    expect(askPrismatix).toHaveBeenCalledTimes(1);
+    act(() => root!.render(<ChatInterface user={OTHER_TEST_USER} onSignOut={async () => {}} />));
+    await act(async () => { await flushPromises(); });
+    expect(host.querySelectorAll('.message-user')).toHaveLength(0);
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('');
+
+    setComposer('Current account prompt');
+    await send();
+    expect(askPrismatix).toHaveBeenCalledTimes(2);
+    expect(host.querySelector('.stop-button')).not.toBeNull();
+
+    await act(async () => {
+      priorRequest.resolve(routeResult(openStream().stream));
+      await flushPromises();
+    });
+    expect(host.querySelector('.stop-button')).not.toBeNull();
+    expect(host.querySelector('.draft-recovery-bar')).toBeNull();
+    expect(host.textContent).not.toContain('Prior account private prompt');
+    expect(host.querySelectorAll('.message-assistant')).toHaveLength(0);
+
+    await act(async () => {
+      currentRequest.resolve(routeResult(currentStream.stream));
+      await flushPromises();
+      await flushPromises();
+    });
+    await act(async () => {
+      currentStream.push('Current account response');
+      currentStream.finish();
+      await flushPromises();
+    });
+    expect(host.querySelector('.message-assistant')?.textContent).toContain('Current account response');
+    expect(host.textContent).not.toContain('Prior account private prompt');
+  });
+
+  it('discards a late prior-account router rejection without exposing its recovery draft', async () => {
+    const priorRequest = deferred<ReturnType<typeof routeResult>>();
+    const currentRequest = deferred<ReturnType<typeof routeResult>>();
+    const currentStream = openStream();
+    (askPrismatix as unknown as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(priorRequest.promise)
+      .mockReturnValueOnce(currentRequest.promise);
+    root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);
+    await act(async () => { await flushPromises(); });
+
+    const setComposer = (value: string) => {
+      const input = host.querySelector<HTMLTextAreaElement>('textarea')!;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      act(() => {
+        setter.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+    const send = async () => act(async () => {
+      host.querySelector<HTMLButtonElement>('.send-button')!.click();
+      await flushPromises();
+      await flushPromises();
+    });
+
+    setComposer('Prior account private prompt');
+    await send();
+    act(() => root!.render(<ChatInterface user={OTHER_TEST_USER} onSignOut={async () => {}} />));
+    await act(async () => { await flushPromises(); });
+    setComposer('Current account prompt');
+    await send();
+    expect(host.querySelector('.stop-button')).not.toBeNull();
+
+    await act(async () => {
+      priorRequest.reject(new Error('prior account router failure'));
+      await flushPromises();
+    });
+    expect(host.querySelector('.stop-button')).not.toBeNull();
+    expect(host.querySelector('.draft-recovery-bar')).toBeNull();
+    expect(host.textContent).not.toContain('Prior account private prompt');
+
+    await act(async () => {
+      currentRequest.resolve(routeResult(currentStream.stream));
+      await flushPromises();
+      await flushPromises();
+    });
+    await act(async () => {
+      currentStream.push('Current account response');
+      currentStream.finish();
+      await flushPromises();
+    });
+    expect(host.querySelector('.message-assistant')?.textContent).toContain('Current account response');
   });
 
   it('keeps earlier messages mounted while the streaming message updates', async () => {
