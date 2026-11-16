@@ -23,6 +23,8 @@ interface CostEstimatorProps {
   finalCostUsd: number | null;
   /** Pricing version from the router / stream headers when available. */
   routerPricingVersion?: string | null;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
 }
 
 export const CostEstimator: React.FC<CostEstimatorProps> = ({
@@ -33,6 +35,8 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   totalCost,
   finalCostUsd,
   routerPricingVersion,
+  onInteractionStart,
+  onInteractionEnd,
 }) => {
   const [detailsOpen, setDetailsOpen] = useState(readDetailsExpanded);
 
@@ -84,6 +88,13 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
     <div
       className={`cost-estimator ${isStreaming ? 'streaming' : 'final'}`}
       aria-live='polite'
+      onFocusCapture={onInteractionStart}
+      onBlurCapture={(event) => {
+        const nextTarget = event.relatedTarget;
+        if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+          onInteractionEnd?.();
+        }
+      }}
     >
       <div className='cost-estimator-title'>
         {isStreaming ? 'This message' : serverFinalApplied ? 'Settled total' : 'Estimated total'}

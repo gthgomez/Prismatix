@@ -689,7 +689,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // Scroll only when a new message bubble is created, and only if user is near bottom.
   useEffect(() => {
     if (messages.length === 0) return;
-    if (!shouldStickToBottomRef.current) return;
+    if (!shouldStickToBottomRef.current && !isStreaming) return;
+    if (isStreaming) {
+      messagesEndRef.current?.scrollIntoView?.({ behavior: 'auto', block: 'end' });
+      return;
+    }
     const lastMessage = messageRefs.current[messages.length - 1];
     if (lastMessage) {
       if (typeof lastMessage.scrollIntoView === 'function') {
@@ -698,7 +702,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return;
     }
     messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' });
-  }, [messages.length]);
+  }, [messages.length, isStreaming, shouldStickToBottomRef]);
+
+  // The responsive cost summary participates in message flow. When it first
+  // appears, keep the transcript pinned to its end so the summary and its
+  // Details control are not clipped beneath the fixed composer while a stream
+  // is in flight.
+  useLayoutEffect(() => {
+    if (!showCostEstimator || !shouldStickToBottomRef.current) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+  }, [showCostEstimator, messages.length, shouldStickToBottomRef]);
 
   // Keep attachment preview visible when user is already at bottom.
   useEffect(() => {
@@ -905,6 +918,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const scheduleCostEstimatorHide = (delayMs = 3000) => {
     clearCostEstimatorHideTimer();
     costEstimatorHideTimeoutRef.current = window.setTimeout(() => {
+      const focusedElement = document.activeElement;
+      const focusedEstimator = document.querySelector('.cost-estimator');
+      if (focusedElement instanceof Node && focusedEstimator?.contains(focusedElement)) {
+        costEstimatorHideTimeoutRef.current = null;
+        return;
+      }
       setShowCostEstimator(false);
       setCurrentUsage(null);
       setFinalMessageCost(null);
@@ -3727,6 +3746,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   />
                 );
               })}
+              <CostEstimator
+                model={costModel}
+                usage={currentUsage}
+                isVisible={showCostEstimator && !showProviderSettings}
+                isStreaming={isStreaming}
+                totalCost={sessionCostTotal}
+                finalCostUsd={finalMessageCost}
+                routerPricingVersion={routerPricingVersion}
+                onInteractionStart={clearCostEstimatorHideTimer}
+                onInteractionEnd={() => scheduleCostEstimatorHide(3000)}
+              />
               <div ref={messagesEndRef} />
             </div>
           )}
@@ -4012,16 +4042,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         dailyLimitUsd={DAILY_BUDGET_LIMIT_USD}
         onCancel={handleBudgetCancel}
         onConfirm={handleBudgetConfirmSend}
-      />
-
-      <CostEstimator
-        model={costModel}
-        usage={currentUsage}
-        isVisible={showCostEstimator && !showProviderSettings}
-        isStreaming={isStreaming}
-        totalCost={sessionCostTotal}
-        finalCostUsd={finalMessageCost}
-        routerPricingVersion={routerPricingVersion}
       />
 
       <KeyboardShortcutsModal

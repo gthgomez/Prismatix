@@ -35,6 +35,143 @@ test('Arctic shell persists through send and history; saved-chat layout has no h
   expect(count).toBe(1);
 });
 
+for (const viewport of [
+  { name: 'compact desktop', width: 1024, height: 600 },
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'narrow mobile', width: 320, height: 844 },
+]) {
+  test(`settled cost Details stay reachable without covering composer at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+
+    let signalRouterStarted!: () => void;
+    let releaseRouterResponse!: () => void;
+    const routerStarted = new Promise<void>((resolve) => { signalRouterStarted = resolve; });
+    const routerResponseReleased = new Promise<void>((resolve) => { releaseRouterResponse = resolve; });
+    await page.route('**/functions/v1/router*', async (route) => {
+      signalRouterStarted();
+      await routerResponseReleased;
+      await route.fulfill(successfulStream('Settled local reply with synthetic receipt', `cost-layout-${viewport.width}`));
+    });
+
+    const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
+    await mkdir(evidenceDir, { recursive: true });
+    const suffix = `${viewport.width}x${viewport.height}`;
+    await signInAsMockUser(page);
+    const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+    await composer.fill('Check that the cost panel stays clear of the composer');
+    await composer.press('Enter');
+    await routerStarted;
+
+    const estimator = page.locator('.cost-estimator');
+    await expect(estimator).toHaveClass(/streaming/);
+    await page.screenshot({ path: `${evidenceDir}/cost-streaming-${suffix}.png`, animations: 'disabled' });
+    const checkComposerHitTargets = async () => page.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>('.cost-estimator');
+      const composerContainer = document.querySelector<HTMLElement>('.chat-input-container');
+      const controls = [...document.querySelectorAll<HTMLElement>(
+        '.chat-input-container .chat-input:not(:disabled), .chat-input-container .file-upload-button:not(:disabled), .chat-input-container .send-button:not(:disabled), .chat-input-container .stop-button:not(:disabled)',
+      )].filter((element) => {
+        const box = element.getBoundingClientRect();
+        return getComputedStyle(element).display !== 'none' && box.width > 0 && box.height > 0
+          && box.left >= 0 && box.right <= window.innerWidth && box.top >= 0 && box.bottom <= window.innerHeight;
+      });
+      if (!panel || !composerContainer) return { panelVisible: false, composerOverlap: true, detailsVisible: false, overlaps: [] as string[], blocked: [] as string[] };
+      const panelBox = panel.getBoundingClientRect();
+      const composerBox = composerContainer.getBoundingClientRect();
+      const messageViewport = panel.closest('.chat-messages')?.getBoundingClientRect();
+      const visiblePanelBox = messageViewport ? {
+        left: Math.max(0, panelBox.left, messageViewport.left),
+        right: Math.min(window.innerWidth, panelBox.right, messageViewport.right),
+        top: Math.max(0, panelBox.top, messageViewport.top),
+        bottom: Math.min(window.innerHeight, panelBox.bottom, messageViewport.bottom),
+      } : null;
+      const composerViewportFit = composerBox.top >= 0 && composerBox.bottom <= window.innerHeight;
+      const detailsButton = panel.querySelector<HTMLElement>('.cost-estimator-details-toggle');
+      const detailsBox = detailsButton?.getBoundingClientRect();
+      const detailsVisible = Boolean(detailsBox && visiblePanelBox && detailsBox.top >= visiblePanelBox.top
+        && detailsBox.bottom <= visiblePanelBox.bottom && detailsBox.left >= visiblePanelBox.left
+        && detailsBox.right <= visiblePanelBox.right);
+      const overlaps: string[] = [];
+      const blocked: string[] = [];
+      for (const control of controls) {
+        const box = control.getBoundingClientRect();
+        if (visiblePanelBox && box.left < visiblePanelBox.right && box.right > visiblePanelBox.left
+          && box.top < visiblePanelBox.bottom && box.bottom > visiblePanelBox.top) {
+          overlaps.push(control.getAttribute('aria-label') || control.className.toString());
+        }
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        if (hit !== control && !control.contains(hit)) blocked.push(control.getAttribute('aria-label') || control.className.toString());
+      }
+      const result = {
+        panelVisible: panelBox.width > 0 && panelBox.height > 0,
+        composerOverlap: Boolean(visiblePanelBox && visiblePanelBox.left < composerBox.right && visiblePanelBox.right > composerBox.left
+          && visiblePanelBox.top < composerBox.bottom && visiblePanelBox.bottom > composerBox.top),
+        composerViewportFit,
+        detailsVisible,
+        overlaps,
+        blocked,
+      };
+      return result;
+    });
+    const details = estimator.locator('.cost-estimator-details-toggle');
+    await details.scrollIntoViewIfNeeded();
+    await expect(details).toBeVisible();
+    const detailHitTarget = await details.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return hit === element || element.contains(hit);
+    });
+    expect(detailHitTarget).toBe(true);
+    const streamingHitTargets = await checkComposerHitTargets();
+    const detailsBox = await details.boundingBox();
+    if (!detailsBox) throw new Error('Cost Details control has no rendered hit area after scrolling into view');
+    await page.mouse.click(detailsBox.x + detailsBox.width / 2, detailsBox.y + detailsBox.height / 2);
+    await expect(details).toHaveAttribute('aria-expanded', 'true');
+    await details.focus();
+    await page.keyboard.press('Enter');
+    await expect(details).toHaveAttribute('aria-expanded', 'false');
+    await page.keyboard.press('Enter');
+    await expect(details).toHaveAttribute('aria-expanded', 'true');
+    await page.screenshot({ path: `${evidenceDir}/cost-streaming-details-expanded-${suffix}.png`, animations: 'disabled' });
+
+    releaseRouterResponse();
+    await expect(page.getByText('Settled local reply with synthetic receipt')).toBeVisible();
+    await expect(estimator).toHaveClass(/final/);
+    await expect(estimator).toContainText('Settled total');
+    await expect(estimator).toContainText('$0.0001');
+    await expect(details).toHaveAttribute('aria-expanded', 'true');
+    await details.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${evidenceDir}/cost-settled-details-expanded-${suffix}.png`, animations: 'disabled' });
+    const settledHitTargets = await checkComposerHitTargets();
+
+    await page.waitForTimeout(3200);
+    const remainsVisibleDuringKeyboardInteraction = await estimator.isVisible();
+    const retainsDetailsFocus = await details.evaluate((element) => document.activeElement === element).catch(() => false);
+    expect({ streamingHitTargets, settledHitTargets, remainsVisibleDuringKeyboardInteraction, retainsDetailsFocus }).toEqual({
+      streamingHitTargets: { panelVisible: true, composerOverlap: false, composerViewportFit: true, detailsVisible: true, overlaps: [], blocked: [] },
+      settledHitTargets: { panelVisible: true, composerOverlap: false, composerViewportFit: true, detailsVisible: true, overlaps: [], blocked: [] },
+      remainsVisibleDuringKeyboardInteraction: true,
+      retainsDetailsFocus: true,
+    });
+    await expect(estimator).toBeVisible();
+    await expect(details).toBeFocused();
+    await expect(details).toHaveAttribute('aria-expanded', 'true');
+    await details.press('Enter');
+    await expect(details).toHaveAttribute('aria-expanded', 'false');
+    await page.screenshot({ path: `${evidenceDir}/cost-settled-collapsed-${suffix}.png`, animations: 'disabled' });
+    await details.press('Enter');
+    await expect(details).toHaveAttribute('aria-expanded', 'true');
+    await expect(details).toBeFocused();
+
+    await composer.fill('Draft for the next local send');
+    await composer.focus();
+    await expect(estimator).toBeVisible();
+    await expect(estimator).toBeHidden({ timeout: 4000 });
+  });
+}
+
 for (const code of ['provider_key_required', 'provider_key_unavailable']) {
   test(`early ${code} response preserves draft without adding a fake chat turn`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 600 });
