@@ -710,7 +710,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // is in flight.
   useLayoutEffect(() => {
     if (!showCostEstimator || !shouldStickToBottomRef.current) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    messagesEndRef.current?.scrollIntoView?.({ behavior: 'auto', block: 'end' });
   }, [showCostEstimator, messages.length, shouldStickToBottomRef]);
 
   // Keep attachment preview visible when user is already at bottom.
