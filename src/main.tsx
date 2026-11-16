@@ -6,6 +6,14 @@ import App from './App';
 import './styles/mobile.css';
 import { registerServiceWorker } from './services/pwaService';
 
+try {
+  // Clear the bounded recovery marker only after this release's entry bundle
+  // has loaded successfully.
+  window.sessionStorage.removeItem('prismatix-startup-update-attempted');
+} catch {
+  // Storage may be unavailable in private browsing; startup remains usable.
+}
+
 registerServiceWorker();
 
 function isPublicResumeRoute(): boolean {
