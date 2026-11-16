@@ -115,15 +115,17 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   const assertAccountControlFits = async () => {
     await expect.poll(() => page.evaluate(() => {
       const header = document.querySelector<HTMLElement>('.chat-header')!;
+      const messages = document.querySelector<HTMLElement>('.chat-messages')!;
       const account = document.querySelector<HTMLElement>('.user-button')!;
       const headerBox = header.getBoundingClientRect();
       const accountBox = account.getBoundingClientRect();
       const hit = document.elementFromPoint(accountBox.left + accountBox.width / 2, accountBox.top + accountBox.height / 2);
       return headerBox.left >= -1 && headerBox.right <= window.innerWidth + 1
         && header.scrollWidth <= header.clientWidth + 1
+        && headerBox.bottom <= messages.getBoundingClientRect().top + 1
         && accountBox.left >= -1 && accountBox.right <= window.innerWidth + 1
-        && (hit === account || account.contains(hit));
-    })).toBe(true);
+        && (hit === account || account.contains(hit)) ? 'ok' : JSON.stringify({headerBox: {left: headerBox.left, right: headerBox.right, top: headerBox.top, bottom: headerBox.bottom, clientHeight: header.clientHeight, scrollHeight: header.scrollHeight}, messagesTop: messages.getBoundingClientRect().top, accountBox: {left: accountBox.left, right: accountBox.right}, hit: (hit as HTMLElement | null)?.className});
+    })).toBe('ok');
     const accountMenu = page.getByRole('button', { name: 'Account menu' });
     await accountMenu.click();
     await expect(page.locator('.user-dropdown')).toBeVisible();

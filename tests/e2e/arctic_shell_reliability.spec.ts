@@ -56,9 +56,8 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
     await expect(composer).toHaveValue('Keep this exact draft');
     await expect(page.locator('.messages-list .message')).toHaveCount(0);
     await expect(page.locator('.arctic-workbench')).toHaveClass(/arctic-new-chat/);
-    await expect(page.locator('.first-run-status')).toContainText('router could not use this saved key');
-    await expect(page.locator('.first-run-status')).not.toContainText('ready to chat');
-    await expect(page.locator('.first-run-status')).not.toContainText(/revoked|rejected|invalid/i);
+    await expect(page.locator('.draft-recovery-text')).not.toContainText('ready to chat');
+    await expect(page.locator('.draft-recovery-text')).not.toContainText(/revoked|rejected|invalid/i);
     await expect(page.locator('.cost-estimator')).toBeHidden();
 
     const recovery = page.locator('.draft-recovery-bar');
@@ -67,7 +66,9 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
     const accountMenu = page.getByRole('button', { name: 'Account menu' });
     const layout = await page.evaluate(() => {
       const header = document.querySelector<HTMLElement>('.chat-header')!;
+      const messages = document.querySelector<HTMLElement>('.chat-messages')!;
       const avatar = document.querySelector<HTMLElement>('.user-button')!;
+      const verify = document.querySelector<HTMLElement>('.provider-setup-composer-status button')!;
       const recovery = document.querySelector<HTMLElement>('.draft-recovery-bar')!;
       const text = recovery.querySelector<HTMLElement>('.draft-recovery-text')!;
       const actions = recovery.querySelector<HTMLElement>('.draft-recovery-actions')!;
@@ -77,8 +78,27 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
       };
       return {
         viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
         header: rect(header),
+        headerFits: header.scrollWidth <= header.clientWidth + 1 && header.scrollHeight <= header.clientHeight + 1,
+        headerControlsFit: [...header.querySelectorAll<HTMLElement>('button')].filter((button) => getComputedStyle(button).display !== 'none').every((button) => {
+          const box = button.getBoundingClientRect();
+          if (box.width === 0 || box.height === 0) return true;
+          const container = header.getBoundingClientRect();
+          return box.left >= container.left - 1 && box.right <= container.right + 1 && box.top >= container.top - 1 && box.bottom <= container.bottom + 1;
+        }),
+        headerControlRects: [...header.querySelectorAll<HTMLElement>('button')].filter((button) => getComputedStyle(button).display !== 'none').map((button) => {
+          const box = button.getBoundingClientRect();
+          return { name: button.getAttribute('aria-label') || button.textContent?.trim(), top: box.top, bottom: box.bottom, left: box.left, right: box.right, height: box.height };
+        }),
+        headerBeforeTranscript: header.getBoundingClientRect().bottom <= messages.getBoundingClientRect().top + 1,
         account: rect(avatar),
+        verify: rect(verify),
+        verifyHit: (() => {
+          const box = verify.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+          return box.top >= 0 && box.bottom <= window.innerHeight && (hit === verify || verify.contains(hit));
+        })(),
         recovery: rect(recovery),
         recoveryText: rect(text),
         recoveryActions: rect(actions),
@@ -93,10 +113,17 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
     });
     expect(layout.header.left).toBeGreaterThanOrEqual(0);
     expect(layout.header.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    expect(layout.headerFits).toBe(true);
+    expect(layout.headerControlsFit, JSON.stringify(layout)).toBe(true);
+    expect(layout.headerBeforeTranscript).toBe(true);
     expect(layout.account.left).toBeGreaterThanOrEqual(0);
     expect(layout.account.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
     expect(layout.recoveryOverlaps).toBe(false);
     expect(layout.textFits).toBe(true);
+    await expect(page.getByRole('button', { name: 'Verify provider keys', exact: true })).toBeVisible();
+    expect(layout.verify.top).toBeGreaterThanOrEqual(0);
+    expect(layout.verify.bottom).toBeLessThanOrEqual(layout.viewportHeight + 1);
+    expect(layout.verifyHit).toBe(true);
     await expect(recoveryText).toContainText(code === 'provider_key_required' ? 'No usable provider credential' : 'could not be retrieved');
     await expect(recoveryActions.getByRole('button', { name: 'Restore draft' })).toBeVisible();
     await expect(recoveryActions.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();

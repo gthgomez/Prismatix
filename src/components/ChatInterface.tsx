@@ -3509,7 +3509,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   onOpenSettings={() => setShowProviderSettings(true)}
                   onSaved={(message, verified) => setFirstRunOutcome({ message, verified })}
                 />
-              ) : !providerVerified ? (
+              ) : !providerVerified && !failedTurnDraft ? (
                 <div className={`provider-setup-state ${providerPlugins.verificationStatus === 'unverified' || providerPlugins.verificationStatus === 'verified' ? '' : 'error'}`} role={providerPlugins.verificationStatus === 'invalid' || providerPlugins.verificationStatus === 'unavailable' ? 'alert' : 'status'}>
                   <strong>{providerPlugins.verificationStatus === 'invalid' ? 'Provider key needs attention' : providerPlugins.verificationStatus === 'unavailable' ? 'Could not verify provider key' : 'Verify your saved provider key'}</strong>
                   <span>{providerPlugins.verificationStatus === 'unverified' || providerPlugins.verificationStatus === 'verified' ? 'A saved key is not verified until its provider accepts it.' : providerPlugins.verificationStatus === 'invalid' ? 'The provider rejected a saved key. Update it in Provider Settings, then verify again.' : 'Verification is temporarily unavailable. Your draft is preserved; retry when the provider is reachable.'}</span>
@@ -3880,6 +3880,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         duplicateNotice={duplicateNotice}
         composerValidationView={composerValidationView}
         providerSetupBlocked={messages.length === 0 && (providerPlugins.loading || Boolean(providerPlugins.error) || !providerPlugins.isConfigured || !providerVerified || enabledProviders.size === 0)}
+        providerSetupVerifyAvailable={messages.length === 0 && Boolean(failedTurnDraft) && providerPlugins.isConfigured && !providerPlugins.loading && !providerPlugins.error && !providerVerified}
+        onVerifyProviderKeys={() => void handleVerifyProviders()}
         onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
         onOpenUrlIngestion={() => setIsUrlModalOpen(true)}
         onOpenDocComparison={() => setIsDocComparisonModalOpen(true)}

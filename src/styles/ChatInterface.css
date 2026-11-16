@@ -4719,7 +4719,10 @@
 .arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-accordion .arctic-route-check { color: var(--color-text, #fff); }
 
 @media (max-width: 1200px) {
-  .arctic-new-chat.app-with-sidebar { grid-template-columns: minmax(200px, 23vw) minmax(0, 1fr); }
+  .arctic-new-chat.app-with-sidebar {
+    grid-template-columns: minmax(200px, 23vw) minmax(0, 1fr);
+    grid-template-rows: max-content minmax(0, 1fr);
+  }
   .arctic-new-chat > .chat-container { grid-column: 2; }
   .arctic-new-chat .chat-header { grid-column: 2 / 3; width: 100%; }
   .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .chat-header {
@@ -5730,6 +5733,11 @@
   cursor: pointer;
 }
 .provider-setup-composer-status button:focus-visible { outline: 2px solid #1570ef; outline-offset: 2px; }
+.provider-setup-composer-status .provider-setup-settings-button {
+  min-height: 34px;
+  padding: 0.3rem 0.6rem;
+  background: #f7faff;
+}
 .chat-container.provider-setup-blocked .provider-setup-state {
   display: flex;
   flex-direction: column;
@@ -5800,6 +5808,9 @@
   overscroll-behavior: contain;
 }
 .chat-container.is-empty.provider-setup-blocked .chat-messages:has(.provider-setup-state) .provider-setup-state { margin-top: 0.25rem; }
+.arctic-new-chat.arctic-recovering .chat-container.is-empty.provider-setup-blocked .provider-setup-state { display: none; }
+.arctic-new-chat.arctic-recovering .chat-container.is-empty .first-run-status,
+.arctic-new-chat.arctic-recovering .chat-container.is-empty .empty-state { display: none; }
 .chat-container.provider-setup-blocked .send-validation-error { display: none !important; }
 
 /* Saved chats keep an explicit routing disclosure even on wide layouts. */
