@@ -351,6 +351,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [showCostEstimator, setShowCostEstimator] = useState(false);
   const costEstimatorPanelRef = useRef<HTMLDivElement>(null);
   const costEstimatorDetailsButtonRef = useRef<HTMLButtonElement>(null);
+  const [compactCostReveal, setCompactCostReveal] = useState<{ viewportHeight: number; request: number } | null>(null);
+  const compactCostRevealRequestRef = useRef(0);
   const [finalMessageCost, setFinalMessageCost] = useState<number | null>(null);
   const [routerPricingVersion, setRouterPricingVersion] = useState<string | undefined>(undefined);
   const [debateSelection, setDebateSelection] = useState<DebateSelection>('off');
@@ -714,6 +716,42 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (!showCostEstimator || !shouldStickToBottomRef.current) return;
     messagesEndRef.current?.scrollIntoView?.({ behavior: 'auto', block: 'end' });
   }, [showCostEstimator, messages.length, shouldStickToBottomRef]);
+
+  useEffect(() => {
+    if (!showCostEstimator || showProviderSettings) setCompactCostReveal(null);
+  }, [showCostEstimator, showProviderSettings]);
+
+  useEffect(() => {
+    if (compactCostReveal?.request === undefined) return;
+    const messageViewport = costEstimatorPanelRef.current?.closest<HTMLElement>('.chat-messages');
+    if (!messageViewport || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      const viewportHeight = Math.max(0, messageViewport.clientHeight - 4);
+      setCompactCostReveal((current) => current && current.viewportHeight !== viewportHeight
+        ? { ...current, viewportHeight }
+        : current);
+    });
+    observer.observe(messageViewport);
+    return () => observer.disconnect();
+  }, [compactCostReveal?.request]);
+
+  useLayoutEffect(() => {
+    if (compactCostReveal?.request === undefined) return;
+    const panel = costEstimatorPanelRef.current;
+    const detailsButton = costEstimatorDetailsButtonRef.current;
+    const messageViewport = panel?.closest<HTMLElement>('.chat-messages');
+    if (!panel || !detailsButton || !messageViewport) return;
+
+    const panelTopOffset = panel.getBoundingClientRect().top - messageViewport.getBoundingClientRect().top;
+    messageViewport.scrollTop = Math.max(0, messageViewport.scrollTop + panelTopOffset);
+
+    const panelRect = panel.getBoundingClientRect();
+    const buttonRect = detailsButton.getBoundingClientRect();
+    const buttonOverflow = Math.max(0, buttonRect.bottom - panelRect.bottom)
+      - Math.max(0, panelRect.top - buttonRect.top);
+    panel.scrollTop = Math.max(0, panel.scrollTop + buttonOverflow);
+    detailsButton.focus({ preventScroll: true });
+  }, [compactCostReveal?.request]);
 
   // Keep attachment preview visible when user is already at bottom.
   useEffect(() => {
@@ -3232,15 +3270,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               aria-label='View cost details'
               onClick={() => {
                 const panel = costEstimatorPanelRef.current;
-                const detailsButton = costEstimatorDetailsButtonRef.current;
-                if (!panel || !detailsButton) return;
-                const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+                if (!panel || !costEstimatorDetailsButtonRef.current) return;
                 const messageViewport = panel.closest<HTMLElement>('.chat-messages');
-                if (messageViewport) {
-                  const offset = panel.getBoundingClientRect().top - messageViewport.getBoundingClientRect().top;
-                  messageViewport.scrollBy({ top: offset, behavior });
-                }
-                detailsButton.focus({ preventScroll: true });
+                if (!messageViewport) return;
+                compactCostRevealRequestRef.current += 1;
+                setCompactCostReveal({
+                  viewportHeight: Math.max(0, messageViewport.clientHeight - 4),
+                  request: compactCostRevealRequestRef.current,
+                });
               }}
             >
               Cost details
@@ -3781,6 +3818,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 onInteractionEnd={() => scheduleCostEstimatorHide(3000)}
                 panelRef={costEstimatorPanelRef}
                 detailsButtonRef={costEstimatorDetailsButtonRef}
+                compactViewportHeight={compactCostReveal?.viewportHeight ?? null}
               />
               <div ref={messagesEndRef} />
             </div>

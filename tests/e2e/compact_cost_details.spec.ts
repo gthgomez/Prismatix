@@ -2,12 +2,12 @@ import { expect, test } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
-const response = (id: string) => ({
+const response = (id: string, reply = 'Synthetic compact-chat reply.') => ({
   status: 200,
   headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': id },
   body: [
     { type: 'meta', model: 'gemini-3.8-flash', cost: { finalUsd: 0.0001 } },
-    { type: 'content_block_delta', delta: { text: 'Synthetic compact-chat reply.' } },
+    { type: 'content_block_delta', delta: { text: reply } },
     { type: 'receipt', executionId: id, status: 'completed', settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
   ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
 });
@@ -67,13 +67,34 @@ for (const viewport of cases) {
     await shortcut.click();
     const details = page.getByRole('button', { name: 'Details', exact: true });
     await expect(details).toBeFocused();
-    await expect(details).toBeInViewport();
-    await expect(panel.locator('.cost-estimator-title')).toBeInViewport();
-    await expect(panel.locator('.cost-estimator-row').first()).toBeInViewport();
+    const detailsHit = await details.evaluate((element) => {
+      const clip = element.closest('.chat-messages');
+      const target = element.getBoundingClientRect();
+      const viewport = clip?.getBoundingClientRect();
+      const hit = document.elementFromPoint(target.left + target.width / 2, target.top + target.height / 2);
+      return {
+        fullyInsideTranscript: !!viewport && target.top >= viewport.top && target.bottom <= viewport.bottom,
+        receivesPointer: hit === element || element.contains(hit),
+        panelCanScroll: element.closest('.cost-estimator')!.scrollHeight > element.closest('.cost-estimator')!.clientHeight,
+        rect: { top: target.top, bottom: target.bottom },
+        clip: viewport && { top: viewport.top, bottom: viewport.bottom },
+        hitClass: (hit as HTMLElement | null)?.className,
+      };
+    });
+    console.log(`Details hit geometry ${viewport.width}x${viewport.height}: ${JSON.stringify(detailsHit)}`);
+    expect(detailsHit.fullyInsideTranscript, `Details must be fully within transcript clip: ${JSON.stringify(detailsHit)}`).toBe(true);
+    expect(detailsHit.receivesPointer, `Details center must hit its real button: ${JSON.stringify(detailsHit)}`).toBe(true);
+    if (viewport.width === 1024) expect(detailsHit.panelCanScroll, 'all cost content must remain scrollable inside the short transcript').toBe(true);
+    await page.screenshot({ path: `${dir}/after-details-revealed-${viewport.width}x${viewport.height}.png`, animations: 'disabled' });
+    await panel.evaluate((element) => { element.scrollTop = 0; });
+    for (const selector of ['.cost-estimator-title', '.cost-estimator-row', '.cost-estimator-total', '.cost-estimator-session']) {
+      await expect(panel.locator(selector).first()).toBeInViewport();
+    }
+    await page.screenshot({ path: `${dir}/after-cost-summary-readable-${viewport.width}x${viewport.height}.png`, animations: 'disabled' });
+    await shortcut.click();
     const detailsBox = await details.boundingBox();
     const composerAfterScrollBox = await composer.boundingBox();
     expect(detailsBox && composerAfterScrollBox && detailsBox.y + detailsBox.height <= composerAfterScrollBox.y).toBe(true);
-    await page.screenshot({ path: `${dir}/after-details-revealed-${viewport.width}x${viewport.height}.png`, animations: 'disabled' });
     await details.click();
     await expect(page.getByRole('button', { name: 'Hide details' })).toHaveAttribute('aria-expanded', 'true');
     await page.screenshot({ path: `${dir}/after-details-open-${viewport.width}x${viewport.height}.png`, animations: 'disabled' });
@@ -122,3 +143,48 @@ test('wide chat retains the unmodified cost panel and has no compact shortcut', 
   await expect(page.locator('.cost-estimator-details-toggle')).toBeVisible();
   await page.screenshot({ path: `${dir}/after-settled-1440x900.png`, animations: 'disabled' });
 });
+
+for (const viewport of [{ width: 1024, height: 768 }, { width: 1280, height: 600 }]) {
+  test(`cost shortcut follows in-flow layout at crossed breakpoint ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
+    test.skip(info.project.name !== 'chromium', 'Crossed breakpoints use desktop Chromium at CSS DPR 1.');
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [], costLogs: [] });
+    let request = 0;
+    await page.route('**/functions/v1/router*', (route) => {
+      request += 1;
+      return route.fulfill(response(`crossed-${viewport.width}-${request}`, `Synthetic long-history reply ${request}.`));
+    });
+    await signInAsMockUser(page);
+
+    const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+    // Long synthetic transcript content creates scroll pressure without letting
+    // the estimator's intentional three-second dismissal expire between turns.
+    await composer.fill(Array.from({ length: 100 }, (_, line) => `Synthetic transcript context line ${line + 1}.`).join('\n'));
+    await composer.press('Enter');
+    await expect(page.getByText('Synthetic long-history reply 1.')).toBeVisible();
+    const panel = page.locator('.cost-estimator');
+    await expect(panel).toBeVisible();
+    const position = await panel.evaluate((element) => getComputedStyle(element).position);
+    const shortcut = page.getByRole('button', { name: 'View cost details' });
+    const dir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? info.outputPath();
+    await mkdir(dir, { recursive: true });
+    expect(position).toBe('relative');
+    await expect(shortcut).toBeVisible();
+    await shortcut.click();
+    const details = panel.locator('.cost-estimator-details-toggle');
+    const hit = await details.evaluate((element) => {
+      const viewportRect = element.closest('.chat-messages')!.getBoundingClientRect();
+      const rect = element.getBoundingClientRect();
+      const top = rect.top + rect.height / 2;
+      const left = rect.left + rect.width / 2;
+      const target = document.elementFromPoint(left, top);
+      return rect.top >= viewportRect.top && rect.bottom <= viewportRect.bottom && (target === element || element.contains(target));
+    });
+    expect(hit, 'the in-flow Details button is visible and receives its center-point pointer hit').toBe(true);
+    const detailsBox = await details.boundingBox();
+    const composerBox = await page.locator('.chat-input-container').boundingBox();
+    expect(detailsBox && composerBox && detailsBox.y + detailsBox.height <= composerBox.y).toBe(true);
+    await page.screenshot({ path: `${dir}/after-details-revealed-${viewport.width}x${viewport.height}.png`, animations: 'disabled' });
+  });
+}

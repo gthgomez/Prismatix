@@ -162,7 +162,25 @@
   flex-shrink: 1;
 }
 
-.compact-cost-details-button { display: none; }
+.compact-cost-details-button {
+  display: none;
+  min-height: 40px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid #d5e2f1;
+  border-radius: 10px;
+  background: #fff;
+  color: #172338;
+  font: inherit;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.compact-cost-details-button:focus-visible { outline: 2px solid #1570ef; outline-offset: 2px; }
+.arctic-workbench:not(.arctic-new-chat) .compact-cost-details-button {
+  border-color: var(--color-border, rgba(255,255,255,.1));
+  background: var(--color-surface, #0d141b);
+  color: var(--color-text, #fff);
+}
 
 .header-utility-bar {
   display: contents;
@@ -2458,7 +2476,7 @@
   font-style: italic;
 }
 
-@media (min-width: 769px) and (max-height: 680px) {
+@media (min-width: 769px) and (max-height: 680px), (min-width: 769px) and (max-width: 1200px) {
   .messages-list > .cost-estimator {
     position: relative;
     inset: auto;
@@ -4758,25 +4776,6 @@
 .arctic-workbench:not(.arctic-new-chat) > .arctic-routing-panel .arctic-route-accordion .arctic-route-check { color: var(--color-text, #fff); }
 
 @media (max-width: 1200px) {
-  .compact-cost-details-button { display: inline-flex; }
-  .compact-cost-details-button {
-    min-height: 40px;
-    padding: 0.45rem 0.65rem;
-    border: 1px solid #d5e2f1;
-    border-radius: 10px;
-    background: #fff;
-    color: #172338;
-    font: inherit;
-    font-size: 0.78rem;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-  .compact-cost-details-button:focus-visible { outline: 2px solid #1570ef; outline-offset: 2px; }
-  .arctic-workbench:not(.arctic-new-chat) .compact-cost-details-button {
-    border-color: var(--color-border, rgba(255,255,255,.1));
-    background: var(--color-surface, #0d141b);
-    color: var(--color-text, #fff);
-  }
   .arctic-new-chat.app-with-sidebar {
     grid-template-columns: minmax(200px, 23vw) minmax(0, 1fr);
     grid-template-rows: max-content minmax(0, 1fr);
@@ -4886,7 +4885,10 @@
   }
 }
 
-@media (min-width: 1201px) {
+@media (max-width: 1200px), (min-width: 1201px) and (max-height: 680px) {
+  .compact-cost-details-button { display: inline-flex; }
+}
+@media (min-width: 1201px) and (min-height: 681px) {
   .compact-cost-details-button { display: none; }
 }
 
@@ -5940,4 +5942,12 @@
   .provider-setup-composer-status { align-items: flex-start; flex-direction: column; }
   .provider-setup-composer-status button { width: 100%; }
   .chat-container.provider-setup-blocked .chat-input-container { padding-inline: 0.65rem; }
+}
+
+@media (max-width: 1200px), (min-width: 1201px) and (max-height: 680px) {
+  .cost-estimator.compact-details-revealed {
+    max-height: min(var(--compact-cost-viewport-height), 38dvh, 14rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
 }

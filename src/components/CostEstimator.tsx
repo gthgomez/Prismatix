@@ -27,6 +27,7 @@ interface CostEstimatorProps {
   onInteractionEnd?: () => void;
   panelRef?: Ref<HTMLDivElement>;
   detailsButtonRef?: Ref<HTMLButtonElement>;
+  compactViewportHeight?: number | null;
 }
 
 export const CostEstimator: React.FC<CostEstimatorProps> = ({
@@ -41,6 +42,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   onInteractionEnd,
   panelRef,
   detailsButtonRef,
+  compactViewportHeight,
 }) => {
   const [detailsOpen, setDetailsOpen] = useState(readDetailsExpanded);
 
@@ -91,7 +93,10 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   return (
     <div
       ref={panelRef}
-      className={`cost-estimator ${isStreaming ? 'streaming' : 'final'}`}
+      className={`cost-estimator ${isStreaming ? 'streaming' : 'final'} ${compactViewportHeight !== null && compactViewportHeight !== undefined ? 'compact-details-revealed' : ''}`}
+      style={compactViewportHeight !== null && compactViewportHeight !== undefined
+        ? ({ '--compact-cost-viewport-height': `${compactViewportHeight}px` } as React.CSSProperties)
+        : undefined}
       aria-live='polite'
       onFocusCapture={onInteractionStart}
       onBlurCapture={(event) => {
