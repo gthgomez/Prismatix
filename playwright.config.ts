@@ -1,6 +1,8 @@
 // playwright.config.ts
 import { defineConfig, devices } from '@playwright/test';
 
+const previewPort = Number(process.env.PLAYWRIGHT_PORT ?? 4173);
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 30000,
@@ -10,8 +12,11 @@ export default defineConfig({
   fullyParallel: true,
   reporter: 'list',
   use: {
-    baseURL: 'http://localhost:4173',
+    baseURL: `http://127.0.0.1:${previewPort}`,
     trace: 'on-first-retry',
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+      ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } }
+      : {}),
   },
   projects: [
     {
@@ -24,9 +29,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run preview -- --port 4173',
-    port: 4173,
-    reuseExistingServer: !process.env.CI,
+    command: `npm run preview -- --host 127.0.0.1 --port ${previewPort}`,
+    port: previewPort,
+    reuseExistingServer: !process.env.CI && !process.env.PLAYWRIGHT_FORCE_WEB_SERVER,
     timeout: 120000,
   },
 });

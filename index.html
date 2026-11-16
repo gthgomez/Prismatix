@@ -57,6 +57,56 @@
       @keyframes spin {
         to { transform: rotate(360deg); }
       }
+
+      .startup-recovery {
+        position: fixed;
+        z-index: 10000;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        gap: 12px;
+        padding: 24px;
+        box-sizing: border-box;
+        background: #03070b;
+        color: #e8eef2;
+        font: 16px/1.5 system-ui, sans-serif;
+        text-align: center;
+      }
+
+      .startup-recovery h1 { margin: 0; font-size: 1.25rem; }
+      .startup-recovery p { max-width: 30rem; margin: 0; color: #c5d0d8; }
+      .startup-recovery button {
+        justify-self: center;
+        min-height: 44px;
+        padding: 0 18px;
+        border: 1px solid #67d6d0;
+        border-radius: 10px;
+        background: #0d292d;
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .loading-recovery {
+        display: grid;
+        justify-items: center;
+        gap: 12px;
+        margin-top: 20px;
+      }
+
+      .loading-recovery p { margin: 0; color: #c5d0d8; }
+      .loading-recovery button {
+        min-height: 44px;
+        padding: 0 18px;
+        border: 1px solid #67d6d0;
+        border-radius: 10px;
+        background: #0d292d;
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
@@ -66,6 +116,89 @@
         <div>Loading Prismatix...</div>
       </div>
     </div>
+    <script>
+      (() => {
+        const updateAttemptKey = 'prismatix-startup-update-attempted';
+        let recoveryShown = false;
+
+        const showRecovery = (messageText = 'The app files may have changed. Prismatix is checking for an update. If this screen stays here, reload the app.') => {
+          if (recoveryShown) return;
+          recoveryShown = true;
+          // Keep recovery outside #root. React may mount after a slow request,
+          // so replacing root contents here could race React's DOM ownership.
+          const panel = document.createElement('main');
+          panel.className = 'startup-recovery';
+          panel.setAttribute('role', 'alert');
+          const title = document.createElement('h1');
+          title.textContent = 'Prismatix could not load';
+          const message = document.createElement('p');
+          message.textContent = messageText;
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = 'Reload Prismatix';
+          button.addEventListener('click', () => window.location.reload());
+          panel.append(title, message, button);
+          document.body.append(panel);
+          window.__prismatixStartupRecoveryPanel = panel;
+        };
+
+        const checkForUpdateOnce = async () => {
+          try {
+            if (sessionStorage.getItem(updateAttemptKey)) return;
+            sessionStorage.setItem(updateAttemptKey, '1');
+          } catch {
+            return;
+          }
+
+          if (!('serviceWorker' in navigator)) return;
+          try {
+            const registration = await navigator.serviceWorker.getRegistration();
+            if (!registration) return;
+            await registration.update();
+            const installing = registration.installing;
+            if (!installing) return;
+            await new Promise((resolve) => {
+              const timeout = window.setTimeout(resolve, 8000);
+              installing.addEventListener('statechange', () => {
+                if (installing.state === 'activated' || installing.state === 'redundant') {
+                  window.clearTimeout(timeout);
+                  resolve(undefined);
+                }
+              });
+            });
+            if (installing.state === 'activated') window.location.reload();
+          } catch {
+            // The visible recovery button remains available when updates fail.
+          }
+        };
+
+        window.__prismatixStartupFailure = () => {
+          showRecovery();
+          void checkForUpdateOnce();
+        };
+        window.__prismatixStartupUpdate = () => void checkForUpdateOnce();
+        window.__prismatixStartupRetry = () => window.location.reload();
+
+        // A stalled entry request emits no resource error. Offer a manual
+        // retry after a bounded wait, but leave the module request alone so a
+        // slow, healthy load can still mount normally.
+        const startupStallTimer = window.setTimeout(() => {
+          showRecovery('Startup is taking longer than expected. The app may still finish loading; retry only if it remains stuck.');
+        }, 10000);
+        window.__prismatixStartupReady = () => {
+          window.clearTimeout(startupStallTimer);
+          window.__prismatixStartupRecoveryPanel?.remove();
+          window.__prismatixStartupRecoveryPanel = undefined;
+        };
+
+        window.addEventListener('error', (event) => {
+          const target = event.target;
+          if (target instanceof HTMLScriptElement && target.type === 'module') {
+            window.__prismatixStartupFailure();
+          }
+        }, true);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

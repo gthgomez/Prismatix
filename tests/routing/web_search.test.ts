@@ -79,7 +79,9 @@ describe('F11: Domain Extraction & Formatting', () => {
 
 describe('F11: Web Search Execution', () => {
   it('returns honest unavailable state with zero citations when API key is omitted (zero paid calls)', async () => {
-    const result = await executeWebSearch('Distributed Consensus Raft');
+    // Keep the no-key fixture local: the default Supabase client would attempt
+    // a real edge-function request before returning its unavailable result.
+    const result = await executeWebSearch('Distributed Consensus Raft', undefined, fetch, {});
     expect(result.source).toBe('unavailable');
     expect(result.citations).toHaveLength(0);
     expect(result.contextPrompt).toBe('');
