@@ -37,6 +37,7 @@ const providerPlugins = vi.hoisted(() => ({
   providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }],
   defaultProvider: 'openrouter',
   enabledProviders: new Set(['openrouter']),
+  isConfigured: true,
   isVerified: true,
   verificationStatus: 'verified',
   verificationLoading: false,

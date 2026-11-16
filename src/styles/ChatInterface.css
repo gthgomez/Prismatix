@@ -4463,6 +4463,18 @@
   font-size: 1.17rem;
   line-height: 1.5;
 }
+.arctic-new-chat .empty-state > .arctic-provider-unknown-status {
+  max-width: min(48rem, 100%);
+  margin: 0.15rem auto 0;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid #dce7f3;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 76%);
+  color: #52657e;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  text-align: center;
+}
 .arctic-new-chat .empty-state-capabilities {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1.25rem;

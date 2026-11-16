@@ -56,6 +56,12 @@ test('New Chat reference composition at 1672x941', async ({ page }, testInfo) =>
 test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1672, height: 941 });
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let validationRequests = 0;
+  await page.route('**/functions/v1/provider-settings*', async (route) => {
+    const body = route.request().method() === 'POST' ? route.request().postDataJSON() as Record<string, unknown> : {};
+    if (body.action === 'validate_key') validationRequests++;
+    await route.fallback();
+  });
 
   const routerRequests: RequestRecord[] = [];
   let execution = 0;
@@ -83,12 +89,15 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
   });
 
   await signInAsMockUser(page);
+  expect(validationRequests).toBe(0); // saved metadata is not validation; router authorizes sends
+  const validationRequestsBeforeReload = validationRequests;
   await page.evaluate(() => localStorage.setItem('prismatix_comparison_mode', 'true'));
   await page.reload();
-  // Verification is session state, so a saved key must be checked again after reload.
-  const verifySavedKeys = page.getByRole('button', { name: 'Verify provider keys' });
-  await expect(verifySavedKeys).toBeVisible();
-  await verifySavedKeys.click();
+  // Saved-key metadata after reload is unknown, so let the router authorize each send.
+  await expect(page.locator('.arctic-route-status')).toContainText('Key saved · not checked this session');
+  await expect(page.getByRole('button', { name: 'Verify provider keys', exact: true })).toHaveCount(0);
+  await expect(page.locator('.provider-setup-state')).toHaveCount(0);
+  expect(validationRequests).toBe(validationRequestsBeforeReload);
   await expect(page.getByRole('heading', { name: 'What can I help you with?' })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Chat workflow' }).getByRole('button', { name: 'Compare' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('heading', { name: 'Routing details' })).toBeVisible();
@@ -112,6 +121,8 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
   await expect(workflow.getByRole('button', { name: 'Debate' })).toHaveAttribute('aria-pressed', 'true');
   await sendPrompt('Debate fixture prompt');
   await expect(page.getByText('Mock reply 1')).toBeVisible();
+  await expect(page.locator('.arctic-route-status')).toContainText('Key saved · not checked this session');
+  expect(validationRequests).toBe(validationRequestsBeforeReload);
   expect(routerRequests).toHaveLength(1);
   expect(routerRequests[0]).toMatchObject({ query: 'Debate fixture prompt', mode: 'debate', debateProfile: 'general' });
 

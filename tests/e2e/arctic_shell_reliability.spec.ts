@@ -128,6 +128,12 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
     await expect(recoveryActions.getByRole('button', { name: 'Restore draft' })).toBeVisible();
     await expect(recoveryActions.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
 
+    // A router rejection is explicit; a second send must remain blocked until
+    // the user verifies or updates the provider, with the draft retained.
+    await composer.press('Enter');
+    expect(requests).toBe(1);
+    await expect(composer).toHaveValue('Keep this exact draft');
+
     for (const button of [accountMenu, recoveryActions.getByRole('button', { name: 'Restore draft' }), recoveryActions.getByRole('button', { name: 'Retry', exact: true })]) {
       const hitTargetWorks = await button.evaluate((element) => {
         const box = element.getBoundingClientRect();
@@ -152,7 +158,7 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
   });
 }
 
-test('provider settings lookup failure blocks send, keeps draft, and retry refreshes state', async ({ page }) => {
+test('provider settings lookup failure blocks send, keeps draft, and retry restores router-authorized readiness', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   let checks = 0;
@@ -181,9 +187,10 @@ test('provider settings lookup failure blocks send, keeps draft, and retry refre
   expect(sends).toBe(0);
   await expect(composer).toHaveValue('Draft survives a lookup failure');
   await page.getByRole('button', { name: 'Retry provider check' }).click();
-  await expect(page.getByRole('button', { name: 'Verify provider keys' })).toBeVisible();
-  await page.getByRole('button', { name: 'Verify provider keys' }).click();
+  await expect(page.locator('.arctic-route-status')).toContainText('Key saved · not checked this session');
+  await expect(page.getByRole('button', { name: 'Verify provider keys' })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'What can I help you with?' })).toBeVisible();
+  await composer.fill('Draft survives a lookup failure');
   await composer.press('Enter');
   await expect(page.getByText('Ready after retry')).toBeVisible();
   expect(sends).toBe(1);
@@ -397,14 +404,14 @@ test('saved history exposes provider-check retry and keeps drafts blocked until 
   expect(sends).toBe(0);
   await expect(composer).toHaveValue('Saved chat draft');
   await page.getByRole('button', { name: 'Retry check' }).click();
-  await page.getByRole('button', { name: 'Verify provider keys' }).click();
-  await expect(page.locator('.provider-readiness-banner')).toHaveCount(0);
+  await expect(page.locator('.provider-readiness-banner[role="status"]')).toContainText('not been checked this session');
+  await expect(page.getByRole('button', { name: 'Verify provider keys', exact: true })).toHaveCount(0);
   await composer.press('Enter');
   await expect(page.getByText('Saved chat recovered')).toBeVisible();
   expect(sends).toBe(1);
 });
 
-test('a saved but unverified provider blocks sends until retry verification succeeds', async ({ page }) => {
+test('first-run unverified provider blocks; a returning configured key is router-authorized after reload', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [] });
   let validationCalls = 0;
@@ -449,19 +456,18 @@ test('a saved but unverified provider blocks sends until retry verification succ
 
   await page.reload();
   await signInAsMockUser(page, { verifyConfiguredProviders: false });
-  await expect(routeStatus).toContainText('Key saved · not verified');
+  await expect(routeStatus).toContainText('Key saved · not checked this session');
   const verifyAfterReload = page.getByRole('button', { name: 'Verify provider keys' });
-  await expect(verifyAfterReload).toBeVisible();
+  await expect(verifyAfterReload).toHaveCount(0);
   await expect(page.locator('.first-run-status.success')).toHaveCount(0);
-  await composer.fill('Verification must be repeated after reload');
-  await composer.press('Enter');
-  expect(routerCalls).toBe(1);
-  await expect(composer).toHaveValue('Verification must be repeated after reload');
-  await verifyAfterReload.click();
-  await expect(routeStatus).toContainText('Provider verified · route ready');
+  const validationCountAfterReload = validationCalls;
+  await composer.fill('Router authorizes returning configured key');
   await composer.press('Enter');
   await expect(page.getByText('Verified key mock reply')).toBeVisible();
   expect(routerCalls).toBe(2);
+  expect(validationCalls).toBe(validationCountAfterReload);
+  await expect(routeStatus).toContainText('Key saved · not checked this session');
+  await expect(page.getByRole('button', { name: 'Verify provider keys', exact: true })).toHaveCount(0);
 });
 
 test('attachment-only route rejection removes only its optimistic turn and retry restores one row', async ({ page }) => {
