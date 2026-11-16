@@ -1005,6 +1005,33 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     };
   }, [chatHeaderElement]);
 
+  // The compact saved-chat action rail scrolls horizontally. Anchor its model
+  // menu to the trigger in viewport coordinates so the fixed popover can escape
+  // that rail's overflow clip without changing the wide or mobile variants.
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    if (!showModelSelector) {
+      root.style.removeProperty('--prismatix-model-dropdown-right');
+      return;
+    }
+    const apply = () => {
+      const trigger = modelSelectorRef.current?.querySelector<HTMLElement>('.model-indicator-button');
+      if (!trigger) return;
+      const rightInset = Math.max(8, window.innerWidth - trigger.getBoundingClientRect().right);
+      root.style.setProperty('--prismatix-model-dropdown-right', `${Math.ceil(rightInset)}px`);
+    };
+    apply();
+    window.addEventListener('resize', apply);
+    window.addEventListener('scroll', apply, true);
+    window.visualViewport?.addEventListener('resize', apply);
+    return () => {
+      window.removeEventListener('resize', apply);
+      window.removeEventListener('scroll', apply, true);
+      window.visualViewport?.removeEventListener('resize', apply);
+      root.style.removeProperty('--prismatix-model-dropdown-right');
+    };
+  }, [showModelSelector, chatHeaderElement]);
+
   // ── PX07 conversation continuity ─────────────────────────────────────────
   const mapLoadedMessages = async (loaded: LoadedMessage[]): Promise<Message[]> => {
     const mapped: Message[] = [];

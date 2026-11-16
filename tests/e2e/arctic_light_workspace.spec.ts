@@ -17,6 +17,28 @@ async function openRoutingTools(panel: Locator) {
   await routingTools.locator(':scope > summary').click();
 }
 
+async function expectModelOptionReceivesPointer(page: import('@playwright/test').Page, option: Locator) {
+  await expect(option).toBeVisible();
+  const modelName = (await option.locator('.option-name').textContent())?.trim() ?? 'unknown model';
+  const geometry = await option.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return {
+      rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+      viewport: { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight },
+      receivesPointer: hit === element || element.contains(hit),
+      hit: hit instanceof HTMLElement ? `${hit.tagName.toLowerCase()}.${hit.className}` : hit?.nodeName,
+    };
+  });
+  console.log(`Model option pointer geometry ${modelName}: ${JSON.stringify(geometry)}`);
+  expect(geometry.rect.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.rect.top).toBeGreaterThanOrEqual(0);
+  expect(geometry.rect.right).toBeLessThanOrEqual(geometry.viewport.width);
+  expect(geometry.rect.bottom).toBeLessThanOrEqual(geometry.viewport.height);
+  expect(geometry.receivesPointer, `model option center must hit the real option before scrolling: ${JSON.stringify(geometry)}`).toBe(true);
+  return { x: (geometry.rect.left + geometry.rect.right) / 2, y: (geometry.rect.top + geometry.rect.bottom) / 2 };
+}
+
 test('New Chat reference composition at 1672x941', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1672, height: 941 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -227,6 +249,86 @@ test('compact header measurements follow New Chat, first send, saved history and
   await expect(page.locator('.composer-model-popover')).toBeVisible();
   await expectHeaderMeasurement();
   expect(execution).toBe(1);
+});
+
+test('saved-chat model picker stays hittable outside the compact scrolling header rail', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1160, height: 800 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await setupAuthenticatedMock(page, { hasProviderKey: true });
+  await signInAsMockUser(page);
+  await page.getByRole('button', { name: /^Architectural Discussion/ }).click();
+  await expect(page.locator('.arctic-workbench')).toHaveClass(/arctic-has-history/);
+  const hideChats = page.getByRole('button', { name: 'Hide past chats' });
+  if (await hideChats.isVisible()) await hideChats.click();
+  await expect(page.locator('.arctic-workbench')).toHaveClass(/chats-hidden/);
+
+  const compactChatWidth = await page.locator('.chat-container').evaluate((element) => element.getBoundingClientRect().width);
+  console.log(`Saved-chat width with past chats collapsed at 1160px: ${compactChatWidth}px`);
+  const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
+  await mkdir(evidenceDir, { recursive: true });
+  const compactPicker = page.getByRole('button', { name: 'Choose routing mode: automatic' });
+  await compactPicker.click();
+  await page.getByRole('tab', { name: 'Models' }).click();
+  await page.screenshot({ path: `${evidenceDir}/model-picker-1160x800-before-pointer.png`, animations: 'disabled' });
+  const compactMenuAnchor = await page.locator('.model-dropdown').evaluate((menu) => {
+    const trigger = document.querySelector('.model-indicator-button')!.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    return { position: getComputedStyle(menu).position, rightDelta: Math.abs(menuRect.right - trigger.right) };
+  });
+  expect(compactMenuAnchor.position).toBe('fixed');
+  expect(compactMenuAnchor.rightDelta).toBeLessThanOrEqual(1);
+  const compactOption = page.locator('.model-option').first();
+  const compactModelName = (await compactOption.locator('.option-name').textContent())?.trim() ?? 'unknown model';
+  const compactHit = await expectModelOptionReceivesPointer(page, compactOption);
+  // Use the previously measured center directly. Locator.click would auto-scroll
+  // the hidden part of this clipped option and mask the regression.
+  await page.mouse.click(compactHit.x, compactHit.y);
+  const compactModelPicker = page.locator('.model-indicator-button');
+  await expect(compactModelPicker).toContainText(compactModelName);
+  await expect(page.locator('.model-dropdown')).toBeHidden();
+  await page.screenshot({ path: `${evidenceDir}/model-picker-1160x800-selected.png`, animations: 'disabled' });
+
+  // The normal wide popover keeps both pointer geometry and keyboard selection.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const widePicker = page.locator('.model-indicator-button');
+  await widePicker.click();
+  await page.getByRole('tab', { name: 'Models' }).click();
+  await page.screenshot({ path: `${evidenceDir}/model-picker-1440x900-open.png`, animations: 'disabled' });
+  const wideOption = page.locator('.model-option:not(.manual)').first();
+  const wideModelName = (await wideOption.locator('.option-name').textContent())?.trim() ?? 'unknown model';
+  await expectModelOptionReceivesPointer(page, wideOption);
+  await wideOption.focus();
+  await page.keyboard.press('Enter');
+  const selectedWidePicker = page.locator('.model-indicator-button');
+  await expect(selectedWidePicker).toContainText(wideModelName);
+  await expect(page.locator('.model-dropdown')).toBeHidden();
+
+  // Mobile retains its fixed sheet and Escape returns focus to the opener.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await selectedWidePicker.click();
+  const mobileMenu = page.locator('.model-dropdown');
+  await expect(mobileMenu).toBeVisible();
+  const mobileMenuGeometry = await mobileMenu.evaluate((menu) => ({
+    position: getComputedStyle(menu).position,
+    top: menu.getBoundingClientRect().top,
+    headerBottom: document.querySelector('.chat-header')!.getBoundingClientRect().bottom,
+  }));
+  expect(mobileMenuGeometry.position).toBe('fixed');
+  expect(mobileMenuGeometry.top).toBeGreaterThan(mobileMenuGeometry.headerBottom);
+  await page.getByRole('tab', { name: 'Models' }).click();
+  await page.screenshot({ path: `${evidenceDir}/model-picker-390x844-open.png`, animations: 'disabled' });
+  const mobileOption = page.locator('.model-option:not(.manual)').first();
+  const mobileModelName = (await mobileOption.locator('.option-name').textContent())?.trim() ?? 'unknown model';
+  await mobileOption.focus();
+  await page.keyboard.press('Enter');
+  const mobilePicker = page.locator('.model-indicator-button');
+  await expect(mobilePicker).toContainText(mobileModelName);
+  await mobilePicker.click();
+  await expect(mobileMenu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(mobileMenu).toBeHidden();
+  await expect(mobilePicker).toBeFocused();
+  await page.screenshot({ path: `${evidenceDir}/model-picker-390x844-dismissed.png`, animations: 'disabled' });
 });
 
 test('compact-height New Chat keeps the welcome heading intact and starter cards scroll-reachable', async ({ page }, testInfo) => {
