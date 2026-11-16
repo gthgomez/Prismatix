@@ -1,7 +1,7 @@
 // tests/e2e/fixtures/mockAuth.ts
 // Deterministic mock fixtures for authenticated Playwright testing without paid API calls.
 
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
 export const MOCK_USER = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -148,6 +148,13 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
     const req = route.request();
     if (req.method() === 'POST') {
       const postData = req.postDataJSON() as Record<string, unknown> | null;
+      if (postData?.action === 'validate_key') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ provider: postData.provider ?? 'openrouter', status: hasKey ? 'enabled' : 'not_configured' }),
+        });
+      }
       if (postData?.action === 'set_key' || postData?.action === 'set_enabled') {
         return route.fulfill({
           status: 200,
@@ -360,25 +367,37 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
   });
 }
 
-export async function signInAsMockUser(page: Page) {
+export async function signInAsMockUser(page: Page, options: { verifyConfiguredProviders?: boolean } = {}) {
   await page.goto('/');
   const emailInput = page.locator('#email');
   const composer = page.getByRole('textbox', { name: /message prismatix/i });
 
-  // Prefer the authorized chat shell when the synthetic session is already
-  // hydrated (including after reload). Fall back to interactive sign-in only
-  // when the auth form is what actually rendered.
-  try {
-    await composer.waitFor({ state: 'visible', timeout: 10000 });
-    return;
-  } catch {
-    // Continue to form sign-in below.
+  // The authenticated shell or the sign-in form can win while client auth is
+  // hydrating. Wait for whichever state becomes visible first.
+  const initialState = await Promise.race([
+    composer.waitFor({ state: 'visible', timeout: 30000 }).then(() => 'shell' as const).catch(() => null),
+    emailInput.waitFor({ state: 'visible', timeout: 30000 }).then(() => 'login' as const).catch(() => null),
+  ]);
+
+  if (initialState === 'login') {
+    await emailInput.waitFor({ state: 'visible', timeout: 10000 });
+    await emailInput.fill(MOCK_USER.email);
+    await page.locator('#password').fill('ValidPassword123!');
+    await page.locator('button[type="submit"]').click();
+    await composer.waitFor({ state: 'visible', timeout: 15000 });
+  } else if (initialState !== 'shell') {
+    throw new Error('Mock sign-in did not reach either the authenticated chat shell or the sign-in form.');
   }
 
-  await emailInput.waitFor({ state: 'visible', timeout: 10000 });
-  await emailInput.fill(MOCK_USER.email);
-  await page.locator('#password').fill('ValidPassword123!');
-  await page.locator('button[type="submit"]').click();
-  await composer.waitFor({ state: 'visible', timeout: 10000 });
+  await expect.poll(async () => (await page.locator('.arctic-route-status').innerText().catch(() => '')).trim())
+    .not.toContain('Checking provider setup');
+
+  if (options.verifyConfiguredProviders !== false) {
+    const verify = page.getByRole('button', { name: 'Verify provider keys', exact: true }).first();
+    if (await verify.isVisible().catch(() => false)) {
+      await verify.click();
+      await expect(page.locator('.arctic-route-status')).toContainText('Provider verified · route ready');
+    }
+  }
 }
 

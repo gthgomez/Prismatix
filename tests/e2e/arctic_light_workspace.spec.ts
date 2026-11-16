@@ -85,6 +85,11 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
   await signInAsMockUser(page);
   await page.evaluate(() => localStorage.setItem('prismatix_comparison_mode', 'true'));
   await page.reload();
+  // Verification is session state, so a saved key must be checked again after reload.
+  const verifySavedKeys = page.getByRole('button', { name: 'Verify provider keys' });
+  await expect(verifySavedKeys).toBeVisible();
+  await verifySavedKeys.click();
+  await expect(page.getByRole('heading', { name: 'What can I help you with?' })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Chat workflow' }).getByRole('button', { name: 'Compare' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('heading', { name: 'Routing details' })).toBeVisible();
   await expect(page.getByText('Two selected models')).toBeVisible();

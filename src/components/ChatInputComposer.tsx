@@ -46,6 +46,7 @@ export interface ChatInputComposerProps {
   contextExcludedCount: number;
   duplicateNotice: string | null;
   composerValidationView: ComposerSendValidationView | null;
+  providerSetupBlocked?: boolean;
   onOpenPromptLibrary?: () => void;
   onOpenUrlIngestion?: () => void;
   onOpenDocComparison?: () => void;
@@ -90,6 +91,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   contextExcludedCount,
   duplicateNotice,
   composerValidationView,
+  providerSetupBlocked = false,
   onOpenPromptLibrary,
   onOpenUrlIngestion,
   onOpenDocComparison,
@@ -100,6 +102,12 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   return (
     <div className='chat-input-container'>
       <div className='input-wrapper'>
+        {providerSetupBlocked && (
+          <div className='provider-setup-composer-status' role='status'>
+            <span>Sending is paused. Your draft stays here until a provider is connected.</span>
+            <button type='button' onClick={onOpenProviderSettings}>Connect a provider</button>
+          </div>
+        )}
         <AttachmentPreview
           attachments={draftAttachments}
           onRemove={onRemoveAttachment}

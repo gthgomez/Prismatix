@@ -362,6 +362,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // Provider plug-ins (PX12): which providers are on for this user.
   const providerPlugins = useProviderPlugins(user?.id);
   const enabledProviders = providerPlugins.enabledProviders;
+  const providerVerified = providerPlugins.isVerified && !(firstRunOutcome && !firstRunOutcome.verified);
   const openRouterProvider = providerPlugins.providers.find((provider) => provider.id === 'openrouter');
   useEffect(() => {
     setFirstRunOutcome((current) => reconcileFirstRunOutcome(current, openRouterProvider));
@@ -427,12 +428,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     error?: string;
     failedUserIndex?: number;
     overrideModel?: RouterModel;
+    optimisticMessageId?: string;
+    optimisticMessageContent?: string;
   } | null>(null);
   const activeDraftRef = useRef<{
     rawInput: string;
     queryText: string;
     attachments: FileUploadPayload[];
     overrideModel?: RouterModel;
+    optimisticMessageId?: string;
+    optimisticMessageContent?: string;
   } | null>(null);
 
   // PR 1: F05 global full-text chat search state
@@ -1161,7 +1166,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const handleRetryTurn = async () => {
     if (!failedTurnDraft || isStreaming) return;
-    const { queryText, attachments, overrideModel } = failedTurnDraft;
+    if (providerPlugins.loading || providerPlugins.error || !providerPlugins.isConfigured || !providerVerified) {
+      setSendValidationError(providerPlugins.error
+        ? 'Provider setup could not be checked. Retry the check or open Provider Settings.'
+        : 'Verify a saved provider key before retrying. Your draft is preserved.');
+      return;
+    }
+    const { rawInput, queryText, attachments, overrideModel, optimisticMessageId, optimisticMessageContent } = failedTurnDraft;
     setFailedTurnDraft(null);
 
     // Remove the failed assistant message if present
@@ -1173,12 +1184,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return prev;
     });
 
-    const historyForRequest = [...messages];
-    const lastUserIdx = messages.length - 1;
-    const historyBeforeUser =
-      lastUserIdx >= 0 && messages[lastUserIdx]?.role === 'user'
-        ? messages.slice(0, lastUserIdx)
-        : historyForRequest;
+    const optimisticIndex = optimisticMessageId
+      ? messages.findIndex((message) => message.id === optimisticMessageId)
+      : -1;
+    const historyBeforeUser = optimisticIndex >= 0
+      ? messages.slice(0, optimisticIndex)
+      : messages.filter((message, index) => !(index === messages.length - 1 && message.role === 'assistant' && typeof message.content === 'string' && message.content.startsWith('⚠️')));
+
+    if (optimisticMessageId && optimisticIndex < 0) {
+      const attachmentSummary = attachments.length > 0
+        ? `[${attachments.length} file${attachments.length > 1 ? 's' : ''} attached]`
+        : '';
+      setMessages((prev) => prev.some((message) => message.id === optimisticMessageId)
+        ? prev
+        : [...prev, {
+            id: optimisticMessageId,
+            role: 'user',
+            content: optimisticMessageContent ?? (rawInput.trim() || attachmentSummary),
+            timestamp: Date.now(),
+            attachments: attachments.length > 0 ? attachments : undefined,
+          }]);
+    }
+    setInput('');
+    setDraftAttachments([]);
 
     await executeTurn({
       queryText,
@@ -1186,6 +1214,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       historyMessages: historyBeforeUser,
       overrideModel: overrideModel || undefined,
       skipBudgetCheck: true,
+      optimisticMessageId,
     });
   };
 
@@ -1527,6 +1556,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     promptTokenEstimate: passedPromptTokenEstimate,
     skipBudgetCheck = false,
     regenerateTargetMessageId,
+    optimisticMessageId,
   }: {
     queryText: string;
     attachmentsToProcess: FileUploadPayload[];
@@ -1535,6 +1565,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     promptTokenEstimate?: number;
     skipBudgetCheck?: boolean;
     regenerateTargetMessageId?: string;
+    optimisticMessageId?: string;
   }) => {
     const estimatedModel = overrideModel || manualModelOverride || currentModel;
     const historyText = historyMessages.map((msg) => {
@@ -2263,11 +2294,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         setStreamOutcome({ status: 'cancelled', executionId: executionIdRef.current });
         scheduleCostEstimatorHide(1500);
         setFailedTurnDraft({
-          rawInput: activeDraftRef.current?.rawInput || queryText,
+          rawInput: activeDraftRef.current?.rawInput ?? queryText,
           queryText,
           attachments: attachmentsToProcess,
           error: 'Generation cancelled',
           overrideModel: overrideModel || undefined,
+          optimisticMessageId,
+          optimisticMessageContent: activeDraftRef.current?.optimisticMessageContent,
         });
       } else {
         console.error('Stream error:', error);
@@ -2282,12 +2315,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           error: errorDesc,
         });
         if (routeUnavailable) {
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            return last?.role === 'user' && extractTextContent(last.content) === (queryText || '')
-              ? prev.slice(0, -1)
-              : prev;
-          });
+          providerPlugins.invalidateVerification();
+          if (optimisticMessageId) {
+            setMessages((prev) => prev.filter((message) => message.id !== optimisticMessageId));
+          }
         } else {
           setMessages((prev) => [...prev, {
             role: 'assistant',
@@ -2299,11 +2330,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
         // F02: Preserve user prompt and attachments safely in session memory
         setFailedTurnDraft({
-          rawInput: activeDraftRef.current?.rawInput || queryText,
+          rawInput: activeDraftRef.current?.rawInput ?? queryText,
           queryText,
           attachments: attachmentsToProcess,
           error: errorDesc,
           overrideModel: overrideModel || undefined,
+          optimisticMessageId,
+          optimisticMessageContent: activeDraftRef.current?.optimisticMessageContent,
         });
         if (waitingFirstTokenRef.current) {
           restoreComposerSafely();
@@ -2326,12 +2359,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       setSendValidationError('Attachments are still processing. Please wait for completion before sending.');
       return;
     }
-    if (providerPlugins.loading || providerPlugins.error || providerPlugins.isConfigured === false || enabledProviders.size === 0) {
+    if (providerPlugins.loading || providerPlugins.error || providerPlugins.isConfigured === false || !providerVerified || enabledProviders.size === 0) {
       setSendValidationError(providerPlugins.error
         ? 'Provider setup could not be checked. Retry the check or open Provider Settings.'
         : providerPlugins.loading
           ? 'Provider setup is still being checked. Please wait before sending.'
-          : 'No enabled provider with a saved key is available. Open Provider Settings to connect or enable a provider.');
+          : !providerPlugins.isConfigured
+            ? 'No enabled provider with a saved key is available. Open Provider Settings to connect or enable a provider.'
+            : 'The saved provider key has not been verified. Verify it before sending.');
       return;
     }
     if (debateSelection === 'video_ui' && !hasReadyVideo) {
@@ -2456,7 +2491,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       : '';
 
     const firstImage = draftAttachments.find((f) => f.isImage);
+    const optimisticMessageId = `optimistic-${crypto.randomUUID()}`;
     const userMessage: Message = {
+      id: optimisticMessageId,
       role: 'user',
       content: input.trim() || attachmentSummary,
       timestamp: Date.now(),
@@ -2476,6 +2513,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       queryText,
       attachments: [...draftAttachments],
       overrideModel: manualModelOverride || undefined,
+      optimisticMessageId,
+      optimisticMessageContent: String(userMessage.content),
     };
 
     // Clear inputs
@@ -2491,7 +2530,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       overrideModel: manualModelOverride || undefined,
       promptTokenEstimate,
       skipBudgetCheck: true,
+      optimisticMessageId,
     });
+  };
+
+  const handleVerifyProviders = async () => {
+    const verified = await providerPlugins.verifyEnabledProviders();
+    setFirstRunOutcome(verified
+      ? { message: 'Provider key verified. You are ready to chat.', verified: true }
+      : { message: 'Provider key could not be verified yet. Check the key or retry the verification.', verified: false });
   };
 
   const isStreamingRef = useRef(isStreaming);
@@ -2938,7 +2985,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       ? 'video'
       : sendValidationError
         ? 'invalid'
-        : providerPlugins.loading || providerPlugins.error || providerPlugins.isConfigured === false
+        : providerPlugins.loading || providerPlugins.error || providerPlugins.isConfigured === false || !providerVerified
           ? 'invalid'
         : !input.trim() && draftAttachments.length === 0
           ? 'empty'
@@ -3039,7 +3086,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             aria-controls='arctic-routing-panel'
             onClick={() => setRoutingPanelOpen((open) => !open)}
           >
-            Routing details
+            {routingPanelOpen ? 'Close routing details' : 'Routing details'}
           </button>
           {catalogSkewed && (
             <span
@@ -3351,7 +3398,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         />
       )}
       {chatHeader}
-      <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''}`}>
+      <div className={`chat-container ${messages.length === 0 ? 'is-empty' : ''} ${messages.length === 0 && (providerPlugins.loading || providerPlugins.error || !providerPlugins.isConfigured || !providerVerified || enabledProviders.size === 0) ? 'provider-setup-blocked' : ''}`}>
       <ChatBackdrop />
       {/* Header */}
 
@@ -3447,6 +3494,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   onOpenSettings={() => setShowProviderSettings(true)}
                   onSaved={(message, verified) => setFirstRunOutcome({ message, verified })}
                 />
+              ) : !providerVerified ? (
+                <div className={`provider-setup-state ${providerPlugins.verificationStatus === 'unverified' || providerPlugins.verificationStatus === 'verified' ? '' : 'error'}`} role={providerPlugins.verificationStatus === 'invalid' || providerPlugins.verificationStatus === 'unavailable' ? 'alert' : 'status'}>
+                  <strong>{providerPlugins.verificationStatus === 'invalid' ? 'Provider key needs attention' : providerPlugins.verificationStatus === 'unavailable' ? 'Could not verify provider key' : 'Verify your saved provider key'}</strong>
+                  <span>{providerPlugins.verificationStatus === 'unverified' || providerPlugins.verificationStatus === 'verified' ? 'A saved key is not verified until its provider accepts it.' : providerPlugins.verificationStatus === 'invalid' ? 'The provider rejected a saved key. Update it in Provider Settings, then verify again.' : 'Verification is temporarily unavailable. Your draft is preserved; retry when the provider is reachable.'}</span>
+                  <button type='button' disabled={providerPlugins.verificationLoading} onClick={() => void handleVerifyProviders()}>{providerPlugins.verificationLoading ? 'Verifying…' : 'Verify provider keys'}</button>
+                  <button type='button' onClick={() => setShowProviderSettings(true)}>Open Provider Settings</button>
+                </div>
               ) : (
                 <>
                   <img className='arctic-hero-mark' src='/prismatix-arctic-mark.svg' alt='' />
@@ -3762,6 +3816,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           <button type='button' onClick={() => setShowProviderSettings(true)}>Connect a provider</button>
         </div>
       )}
+      {messages.length > 0 && !providerPlugins.loading && !providerPlugins.error && providerPlugins.isConfigured && !providerVerified && (
+        <div className='provider-readiness-banner' role={providerPlugins.verificationStatus === 'unverified' ? 'status' : 'alert'}>
+          <span>{providerPlugins.verificationStatus === 'unverified' ? 'Saved provider keys must be verified before sending. Your draft is preserved.' : providerPlugins.verificationStatus === 'invalid' ? 'A provider rejected its saved key. Update it before sending.' : 'Provider verification is temporarily unavailable. Retry when ready.'}</span>
+          <button type='button' disabled={providerPlugins.verificationLoading} onClick={() => void handleVerifyProviders()}>{providerPlugins.verificationLoading ? 'Verifying…' : 'Verify provider keys'}</button>
+          <button type='button' onClick={() => setShowProviderSettings(true)}>Provider Settings</button>
+        </div>
+      )}
 
       {/* Input Area */}
       <ChatInputComposer
@@ -3803,6 +3864,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         contextExcludedCount={contextExcludedCount}
         duplicateNotice={duplicateNotice}
         composerValidationView={composerValidationView}
+        providerSetupBlocked={messages.length === 0 && (providerPlugins.loading || Boolean(providerPlugins.error) || !providerPlugins.isConfigured || !providerVerified || enabledProviders.size === 0)}
         onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
         onOpenUrlIngestion={() => setIsUrlModalOpen(true)}
         onOpenDocComparison={() => setIsDocComparisonModalOpen(true)}
@@ -3957,11 +4019,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         <div className='arctic-routing-heading'>
           <span aria-hidden='true'>✦</span>
           <h2>Routing details</h2>
-          <button type='button' className='arctic-routing-close' onClick={() => setRoutingPanelOpen(false)} aria-label='Close routing details'>×</button>
+          <button type='button' className='arctic-routing-close' onClick={() => { setRoutingPanelOpen(false); routingToggleRef.current?.focus(); }} aria-label='Close routing details'>×</button>
         </div>
-        <div className={`arctic-route-status ${isStreaming ? 'running' : providerPlugins.loading ? 'checking' : providerPlugins.error || !providerPlugins.isConfigured || (firstRunOutcome && !firstRunOutcome.verified) ? 'setup' : 'ready'}`} role='status'>
-          <span className='arctic-status-icon' aria-hidden='true'>{isStreaming ? '◌' : providerPlugins.loading ? '…' : providerPlugins.error || !providerPlugins.isConfigured || (firstRunOutcome && !firstRunOutcome.verified) ? '!' : '✓'}</span>
-          <span><small>Route status</small><strong>{isStreaming ? 'Request in progress' : providerPlugins.loading ? 'Checking provider setup' : providerPlugins.error ? 'Provider status unavailable' : firstRunOutcome && !firstRunOutcome.verified ? 'Key saved · not verified' : !providerPlugins.isConfigured ? 'Connect a provider' : 'Provider configured · route checked on send'}</strong></span>
+        <div className={`arctic-route-status ${isStreaming ? 'running' : providerPlugins.loading || providerPlugins.verificationLoading ? 'checking' : providerPlugins.error || !providerPlugins.isConfigured || !providerVerified ? 'setup' : 'ready'}`} role='status'>
+          <span className='arctic-status-icon' aria-hidden='true'>{isStreaming ? '◌' : providerPlugins.loading || providerPlugins.verificationLoading ? '…' : providerPlugins.error || !providerPlugins.isConfigured || !providerVerified ? '!' : '✓'}</span>
+          <span><small>Route status</small><strong>{isStreaming ? 'Request in progress' : providerPlugins.loading ? 'Checking provider setup' : providerPlugins.error ? 'Provider status unavailable' : !providerPlugins.isConfigured ? 'Connect a provider' : !providerVerified ? providerPlugins.verificationStatus === 'invalid' ? 'Saved key rejected' : providerPlugins.verificationStatus === 'unavailable' ? 'Verification unavailable' : 'Key saved · not verified' : 'Provider verified · route ready'}</strong></span>
         </div>
         <section className='arctic-route-field'>
           <h3>Selected model</h3>
@@ -3980,9 +4042,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 : `Debate is enabled with the ${debateSelection} profile.`
               : manualModelOverride
             ? `You selected ${getCatalogEntry(manualModelOverride).shortName} manually.`
-            : providerPlugins.isConfigured
+              : providerPlugins.isConfigured && providerVerified
               ? 'Prismatix selects a model after you enter a request, based on task complexity, available providers, and attachments.'
-              : 'Connect an AI provider before sending a request.'}</p>
+                : providerPlugins.isConfigured
+                  ? 'Verify a saved provider key before sending a request.'
+                  : 'Connect an AI provider before sending a request.'}</p>
         </section>
         <section className='arctic-route-field'>
           <h3>Estimated cost</h3>

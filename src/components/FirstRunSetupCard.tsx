@@ -42,7 +42,7 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
       }
       const verified = validation.status === 'enabled';
 
-      const saved = await plugins.setKey('openrouter', apiKey.trim());
+      const saved = await plugins.setKey('openrouter', apiKey.trim(), validation);
       if (saved) {
         const message = verified
           ? 'Key saved and verified. You are ready to chat.'

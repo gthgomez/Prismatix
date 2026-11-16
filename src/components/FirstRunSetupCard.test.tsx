@@ -33,7 +33,7 @@ describe('FirstRunSetupCard connection status', () => {
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     });
     expect(validateKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key');
-    expect(plugins.setKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key');
+    expect(plugins.setKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key', { provider: 'openrouter', status: 'enabled' });
     expect(container.textContent).toContain('Key saved and verified');
     expect(container.querySelector('.first-run-status')?.classList.contains('success')).toBe(true);
     expect(onSaved).toHaveBeenCalledWith('Key saved and verified. You are ready to chat.', true);
@@ -51,7 +51,7 @@ describe('FirstRunSetupCard connection status', () => {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     });
-    expect(plugins.setKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key');
+    expect(plugins.setKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key', { provider: 'openrouter', status: 'unavailable' });
     expect(container.textContent).toContain('could not be verified');
     expect(container.querySelector('.first-run-status')?.classList.contains('pending')).toBe(true);
     expect(container.textContent).not.toContain('You are ready to chat.');

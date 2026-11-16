@@ -25,11 +25,16 @@ export interface ProviderPlugins {
   defaultProvider: ProviderId | null;
   enabledProviders: ReadonlySet<ProviderId>;
   isConfigured: boolean;
+  isVerified: boolean;
+  verificationStatus: 'unverified' | 'verified' | 'unavailable' | 'invalid';
+  verificationLoading: boolean;
+  verifyEnabledProviders: () => Promise<boolean>;
+  invalidateVerification: () => void;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
   setEnabled: (provider: ProviderId, enabled: boolean) => Promise<boolean>;
-  setKey: (provider: ProviderId, apiKey: string) => Promise<boolean>;
+  setKey: (provider: ProviderId, apiKey: string, validation?: { status: ProviderKeyStatus; message?: string }) => Promise<boolean>;
   removeKey: (provider: ProviderId) => Promise<boolean>;
   setDefault: (provider: ProviderId) => Promise<boolean>;
   validateKey: (provider: ProviderId, apiKey?: string) => Promise<ProviderValidationResult>;
@@ -39,6 +44,7 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   const [payload, setPayload] = useState<ProviderSettingsPayload | null>(null);
   const [statuses, setStatuses] = useState<Record<string, { status: ProviderKeyStatus; message?: string }>>({});
   const [loading, setLoading] = useState(true);
+  const [verificationLoading, setVerificationLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const mountedRef = useRef(true);
@@ -62,6 +68,7 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     try {
       const next = await fetchProviderSettings();
       if (seq !== seqRef.current || !mountedRef.current) return;
+      setStatuses({});
       applyPayload(next);
     } catch (err) {
       if (seq !== seqRef.current || !mountedRef.current) return;
@@ -75,6 +82,7 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   // metadata is never shown for the next one.
   useEffect(() => {
     setPayload(null);
+    setStatuses({});
     void refresh();
   }, [refresh, userId]);
 
@@ -123,6 +131,20 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     return providers.some((p) => p.hasKey && p.enabled && p.status !== 'invalid_revoked');
   }, [providers]);
 
+  const enabledKeyProviders = useMemo(
+    () => providers.filter((provider) => provider.hasKey && provider.enabled),
+    [providers],
+  );
+  const isVerified = enabledKeyProviders.length > 0
+    && enabledKeyProviders.every((provider) => statuses[provider.id]?.status === 'enabled');
+  const verificationStatus: ProviderPlugins['verificationStatus'] = isVerified
+    ? 'verified'
+    : enabledKeyProviders.some((provider) => statuses[provider.id]?.status === 'invalid_revoked')
+      ? 'invalid'
+      : enabledKeyProviders.some((provider) => statuses[provider.id]?.status === 'unavailable')
+        ? 'unavailable'
+        : 'unverified';
+
   const validateKeyHandler = useCallback(
     async (provider: ProviderId, apiKey?: string): Promise<ProviderValidationResult> => {
       try {
@@ -152,17 +174,70 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     [],
   );
 
+  const verifyEnabledProviders = useCallback(async (): Promise<boolean> => {
+    const targets = providers.filter((provider) => provider.hasKey && provider.enabled);
+    if (targets.length === 0) return false;
+    setVerificationLoading(true);
+    try {
+      const results = await Promise.all(targets.map((provider) => validateKeyHandler(provider.id)));
+      return results.length > 0 && results.every((result) => result.status === 'enabled');
+    } finally {
+      setVerificationLoading(false);
+    }
+  }, [providers, validateKeyHandler]);
+
+  const invalidateVerification = useCallback(() => setStatuses({}), []);
+
+  const clearProviderVerification = useCallback((provider: ProviderId) => {
+    setStatuses((prev) => {
+      const next = { ...prev };
+      delete next[provider];
+      return next;
+    });
+  }, []);
+
+  const setKeyHandler = useCallback(async (
+    provider: ProviderId,
+    apiKey: string,
+    validation?: { status: ProviderKeyStatus; message?: string },
+  ): Promise<boolean> => {
+    const saved = await mutate(() => setProviderKey(provider, apiKey));
+    if (!saved) return false;
+    setStatuses((prev) => ({
+      ...prev,
+      [provider]: validation ? { status: validation.status, message: validation.message } : { status: 'unknown' },
+    }));
+    return true;
+  }, [mutate]);
+
+  const setEnabledHandler = useCallback(async (provider: ProviderId, enabled: boolean): Promise<boolean> => {
+    const saved = await mutate(() => setProviderEnabled(provider, enabled));
+    if (saved) clearProviderVerification(provider);
+    return saved;
+  }, [clearProviderVerification, mutate]);
+
+  const removeKeyHandler = useCallback(async (provider: ProviderId): Promise<boolean> => {
+    const removed = await mutate(() => deleteProviderKey(provider));
+    if (removed) clearProviderVerification(provider);
+    return removed;
+  }, [clearProviderVerification, mutate]);
+
   return {
     providers,
     defaultProvider: payload?.defaultProvider ?? null,
     enabledProviders,
     isConfigured,
+    isVerified,
+    verificationStatus,
+    verificationLoading,
+    verifyEnabledProviders,
+    invalidateVerification,
     loading,
     error,
     refresh,
-    setEnabled: (provider, enabled) => mutate(() => setProviderEnabled(provider, enabled)),
-    setKey: (provider, apiKey) => mutate(() => setProviderKey(provider, apiKey)),
-    removeKey: (provider) => mutate(() => deleteProviderKey(provider)),
+    setEnabled: setEnabledHandler,
+    setKey: setKeyHandler,
+    removeKey: removeKeyHandler,
     setDefault: (provider) => mutate(() => setDefaultProvider(provider)),
     validateKey: validateKeyHandler,
   };

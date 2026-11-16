@@ -13,14 +13,8 @@ export function reconcileFirstRunOutcome(
   if (!outcome) return null;
   if (!provider?.hasKey || !provider.enabled || provider.status === 'invalid_revoked') return null;
 
-  if (provider.status === 'enabled' && !outcome.verified) {
-    return { message: 'Key saved and verified. You are ready to chat.', verified: true };
-  }
-  if (provider.status !== 'enabled' && outcome.verified) {
-    return {
-      message: 'Key saved, but could not be verified. Check Provider Settings before chatting.',
-      verified: false,
-    };
-  }
+  // GET settings status describes whether the key is saved and enabled. It is
+  // not evidence that the provider accepted the key; only validate_key can
+  // move an unverified key to the ready state.
   return outcome;
 }
