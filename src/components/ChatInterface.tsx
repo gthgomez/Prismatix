@@ -356,6 +356,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
   const [showProviderSettings, setShowProviderSettings] = useState(false);
   const [firstRunOutcome, setFirstRunOutcome] = useState<FirstRunOutcome | null>(null);
+  const [rejectedRoute, setRejectedRoute] = useState<{
+    mode: 'chat' | 'compare' | 'debate';
+    manualModel: RouterModel | null;
+  } | null>(null);
   const activeUserIdRef = useRef(user?.id);
   const accountGenerationRef = useRef(0);
   const [showMemorySettings, setShowMemorySettings] = useState(false);
@@ -366,19 +370,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const enabledProviders = providerPlugins.enabledProviders;
   const providerVerified = providerPlugins.isVerified && !(firstRunOutcome && !firstRunOutcome.verified);
   const openRouterProvider = providerPlugins.providers.find((provider) => provider.id === 'openrouter');
-  // A configured key loaded from settings is only an unknown observation, not
-  // proof of verification. Preserve router-authorized sends for returning
-  // users, while keeping explicit setup failures and in-flight checks blocked.
-  const providerVerificationRequiresAction = providerPlugins.verificationLoading
-    || providerPlugins.verificationStatus === 'invalid'
+  const providerChecksNeedAttention = providerPlugins.verificationStatus === 'invalid'
     || providerPlugins.verificationStatus === 'unavailable'
-    || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked' || provider.status === 'unavailable')
-    || Boolean(firstRunOutcome && !firstRunOutcome.verified);
-  const providerCanAttemptRouterSend = !providerPlugins.loading
-    && !providerPlugins.error
-    && providerPlugins.isConfigured
-    && enabledProviders.size > 0
-    && !providerVerificationRequiresAction;
+    || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked' || provider.status === 'unavailable');
   useEffect(() => {
     setFirstRunOutcome((current) => reconcileFirstRunOutcome(current, openRouterProvider));
   }, [openRouterProvider]);
@@ -508,6 +502,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     filePickerRef.current = openPicker;
   }, []);
   const workspaceMode = comparisonMode ? 'compare' : debateSelection !== 'off' ? 'debate' : 'chat';
+  const routeRecoveryApplies = Boolean(rejectedRoute
+    && rejectedRoute.mode === workspaceMode
+    && rejectedRoute.manualModel === (workspaceMode === 'chat' ? manualModelOverride : null));
+  // A failed status for one saved provider must not veto unrelated routes.
+  // Explicit first-run verification and recovery for this same rejected route
+  // remain blocked; ordinary route choice stays with the router.
+  const providerVerificationRequiresAction = providerPlugins.verificationLoading
+    || Boolean(firstRunOutcome && !firstRunOutcome.verified)
+    || routeRecoveryApplies;
+  const providerCanAttemptRouterSend = !providerPlugins.loading
+    && !providerPlugins.error
+    && providerPlugins.isConfigured
+    && enabledProviders.size > 0
+    && !providerVerificationRequiresAction;
 
   const selectWorkspaceMode = useCallback((mode: 'chat' | 'compare' | 'debate') => {
     const compare = mode === 'compare';
@@ -661,6 +669,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setDraftAttachments([]);
     setFailedTurnDraft(null);
     setFirstRunOutcome(null);
+    setRejectedRoute(null);
     setSendValidationError(null);
     setStreamOutcome(null);
     setDuplicateNotice(null);
@@ -1226,7 +1235,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         : providerPlugins.loading
           ? 'Provider setup is still being checked. Please wait before retrying.'
           : providerVerificationRequiresAction
-            ? 'A recent provider check or router request needs attention. Verify or update the provider before retrying.'
+            ? routeRecoveryApplies
+              ? 'The router rejected this route. Verify or update its provider before retrying.'
+              : 'A recent provider check needs attention. Verify or update the provider before retrying.'
             : 'No enabled provider with a saved key is available. Your draft is preserved.');
       return;
     }
@@ -1629,6 +1640,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   }) => {
     const requestAccountGeneration = accountGenerationRef.current;
     const requestUserId = user?.id;
+    const requestRoute: { mode: 'chat' | 'compare' | 'debate'; manualModel: RouterModel | null } = {
+      mode: workspaceMode,
+      manualModel: workspaceMode === 'chat' ? manualModelOverride : null,
+    };
     const requestStillCurrent = () => requestAccountGeneration === accountGenerationRef.current
       && activeUserIdRef.current === requestUserId;
     if (!requestStillCurrent()) return;
@@ -2408,10 +2423,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         });
         if (routeUnavailable) {
           providerPlugins.invalidateVerification();
-          setFirstRunOutcome({
-            message: 'The router could not use this saved key for the request. This does not confirm the key needs replacement; verify or update the provider before retrying.',
-            verified: false,
-          });
+          setRejectedRoute(requestRoute);
           if (optimisticMessageId) {
             setMessages((prev) => prev.filter((message) => message.id !== optimisticMessageId));
           }
@@ -2463,7 +2475,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         : providerPlugins.loading
           ? 'Provider setup is still being checked. Please wait before sending.'
           : providerVerificationRequiresAction
-            ? providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked')
+            ? routeRecoveryApplies
+              ? 'The router recently rejected this route. Verify or update its provider before retrying.'
+              : providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked')
               ? 'A saved provider key was rejected. Update it in Provider Settings, then verify it before sending.'
               : providerPlugins.verificationLoading
                 ? 'Provider verification is in progress. Please wait before sending.'
@@ -2640,11 +2654,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   const handleVerifyProviders = async () => {
     const requestUserId = user?.id;
+    const resolvingFirstRun = Boolean(firstRunOutcome && !firstRunOutcome.verified);
     const verified = await providerPlugins.verifyEnabledProviders();
     if (activeUserIdRef.current !== requestUserId) return;
-    setFirstRunOutcome(verified
-      ? { message: 'Provider key verified. You are ready to chat.', verified: true }
-      : { message: 'Provider key could not be verified yet. Check the key or retry the verification.', verified: false });
+    // A user-driven provider check resolves the UI's route-recovery pause;
+    // the router remains authoritative if this route still cannot dispatch.
+    setRejectedRoute(null);
+    if (resolvingFirstRun) {
+      setFirstRunOutcome(verified
+        ? { message: 'Provider key verified. You are ready to chat.', verified: true }
+        : { message: 'Provider key could not be verified yet. Check the key or retry the verification.', verified: false });
+    }
   };
 
   const isStreamingRef = useRef(isStreaming);
@@ -3595,9 +3615,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   <button type='button' onClick={() => setShowProviderSettings(true)}>Open Provider Settings</button>
                 </div>
               ) : providerVerificationRequiresAction && !failedTurnDraft ? (
-                <div className={`provider-setup-state ${providerPlugins.verificationStatus === 'invalid' || providerPlugins.verificationStatus === 'unavailable' ? 'error' : ''}`} role={providerPlugins.verificationStatus === 'invalid' || providerPlugins.verificationStatus === 'unavailable' || Boolean(firstRunOutcome && !firstRunOutcome.verified) ? 'alert' : 'status'}>
-                  <strong>{providerPlugins.verificationLoading ? 'Checking provider key' : providerPlugins.verificationStatus === 'invalid' ? 'Provider key needs attention' : providerPlugins.verificationStatus === 'unavailable' ? 'Could not verify provider key' : 'Verify your saved provider key'}</strong>
-                  <span>{providerPlugins.verificationLoading ? 'A provider check is in progress. Sending is paused until it completes.' : providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'A provider rejected this saved key. Update it in Provider Settings, then verify again.' : providerPlugins.verificationStatus === 'unavailable' || providerPlugins.providers.some((provider) => provider.status === 'unavailable') ? 'Verification was unavailable. Your draft is preserved; retry the check when the provider is reachable.' : 'A recent first-run check or router request could not confirm this key. Verify or update it before sending.'}</span>
+                <div className={`provider-setup-state ${routeRecoveryApplies || providerPlugins.verificationStatus === 'invalid' || providerPlugins.verificationStatus === 'unavailable' ? 'error' : ''}`} role={providerVerificationRequiresAction ? 'alert' : 'status'}>
+                  <strong>{routeRecoveryApplies ? 'This route needs attention' : providerPlugins.verificationLoading ? 'Checking provider key' : providerPlugins.verificationStatus === 'invalid' ? 'Provider key needs attention' : providerPlugins.verificationStatus === 'unavailable' ? 'Could not verify provider key' : 'Verify your saved provider key'}</strong>
+                  <span>{routeRecoveryApplies ? 'The router rejected a previous request for this route. Verify or update its provider before retrying; other routes remain subject to router authorization.' : providerPlugins.verificationLoading ? 'A provider check is in progress. Sending is paused until it completes.' : providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'A provider rejected this saved key. Update it in Provider Settings, then verify again.' : providerPlugins.verificationStatus === 'unavailable' || providerPlugins.providers.some((provider) => provider.status === 'unavailable') ? 'Verification was unavailable. Your draft is preserved; retry the check when the provider is reachable.' : 'A recent first-run check could not confirm this key. Verify or update it before sending.'}</span>
                   <button type='button' disabled={providerPlugins.verificationLoading} onClick={() => void handleVerifyProviders()}>{providerPlugins.verificationLoading ? 'Verifying…' : 'Verify provider keys'}</button>
                   <button type='button' onClick={() => setShowProviderSettings(true)}>Open Provider Settings</button>
                 </div>
@@ -3611,7 +3631,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               ) : (
                 <>
                   {!providerVerified && (
-                    <p className='arctic-provider-unknown-status' role='status'>A saved key has not been checked this session. The router will authorize each send.</p>
+                    <p className='arctic-provider-unknown-status' role='status'>{providerChecksNeedAttention ? 'One or more saved provider checks need attention. The router evaluates each route when you send.' : 'A saved key has not been checked this session. The router will authorize each send.'}</p>
                   )}
                   <img className='arctic-hero-mark' src='/prismatix-arctic-mark.svg' alt='' />
                   <h2>What can I help you with?</h2>
@@ -3928,7 +3948,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       )}
       {messages.length > 0 && !providerPlugins.loading && !providerPlugins.error && providerPlugins.isConfigured && !providerVerified && (
         <div className='provider-readiness-banner' role={providerVerificationRequiresAction ? 'alert' : 'status'}>
-          <span>{!providerVerificationRequiresAction ? 'Saved provider keys have not been checked this session. The router will authorize each send.' : providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'A provider rejected its saved key. Update it in Provider Settings before sending.' : providerPlugins.verificationStatus === 'unavailable' || providerPlugins.providers.some((provider) => provider.status === 'unavailable') ? 'Provider verification was unavailable. Retry the check before sending.' : providerPlugins.verificationLoading ? 'Provider verification is in progress. Sending is paused.' : 'A recent first-run check or router request could not confirm this key. Verify or update it before sending.'}</span>
+          <span>{routeRecoveryApplies ? 'The router recently rejected this route. Verify or update its provider before retrying it.' : providerVerificationRequiresAction ? providerPlugins.verificationLoading ? 'Provider verification is in progress. Sending is paused.' : 'A recent first-run check could not confirm this key. Verify or update it before sending.' : providerChecksNeedAttention ? 'One or more provider keys need attention. The router evaluates each route when you send.' : 'Saved provider keys have not been checked this session. The router will authorize each send.'}</span>
           {providerVerificationRequiresAction && <button type='button' disabled={providerPlugins.verificationLoading} onClick={() => void handleVerifyProviders()}>{providerPlugins.verificationLoading ? 'Verifying…' : 'Verify provider keys'}</button>}
           <button type='button' onClick={() => setShowProviderSettings(true)}>Provider Settings</button>
         </div>
@@ -4135,7 +4155,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         </div>
         <div className={`arctic-route-status ${isStreaming ? 'running' : providerPlugins.loading || providerPlugins.verificationLoading ? 'checking' : providerPlugins.error || !providerPlugins.isConfigured || providerVerificationRequiresAction || !providerVerified ? 'setup' : 'ready'}`} role='status'>
           <span className='arctic-status-icon' aria-hidden='true'>{isStreaming ? '◌' : providerPlugins.loading || providerPlugins.verificationLoading ? '…' : providerPlugins.error || !providerPlugins.isConfigured || providerVerificationRequiresAction || !providerVerified ? '!' : '✓'}</span>
-          <span><small>Route status</small><strong>{isStreaming ? 'Request in progress' : providerPlugins.loading ? 'Checking provider setup' : providerPlugins.error ? 'Provider status unavailable' : !providerPlugins.isConfigured ? providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'Saved key rejected' : 'Connect a provider' : providerVerificationRequiresAction ? providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'Saved key rejected' : providerPlugins.verificationStatus === 'unavailable' || providerPlugins.providers.some((provider) => provider.status === 'unavailable') ? 'Verification unavailable' : 'Verification required' : !providerVerified ? 'Key saved · not checked this session' : 'Provider verified · route ready'}</strong></span>
+          <span><small>Route status</small><strong>{isStreaming ? 'Request in progress' : providerPlugins.loading ? 'Checking provider setup' : providerPlugins.error ? 'Provider status unavailable' : !providerPlugins.isConfigured ? providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'Saved key rejected' : 'Connect a provider' : routeRecoveryApplies ? 'This route needs verification' : providerVerificationRequiresAction ? providerPlugins.verificationStatus === 'invalid' || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked') ? 'Saved key rejected' : providerPlugins.verificationStatus === 'unavailable' || providerPlugins.providers.some((provider) => provider.status === 'unavailable') ? 'Verification unavailable' : 'Verification required' : providerChecksNeedAttention ? 'A provider key needs attention' : !providerVerified ? 'Key saved · not checked this session' : 'Provider verified · route ready'}</strong></span>
         </div>
         <section className='arctic-route-field'>
           <h3>Selected model</h3>
@@ -4157,9 +4177,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               : providerPlugins.isConfigured && providerVerified
               ? 'Prismatix selects a model after you enter a request, based on task complexity, available providers, and attachments.'
                 : providerPlugins.isConfigured
-                  ? providerVerificationRequiresAction
-                    ? 'Verify or update the saved provider key before sending or retrying.'
-                    : 'The saved key has not been checked this session. The router authorizes each request.'
+                  ? routeRecoveryApplies
+                    ? 'The router rejected this route recently. Verify or update its provider before retrying it.'
+                    : providerVerificationRequiresAction
+                      ? 'Verify the saved provider key before sending this first-run request.'
+                      : providerChecksNeedAttention
+                        ? 'Some saved provider checks need attention. The router determines which provider can handle each request.'
+                        : 'The saved key has not been checked this session. The router authorizes each request.'
                   : 'Connect an AI provider before sending a request.'}</p>
         </section>
         <section className='arctic-route-field'>

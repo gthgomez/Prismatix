@@ -158,6 +158,57 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
   });
 }
 
+for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
+  test(`unrelated ${unrelatedStatus} provider does not block healthy Google manual or Auto routes`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+    await page.route('**/functions/v1/provider-settings*', async (route) => {
+      const body = route.request().method() === 'POST' ? route.request().postDataJSON() as Record<string, unknown> : {};
+      if (body.action === 'validate_key') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider: body.provider, status: 'enabled' }) });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          providers: [
+            { id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, status: 'enabled' },
+            { id: 'google', label: 'Google', enabled: true, hasKey: true, status: 'enabled' },
+            { id: 'anthropic', label: 'Anthropic', enabled: true, hasKey: true, status: unrelatedStatus },
+          ],
+          defaultProvider: 'google',
+        }),
+      });
+    });
+    const routerRequests: Array<Record<string, unknown>> = [];
+    await page.route('**/functions/v1/router*', async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      routerRequests.push(body);
+      await route.fulfill(successfulStream(`Mock response ${routerRequests.length}`, `unrelated-${unrelatedStatus}-${routerRequests.length}`));
+    });
+
+    await signInAsMockUser(page);
+    const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+    await composer.fill('Use Auto with an unrelated provider issue');
+    await composer.press('Enter');
+    await expect(page.getByText('Mock response 1')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Choose routing mode: automatic' }).click();
+    await page.getByRole('tab', { name: 'Models' }).click();
+    await page.getByRole('region', { name: 'Historic model catalog' }).getByRole('button', { name: /Historic models/ }).click();
+    await page.locator('.model-option').filter({ hasText: 'Gemini 2.5 Flash' }).click();
+    await expect(page.getByRole('button', { name: 'Choose model: Gemini 2.5 Flash' })).toBeVisible();
+    await composer.fill('Use a healthy Google model manually');
+    await composer.press('Enter');
+    await expect(page.getByText('Mock response 2')).toBeVisible();
+
+    expect(routerRequests).toHaveLength(2);
+    expect(routerRequests[0]?.modelOverride).toBeUndefined();
+    expect(routerRequests[1]?.modelOverride).toBe('gemini-2.5-flash');
+  });
+}
+
 test('provider settings lookup failure blocks send, keeps draft, and retry restores router-authorized readiness', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
