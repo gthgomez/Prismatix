@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, type Ref } from 'react';
 import { calculateCostBreakdown, type UsageEstimate } from '../costEngine';
 import { PRICING_VERSION } from '../pricingRegistry';
 import type { RouterModel } from '../types';
@@ -25,6 +25,9 @@ interface CostEstimatorProps {
   routerPricingVersion?: string | null;
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
+  panelRef?: Ref<HTMLDivElement>;
+  detailsButtonRef?: Ref<HTMLButtonElement>;
+  compactViewportHeight?: number | null;
 }
 
 export const CostEstimator: React.FC<CostEstimatorProps> = ({
@@ -37,6 +40,9 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   routerPricingVersion,
   onInteractionStart,
   onInteractionEnd,
+  panelRef,
+  detailsButtonRef,
+  compactViewportHeight,
 }) => {
   const [detailsOpen, setDetailsOpen] = useState(readDetailsExpanded);
 
@@ -86,7 +92,11 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
 
   return (
     <div
-      className={`cost-estimator ${isStreaming ? 'streaming' : 'final'}`}
+      ref={panelRef}
+      className={`cost-estimator ${isStreaming ? 'streaming' : 'final'} ${compactViewportHeight !== null && compactViewportHeight !== undefined ? 'compact-details-revealed' : ''}`}
+      style={compactViewportHeight !== null && compactViewportHeight !== undefined
+        ? ({ '--compact-cost-viewport-height': `${compactViewportHeight}px` } as React.CSSProperties)
+        : undefined}
       aria-live='polite'
       onFocusCapture={onInteractionStart}
       onBlurCapture={(event) => {
@@ -140,6 +150,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
       </div>
 
       <button
+        ref={detailsButtonRef}
         type='button'
         className='cost-estimator-details-toggle'
         aria-expanded={detailsOpen}

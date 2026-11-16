@@ -162,6 +162,26 @@
   flex-shrink: 1;
 }
 
+.compact-cost-details-button {
+  display: none;
+  min-height: 40px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid #d5e2f1;
+  border-radius: 10px;
+  background: #fff;
+  color: #172338;
+  font: inherit;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.compact-cost-details-button:focus-visible { outline: 2px solid #1570ef; outline-offset: 2px; }
+.arctic-workbench:not(.arctic-new-chat) .compact-cost-details-button {
+  border-color: var(--color-border, rgba(255,255,255,.1));
+  background: var(--color-surface, #0d141b);
+  color: var(--color-text, #fff);
+}
+
 .header-utility-bar {
   display: contents;
 }
@@ -2456,7 +2476,7 @@
   font-style: italic;
 }
 
-@media (min-width: 769px) and (max-height: 680px) {
+@media (min-width: 769px) and (max-height: 680px), (min-width: 769px) and (max-width: 1200px) {
   .messages-list > .cost-estimator {
     position: relative;
     inset: auto;
@@ -4858,6 +4878,20 @@
   .arctic-new-chat .capability-card-desc { font-size: 0.84rem; }
 }
 
+@media (max-width: 768px) {
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .chat-header {
+    min-height: 0;
+    padding: max(0.45rem, env(safe-area-inset-top)) 0.65rem 0.45rem;
+  }
+}
+
+@media (max-width: 1200px), (min-width: 1201px) and (max-height: 680px) {
+  .compact-cost-details-button { display: inline-flex; }
+}
+@media (min-width: 1201px) and (min-height: 681px) {
+  .compact-cost-details-button { display: none; }
+}
+
 @media (min-width: 1201px) {
   .arctic-new-chat .arctic-mode-switch { position: relative; left: 33px; }
   .arctic-new-chat .arctic-hero-mark,
@@ -5155,6 +5189,56 @@
 @media (max-width: 640px) {
   .first-run-input-row { flex-direction: column; }
   .first-run-submit { width: 100%; }
+}
+
+/* Keep compact history headers on one row; the action rail can scroll horizontally. */
+@media (max-width: 1200px) {
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-content {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions {
+    flex: 0 1 auto;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions::-webkit-scrollbar { display: none; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions > *,
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar > * { flex: 0 0 auto; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions .model-selector-container {
+    flex: 0 0 auto;
+    order: initial;
+    min-width: 0;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions .model-indicator-button { width: auto; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .memory-trigger-label { display: none; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-button.memory-trigger {
+    min-width: 40px;
+    width: 40px;
+    padding: 0.5rem;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar { flex-wrap: nowrap; flex: 0 0 auto; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar-trailing { flex: 0 0 auto; }
+}
+
+/* Escape the horizontally scrolling compact history header action rail while
+   keeping the model menu aligned to its actual trigger. The 768px-and-below
+   viewport sheet and the wide anchored popover retain their existing rules. */
+@media (min-width: 769px) and (max-width: 1200px) {
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .model-dropdown {
+    position: fixed;
+    top: var(--prismatix-model-dropdown-top, 5.25rem);
+    right: max(0.5rem, var(--prismatix-model-dropdown-right, 1rem));
+    left: auto;
+    width: min(320px, 92vw);
+    min-width: min(320px, 92vw);
+    max-width: calc(100vw - 1rem);
+    max-height: min(88dvh, calc(100dvh - var(--prismatix-model-dropdown-top, 5.25rem) - 1rem));
+    z-index: 2500;
+  }
 }
 
 .first-run-input {
@@ -5875,4 +5959,12 @@
   .provider-setup-composer-status { align-items: flex-start; flex-direction: column; }
   .provider-setup-composer-status button { width: 100%; }
   .chat-container.provider-setup-blocked .chat-input-container { padding-inline: 0.65rem; }
+}
+
+@media (max-width: 1200px), (min-width: 1201px) and (max-height: 680px) {
+  .cost-estimator.compact-details-revealed {
+    max-height: min(var(--compact-cost-viewport-height), 38dvh, 14rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
 }

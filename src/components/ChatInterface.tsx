@@ -349,6 +349,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [sessionCostTotal, setSessionCostTotal] = useState(0);
   const [spendRefreshKey, setSpendRefreshKey] = useState(0);
   const [showCostEstimator, setShowCostEstimator] = useState(false);
+  const costEstimatorPanelRef = useRef<HTMLDivElement>(null);
+  const costEstimatorDetailsButtonRef = useRef<HTMLButtonElement>(null);
+  const [compactCostReveal, setCompactCostReveal] = useState<{ viewportHeight: number; request: number } | null>(null);
+  const compactCostRevealRequestRef = useRef(0);
   const [finalMessageCost, setFinalMessageCost] = useState<number | null>(null);
   const [routerPricingVersion, setRouterPricingVersion] = useState<string | undefined>(undefined);
   const [debateSelection, setDebateSelection] = useState<DebateSelection>('off');
@@ -713,6 +717,42 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     messagesEndRef.current?.scrollIntoView?.({ behavior: 'auto', block: 'end' });
   }, [showCostEstimator, messages.length, shouldStickToBottomRef]);
 
+  useEffect(() => {
+    if (!showCostEstimator || showProviderSettings) setCompactCostReveal(null);
+  }, [showCostEstimator, showProviderSettings]);
+
+  useEffect(() => {
+    if (compactCostReveal?.request === undefined) return;
+    const messageViewport = costEstimatorPanelRef.current?.closest<HTMLElement>('.chat-messages');
+    if (!messageViewport || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      const viewportHeight = Math.max(0, messageViewport.clientHeight - 4);
+      setCompactCostReveal((current) => current && current.viewportHeight !== viewportHeight
+        ? { ...current, viewportHeight }
+        : current);
+    });
+    observer.observe(messageViewport);
+    return () => observer.disconnect();
+  }, [compactCostReveal?.request]);
+
+  useLayoutEffect(() => {
+    if (compactCostReveal?.request === undefined) return;
+    const panel = costEstimatorPanelRef.current;
+    const detailsButton = costEstimatorDetailsButtonRef.current;
+    const messageViewport = panel?.closest<HTMLElement>('.chat-messages');
+    if (!panel || !detailsButton || !messageViewport) return;
+
+    const panelTopOffset = panel.getBoundingClientRect().top - messageViewport.getBoundingClientRect().top;
+    messageViewport.scrollTop = Math.max(0, messageViewport.scrollTop + panelTopOffset);
+
+    const panelRect = panel.getBoundingClientRect();
+    const buttonRect = detailsButton.getBoundingClientRect();
+    const buttonOverflow = Math.max(0, buttonRect.bottom - panelRect.bottom)
+      - Math.max(0, panelRect.top - buttonRect.top);
+    panel.scrollTop = Math.max(0, panel.scrollTop + buttonOverflow);
+    detailsButton.focus({ preventScroll: true });
+  }, [compactCostReveal?.request]);
+
   // Keep attachment preview visible when user is already at bottom.
   useEffect(() => {
     if (!shouldStickToBottomRef.current) return;
@@ -964,6 +1004,33 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       root.style.removeProperty('--prismatix-chat-header-h');
     };
   }, [chatHeaderElement]);
+
+  // The compact saved-chat action rail scrolls horizontally. Anchor its model
+  // menu to the trigger in viewport coordinates so the fixed popover can escape
+  // that rail's overflow clip without changing the wide or mobile variants.
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    if (!showModelSelector) {
+      root.style.removeProperty('--prismatix-model-dropdown-right');
+      return;
+    }
+    const apply = () => {
+      const trigger = modelSelectorRef.current?.querySelector<HTMLElement>('.model-indicator-button');
+      if (!trigger) return;
+      const rightInset = Math.max(8, window.innerWidth - trigger.getBoundingClientRect().right);
+      root.style.setProperty('--prismatix-model-dropdown-right', `${Math.ceil(rightInset)}px`);
+    };
+    apply();
+    window.addEventListener('resize', apply);
+    window.addEventListener('scroll', apply, true);
+    window.visualViewport?.addEventListener('resize', apply);
+    return () => {
+      window.removeEventListener('resize', apply);
+      window.removeEventListener('scroll', apply, true);
+      window.visualViewport?.removeEventListener('resize', apply);
+      root.style.removeProperty('--prismatix-model-dropdown-right');
+    };
+  }, [showModelSelector, chatHeaderElement]);
 
   // ── PX07 conversation continuity ─────────────────────────────────────────
   const mapLoadedMessages = async (loaded: LoadedMessage[]): Promise<Message[]> => {
@@ -3223,6 +3290,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             </div>
           </div>
           <div className='header-actions'>
+          {showCostEstimator && !showProviderSettings && (
+            <button
+              type='button'
+              className='compact-cost-details-button'
+              aria-label='View cost details'
+              onClick={() => {
+                const panel = costEstimatorPanelRef.current;
+                if (!panel || !costEstimatorDetailsButtonRef.current) return;
+                const messageViewport = panel.closest<HTMLElement>('.chat-messages');
+                if (!messageViewport) return;
+                compactCostRevealRequestRef.current += 1;
+                setCompactCostReveal({
+                  viewportHeight: Math.max(0, messageViewport.clientHeight - 4),
+                  request: compactCostRevealRequestRef.current,
+                });
+              }}
+            >
+              Cost details
+            </button>
+          )}
           <button
             type='button'
             className='arctic-routing-toggle'
@@ -3756,6 +3843,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 routerPricingVersion={routerPricingVersion}
                 onInteractionStart={clearCostEstimatorHideTimer}
                 onInteractionEnd={() => scheduleCostEstimatorHide(3000)}
+                panelRef={costEstimatorPanelRef}
+                detailsButtonRef={costEstimatorDetailsButtonRef}
+                compactViewportHeight={compactCostReveal?.viewportHeight ?? null}
               />
               <div ref={messagesEndRef} />
             </div>
