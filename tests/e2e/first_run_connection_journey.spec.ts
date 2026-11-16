@@ -112,6 +112,23 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await mkdir(outputDir, { recursive: true });
   const tracePath = `${outputDir}/connection-journey.zip`;
   const capture = async (name: string) => page.screenshot({ path: `${outputDir}/${name}.png` });
+  const assertAccountControlFits = async () => {
+    await expect.poll(() => page.evaluate(() => {
+      const header = document.querySelector<HTMLElement>('.chat-header')!;
+      const account = document.querySelector<HTMLElement>('.user-button')!;
+      const headerBox = header.getBoundingClientRect();
+      const accountBox = account.getBoundingClientRect();
+      const hit = document.elementFromPoint(accountBox.left + accountBox.width / 2, accountBox.top + accountBox.height / 2);
+      return headerBox.left >= -1 && headerBox.right <= window.innerWidth + 1
+        && header.scrollWidth <= header.clientWidth + 1
+        && accountBox.left >= -1 && accountBox.right <= window.innerWidth + 1
+        && (hit === account || account.contains(hit));
+    })).toBe(true);
+    const accountMenu = page.getByRole('button', { name: 'Account menu' });
+    await accountMenu.click();
+    await expect(page.locator('.user-dropdown')).toBeVisible();
+    await accountMenu.click();
+  };
   await page.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
   await signInAsMockUser(page);
   await expect(page.locator('.first-run-card')).toBeVisible();
@@ -140,6 +157,7 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await capture('transition-streaming-1024x600');
   releaseRouterResponse();
   await expect(page.getByText(GENERATED_REPLY)).toBeVisible({ timeout: 15000 });
+  await assertAccountControlFits();
   await capture('transition-reply-1024x600');
   expect(fixture.routerRequests).toHaveLength(1);
   expect(fixture.routerRequests[0]?.query).toBe(prompt);
@@ -157,6 +175,7 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await page.reload();
   await expect(page.getByRole('textbox', { name: /message prismatix/i })).toBeVisible({ timeout: 15000 });
   await expect(page.getByText(GENERATED_REPLY)).toBeVisible({ timeout: 15000 });
+  await assertAccountControlFits();
   await capture('transition-reload-1024x600');
   expect(fixture.routerRequests).toHaveLength(1);
   expect(fixture.messages[0]?.conversation_id).toBe(fixture.conversation?.id);

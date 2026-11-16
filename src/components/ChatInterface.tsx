@@ -356,11 +356,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
   const [showProviderSettings, setShowProviderSettings] = useState(false);
   const [firstRunOutcome, setFirstRunOutcome] = useState<FirstRunOutcome | null>(null);
+  const activeUserIdRef = useRef(user?.id);
   const [showMemorySettings, setShowMemorySettings] = useState(false);
   const [lastRecall, setLastRecall] = useState<{ conversationId: string; hits: number } | null>(null);
 
   // Provider plug-ins (PX12): which providers are on for this user.
   const providerPlugins = useProviderPlugins(user?.id);
+  useLayoutEffect(() => {
+    if (activeUserIdRef.current !== user?.id) {
+      activeUserIdRef.current = user?.id;
+      setFirstRunOutcome(null);
+    }
+  }, [user?.id]);
   const enabledProviders = providerPlugins.enabledProviders;
   const providerVerified = providerPlugins.isVerified && !(firstRunOutcome && !firstRunOutcome.verified);
   const openRouterProvider = providerPlugins.providers.find((provider) => provider.id === 'openrouter');
@@ -2309,6 +2316,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           ? String((error as { code?: unknown }).code)
           : '';
         const routeUnavailable = ['provider_key_required', 'provider_key_unavailable', 'no_available_provider', 'provider_unavailable', 'provider_disabled'].includes(routerCode);
+        setShowCostEstimator(false);
         setStreamOutcome({
           status: 'error',
           executionId: executionIdRef.current,
@@ -2316,6 +2324,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         });
         if (routeUnavailable) {
           providerPlugins.invalidateVerification();
+          setFirstRunOutcome({
+            message: 'The router could not use this saved key for the request. This does not confirm the key needs replacement; verify or update the provider before retrying.',
+            verified: false,
+          });
           if (optimisticMessageId) {
             setMessages((prev) => prev.filter((message) => message.id !== optimisticMessageId));
           }
@@ -2535,7 +2547,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const handleVerifyProviders = async () => {
+    const requestUserId = user?.id;
     const verified = await providerPlugins.verifyEnabledProviders();
+    if (activeUserIdRef.current !== requestUserId) return;
     setFirstRunOutcome(verified
       ? { message: 'Provider key verified. You are ready to chat.', verified: true }
       : { message: 'Provider key could not be verified yet. Check the key or retry the verification.', verified: false });
@@ -3349,7 +3363,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   );
 
   return (
-    <div className={`app-with-sidebar arctic-workbench arctic-new-chat ${messages.length > 0 || selectedConversationId ? 'arctic-has-history' : ''} ${chatsHidden ? 'chats-hidden' : ''}`}>
+    <div className={`app-with-sidebar arctic-workbench arctic-new-chat ${messages.length > 0 || selectedConversationId ? 'arctic-has-history' : ''} ${failedTurnDraft ? 'arctic-recovering' : ''} ${chatsHidden ? 'chats-hidden' : ''}`}>
       {!chatsHidden && (
         <ConversationSidebar
           preferenceScope={user?.id ?? null}
@@ -3490,6 +3504,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                 </div>
               ) : !providerPlugins.isConfigured ? (
                 <FirstRunSetupCard
+                  key={user?.id ?? 'anonymous'}
                   plugins={providerPlugins}
                   onOpenSettings={() => setShowProviderSettings(true)}
                   onSaved={(message, verified) => setFirstRunOutcome({ message, verified })}

@@ -4722,6 +4722,51 @@
   .arctic-new-chat.app-with-sidebar { grid-template-columns: minmax(200px, 23vw) minmax(0, 1fr); }
   .arctic-new-chat > .chat-container { grid-column: 2; }
   .arctic-new-chat .chat-header { grid-column: 2 / 3; width: 100%; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .chat-header {
+    height: auto;
+    min-height: 84px;
+    padding: 0.65rem 1rem;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-content {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions {
+    display: flex;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar-trailing {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .user-menu-container { flex: 0 0 auto; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .user-button { margin-right: 0; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .draft-recovery-bar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .draft-recovery-text {
+    flex: 1 1 20rem;
+    min-width: 0;
+    align-items: flex-start;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .draft-recovery-actions { margin-left: auto; }
   .arctic-routing-toggle {
     display: inline-flex;
     align-items: center;

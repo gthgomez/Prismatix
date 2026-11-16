@@ -37,6 +37,7 @@ test('Arctic shell persists through send and history; saved-chat layout has no h
 for (const code of ['provider_key_required', 'provider_key_unavailable']) {
   test(`early ${code} response preserves draft without adding a fake chat turn`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 600 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
     let requests = 0;
     await page.route('**/functions/v1/router*', async (route) => {
@@ -55,9 +56,66 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
     await expect(composer).toHaveValue('Keep this exact draft');
     await expect(page.locator('.messages-list .message')).toHaveCount(0);
     await expect(page.locator('.arctic-workbench')).toHaveClass(/arctic-new-chat/);
-      const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
-      await mkdir(evidenceDir, { recursive: true });
-      await page.screenshot({ path: `${evidenceDir}/transition-provider-failure-1024x600-${code}.png` });
+    await expect(page.locator('.first-run-status')).toContainText('router could not use this saved key');
+    await expect(page.locator('.first-run-status')).not.toContainText('ready to chat');
+    await expect(page.locator('.first-run-status')).not.toContainText(/revoked|rejected|invalid/i);
+    await expect(page.locator('.cost-estimator')).toBeHidden();
+
+    const recovery = page.locator('.draft-recovery-bar');
+    const recoveryText = recovery.locator('.draft-recovery-text');
+    const recoveryActions = recovery.locator('.draft-recovery-actions');
+    const accountMenu = page.getByRole('button', { name: 'Account menu' });
+    const layout = await page.evaluate(() => {
+      const header = document.querySelector<HTMLElement>('.chat-header')!;
+      const avatar = document.querySelector<HTMLElement>('.user-button')!;
+      const recovery = document.querySelector<HTMLElement>('.draft-recovery-bar')!;
+      const text = recovery.querySelector<HTMLElement>('.draft-recovery-text')!;
+      const actions = recovery.querySelector<HTMLElement>('.draft-recovery-actions')!;
+      const rect = (element: HTMLElement) => {
+        const box = element.getBoundingClientRect();
+        return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width, height: box.height };
+      };
+      return {
+        viewportWidth: window.innerWidth,
+        header: rect(header),
+        account: rect(avatar),
+        recovery: rect(recovery),
+        recoveryText: rect(text),
+        recoveryActions: rect(actions),
+        recoveryOverlaps: (() => {
+          const textRect = text.getBoundingClientRect();
+          const actionsRect = actions.getBoundingClientRect();
+          return textRect.left < actionsRect.right && textRect.right > actionsRect.left
+            && textRect.top < actionsRect.bottom && textRect.bottom > actionsRect.top;
+        })(),
+        textFits: text.scrollHeight <= text.clientHeight + 1,
+      };
+    });
+    expect(layout.header.left).toBeGreaterThanOrEqual(0);
+    expect(layout.header.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    expect(layout.account.left).toBeGreaterThanOrEqual(0);
+    expect(layout.account.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    expect(layout.recoveryOverlaps).toBe(false);
+    expect(layout.textFits).toBe(true);
+    await expect(recoveryText).toContainText(code === 'provider_key_required' ? 'No usable provider credential' : 'could not be retrieved');
+    await expect(recoveryActions.getByRole('button', { name: 'Restore draft' })).toBeVisible();
+    await expect(recoveryActions.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
+
+    for (const button of [accountMenu, recoveryActions.getByRole('button', { name: 'Restore draft' }), recoveryActions.getByRole('button', { name: 'Retry', exact: true })]) {
+      const hitTargetWorks = await button.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return hit === element || element.contains(hit);
+      });
+      expect(hitTargetWorks).toBe(true);
+    }
+    await accountMenu.click();
+    await expect(page.locator('.user-dropdown')).toBeVisible();
+    await accountMenu.click();
+
+    const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
+    await mkdir(evidenceDir, { recursive: true });
+    await page.screenshot({ path: `${evidenceDir}/transition-provider-failure-1024x600-${code}.png`, animations: 'disabled' });
       const verify = page.getByRole('button', { name: 'Verify provider keys', exact: true });
       if (await verify.isVisible().catch(() => false)) await verify.click();
     await page.getByRole('button', { name: 'Retry', exact: true }).click();
@@ -361,6 +419,22 @@ test('a saved but unverified provider blocks sends until retry verification succ
   await composer.press('Enter');
   await expect(page.getByText('Verified key mock reply')).toBeVisible();
   expect(routerCalls).toBe(1);
+
+  await page.reload();
+  await signInAsMockUser(page, { verifyConfiguredProviders: false });
+  await expect(routeStatus).toContainText('Key saved · not verified');
+  const verifyAfterReload = page.getByRole('button', { name: 'Verify provider keys' });
+  await expect(verifyAfterReload).toBeVisible();
+  await expect(page.locator('.first-run-status.success')).toHaveCount(0);
+  await composer.fill('Verification must be repeated after reload');
+  await composer.press('Enter');
+  expect(routerCalls).toBe(1);
+  await expect(composer).toHaveValue('Verification must be repeated after reload');
+  await verifyAfterReload.click();
+  await expect(routeStatus).toContainText('Provider verified · route ready');
+  await composer.press('Enter');
+  await expect(page.getByText('Verified key mock reply')).toBeVisible();
+  expect(routerCalls).toBe(2);
 });
 
 test('attachment-only route rejection removes only its optimistic turn and retry restores one row', async ({ page }) => {

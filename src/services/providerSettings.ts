@@ -80,6 +80,8 @@ export interface ProviderValidationResult {
   provider: ProviderId;
   status: import('../types').ProviderKeyStatus;
   message?: string;
+  /** Client-only marker: this response belongs to a previous signed-in account. */
+  stale?: boolean;
 }
 
 export async function validateProviderKey(

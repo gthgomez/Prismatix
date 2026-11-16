@@ -81,4 +81,25 @@ describe('FirstRunSetupCard connection status', () => {
     expect(container.textContent).toContain('Key saved and verified');
     await act(async () => root.unmount());
   });
+
+  it('does not save a key when its deferred check belongs to a previous account', async () => {
+    const validateKey = vi.fn().mockResolvedValue({
+      provider: 'openrouter',
+      status: 'unavailable',
+      stale: true,
+    });
+    const { container, root, plugins, onSaved } = renderCard(validateKey as ProviderPlugins['validateKey']);
+    const input = container.querySelector<HTMLInputElement>('#first-run-openrouter-key')!;
+    const form = container.querySelector('form')!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(input, 'sk-or-stale-account-key');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    expect(plugins.setKey).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('The key was not saved');
+    await act(async () => root.unmount());
+  });
 });
