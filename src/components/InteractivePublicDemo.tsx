@@ -211,6 +211,13 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
     const nextTab = tabRefs.current[nextIndex];
     nextTab?.focus();
     nextTab?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    const tabList = nextTab?.closest<HTMLElement>('.demo-tabs');
+    if (nextTab && tabList) {
+      const listBounds = tabList.getBoundingClientRect();
+      const tabBounds = nextTab.getBoundingClientRect();
+      if (tabBounds.left < listBounds.left) tabList.scrollLeft -= listBounds.left - tabBounds.left;
+      else if (tabBounds.right > listBounds.right) tabList.scrollLeft += tabBounds.right - listBounds.right;
+    }
   };
 
   const handleSkip = () => {
