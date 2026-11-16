@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
+import { MODEL_ORDER, getCatalogEntry } from '../../src/modelCatalog';
 
 const successfulStream = (text: string, executionId: string) => ({
   status: 200,
@@ -160,6 +161,9 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
 
 for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
   test(`unrelated ${unrelatedStatus} provider does not block healthy Google manual or Auto routes`, async ({ page }) => {
+    const healthyGoogleModel = MODEL_ORDER.find((id) => getCatalogEntry(id).provider === 'google');
+    expect(healthyGoogleModel).toBeTruthy();
+    const healthyGoogleModelName = getCatalogEntry(healthyGoogleModel!).shortName;
     await page.setViewportSize({ width: 1440, height: 900 });
     await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
     await page.route('**/functions/v1/provider-settings*', async (route) => {
@@ -197,15 +201,15 @@ for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
     await page.getByRole('button', { name: 'Choose routing mode: automatic' }).click();
     await page.getByRole('tab', { name: 'Models' }).click();
     await page.getByRole('region', { name: 'Historic model catalog' }).getByRole('button', { name: /Historic models/ }).click();
-    await page.locator('.model-option').filter({ hasText: 'Gemini 2.5 Flash' }).click();
-    await expect(page.getByRole('button', { name: 'Choose model: Gemini 2.5 Flash' })).toBeVisible();
+    await page.locator('.model-option').filter({ hasText: healthyGoogleModelName }).click();
+    await expect(page.getByRole('button', { name: `Choose model: ${healthyGoogleModelName}` })).toBeVisible();
     await composer.fill('Use a healthy Google model manually');
     await composer.press('Enter');
     await expect(page.getByText('Mock response 2')).toBeVisible();
 
     expect(routerRequests).toHaveLength(2);
     expect(routerRequests[0]?.modelOverride).toBeUndefined();
-    expect(routerRequests[1]?.modelOverride).toBe('gemini-2.5-flash');
+    expect(routerRequests[1]?.modelOverride).toBe(healthyGoogleModel);
   });
 }
 
