@@ -96,10 +96,51 @@ test('a stuck v1 tab recovers on user reload without refreshing a healthy v1 tab
   });
   const page = await context.newPage();
   const healthyPage = await context.newPage();
+  const forwardMigrationProof = (target: typeof page) => target.on('console', (message) => {
+    if (message.text().startsWith('[pwa-migration-proof]')) console.info(message.text());
+  });
+  forwardMigrationProof(page);
+  forwardMigrationProof(healthyPage);
   let healthyNavigationCount = 0;
   healthyPage.on('framenavigated', (frame) => {
     if (frame === healthyPage.mainFrame()) healthyNavigationCount += 1;
   });
+  const logMigrationSnapshot = async (target: typeof page, stage: string) => {
+    const snapshot = await target.evaluate(async ({ stageName, legacyEntryPath }) => {
+      const cacheNames = await caches.keys();
+      const legacyCacheExists = cacheNames.includes('prismatix-shell-v1');
+      const currentCacheExists = cacheNames.includes('prismatix-shell-v2');
+      const legacyCache = legacyCacheExists ? await caches.open('prismatix-shell-v1') : undefined;
+      const currentCache = currentCacheExists ? await caches.open('prismatix-shell-v2') : undefined;
+      const registration = await navigator.serviceWorker.getRegistration();
+      const controller = navigator.serviceWorker.controller;
+      const documentEntryPath = document.querySelector<HTMLScriptElement>('script[type="module"]')?.src
+        ? new URL(document.querySelector<HTMLScriptElement>('script[type="module"]')!.src).pathname
+        : null;
+      return {
+        stage: stageName,
+        controllerPath: controller ? new URL(controller.scriptURL).pathname : null,
+        controllerState: controller?.state ?? null,
+        activeWorkerState: registration?.active?.state ?? null,
+        legacyCacheExists,
+        currentCacheExists,
+        legacyShellRootCached: Boolean(await legacyCache?.match('/')),
+        legacyShellIndexCached: Boolean(await legacyCache?.match('/index.html')),
+        legacyEntryCached: Boolean(await legacyCache?.match(legacyEntryPath)),
+        currentShellIndexCached: Boolean(await currentCache?.match('/index.html')),
+        documentEntryPath,
+        currentEntryCached: documentEntryPath ? Boolean(await currentCache?.match(documentEntryPath)) : false,
+        syntheticDraftPresent: (window as Window & { __unsentDraftSentinel?: string }).__unsentDraftSentinel === 'synthetic unsent draft',
+        documentStillLoading: document.querySelector('#root')?.textContent?.includes('Loading Prismatix...') ?? false,
+      };
+    }, { stageName: stage, legacyEntryPath: '/assets/index-BsF4w_.js' });
+    const proof = {
+      ...snapshot,
+      topLevelNavigationCount: target === healthyPage ? healthyNavigationCount : null,
+    };
+    await target.evaluate((value) => console.info(`[pwa-migration-proof] ${JSON.stringify(value)}`), proof);
+    return proof;
+  };
   try {
     await page.goto(origin);
     await expect(page.getByText('Previous Prismatix shell')).toBeVisible();
@@ -109,18 +150,37 @@ test('a stuck v1 tab recovers on user reload without refreshing a healthy v1 tab
       const cache = await caches.open('prismatix-shell-v1');
       return Boolean(await cache.match('/')) && Boolean(await cache.match('/index.html'));
     })).toBe(true);
-
     await healthyPage.goto(origin);
     await expect(healthyPage.getByText('Previous Prismatix shell')).toBeVisible();
     await expect.poll(() => healthyPage.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
-    expect(await healthyPage.evaluate(() => (window as Window & { __unsentDraftSentinel?: string }).__unsentDraftSentinel)).toBe('synthetic unsent draft');
+    // The first document registers the worker only after load, so it cannot
+    // seed its own entry bundle. A second, now-controlled v1 navigation fetches
+    // and caches the legacy entry before the test retires it.
+    await expect.poll(() => page.evaluate(async () => {
+      const cache = await caches.open('prismatix-shell-v1');
+      return Boolean(await cache.match('/assets/index-BsF4w_.js'));
+    })).toBe(true);
+    const installedLegacyState = await logMigrationSnapshot(page, 'controlled-v1-before-retiring-entry');
+    expect(installedLegacyState.controllerPath).toBe('/sw.js');
+    expect(installedLegacyState.controllerState).toBe('activated');
+    expect(installedLegacyState.legacyShellRootCached).toBe(true);
+    expect(installedLegacyState.legacyShellIndexCached).toBe(true);
+    expect(installedLegacyState.legacyEntryCached).toBe(true);
+    const healthyLegacyState = await logMigrationSnapshot(healthyPage, 'healthy-v1-tab-before-update');
+    expect(healthyLegacyState.syntheticDraftPresent).toBe(true);
     const healthyNavigationCountBeforeUpdate = healthyNavigationCount;
+    expect(healthyLegacyState.topLevelNavigationCount).toBe(healthyNavigationCountBeforeUpdate);
+    expect(await healthyPage.evaluate(() => (window as Window & { __unsentDraftSentinel?: string }).__unsentDraftSentinel)).toBe('synthetic unsent draft');
 
     // Retire only this old hashed entry while retaining the real v1 worker and cached HTML.
     await page.evaluate(async () => {
       const cache = await caches.open('prismatix-shell-v1');
       await cache.delete('/assets/index-BsF4w_.js');
     });
+    const retiredLegacyState = await logMigrationSnapshot(page, 'v1-document-kept-after-entry-retirement-before-v2-release');
+    expect(retiredLegacyState.legacyCacheExists).toBe(true);
+    expect(retiredLegacyState.legacyShellIndexCached).toBe(true);
+    expect(retiredLegacyState.legacyEntryCached).toBe(false);
     release = 'current';
 
     await page.reload();
@@ -134,8 +194,25 @@ test('a stuck v1 tab recovers on user reload without refreshing a healthy v1 tab
       if (!registration) throw new Error('The legacy worker registration was lost');
       await registration.update();
     }).catch(() => undefined); // Keep checking the sentinel if activation navigates this page.
-    await expect.poll(() => page.evaluate(async () => (await caches.keys()).some((name) => name === 'prismatix-shell-v2'))).toBe(true);
+    // The v2 cache is created during install, before activate has removed the
+    // old cache. Wait for the activation cleanup itself, not cache creation.
+    await expect.poll(() => page.evaluate(async () => {
+      const names = await caches.keys();
+      const registration = await navigator.serviceWorker.getRegistration();
+      return names.includes('prismatix-shell-v2')
+        && !names.includes('prismatix-shell-v1')
+        && registration?.active?.state === 'activated';
+    })).toBe(true);
     await expect(page.locator('#root')).toContainText('Loading Prismatix...');
+    const upgradedWorkerState = await logMigrationSnapshot(page, 'v2-activated-old-document-not-reloaded');
+    expect(upgradedWorkerState.currentCacheExists).toBe(true);
+    expect(upgradedWorkerState.legacyCacheExists).toBe(false);
+    expect(upgradedWorkerState.documentStillLoading).toBe(true);
+    expect(upgradedWorkerState.controllerState).toBe('activated');
+    expect(upgradedWorkerState.activeWorkerState).toBe('activated');
+    const healthyAfterUpgradeState = await logMigrationSnapshot(healthyPage, 'healthy-tab-still-open-after-v2-activation');
+    expect(healthyAfterUpgradeState.syntheticDraftPresent).toBe(true);
+    expect(healthyAfterUpgradeState.topLevelNavigationCount).toBe(healthyNavigationCountBeforeUpdate);
     expect(await healthyPage.evaluate(() => (window as Window & { __unsentDraftSentinel?: string }).__unsentDraftSentinel)).toBe('synthetic unsent draft');
     expect(healthyNavigationCount).toBe(healthyNavigationCountBeforeUpdate);
 
@@ -146,6 +223,10 @@ test('a stuck v1 tab recovers on user reload without refreshing a healthy v1 tab
     expect(healthyNavigationCount).toBe(healthyNavigationCountBeforeUpdate);
     await expect(page.locator('#root')).not.toContainText('Loading Prismatix...');
     await expect(page.locator('#root')).not.toContainText('Previous Prismatix shell');
+    const recoveredState = await logMigrationSnapshot(page, 'current-shell-after-user-reload');
+    expect(recoveredState.currentCacheExists).toBe(true);
+    expect(recoveredState.legacyCacheExists).toBe(false);
+    expect(recoveredState.currentEntryCached).toBe(true);
 
     const entryPath = await page.evaluate(() => new URL(document.querySelector<HTMLScriptElement>('script[type="module"]')!.src).pathname);
     await expect.poll(() => page.evaluate(async (path) => {
