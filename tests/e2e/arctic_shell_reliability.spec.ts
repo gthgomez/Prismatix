@@ -8,7 +8,7 @@ const successfulStream = (text: string, executionId: string) => ({
   body: [
     { type: 'meta', model: 'gemini-3.8-flash', cost: { finalUsd: 0.0001 } },
     { type: 'content_block_delta', delta: { text } },
-    { type: 'receipt', executionId, status: 'completed' },
+    { type: 'receipt', executionId, status: 'completed', settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
   ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
 });
 
