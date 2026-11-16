@@ -87,6 +87,16 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(activeContent);
+  const [copyFallback, setCopyFallback] = useState<string | null>(null);
+  const copyRecoveryText = async (text: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(text);
+      setCopyFallback(null);
+    } catch {
+      setCopyFallback(text);
+    }
+  };
 
   useEffect(() => {
     if (!isEditing) {
@@ -548,6 +558,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 <div className={`comparison-column model-a ${message.comparisonResults.preferred === 'A' ? 'is-preferred' : ''}`}>
                   <div className='comparison-header'>
                     <span className='comparison-model-badge'>{message.comparisonResults.modelA.model}</span>
+                    {message.comparisonResults.modelA.status && message.comparisonResults.modelA.status !== 'completed' && <span role='status'>{message.comparisonResults.modelA.status === 'failed' ? 'Failed' : message.comparisonResults.modelA.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>}
                     {message.comparisonResults.modelA.cost !== undefined && (
                       <span className='comparison-cost'>${message.comparisonResults.modelA.cost.toFixed(4)}</span>
                     )}
@@ -555,9 +566,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                   <div className='comparison-content'>
                     <FormattedMessage content={message.comparisonResults.modelA.content} />
                   </div>
+                  <button type='button' onClick={() => void copyRecoveryText(message.comparisonResults!.modelA.content)}>Copy response</button>
                   <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
                     <button
                       type='button'
+                      disabled={message.comparisonResults.modelA.status !== undefined && message.comparisonResults.modelA.status !== 'completed'}
                       onClick={() => onSelectComparisonPreference?.(index, 'A')}
                       style={{
                         padding: '0.25rem 0.6rem',
@@ -578,6 +591,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 <div className={`comparison-column model-b ${message.comparisonResults.preferred === 'B' ? 'is-preferred' : ''}`}>
                   <div className='comparison-header'>
                     <span className='comparison-model-badge'>{message.comparisonResults.modelB.model}</span>
+                    {message.comparisonResults.modelB.status && message.comparisonResults.modelB.status !== 'completed' && <span role='status'>{message.comparisonResults.modelB.status === 'failed' ? 'Failed' : message.comparisonResults.modelB.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>}
                     {message.comparisonResults.modelB.cost !== undefined && (
                       <span className='comparison-cost'>${message.comparisonResults.modelB.cost.toFixed(4)}</span>
                     )}
@@ -585,9 +599,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                   <div className='comparison-content'>
                     <FormattedMessage content={message.comparisonResults.modelB.content} />
                   </div>
+                  <button type='button' onClick={() => void copyRecoveryText(message.comparisonResults!.modelB.content)}>Copy response</button>
                   <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
                     <button
                       type='button'
+                      disabled={message.comparisonResults.modelB.status !== undefined && message.comparisonResults.modelB.status !== 'completed'}
                       onClick={() => onSelectComparisonPreference?.(index, 'B')}
                       style={{
                         padding: '0.25rem 0.6rem',
@@ -606,6 +622,17 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                   </div>
                 </div>
               </div>
+            )}
+
+            {message.transcriptSaved === false && (
+              <div className='transcript-unsaved-notice' role='alert'>
+                This response was generated but could not be saved to chat history. Copy or select the response below before leaving; sending again may create a new paid request.
+              </div>
+            )}
+            {copyFallback !== null && (
+              <label className='copy-recovery-fallback'>Clipboard access failed. Select and copy this response.
+                <textarea readOnly value={copyFallback} onFocus={(event) => event.currentTarget.select()} aria-label='Response text to copy manually' />
+              </label>
             )}
 
             {isWaitingFirstToken && isStreamingAssistant && (

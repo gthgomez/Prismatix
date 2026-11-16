@@ -14,12 +14,14 @@ function makeMockSupabase(overrides: {
   costLogs?: Record<string, any>;
   rpcHandler?: (name: string, params: any) => Promise<any>;
   purgedCount?: number;
+  assistantMessages?: Record<string, any>;
 } = {}) {
   const updates: any[] = [];
   const costLogUpdates: any[] = [];
   const costLogInserts: any[] = [];
 
   const costLogsStore: Record<string, any> = { ...(overrides.costLogs ?? {}) };
+  const assistantMessages = { ...(overrides.assistantMessages ?? {}) };
 
   const rpc = vi.fn().mockImplementation(async (name: string, params: any) => {
     if (overrides.rpcHandler) {
@@ -97,6 +99,25 @@ function makeMockSupabase(overrides: {
             costLogInserts.push(payload);
             costLogsStore[payload.idempotency_key] = payload;
             return Promise.resolve({ error: null });
+          },
+        };
+      }
+      if (table === 'messages') {
+        return {
+          select: () => {
+            const filters: Record<string, unknown> = {};
+            const query = {
+              eq: (field: string, value: unknown) => {
+                filters[field] = value;
+                return query;
+              },
+              maybeSingle: () => {
+                const row = assistantMessages[String(filters.execution_id)];
+                const matches = row && Object.entries(filters).every(([key, value]) => row[key] === value);
+                return Promise.resolve({ data: matches ? row : null, error: null });
+              },
+            };
+            return query;
           },
         };
       }
@@ -350,5 +371,42 @@ describe('processReconciliationBatch', () => {
     });
 
     expect(summary.purged).toBe(5);
+  });
+
+  it('marks missing assistant transcript as unresolved manual recovery, without fabricating a repair', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-transcript', kind: 'assistant_transcript_failed', execution_id: 'exec-1', attempts: 0,
+        payload: { userId: 'user-1', conversationId: 'conv-1' } }],
+    });
+
+    const summary = await processReconciliationBatch(mock.client, { dryRun: false, purgeDays: 0, logger: { log: () => {}, error: () => {} } });
+
+    expect(summary.failed).toBe(1);
+    expect(mock.updates[0].payload).toMatchObject({ status: 'failed', last_error: 'assistant_transcript_missing_manual_recovery_required' });
+  });
+
+  it('only resolves assistant transcript failure when the owner-scoped durable row exists', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-transcript', kind: 'assistant_transcript_failed', execution_id: 'exec-1', attempts: 0,
+        payload: { userId: 'user-1', conversationId: 'conv-1' } }],
+      assistantMessages: { 'exec-1': { id: 'message-1', execution_id: 'exec-1', user_id: 'user-1', conversation_id: 'conv-1', role: 'assistant' } },
+    });
+
+    const summary = await processReconciliationBatch(mock.client, { dryRun: false, purgeDays: 0, logger: { log: () => {}, error: () => {} } });
+
+    expect(summary.processed).toBe(1);
+    expect(mock.updates[0].payload).toMatchObject({ status: 'done', last_error: 'assistant_transcript_exists_verified' });
+  });
+
+  it('does not inspect or resolve a transcript job whose account/conversation scope differs from the execution', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-transcript-owner', kind: 'assistant_transcript_failed', execution_id: 'exec-1', attempts: 0,
+        payload: { userId: 'another-user', conversationId: 'conv-1' } }],
+    });
+
+    const summary = await processReconciliationBatch(mock.client, { dryRun: false, purgeDays: 0, logger: { log: () => {}, error: () => {} } });
+
+    expect(summary.failed).toBe(1);
+    expect(mock.updates[0].payload).toMatchObject({ status: 'failed', last_error: 'assistant_transcript_owner_mismatch_manual_review' });
   });
 });

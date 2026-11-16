@@ -232,7 +232,40 @@ export async function processReconciliationBatch(supabase, options = {}) {
 
         await updateJob(job.id, 'done', attempts);
         summary.processed++;
-      } else if (job.kind === 'budget_breached' || job.kind === 'refund_lease' || job.kind === 'assistant_transcript_conflict' || job.kind === 'assistant_transcript_failed') {
+      } else if (job.kind === 'assistant_transcript_failed' || job.kind === 'assistant_transcript_conflict') {
+        const expectedUserId = job.payload?.userId;
+        const expectedConversationId = job.payload?.conversationId;
+        if (
+          typeof expectedUserId !== 'string' || !expectedUserId
+          || typeof expectedConversationId !== 'string' || !expectedConversationId
+          || execution.subject_id !== expectedUserId
+          || execution.conversation_id !== expectedConversationId
+        ) {
+          await updateJob(job.id, 'failed', attempts, 'assistant_transcript_owner_mismatch_manual_review');
+          summary.failed++;
+        } else if (job.kind === 'assistant_transcript_conflict') {
+          // Conflicting content cannot be safely overwritten or reconstructed from the ledger.
+          await updateJob(job.id, 'failed', attempts, 'assistant_transcript_conflict_manual_review');
+          summary.failed++;
+        } else {
+          const { data: assistantMessage, error: messageQueryErr } = await supabase
+            .from('messages')
+            .select('id,user_id,conversation_id,role')
+            .eq('execution_id', job.execution_id)
+            .eq('user_id', expectedUserId)
+            .eq('conversation_id', expectedConversationId)
+            .eq('role', 'assistant')
+            .maybeSingle();
+          if (messageQueryErr) throw new Error(`assistant_transcript_query_failed: ${messageQueryErr.message}`);
+          if (assistantMessage) {
+            await updateJob(job.id, 'done', attempts, 'assistant_transcript_exists_verified');
+            summary.processed++;
+          } else {
+            await updateJob(job.id, 'failed', attempts, 'assistant_transcript_missing_manual_recovery_required');
+            summary.failed++;
+          }
+        }
+      } else if (job.kind === 'budget_breached' || job.kind === 'refund_lease') {
         await updateJob(job.id, 'done', attempts);
         summary.processed++;
       } else {
