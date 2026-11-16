@@ -1,9 +1,8 @@
 // Prismatix service worker: network-first shell, validated asset caching, and
-// a one-time migration from the original v1 cache.
+// a non-disruptive migration from the original v1 cache.
 
 const CACHE_NAME = 'prismatix-shell-v2';
 const CACHE_PREFIX = 'prismatix-shell-';
-const PREVIOUS_CACHE = 'prismatix-shell-v1';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -22,7 +21,6 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const existingCaches = await caches.keys();
-    const migratingV1Shell = existingCaches.includes(PREVIOUS_CACHE);
 
     // Only remove caches owned by Prismatix; unrelated origin caches belong to
     // other apps on the same host and must not be touched.
@@ -31,24 +29,9 @@ self.addEventListener('activate', (event) => {
       .map((name) => caches.delete(name)));
 
     await self.clients.claim();
-
-    if (migratingV1Shell) {
-      // v1 clients can be stuck before their app module runs, so they cannot
-      // listen for controllerchange. Refresh app windows once during this
-      // cache-protocol migration; local/session auth storage is untouched.
-      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      const staleShellClients = clients.filter((client) => {
-        const url = new URL(client.url);
-        return url.origin === self.location.origin && url.pathname.startsWith(self.registration.scope.replace(self.location.origin, ''));
-      });
-      // Start navigation after activation completes. Awaiting navigate() from
-      // activate can hold the worker in `activating` while the navigation's
-      // fetch event waits for that same worker to become active.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      staleShellClients.forEach((client) => {
-        void client.navigate(client.url).catch(() => null);
-      });
-    }
+    // Claim old clients without reloading them: a worker cannot distinguish a
+    // failed startup from a healthy tab with unsent work. A user-initiated
+    // navigation is network-first and loads the current shell.
   })());
 });
 
@@ -79,14 +62,22 @@ function unavailableAsset() {
   });
 }
 
+async function cacheBestEffort(cache, request, response) {
+  try {
+    await cache.put(request, response);
+  } catch {
+    // A cache quota or storage failure must not replace a successful response.
+  }
+}
+
 async function handleNavigation(request, cache) {
   try {
     const response = await fetch(request);
     const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
     if (response.ok && contentType.includes('text/html')) {
-      await cache.put(request, response.clone());
+      await cacheBestEffort(cache, request, response.clone());
       const url = new URL(request.url);
-      if (url.pathname === '/') await cache.put('/index.html', response.clone());
+      if (url.pathname === '/') await cacheBestEffort(cache, '/index.html', response.clone());
       return response;
     }
     return response;
@@ -109,7 +100,7 @@ async function handleAsset(request, cache, url) {
     try {
       const response = await fetch(request);
       if (response.ok && hasExpectedContentType(response, url.pathname)) {
-        await cache.put(request, response.clone());
+        await cacheBestEffort(cache, request, response.clone());
         return response;
       }
       return response.status === 200 ? unavailableAsset() : response;
@@ -121,7 +112,7 @@ async function handleAsset(request, cache, url) {
   try {
     const response = await fetch(request);
     if (response.ok && hasExpectedContentType(response, url.pathname)) {
-      await cache.put(request, response.clone());
+      await cacheBestEffort(cache, request, response.clone());
       return response;
     }
     return response.status === 200 ? unavailableAsset() : response;
@@ -134,7 +125,7 @@ async function handleStatic(request, cache) {
   try {
     const response = await fetch(request);
     if (response.ok && !response.headers.get('content-type')?.toLowerCase().includes('text/html')) {
-      await cache.put(request, response.clone());
+      await cacheBestEffort(cache, request, response.clone());
       return response;
     }
     return response.status === 200 && response.headers.get('content-type')?.toLowerCase().includes('text/html')

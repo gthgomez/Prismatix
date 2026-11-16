@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const fixtureDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../fixtures/pwa-upgrade');
 const distDir = path.resolve(process.cwd(), 'dist');
 
-test('an old controlled mobile client upgrades after its cached entry is retired', async ({ browser }) => {
+test('a stuck v1 tab recovers on user reload without refreshing a healthy v1 tab', async ({ browser }) => {
   const previousWorker = await readFile(path.join(fixtureDir, 'previous-sw.js'));
   let release: 'previous' | 'current' = 'previous';
   let indexHtml = '';
@@ -30,12 +30,22 @@ test('an old controlled mobile client upgrades after its cached entry is retired
       response.end(await readFile(path.join(distDir, 'index.html')));
       return;
     }
+    if (current && pathname === '/__cache-write-probe') {
+      response.setHeader('Content-Type', 'text/html; charset=utf-8');
+      response.end('<!doctype html><html><body>network-navigation-survived-cache-write-failure</body></html>');
+      return;
+    }
     if (!current && pathname === '/assets/index-BsF4w_.js') {
       response.setHeader('Content-Type', 'text/javascript');
-      response.end("document.querySelector('#root').textContent = 'Previous Prismatix shell'; window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));");
+      response.end("document.querySelector('#root').textContent = 'Previous Prismatix shell'; window.__unsentDraftSentinel = 'synthetic unsent draft'; window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));");
       return;
     }
 
+    if (current && pathname === '/assets/cache-write-probe.js') {
+      response.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      response.end('window.__cacheWriteProbe = true;');
+      return;
+    }
     if (current && pathname.startsWith('/assets/')) {
       try {
         const content = await readFile(path.join(distDir, pathname.slice(1)));
@@ -85,6 +95,11 @@ test('an old controlled mobile client upgrades after its cached entry is retired
     serviceWorkers: 'allow',
   });
   const page = await context.newPage();
+  const healthyPage = await context.newPage();
+  let healthyNavigationCount = 0;
+  healthyPage.on('framenavigated', (frame) => {
+    if (frame === healthyPage.mainFrame()) healthyNavigationCount += 1;
+  });
   try {
     await page.goto(origin);
     await expect(page.getByText('Previous Prismatix shell')).toBeVisible();
@@ -94,6 +109,12 @@ test('an old controlled mobile client upgrades after its cached entry is retired
       const cache = await caches.open('prismatix-shell-v1');
       return Boolean(await cache.match('/')) && Boolean(await cache.match('/index.html'));
     })).toBe(true);
+
+    await healthyPage.goto(origin);
+    await expect(healthyPage.getByText('Previous Prismatix shell')).toBeVisible();
+    await expect.poll(() => healthyPage.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+    expect(await healthyPage.evaluate(() => (window as Window & { __unsentDraftSentinel?: string }).__unsentDraftSentinel)).toBe('synthetic unsent draft');
+    const healthyNavigationCountBeforeUpdate = healthyNavigationCount;
 
     // Retire only this old hashed entry while retaining the real v1 worker and cached HTML.
     await page.evaluate(async () => {
@@ -112,11 +133,55 @@ test('an old controlled mobile client upgrades after its cached entry is retired
       const registration = await navigator.serviceWorker.getRegistration();
       if (!registration) throw new Error('The legacy worker registration was lost');
       await registration.update();
-    });
-    await expect(page.getByText('Sign in', { exact: false })).toBeVisible({ timeout: 20_000 });
+    }).catch(() => undefined); // Keep checking the sentinel if activation navigates this page.
     await expect.poll(() => page.evaluate(async () => (await caches.keys()).some((name) => name === 'prismatix-shell-v2'))).toBe(true);
+    await expect(page.locator('#root')).toContainText('Loading Prismatix...');
+    expect(await healthyPage.evaluate(() => (window as Window & { __unsentDraftSentinel?: string }).__unsentDraftSentinel)).toBe('synthetic unsent draft');
+    expect(healthyNavigationCount).toBe(healthyNavigationCountBeforeUpdate);
+
+    // This is the user's explicit reload after v2 has arrived, not a cache reset.
+    await page.reload();
+    await expect(page.getByText('Sign in', { exact: false })).toBeVisible({ timeout: 20_000 });
+    expect(await healthyPage.evaluate(() => (window as Window & { __unsentDraftSentinel?: string }).__unsentDraftSentinel)).toBe('synthetic unsent draft');
+    expect(healthyNavigationCount).toBe(healthyNavigationCountBeforeUpdate);
     await expect(page.locator('#root')).not.toContainText('Loading Prismatix...');
     await expect(page.locator('#root')).not.toContainText('Previous Prismatix shell');
+
+    const entryPath = await page.evaluate(() => new URL(document.querySelector<HTMLScriptElement>('script[type="module"]')!.src).pathname);
+    await expect.poll(() => page.evaluate(async (path) => {
+      const cache = await caches.open('prismatix-shell-v2');
+      return Boolean(await cache.match(path));
+    }, entryPath)).toBe(true);
+    await context.setOffline(true);
+    const offlineEntry = await page.evaluate(async (path) => {
+      const response = await fetch(path);
+      return { status: response.status, contentType: response.headers.get('content-type'), body: await response.text() };
+    }, entryPath);
+    expect(offlineEntry.status).toBe(200);
+    expect(offlineEntry.contentType).toContain('javascript');
+    expect(offlineEntry.body.length).toBeGreaterThan(0);
+    await context.setOffline(false);
+
+    const serviceWorker = context.serviceWorkers().find((worker) => worker.url() === `${origin}/sw.js`);
+    expect(serviceWorker).toBeTruthy();
+    await serviceWorker!.evaluate(() => {
+      const originalPut = Cache.prototype.put;
+      Cache.prototype.put = function (request, response) {
+        const key = typeof request === 'string' ? request : request instanceof Request ? request.url : request.href;
+        if (key.includes('__cache-write-probe')) return Promise.reject(new Error('synthetic cache write failure'));
+        return originalPut.call(this, request, response);
+      };
+    });
+    const assetAfterCacheFailure = await page.evaluate(async () => {
+      const response = await fetch('/assets/cache-write-probe.js');
+      return { status: response.status, contentType: response.headers.get('content-type'), body: await response.text() };
+    });
+    expect(assetAfterCacheFailure.status).toBe(200);
+    expect(assetAfterCacheFailure.contentType).toContain('javascript');
+    expect(assetAfterCacheFailure.body).toContain('__cacheWriteProbe');
+
+    await page.goto(`${origin}/__cache-write-probe`);
+    await expect(page.getByText('network-navigation-survived-cache-write-failure')).toBeVisible();
 
     const missingAsset = await page.evaluate(async () => {
       const response = await fetch('/assets/missing-module-after-deploy.js');
