@@ -61,3 +61,23 @@ test('reduced-motion public demo keeps keyboard-selected tabs visible', async ({
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await assertKeyboardTabReveal(page, 393);
 });
+
+test('393px public demo reveals the last tab after two ArrowRight presses', async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 851 });
+  await page.goto('/demo');
+  const tabs = page.getByRole('tablist', { name: 'Demo scenarios' }).getByRole('tab');
+  await expect(tabs).toHaveCount(3);
+
+  await tabs.first().focus();
+  const pageScrollY = await page.evaluate(() => window.scrollY);
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+
+  await expect(tabs.nth(2)).toHaveAttribute('aria-selected', 'true');
+  await expect(tabs.nth(2)).toBeFocused();
+  const revealState = await readRevealState(page);
+  expect(revealState.tabFullyVisible).toBe(true);
+  expect(revealState.scrollLeft).toBeGreaterThan(0);
+  expect(revealState.pageOverflow).toBe(false);
+  expect(revealState.pageScrollY).toBe(pageScrollY);
+});
