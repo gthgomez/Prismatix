@@ -209,14 +209,21 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
     const nextScenario = DEMO_SCENARIOS[nextIndex]!;
     handleSelectScenario(nextScenario.id);
     const nextTab = tabRefs.current[nextIndex];
-    nextTab?.focus();
-    nextTab?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    nextTab?.focus({ preventScroll: true });
     const tabList = nextTab?.closest<HTMLElement>('.demo-tabs');
     if (nextTab && tabList) {
       const listBounds = tabList.getBoundingClientRect();
       const tabBounds = nextTab.getBoundingClientRect();
-      if (tabBounds.left < listBounds.left) tabList.scrollLeft -= listBounds.left - tabBounds.left;
-      else if (tabBounds.right > listBounds.right) tabList.scrollLeft += tabBounds.right - listBounds.right;
+      const scrollportLeft = listBounds.left + tabList.clientLeft;
+      const scrollportRight = scrollportLeft + tabList.clientWidth;
+      const revealInset = 8;
+      let scrollLeft = tabList.scrollLeft;
+      if (tabBounds.left < scrollportLeft + revealInset) {
+        scrollLeft -= scrollportLeft + revealInset - tabBounds.left;
+      } else if (tabBounds.right > scrollportRight - revealInset) {
+        scrollLeft += tabBounds.right - (scrollportRight - revealInset);
+      }
+      tabList.scrollLeft = Math.max(0, scrollLeft);
     }
   };
 
