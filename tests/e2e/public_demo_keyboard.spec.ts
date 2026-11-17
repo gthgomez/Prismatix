@@ -15,7 +15,7 @@ async function assertKeyboardTabReveal(page: Page, width: number) {
   await expect(selectedTab).toHaveAttribute('aria-selected', 'true');
   await expect(selectedTab).toBeFocused();
   const endState = await readRevealState(page);
-  expect(endState.tabFullyVisible).toBe(true);
+  await expectFirstSampleVisible(page, endState, `End at ${width}px`);
   expect(endState.pageOverflow).toBe(false);
   expect(endState.pageScrollY).toBe(pageScrollY);
   if (width <= 393) {
@@ -26,13 +26,13 @@ async function assertKeyboardTabReveal(page: Page, width: number) {
   await page.keyboard.press('ArrowLeft');
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
   await expect(tabs.nth(1)).toBeFocused();
-  expect((await readRevealState(page)).tabFullyVisible).toBe(true);
+  await expectFirstSampleVisible(page, await readRevealState(page), `ArrowLeft at ${width}px`);
 
   await page.keyboard.press('Home');
   await expect(tabs.first()).toHaveAttribute('aria-selected', 'true');
   await expect(tabs.first()).toBeFocused();
   const homeState = await readRevealState(page);
-  expect(homeState.tabFullyVisible).toBe(true);
+  await expectFirstSampleVisible(page, homeState, `Home at ${width}px`);
   expect(homeState.scrollLeft).toBe(0);
   await expect(page.getByText(/Synthetic Data/)).toBeVisible();
 }
@@ -45,14 +45,76 @@ async function readRevealState(page: Page) {
     const tabRect = tab.getBoundingClientRect();
     const scrollportLeft = listRect.left + list.clientLeft;
     const scrollportRight = scrollportLeft + list.clientWidth;
+    const listStyle = getComputedStyle(list);
+    const tabStyle = getComputedStyle(tab);
+    const viewport = window.visualViewport;
     return {
       scrollLeft: list.scrollLeft,
+      scrollTop: list.scrollTop,
+      scrollWidth: list.scrollWidth,
+      clientWidth: list.clientWidth,
+      scrollHeight: list.scrollHeight,
+      clientHeight: list.clientHeight,
+      scrollport: { left: scrollportLeft, right: scrollportRight, top: listRect.top + list.clientTop, bottom: listRect.top + list.clientTop + list.clientHeight },
+      listRect: { left: listRect.left, right: listRect.right, top: listRect.top, bottom: listRect.bottom, width: listRect.width, height: listRect.height },
+      tabRect: { left: tabRect.left, right: tabRect.right, top: tabRect.top, bottom: tabRect.bottom, width: tabRect.width, height: tabRect.height },
       tabFullyVisible: tabRect.left >= scrollportLeft && tabRect.right <= scrollportRight,
       rightInset: scrollportRight - tabRect.right,
+      overflowX: listStyle.overflowX,
+      scrollBehavior: listStyle.scrollBehavior,
+      paddingInlineStart: listStyle.paddingInlineStart,
+      paddingInlineEnd: listStyle.paddingInlineEnd,
+      font: { family: tabStyle.fontFamily, size: tabStyle.fontSize, weight: tabStyle.fontWeight, letterSpacing: tabStyle.letterSpacing, status: document.fonts.status, loadedFaces: document.fonts.size },
+      viewport: { width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio, visualWidth: viewport?.width ?? null, visualHeight: viewport?.height ?? null, visualScale: viewport?.scale ?? null, scrollX: window.scrollX, scrollY: window.scrollY, documentWidth: document.documentElement.scrollWidth, documentClientWidth: document.documentElement.clientWidth },
       pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
       pageScrollY: window.scrollY,
     };
   });
+}
+
+async function expectFirstSampleVisible(page: Page, firstSample: Awaited<ReturnType<typeof readRevealState>>, label: string) {
+  let subsequentFrames: unknown[] = [];
+  if (!firstSample.tabFullyVisible) {
+    subsequentFrames = await page.evaluate(async () => {
+      const snapshots: Array<{
+        frame: number;
+        time: number;
+        scrollLeft: number;
+        scrollWidth: number;
+        clientWidth: number;
+        listRect: { left: number; right: number; top: number; bottom: number; width: number; height: number };
+        tabRect: { left: number; right: number; top: number; bottom: number; width: number; height: number };
+        tabFullyVisible: boolean;
+        rightInset: number;
+        fontStatus: FontFaceSetLoadStatus;
+      }> = [];
+      for (let frame = 1; frame <= 12; frame += 1) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const list = document.querySelector<HTMLElement>('.demo-tabs')!;
+        const tab = document.querySelector<HTMLElement>('.demo-tab[aria-selected="true"]')!;
+        const listRect = list.getBoundingClientRect();
+        const tabRect = tab.getBoundingClientRect();
+        const scrollportLeft = listRect.left + list.clientLeft;
+        const scrollportRight = scrollportLeft + list.clientWidth;
+        snapshots.push({
+          frame,
+          time: performance.now(),
+          scrollLeft: list.scrollLeft,
+          scrollWidth: list.scrollWidth,
+          clientWidth: list.clientWidth,
+          listRect: { left: listRect.left, right: listRect.right, top: listRect.top, bottom: listRect.bottom, width: listRect.width, height: listRect.height },
+          tabRect: { left: tabRect.left, right: tabRect.right, top: tabRect.top, bottom: tabRect.bottom, width: tabRect.width, height: tabRect.height },
+          tabFullyVisible: tabRect.left >= scrollportLeft && tabRect.right <= scrollportRight,
+          rightInset: scrollportRight - tabRect.right,
+          fontStatus: document.fonts.status,
+        });
+      }
+      return snapshots;
+    });
+    console.log(`[demo-tab-visibility-diagnostic] ${JSON.stringify({ label, firstSample, subsequentFrames })}`);
+  }
+
+  expect(firstSample.tabFullyVisible, `${label} first sample visibility diagnostic`).toBe(true);
 }
 
 for (const width of [320, 393, 1280]) {
@@ -80,7 +142,7 @@ test('393px public demo reveals the last tab after two ArrowRight presses', asyn
   await expect(tabs.nth(2)).toHaveAttribute('aria-selected', 'true');
   await expect(tabs.nth(2)).toBeFocused();
   const revealState = await readRevealState(page);
-  expect(revealState.tabFullyVisible).toBe(true);
+  await expectFirstSampleVisible(page, revealState, 'two ArrowRight presses at 393px');
   expect(revealState.scrollLeft).toBeGreaterThan(0);
   expect(revealState.rightInset).toBeGreaterThanOrEqual(4);
   expect(revealState.pageOverflow).toBe(false);
