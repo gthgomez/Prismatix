@@ -1,6 +1,6 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { InteractivePublicDemo } from './InteractivePublicDemo';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -68,15 +68,23 @@ describe('InteractivePublicDemo', () => {
     const tabs = Array.from(container!.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
     expect(tabs).toHaveLength(3);
     expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
-    const reveal = vi.fn();
-    tabs[1]!.scrollIntoView = reveal;
+    const tabList = tabs[0]!.closest<HTMLElement>('.demo-tabs')!;
+    Object.defineProperty(tabList, 'clientWidth', { configurable: true, value: 100 });
+    Object.defineProperty(tabList, 'clientLeft', { configurable: true, value: 1 });
+    tabList.getBoundingClientRect = () => ({ left: 0, right: 102 } as DOMRect);
+    tabs.forEach((tab, index) => {
+      tab.getBoundingClientRect = () => {
+        const left = 1 + index * 55 - tabList.scrollLeft;
+        return { left, right: left + 50 } as DOMRect;
+      };
+    });
     tabs[0]!.focus();
 
     await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })));
     expect(tabs[1]!.getAttribute('aria-selected')).toBe('true');
     expect(tabs[1]!.tabIndex).toBe(0);
     expect(tabs[1]).toBe(document.activeElement);
-    expect(reveal).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+    expect(tabList.scrollLeft).toBeGreaterThan(0);
     expect(container!.textContent).toContain('Gemini 3.8 Flash');
 
     await act(async () => tabs[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })));
