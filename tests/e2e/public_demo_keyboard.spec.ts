@@ -128,6 +128,45 @@ test('reduced-motion public demo keeps keyboard-selected tabs visible', async ({
   await assertKeyboardTabReveal(page, 393);
 });
 
+test('a late font metric change re-reveals the focused demo tab', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 851 });
+  await page.goto('/demo');
+  const tabs = page.getByRole('tablist', { name: 'Demo scenarios' }).getByRole('tab');
+  await page.addStyleTag({
+    content: '.demo-tab { box-sizing: border-box; width: 190.984375px; flex: 0 0 190.984375px; }',
+  });
+  await tabs.first().focus();
+  await page.keyboard.press('End');
+  await expect(tabs.nth(2)).toBeFocused();
+  const beforeFontChange = await readRevealState(page);
+  await expectFirstSampleVisible(page, beforeFontChange, 'End before late font metric change at 320px');
+  expect(
+    Math.abs(beforeFontChange.scrollLeft - (beforeFontChange.scrollWidth - beforeFontChange.clientWidth)),
+  ).toBeLessThanOrEqual(1);
+
+  // Reproduce the hosted font-load shift: fallback metrics cap scrolling at
+  // 372px, then the loaded font widens the tabs and scroll extent by 19px.
+  await page.addStyleTag({
+    content: '.demo-tab { box-sizing: border-box; width: 197.1875px; flex: 0 0 197.1875px; }',
+  });
+  const afterFontChange = await readRevealState(page);
+  expect(afterFontChange.scrollWidth).toBeGreaterThan(beforeFontChange.scrollWidth);
+  expect(afterFontChange.scrollLeft).toBe(beforeFontChange.scrollLeft);
+  expect(afterFontChange.tabFullyVisible).toBe(false);
+  expect(afterFontChange.rightInset).toBeLessThan(0);
+  expect(afterFontChange.scrollWidth - afterFontChange.clientWidth - afterFontChange.scrollLeft).toBeGreaterThan(18);
+  expect(afterFontChange.pageOverflow).toBe(false);
+  expect(afterFontChange.pageScrollY).toBe(beforeFontChange.pageScrollY);
+
+  await page.evaluate(() => document.fonts.dispatchEvent(new Event('loadingdone')));
+  const afterFontLoad = await readRevealState(page);
+  expect(afterFontLoad.tabFullyVisible).toBe(true);
+  expect(afterFontLoad.rightInset).toBeGreaterThanOrEqual(4);
+  expect(afterFontLoad.scrollLeft).toBeGreaterThan(afterFontChange.scrollLeft);
+  expect(afterFontLoad.pageOverflow).toBe(false);
+  expect(afterFontLoad.pageScrollY).toBe(beforeFontChange.pageScrollY);
+});
+
 test('393px public demo reveals the last tab after two ArrowRight presses', async ({ page }) => {
   await page.setViewportSize({ width: 393, height: 851 });
   await page.goto('/demo');

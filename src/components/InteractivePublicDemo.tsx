@@ -141,6 +141,24 @@ export interface InteractivePublicDemoProps {
   autoplay?: boolean;
 }
 
+function revealDemoTab(tab: HTMLButtonElement) {
+  const tabList = tab.closest<HTMLElement>('.demo-tabs');
+  if (!tabList) return;
+
+  const listBounds = tabList.getBoundingClientRect();
+  const tabBounds = tab.getBoundingClientRect();
+  const scrollportLeft = listBounds.left + tabList.clientLeft;
+  const scrollportRight = scrollportLeft + tabList.clientWidth;
+  const revealInset = 8;
+  let scrollLeft = tabList.scrollLeft;
+  if (tabBounds.left < scrollportLeft + revealInset) {
+    scrollLeft -= scrollportLeft + revealInset - tabBounds.left;
+  } else if (tabBounds.right > scrollportRight - revealInset) {
+    scrollLeft += tabBounds.right - (scrollportRight - revealInset);
+  }
+  tabList.scrollLeft = Math.max(0, scrollLeft);
+}
+
 export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDemoProps) {
   const [selectedScenarioId, setSelectedScenarioId] = useState('architecture');
   const scenario = DEMO_SCENARIOS.find((s) => s.id === selectedScenarioId) ?? DEMO_SCENARIOS[0]!;
@@ -210,21 +228,7 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
     handleSelectScenario(nextScenario.id);
     const nextTab = tabRefs.current[nextIndex];
     nextTab?.focus({ preventScroll: true });
-    const tabList = nextTab?.closest<HTMLElement>('.demo-tabs');
-    if (nextTab && tabList) {
-      const listBounds = tabList.getBoundingClientRect();
-      const tabBounds = nextTab.getBoundingClientRect();
-      const scrollportLeft = listBounds.left + tabList.clientLeft;
-      const scrollportRight = scrollportLeft + tabList.clientWidth;
-      const revealInset = 8;
-      let scrollLeft = tabList.scrollLeft;
-      if (tabBounds.left < scrollportLeft + revealInset) {
-        scrollLeft -= scrollportLeft + revealInset - tabBounds.left;
-      } else if (tabBounds.right > scrollportRight - revealInset) {
-        scrollLeft += tabBounds.right - (scrollportRight - revealInset);
-      }
-      tabList.scrollLeft = Math.max(0, scrollLeft);
-    }
+    if (nextTab) revealDemoTab(nextTab);
   };
 
   const handleSkip = () => {
@@ -279,6 +283,25 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
     }
     return () => clearTimer();
   }, [autoplay]);
+
+  useEffect(() => {
+    const revealFocusedTabAfterFontLayout = () => {
+      const focusedElement = document.activeElement;
+      if (
+        focusedElement instanceof HTMLButtonElement &&
+        focusedElement.matches('.demo-tabs .demo-tab[aria-selected="true"]')
+      ) {
+        revealDemoTab(focusedElement);
+      }
+    };
+
+    document.fonts.addEventListener('loadingdone', revealFocusedTabAfterFontLayout);
+    document.fonts.addEventListener('loadingerror', revealFocusedTabAfterFontLayout);
+    return () => {
+      document.fonts.removeEventListener('loadingdone', revealFocusedTabAfterFontLayout);
+      document.fonts.removeEventListener('loadingerror', revealFocusedTabAfterFontLayout);
+    };
+  }, []);
 
   return (
     <section className="interactive-demo-card" aria-label="Interactive Prismatix Demo">
