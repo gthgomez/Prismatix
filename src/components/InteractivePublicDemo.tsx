@@ -285,6 +285,9 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
   }, [autoplay]);
 
   useEffect(() => {
+    const fontSet = document.fonts;
+    if (!fontSet) return;
+
     const revealFocusedTabAfterFontLayout = () => {
       const focusedElement = document.activeElement;
       if (
@@ -295,11 +298,11 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
       }
     };
 
-    document.fonts.addEventListener('loadingdone', revealFocusedTabAfterFontLayout);
-    document.fonts.addEventListener('loadingerror', revealFocusedTabAfterFontLayout);
+    fontSet.addEventListener('loadingdone', revealFocusedTabAfterFontLayout);
+    fontSet.addEventListener('loadingerror', revealFocusedTabAfterFontLayout);
     return () => {
-      document.fonts.removeEventListener('loadingdone', revealFocusedTabAfterFontLayout);
-      document.fonts.removeEventListener('loadingerror', revealFocusedTabAfterFontLayout);
+      fontSet.removeEventListener('loadingdone', revealFocusedTabAfterFontLayout);
+      fontSet.removeEventListener('loadingerror', revealFocusedTabAfterFontLayout);
     };
   }, []);
 
