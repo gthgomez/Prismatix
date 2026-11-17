@@ -328,6 +328,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isSendPending, setIsSendPending] = useState(false);
+  const sendLockSeqRef = useRef(0);
+  const sendLockRef = useRef<{ id: number; userId?: string; accountGeneration: number; conversationId: string | null } | null>(null);
   const [isWaitingFirstToken, setIsWaitingFirstToken] = useState(false);
   const [currentModel, setCurrentModel] = useState<RouterModel>('gemini-3.8-flash');
   const [currentComplexity, setCurrentComplexity] = useState<number>(50);
@@ -444,6 +447,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     optimisticMessageId?: string;
     optimisticMessageContent?: string;
   } | null>(null);
+  const [showDraftCopyFallback, setShowDraftCopyFallback] = useState(false);
   const activeDraftRef = useRef<{
     rawInput: string;
     queryText: string;
@@ -658,6 +662,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     if (activeUserIdRef.current === user?.id) return;
     activeUserIdRef.current = user?.id;
     accountGenerationRef.current += 1;
+    sendLockRef.current = null;
+    setIsSendPending(false);
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     activeStreamRef.current = null;
@@ -672,6 +678,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setInput('');
     setDraftAttachments([]);
     setFailedTurnDraft(null);
+    setShowDraftCopyFallback(false);
     setFirstRunOutcome(null);
     setRejectedRoute(null);
     setSendValidationError(null);
@@ -1311,10 +1318,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return prev;
     });
     setFailedTurnDraft(null);
+    setShowDraftCopyFallback(false);
+  };
+
+  const handleCopyFailedDraft = async () => {
+    if (!failedTurnDraft) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(failedTurnDraft.rawInput);
+      setShowDraftCopyFallback(false);
+      setActionNotice({ message: 'Draft copied. Attached files are not included.', type: 'success' });
+    } catch {
+      setShowDraftCopyFallback(true);
+    }
   };
 
   const handleRetryTurn = async () => {
-    if (!failedTurnDraft || isStreaming) return;
+    if (!failedTurnDraft || isStreaming || sendLockRef.current) return;
     if (providerPlugins.loading || providerPlugins.error || !providerPlugins.isConfigured || enabledProviders.size === 0 || providerVerificationRequiresAction) {
       setSendValidationError(providerPlugins.error
         ? 'Provider setup could not be checked. Retry the check or open Provider Settings.'
@@ -1329,6 +1349,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     }
     const { rawInput, queryText, attachments, overrideModel, optimisticMessageId, optimisticMessageContent } = failedTurnDraft;
     setFailedTurnDraft(null);
+    setShowDraftCopyFallback(false);
 
     // Remove the failed assistant message if present
     setMessages((prev) => {
@@ -1404,7 +1425,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const handleDeleteConversation = async (conversationId: string) => {
-    if (isStreaming) return;
+    if (isStreaming || sendLockRef.current) return;
     setActionNotice(null);
     try {
       await deleteConversation(supabase, conversationId);
@@ -1419,13 +1440,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   };
 
   const handleSelectConversation = (conversationId: string) => {
-    if (isStreaming || conversationId === selectedConversationIdRef.current) return;
+    if (isStreaming || sendLockRef.current || conversationId === selectedConversationIdRef.current) return;
     writeSelectedConversation(user?.id ?? null, conversationId);
     void openConversation(conversationId);
   };
 
   const handleNewChat = () => {
-    if (isStreaming) return;
+    if (isStreaming || sendLockRef.current) return;
     conversationLoadSeqRef.current += 1;
     selectedConversationIdRef.current = null;
     setSelectedConversationId(null);
@@ -1931,6 +1952,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           console.warn('[ChatInterface] Web search failed, proceeding without search:', err);
         }
         if (!requestStillCurrent()) return;
+
       }
 
       // 2. F24: Multi-source research workflow mode incorporates project knowledge and web results
@@ -2020,6 +2042,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         ]);
         if (!requestStillCurrent()) return;
 
+        const statusFor = (result: PromiseSettledResult<Awaited<ReturnType<typeof askPrismatixSync>>>): 'completed' | 'interrupted' | 'stopped' | 'failed' => {
+          if (result.status !== 'fulfilled' || !result.value) return 'failed';
+          if (result.value.terminationStatus === 'cancelled') return 'stopped';
+          if (result.value.terminationStatus === 'interrupted' || result.value.terminationStatus === 'error' || !result.value.isDoneReceived) return 'interrupted';
+          if (result.value.terminationStatus !== 'completed' || !result.value.receipt) return 'failed';
+          return 'completed';
+        };
+        const statusA = statusFor(resA);
+        const statusB = statusFor(resB);
+
         const contentA =
           resA.status === 'fulfilled' && resA.value?.content
             ? resA.value.content
@@ -2050,17 +2082,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         }
 
         const comparisonResultsData = {
-          modelA: { model: comparisonModelA, content: contentA, cost: costA },
-          modelB: { model: comparisonModelB, content: contentB, cost: costB },
+          modelA: { model: comparisonModelA, content: contentA, cost: costA, status: statusA, transcriptSaved: resA.status === 'fulfilled' && resA.value?.receipt?.transcript?.saved === true },
+          modelB: { model: comparisonModelB, content: contentB, cost: costB, status: statusB, transcriptSaved: resB.status === 'fulfilled' && resB.value?.receipt?.transcript?.saved === true },
         };
         const comparisonSummary = `Side-by-side comparison: **${comparisonModelA}** vs **${comparisonModelB}**`;
 
-        const execIdA = resA.status === 'fulfilled' ? resA.value?.executionId : undefined;
+        const execIdA = resA.status === 'fulfilled'
+          ? resA.value?.executionId ?? resA.value?.receipt?.executionId
+          : undefined;
         let persistedId: string | undefined;
+        let comparisonSaved = false;
+        const bothTranscriptsSaved = comparisonResultsData.modelA.transcriptSaved
+          && comparisonResultsData.modelB.transcriptSaved;
 
-        if (execIdA) {
+        if (execIdA && bothTranscriptsSaved) {
           try {
-            const { data } = await supabase
+            const { data, error } = await supabase
               .from('messages')
               .update({
                 content: comparisonSummary,
@@ -2073,8 +2110,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               .select('id')
               .maybeSingle();
             if (!requestStillCurrent()) return;
+            if (error) throw error;
             if (data?.id) {
               persistedId = data.id;
+              comparisonSaved = true;
             }
           } catch (err) {
             console.warn('[ChatInterface] Failed to persist comparison metadata to Supabase:', err);
@@ -2091,6 +2130,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               id: persistedId ?? last.id,
               content: comparisonSummary,
               comparisonResults: comparisonResultsData,
+              transcriptSaved: comparisonSaved,
               citations,
             };
           }
@@ -2338,6 +2378,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             if (lastMessage?.role === 'assistant') {
               updated[updated.length - 1] = {
                 ...lastMessage,
+                transcriptSaved: receipt?.transcript?.saved === false ? false : undefined,
                 content: assistantContent
                   ? `${assistantContent}\n\n⚠️ _[Response interrupted before completion]_`
                   : '⚠️ _[Connection interrupted before response started]_',
@@ -2432,6 +2473,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           if (lastMessage?.role === 'assistant') {
             updated[updated.length - 1] = {
               ...lastMessage,
+              transcriptSaved: receipt?.transcript?.saved === false ? false : undefined,
               id: regenerateTargetMessageId || lastMessage.id,
               cost: {
                 estimatedUsd: costEstimateUsd ?? computedCost.finalUsd,
@@ -2547,7 +2589,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     }
   };
 
-  const handleSend = async (skipBudgetCheck = false) => {
+  const handleSend = async (skipBudgetCheck = false, existingLockId?: number) => {
     // Allow send if there's text OR attachments
     const hasContent = input.trim() || draftAttachments.length > 0;
     if (!hasContent || isStreaming) return;
@@ -2657,10 +2699,53 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       return;
     }
 
+    let sendLock = sendLockRef.current;
+    if (sendLock) {
+      if (existingLockId !== sendLock.id) return;
+    } else {
+      if (existingLockId !== undefined) return;
+      sendLock = {
+        id: ++sendLockSeqRef.current,
+        userId: user?.id,
+        accountGeneration: accountGenerationRef.current,
+        conversationId: selectedConversationIdRef.current,
+      };
+      sendLockRef.current = sendLock;
+    }
+    const releaseSendLock = () => {
+      if (sendLockRef.current?.id === sendLock!.id) {
+        sendLockRef.current = null;
+        setIsSendPending(false);
+      }
+    };
+
     if (!skipBudgetCheck) {
+      setIsSendPending(true);
       // Fetch from server first so budget cannot be bypassed by clearing localStorage or opening a new tab.
       // Falls back to localStorage total if the server is unreachable.
-      const dailyTotalUsd = await fetchServerDailyTotal();
+      let timeoutId: number | undefined;
+      let dailyTotalUsd: number;
+      try {
+        dailyTotalUsd = await Promise.race([
+          fetchServerDailyTotal(),
+          new Promise<never>((_, reject) => {
+            timeoutId = window.setTimeout(() => reject(new Error('budget_check_timeout')), 8000);
+          }),
+        ]);
+      } catch {
+        setSendValidationError('Daily budget check did not finish. Your draft is still here; retry the check before sending.');
+        releaseSendLock();
+        return;
+      } finally {
+        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      }
+      if (sendLockRef.current?.id !== sendLock.id
+        || sendLock.accountGeneration !== accountGenerationRef.current
+        || sendLock.userId !== user?.id
+        || sendLock.conversationId !== selectedConversationIdRef.current) {
+        releaseSendLock();
+        return;
+      }
       const budgetDecision = evaluateBudget({
         estimateUsd: budgetEstimateUsd,
         dailyTotalUsd,
@@ -2676,11 +2761,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             timestamp: Date.now(),
           },
         ]);
+        releaseSendLock();
         return;
       }
 
       if (budgetDecision.requiresConfirm) {
-        pendingActionRef.current = () => void handleSend(true);
+        pendingActionRef.current = () => void handleSend(true, sendLock!.id);
         setBudgetConfirm({
           estimateUsd: budgetEstimateUsd,
           dailyTotalUsd,
@@ -2727,15 +2813,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
     setDraftAttachments([]);
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
-    await executeTurn({
-      queryText,
-      attachmentsToProcess,
-      historyMessages: historyForRequest,
-      overrideModel: manualModelOverride || undefined,
-      promptTokenEstimate,
-      skipBudgetCheck: true,
-      optimisticMessageId,
-    });
+    setIsSendPending(false);
+    try {
+      await executeTurn({
+        queryText,
+        attachmentsToProcess,
+        historyMessages: historyForRequest,
+        overrideModel: manualModelOverride || undefined,
+        promptTokenEstimate,
+        skipBudgetCheck: true,
+        optimisticMessageId,
+      });
+    } finally {
+      releaseSendLock();
+    }
   };
 
   const handleVerifyProviders = async () => {
@@ -2763,7 +2854,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   executeTurnRef.current = executeTurn;
 
   const handleRegenerate = useCallback(async (index: number, modelOverride?: RouterModel) => {
-    if (isStreamingRef.current) return;
+    if (isStreamingRef.current || sendLockRef.current) return;
     const snapshot = messagesRef.current;
     let userIndex = -1;
     for (let i = index - 1; i >= 0; i--) {
@@ -2851,7 +2942,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   }, [resetAutoScroll, debateSelection]);
 
   const handleEditPrompt = useCallback(async (index: number, newPrompt: string) => {
-    if (isStreamingRef.current) return;
+    if (isStreamingRef.current || sendLockRef.current) return;
     const snapshot = messagesRef.current;
     const targetUserMessage = snapshot[index];
     if (!targetUserMessage || targetUserMessage.role !== 'user') return;
@@ -3105,6 +3196,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   const handleBudgetCancel = () => {
     pendingActionRef.current = null;
     setBudgetConfirm(null);
+    sendLockRef.current = null;
+    setIsSendPending(false);
   };
 
   const handleBudgetConfirmSend = () => {
@@ -3114,7 +3207,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       pendingActionRef.current = null;
       action();
     } else {
-      void handleSend(true);
+      sendLockRef.current = null;
+      setIsSendPending(false);
     }
   };
 
@@ -3193,7 +3287,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
   // so its disabled state is self-explanatory and never looks actionable.
   const sendBlockedReason = isStreaming
     ? 'streaming'
-    : hasPendingVideoUploads
+    : isSendPending
+      ? 'pending'
+      : hasPendingVideoUploads
       ? 'video'
       : sendValidationError
         ? 'invalid'
@@ -3588,7 +3684,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
           conversations={conversations}
           selectedId={selectedConversationId}
           isLoading={conversationsLoading}
-          disabled={isStreaming}
+          disabled={isStreaming || isSendPending}
           isOpen={sidebarOpen}
           hasMore={hasMoreConversations}
           isLoadingMore={isLoadingMoreConversations}
@@ -3872,7 +3968,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         <div className='draft-recovery-bar' role='alert'>
           <div className='draft-recovery-text'>
             <span className='draft-recovery-icon' aria-hidden='true'>⚠️</span>
-            <span>Send failed: {failedTurnDraft.error || 'The request could not be completed.'}</span>
+            <span>Send failed: {failedTurnDraft.error || 'The request could not be completed.'} This draft is kept only in this tab and will be lost on refresh. Copy the text now; attached files are not included.</span>
           </div>
           <div className='draft-recovery-actions'>
             <button
@@ -3881,6 +3977,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
               onClick={handleRestoreDraft}
             >
               Restore draft
+            </button>
+            <button
+              type='button'
+              className='draft-recovery-copy-btn'
+              onClick={() => void handleCopyFailedDraft()}
+            >
+              Copy draft
             </button>
             <button
               type='button'
@@ -3893,12 +3996,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <button
               type='button'
               className='draft-recovery-dismiss-btn'
-              onClick={() => setFailedTurnDraft(null)}
+              onClick={() => { setFailedTurnDraft(null); setShowDraftCopyFallback(false); }}
               aria-label='Dismiss recovery notice'
             >
               ✕
             </button>
           </div>
+          {showDraftCopyFallback && (
+            <label className='draft-copy-fallback'>Clipboard access failed. Select and copy the draft text manually.
+              <textarea readOnly value={failedTurnDraft.rawInput} onFocus={(event) => event.currentTarget.select()} aria-label='Draft text to copy manually' />
+              {failedTurnDraft.attachments.length > 0 && <span>Reattach these files separately: {failedTurnDraft.attachments.map((file) => file.name).join(', ')}</span>}
+            </label>
+          )}
         </div>
       )}
 
@@ -4083,6 +4192,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
         onSend={() => void handleSend()}
         onStop={handleStop}
         isStreaming={isStreaming}
+        isSendPending={isSendPending}
         isWaitingFirstToken={isWaitingFirstToken}
         sendBlockedReason={sendBlockedReason}
         sendBlockedTitles={SEND_BLOCKED_TITLES}
@@ -4343,6 +4453,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
             <option value='capability'>Capability</option>
           </select>
           <label htmlFor='arctic-spend-cap'>Per-turn spend cap</label>
+          <small className='routing-spend-cap-note'>Compare checks the estimated combined cost before sending. The router enforces this cap per request, so the two request totals are not covered by one shared server cap.</small>
           <select
             id='arctic-spend-cap'
             value={spendCapSelectValue(maxSpendCap)}

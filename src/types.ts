@@ -173,6 +173,8 @@ export interface Message {
   thinkingLog?: string[];
   thinkingDurationMs?: number;
   cost?: MessageCost;
+  /** Explicitly false means the router reported that this answer was not persisted. */
+  transcriptSaved?: boolean;
   feedback?: 'up' | 'down';
   citations?: Array<{
     id: number;
@@ -182,8 +184,8 @@ export interface Message {
     snippet: string;
   }>;
   comparisonResults?: {
-    modelA: { model: RouterModel; content: string; cost?: number };
-    modelB: { model: RouterModel; content: string; cost?: number };
+    modelA: { model: RouterModel; content: string; cost?: number; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean };
+    modelB: { model: RouterModel; content: string; cost?: number; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean };
     preferred?: 'A' | 'B';
   };
   metadata?: Record<string, unknown>;

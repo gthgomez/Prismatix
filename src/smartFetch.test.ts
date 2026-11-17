@@ -22,7 +22,7 @@ vi.mock('./lib/supabase', () => ({
   },
 }));
 
-import { askPrismatix, resetConversation } from './smartFetch';
+import { askPrismatix, askPrismatixSync, resetConversation } from './smartFetch';
 
 function createJwt(iss: string): string {
   const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
@@ -216,5 +216,25 @@ describe('smartFetch debate support', () => {
     const init = firstCall![1] as RequestInit;
     const body = JSON.parse(String(init.body));
     expect(body.imageStorageUrl).toBe('supabase://chat-uploads/user-id/image.png');
+  });
+
+  it('preserves terminal receipt and interruption status in sync responses', async () => {
+    const receipt = { executionId: 'exec-1', status: 'indeterminate', terminalOutcome: 'upstream_interrupted', transcript: { saved: true }, settlement: { state: 'pending' }, calls: [] };
+    const sse = [
+      { type: 'content_block_delta', delta: { text: 'partial answer' } },
+      { type: 'receipt', ...receipt },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(makeStream(sse), {
+      status: 200,
+      headers: { 'X-Router-Model': 'gemini-3.8-flash', 'X-Prismatix-Execution-Id': 'exec-1' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await askPrismatixSync('test compare result');
+
+    expect(result?.content).toBe('partial answer');
+    expect(result?.receipt).toMatchObject(receipt);
+    expect(result?.terminationStatus).toBe('interrupted');
+    expect(result?.executionId).toBe('exec-1');
   });
 });

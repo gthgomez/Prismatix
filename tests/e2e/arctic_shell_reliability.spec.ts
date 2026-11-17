@@ -9,8 +9,109 @@ const successfulStream = (text: string, executionId: string) => ({
   body: [
     { type: 'meta', model: 'gemini-3.8-flash', cost: { finalUsd: 0.0001 } },
     { type: 'content_block_delta', delta: { text } },
-    { type: 'receipt', executionId, status: 'completed', settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
+    { type: 'receipt', executionId, status: 'completed', transcript: { saved: true }, settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
   ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
+});
+
+test('failed-send draft remains session-only and reload never auto-dispatches it', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let routerRequests = 0;
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'provider_key_unavailable' }) });
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Keep this only in memory');
+  await composer.press('Enter');
+  await expect(page.locator('.draft-recovery-bar')).toContainText('lost on refresh');
+  expect(routerRequests).toBe(1);
+  expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Keep this only in memory');
+  await page.reload();
+  await expect(page.getByRole('textbox', { name: 'Message Prismatix' })).toBeVisible();
+  await expect(page.locator('.draft-recovery-bar')).toBeHidden();
+  expect(routerRequests).toBe(1);
+});
+
+test('Compare preserves interrupted model outcome and warns when either transcript was not saved', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let requests = 0;
+  await page.route('**/functions/v1/router*', async (route) => {
+    const body = route.request().postDataJSON() as { modelOverride?: string };
+    requests++;
+    if (body.modelOverride === 'gemini-3.8-flash') {
+      const events = [
+        { type: 'content_block_delta', delta: { text: 'Partial answer A' } },
+        { type: 'receipt', executionId: 'compare-a', status: 'indeterminate', terminalOutcome: 'upstream_interrupted', transcript: { saved: false }, settlement: { state: 'pending', committedUsd: null, pendingCalls: 1 }, calls: [] },
+      ];
+      await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' }, body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') });
+      return;
+    }
+    await route.fulfill(successfulStream('Complete answer B', `compare-${requests}`));
+  });
+  await signInAsMockUser(page);
+  await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Compare without hiding a partial result');
+  await composer.press('Enter');
+  await expect(page.getByText('Partial answer A')).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('could not be saved');
+  await expect(page.getByText('Interrupted · partial response')).toBeVisible();
+  await expect(page.getByText('Complete answer B')).toBeVisible();
+  expect(requests).toBe(2);
+});
+
+test('Compare marks completed answers unsaved when its metadata write returns a database error', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let requests = 0;
+  let metadataWrites = 0;
+  const messageMethods: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/rest/v1/messages')) messageMethods.push(`observed:${request.method()}`);
+  });
+  await page.route('**/rest/v1/messages*', async (route) => {
+    messageMethods.push(`route:${route.request().method()}`);
+    if (route.request().method() === 'PATCH') {
+      metadataWrites++;
+      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ code: '08006', message: 'synthetic database unavailable' }) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route('**/functions/v1/router*', async (route) => {
+    requests++;
+    await route.fulfill(successfulStream(`Completed model ${requests}`, `compare-write-${requests}`));
+  });
+  await signInAsMockUser(page);
+  await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Report a failed durable comparison metadata write');
+  await composer.press('Enter');
+  await expect(page.getByText('Completed model 1')).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('could not be saved');
+  expect(requests).toBe(2);
+  expect({ metadataWrites, messageMethods }).toEqual({ metadataWrites: 1, messageMethods: expect.arrayContaining(['route:PATCH']) });
+});
+
+test('ordinary Chat visibly marks a router-reported unsaved answer without retrying it', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let requests = 0;
+  await page.route('**/functions/v1/router*', async (route) => {
+    requests++;
+    const events = [
+      { type: 'content_block_delta', delta: { text: 'Keep this generated answer visible' } },
+      { type: 'receipt', executionId: 'single-unsaved', status: 'completed', transcript: { saved: false }, settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
+    ];
+    await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' }, body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n` });
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Return an answer but report storage failure');
+  await composer.press('Enter');
+  await expect(page.getByText('Keep this generated answer visible')).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('could not be saved');
+  await expect(page.getByRole('button', { name: 'Copy response' })).toBeVisible();
+  expect(requests).toBe(1);
 });
 
 test('Arctic shell persists through send and history; saved-chat layout has no horizontal overflow', async ({ page }) => {
@@ -33,6 +134,123 @@ test('Arctic shell persists through send and history; saved-chat layout has no h
   await expect(header).toHaveAttribute('data-shell-node-marker', 'stable');
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1440);
   expect(count).toBe(1);
+});
+
+test('slow spend preflight owns one logical send across rapid click and Enter', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let releaseSpend!: () => void;
+  let signalSpendStarted!: () => void;
+  let blockNextSpendRequest = false;
+  let spendRequestBlocked = false;
+  const spendStarted = new Promise<void>((resolve) => { signalSpendStarted = resolve; });
+  const spendResponseGate = new Promise<void>((resolve) => { releaseSpend = resolve; });
+  let routerRequests = 0;
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    await route.fulfill(successfulStream('Single paid mock answer', 'single-logical-send'));
+  });
+  await signInAsMockUser(page);
+  await page.route('**/functions/v1/spend_stats*', async (route) => {
+    if (blockNextSpendRequest) {
+      if (!spendRequestBlocked) {
+        spendRequestBlocked = true;
+        signalSpendStarted();
+      }
+      await spendResponseGate;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ today: 0 }) });
+  });
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Do not dispatch this twice');
+  blockNextSpendRequest = true;
+  await composer.focus();
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await spendStarted;
+  await expect(page.locator('.send-preflight-status')).toContainText('Checking your daily budget');
+  await page.evaluate(() => document.querySelector<HTMLTextAreaElement>('.chat-input')?.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+  ));
+  releaseSpend();
+  await expect(page.getByText('Single paid mock answer')).toBeVisible();
+  expect(routerRequests).toBe(1);
+  await expect(page.getByText('Do not dispatch this twice', { exact: true })).toHaveCount(1);
+});
+
+test('a budget lookup that exceeds its deadline preserves the draft without dispatch', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let releaseSpend!: () => void;
+  let signalSpendStarted!: () => void;
+  let blockNextSpendRequest = false;
+  let blocked = false;
+  const spendStarted = new Promise<void>((resolve) => { signalSpendStarted = resolve; });
+  const spendResponseGate = new Promise<void>((resolve) => { releaseSpend = resolve; });
+  await signInAsMockUser(page);
+  await page.route('**/functions/v1/spend_stats*', async (route) => {
+    if (blockNextSpendRequest) {
+      if (!blocked) {
+        blocked = true;
+        signalSpendStarted();
+      }
+      await spendResponseGate;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ today: 0 }) });
+  });
+  let routerRequests = 0;
+  await page.route('**/functions/v1/router*', async (route) => { routerRequests++; await route.fulfill(successfulStream('Should not dispatch', 'budget-timeout')); });
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Keep me while the budget lookup stalls');
+  blockNextSpendRequest = true;
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await spendStarted;
+  await expect(page.getByRole('alert')).toContainText('Daily budget check did not finish', { timeout: 12000 });
+  await expect(composer).toHaveValue('Keep me while the budget lookup stalls');
+  expect(routerRequests).toBe(0);
+  releaseSpend();
+  expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Keep me while the budget lookup stalls');
+});
+
+test('late budget response after sign-out cannot dispatch into another account', async ({ page }, testInfo) => {
+  const narrowMobile = testInfo.project.name === 'mobile';
+  if (narrowMobile) await page.setViewportSize({ width: 390, height: 844 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let releaseSpend!: () => void;
+  let signalSpendStarted!: () => void;
+  let blockNextSpendRequest = false;
+  let blocked = false;
+  const spendStarted = new Promise<void>((resolve) => { signalSpendStarted = resolve; });
+  const spendResponseGate = new Promise<void>((resolve) => { releaseSpend = resolve; });
+  await signInAsMockUser(page);
+  await page.route('**/functions/v1/spend_stats*', async (route) => {
+    if (blockNextSpendRequest) {
+      if (!blocked) {
+        blocked = true;
+        signalSpendStarted();
+      }
+      await spendResponseGate;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ today: 0 }) });
+  });
+  let routerRequests = 0;
+  await page.route('**/functions/v1/router*', async (route) => { routerRequests++; await route.fulfill(successfulStream('Must not cross accounts', 'stale-budget')); });
+  await page.route('**/auth/v1/logout*', async (route) => route.fulfill({ status: 204, body: '' }));
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Account-scoped pending draft');
+  blockNextSpendRequest = true;
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await spendStarted;
+  await expect(page.locator('.send-preflight-status')).toContainText('Checking your daily budget');
+  // The mobile drawer starts collapsed, so New Chat is intentionally not in
+  // the accessibility tree. Assert the visible send control is locked there;
+  // desktop additionally exposes and locks the New Chat action.
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  if (!narrowMobile) await expect(page.getByRole('button', { name: /new chat/i })).toBeDisabled();
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await page.getByRole('button', { name: 'Sign Out' }).click();
+  await expect(page.locator('#email')).toBeVisible();
+  releaseSpend();
+  await page.waitForTimeout(100);
+  expect(routerRequests).toBe(0);
 });
 
 for (const viewport of [
@@ -199,6 +417,10 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
     await expect(page.locator('.cost-estimator')).toBeHidden();
 
     const recovery = page.locator('.draft-recovery-bar');
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, get: () => undefined }));
+    await recovery.getByRole('button', { name: 'Copy draft' }).click();
+    await expect(recovery.getByRole('textbox', { name: 'Draft text to copy manually' })).toHaveValue('Keep this exact draft');
+    expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Keep this exact draft');
     const recoveryText = recovery.locator('.draft-recovery-text');
     const recoveryActions = recovery.locator('.draft-recovery-actions');
     const accountMenu = page.getByRole('button', { name: 'Account menu' });

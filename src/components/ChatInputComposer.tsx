@@ -18,6 +18,7 @@ export interface ChatInputComposerProps {
   onSend: () => void;
   onStop: () => void;
   isStreaming: boolean;
+  isSendPending?: boolean;
   isWaitingFirstToken: boolean;
   sendBlockedReason: SendBlockedReason;
   sendBlockedTitles: Record<string, string>;
@@ -65,6 +66,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   onSend,
   onStop,
   isStreaming,
+  isSendPending = false,
   isWaitingFirstToken,
   sendBlockedReason,
   sendBlockedTitles,
@@ -106,6 +108,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   return (
     <div className='chat-input-container'>
       <div className='input-wrapper'>
+        {isSendPending && <div className='send-preflight-status' role='status'>Checking your daily budget before sending. Your draft is held in this tab.</div>}
         {providerSetupBlocked && (
           <div className='provider-setup-composer-status' role='status'>
             <span>{providerSetupVerifyAvailable ? 'Sending is paused. Verify your saved provider key to continue; your draft stays here.' : 'Sending is paused. Your draft stays here until a provider is connected.'}</span>
@@ -130,7 +133,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
             onFileContent={onFileSelect}
             onMultipleFiles={onMultipleFiles}
             onPickerReady={onFilePickerReady}
-            disabled={isStreaming}
+            disabled={isStreaming || isSendPending}
             maxFiles={10}
           />
           <textarea
@@ -147,7 +150,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
             }
             aria-label='Message Prismatix'
             className='chat-input'
-            disabled={isStreaming}
+            disabled={isStreaming || isSendPending}
             rows={1}
           />
           <button
@@ -203,7 +206,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
                   type='button'
                   className='composer-tool-btn prompt-library-btn'
                   onClick={onOpenPromptLibrary}
-                  disabled={isStreaming}
+                  disabled={isStreaming || isSendPending}
                   aria-label='Prompt templates library'
                   title='Prompt templates library'
                 >
@@ -218,7 +221,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
                   type='button'
                   className='composer-tool-btn url-ingest-btn'
                   onClick={onOpenUrlIngestion}
-                  disabled={isStreaming}
+                  disabled={isStreaming || isSendPending}
                   aria-label='Read web page URL'
                   title='Read web page URL'
                 >
@@ -233,7 +236,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
                   type='button'
                   className='composer-tool-btn doc-compare-btn'
                   onClick={onOpenDocComparison}
-                  disabled={isStreaming}
+                  disabled={isStreaming || isSendPending}
                   aria-label='Compare two documents'
                   title='Compare two documents side-by-side'
                 >
@@ -250,7 +253,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
                   type='button'
                   className='composer-tool-btn image-gen-btn'
                   onClick={onOpenImageGen}
-                  disabled={isStreaming}
+                  disabled={isStreaming || isSendPending}
                   aria-label='Generate image (BYOK)'
                   title='Generate image with BYOK model'
                 >
@@ -266,7 +269,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
                   type='button'
                   className={`composer-tool-btn voice-dictation-btn ${isRecordingVoice ? 'is-recording' : ''}`}
                   onClick={onToggleVoiceDictation}
-                  disabled={isStreaming}
+                  disabled={isStreaming || isSendPending}
                   aria-label={isRecordingVoice ? 'Stop voice recording' : 'Voice dictation'}
                   title={isRecordingVoice ? 'Stop voice recording' : 'Voice dictation (speech to text)'}
                   aria-pressed={isRecordingVoice}
@@ -297,7 +300,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
             onClearOverride={onClearOverride}
             onGeminiThinkingChange={onGeminiThinkingChange}
             onOpenProviderSettings={onOpenProviderSettings}
-            disabled={isStreaming}
+            disabled={isStreaming || isSendPending}
           />
         </div>
 

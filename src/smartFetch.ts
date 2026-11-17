@@ -6,6 +6,8 @@ import { CONFIG } from './config';
 import { devLog, devWarn, devError } from './utils';
 import { noteServerTariffVersion } from './catalogSkew';
 import { readRouterStream } from './hooks/useStreamHandler';
+import type { StreamTerminationStatus } from './hooks/useStreamHandler';
+import type { TerminalReceipt } from '../supabase/functions/_shared/execution_receipt';
 import type { AttachmentRef } from '../supabase/functions/_shared/conversation_attachments';
 import type {
   DebateParticipant,
@@ -86,6 +88,10 @@ export interface RouterResponseBase {
   executionId?: string;
   /** PX07: stable per-logical-send request id (reused on the 401 retry). */
   clientRequestId?: string;
+  receipt?: TerminalReceipt;
+  terminationStatus?: StreamTerminationStatus;
+  isDoneReceived?: boolean;
+  streamError?: unknown;
 }
 
 /**
@@ -680,7 +686,14 @@ export async function askPrismatixSync(
     );
 
     const { stream: _, ...base } = result;
-    return { ...base, content: streamResult.assistantContent };
+    return {
+      ...base,
+      content: streamResult.assistantContent,
+      receipt: streamResult.receipt,
+      terminationStatus: streamResult.terminationStatus,
+      isDoneReceived: streamResult.isDoneReceived,
+      streamError: streamResult.error,
+    };
   } catch (error) {
     devError('[smartFetch] Stream reading error:', error);
     return null;
