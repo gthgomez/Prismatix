@@ -3,20 +3,23 @@
 import { test, expect, type Page } from '@playwright/test';
 import { setupAuthenticatedMock, MOCK_SESSION, MOCK_USER, signInAsMockUser } from './fixtures/mockAuth';
 
-async function watchScriptResponses(page: Page) {
+async function watchScriptResponses(page: Page, baseURL: string | undefined) {
+  if (!baseURL) throw new Error('Playwright baseURL is required to measure built assets.');
+  const trackedOrigin = new URL(baseURL).origin;
   const assets: Array<{ type: string; url: string; bytes: number }> = [];
   page.on('response', async (response) => {
     const type = response.request().resourceType();
-    if (!['script', 'stylesheet'].includes(type) || !response.url().startsWith('http://localhost:4173/')) return;
+    const responseURL = new URL(response.url());
+    if (!['script', 'stylesheet'].includes(type) || responseURL.origin !== trackedOrigin) return;
     const headerBytes = Number(await response.headerValue('content-length'));
     const bytes = Number.isFinite(headerBytes) && headerBytes > 0 ? headerBytes : (await response.body()).byteLength;
-    assets.push({ type, url: new URL(response.url()).pathname, bytes });
+    assets.push({ type, url: responseURL.pathname, bytes });
   });
   return assets;
 }
 
 test('logged-out built route does not download the chat bundle', async ({ page }, testInfo) => {
-  const assets = await watchScriptResponses(page);
+  const assets = await watchScriptResponses(page, testInfo.project.use.baseURL);
   await page.goto('/');
   await expect(page.locator('#email')).toBeVisible();
   await page.waitForLoadState('networkidle');
@@ -32,14 +35,15 @@ test('logged-out built route does not download the chat bundle', async ({ page }
     body: Buffer.from(JSON.stringify(report, null, 2)),
     contentType: 'application/json',
   });
+  expect(report.totalAssetBytes).toBeGreaterThan(0);
   expect(report.chatAssets).toEqual([]);
   // Guard against regressing to the previous single 615 KB AuthenticatedApp
   // bundle, whose name did not identify the embedded ChatInterface module.
   expect(report.totalAssetBytes).toBeLessThan(600_000);
 });
 
-test('normal mocked sign-in downloads chat only after authentication', async ({ page }) => {
-  const assets = await watchScriptResponses(page);
+test('normal mocked sign-in downloads chat only after authentication', async ({ page }, testInfo) => {
+  const assets = await watchScriptResponses(page, testInfo.project.use.baseURL);
   await page.route('**/auth/v1/token*', async (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -65,16 +69,16 @@ test('normal mocked sign-in downloads chat only after authentication', async ({ 
   expect(assets.some((item) => item.type === 'stylesheet' && /ChatInterface/i.test(item.url))).toBe(true);
 });
 
-test('reset deep link remains on reset UI without loading chat code', async ({ page }) => {
-  const assets = await watchScriptResponses(page);
+test('reset deep link remains on reset UI without loading chat code', async ({ page }, testInfo) => {
+  const assets = await watchScriptResponses(page, testInfo.project.use.baseURL);
   await page.goto('/reset-password?type=recovery');
   await expect(page.getByRole('heading', { name: 'Reset Password' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText(/invalid or expired/i);
   expect(assets.some((item) => /ChatInterface/i.test(item.url))).toBe(false);
 });
 
-test('synthetic authenticated fixture loads the deferred chat code', async ({ page }) => {
-  const assets = await watchScriptResponses(page);
+test('synthetic authenticated fixture loads the deferred chat code', async ({ page }, testInfo) => {
+  const assets = await watchScriptResponses(page, testInfo.project.use.baseURL);
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [], costLogs: [] });
   await signInAsMockUser(page);
   await expect(page.getByRole('textbox', { name: /message prismatix/i })).toBeVisible();
