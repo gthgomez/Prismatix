@@ -62,6 +62,43 @@ describe('InteractivePublicDemo', () => {
     });
   });
 
+  it('supports roving keyboard tabs, wrapping, Home/End, selected state, and focus reveal', async () => {
+    const root = createRoot(container!);
+    await act(async () => root.render(<InteractivePublicDemo autoplay={false} />));
+    const tabs = Array.from(container!.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    expect(tabs).toHaveLength(3);
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
+    const tabList = tabs[0]!.closest<HTMLElement>('.demo-tabs')!;
+    Object.defineProperty(tabList, 'clientWidth', { configurable: true, value: 100 });
+    Object.defineProperty(tabList, 'clientLeft', { configurable: true, value: 1 });
+    tabList.getBoundingClientRect = () => ({ left: 0, right: 102 } as DOMRect);
+    tabs.forEach((tab, index) => {
+      tab.getBoundingClientRect = () => {
+        const left = 1 + index * 55 - tabList.scrollLeft;
+        return { left, right: left + 50 } as DOMRect;
+      };
+    });
+    tabs[0]!.focus();
+
+    await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })));
+    expect(tabs[1]!.getAttribute('aria-selected')).toBe('true');
+    expect(tabs[1]!.tabIndex).toBe(0);
+    expect(tabs[1]).toBe(document.activeElement);
+    expect(tabList.scrollLeft).toBeGreaterThan(0);
+    expect(container!.textContent).toContain('Gemini 3.8 Flash');
+
+    await act(async () => tabs[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })));
+    expect(tabs[2]!.getAttribute('aria-selected')).toBe('true');
+    await act(async () => tabs[2]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })));
+    expect(tabs[0]!.getAttribute('aria-selected')).toBe('true');
+    await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true })));
+    expect(tabs[2]!.getAttribute('aria-selected')).toBe('true');
+    await act(async () => tabs[2]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true })));
+    expect(tabs[0]!.getAttribute('aria-selected')).toBe('true');
+    expect(container!.textContent).toContain('Synthetic Data');
+    await act(async () => root.unmount());
+  });
+
   it('allows clicking Reset to clear and Replay to stream', async () => {
     const root = createRoot(container!);
     await act(async () => {

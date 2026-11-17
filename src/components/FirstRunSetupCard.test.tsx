@@ -53,6 +53,8 @@ describe('FirstRunSetupCard connection status', () => {
     });
     expect(plugins.setKey).toHaveBeenCalledWith('openrouter', 'sk-or-test-key', { provider: 'openrouter', status: 'unavailable' });
     expect(container.textContent).toContain('could not be verified');
+    expect(container.textContent).toContain('Chat is paused until you verify this key or update it in Provider Settings.');
+    expect(container.textContent).not.toContain('You can try it now');
     expect(container.querySelector('.first-run-status')?.classList.contains('pending')).toBe(true);
     expect(container.textContent).not.toContain('You are ready to chat.');
     expect(onSaved).toHaveBeenCalledWith(expect.stringContaining('could not be verified'), false);

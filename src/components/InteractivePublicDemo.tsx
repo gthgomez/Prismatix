@@ -141,6 +141,24 @@ export interface InteractivePublicDemoProps {
   autoplay?: boolean;
 }
 
+function revealDemoTab(tab: HTMLButtonElement) {
+  const tabList = tab.closest<HTMLElement>('.demo-tabs');
+  if (!tabList) return;
+
+  const listBounds = tabList.getBoundingClientRect();
+  const tabBounds = tab.getBoundingClientRect();
+  const scrollportLeft = listBounds.left + tabList.clientLeft;
+  const scrollportRight = scrollportLeft + tabList.clientWidth;
+  const revealInset = 8;
+  let scrollLeft = tabList.scrollLeft;
+  if (tabBounds.left < scrollportLeft + revealInset) {
+    scrollLeft -= scrollportLeft + revealInset - tabBounds.left;
+  } else if (tabBounds.right > scrollportRight - revealInset) {
+    scrollLeft += tabBounds.right - (scrollportRight - revealInset);
+  }
+  tabList.scrollLeft = Math.max(0, scrollLeft);
+}
+
 export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDemoProps) {
   const [selectedScenarioId, setSelectedScenarioId] = useState('architecture');
   const scenario = DEMO_SCENARIOS.find((s) => s.id === selectedScenarioId) ?? DEMO_SCENARIOS[0]!;
@@ -148,6 +166,7 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
   const [isPlaying, setIsPlaying] = useState(false);
   const [isCompleted, setIsCompleted] = useState(!autoplay);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const clearTimer = () => {
     if (timerRef.current !== null) {
@@ -194,6 +213,22 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
       setIsPlaying(false);
       setIsCompleted(true);
     }
+  };
+
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % DEMO_SCENARIOS.length;
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + DEMO_SCENARIOS.length) % DEMO_SCENARIOS.length;
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = DEMO_SCENARIOS.length - 1;
+    if (nextIndex === null) return;
+
+    event.preventDefault();
+    const nextScenario = DEMO_SCENARIOS[nextIndex]!;
+    handleSelectScenario(nextScenario.id);
+    const nextTab = tabRefs.current[nextIndex];
+    nextTab?.focus({ preventScroll: true });
+    if (nextTab) revealDemoTab(nextTab);
   };
 
   const handleSkip = () => {
@@ -249,6 +284,28 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
     return () => clearTimer();
   }, [autoplay]);
 
+  useEffect(() => {
+    const fontSet = document.fonts;
+    if (!fontSet) return;
+
+    const revealFocusedTabAfterFontLayout = () => {
+      const focusedElement = document.activeElement;
+      if (
+        focusedElement instanceof HTMLButtonElement &&
+        focusedElement.matches('.demo-tabs .demo-tab[aria-selected="true"]')
+      ) {
+        revealDemoTab(focusedElement);
+      }
+    };
+
+    fontSet.addEventListener('loadingdone', revealFocusedTabAfterFontLayout);
+    fontSet.addEventListener('loadingerror', revealFocusedTabAfterFontLayout);
+    return () => {
+      fontSet.removeEventListener('loadingdone', revealFocusedTabAfterFontLayout);
+      fontSet.removeEventListener('loadingerror', revealFocusedTabAfterFontLayout);
+    };
+  }, []);
+
   return (
     <section className="interactive-demo-card" aria-label="Interactive Prismatix Demo">
       <div className="demo-header">
@@ -264,11 +321,16 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
           {DEMO_SCENARIOS.map((item) => (
             <button
               key={item.id}
+              ref={(node) => { tabRefs.current[DEMO_SCENARIOS.indexOf(item)] = node; }}
               type="button"
               role="tab"
+              id={`demo-tab-${item.id}`}
               aria-selected={item.id === selectedScenarioId}
+              aria-controls="demo-panel"
+              tabIndex={item.id === selectedScenarioId ? 0 : -1}
               className={`demo-tab ${item.id === selectedScenarioId ? 'active' : ''}`}
               onClick={() => handleSelectScenario(item.id)}
+              onKeyDown={(event) => handleTabKeyDown(event, DEMO_SCENARIOS.indexOf(item))}
             >
               {item.tabLabel}
             </button>
@@ -276,7 +338,7 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
         </div>
       </div>
 
-      <div className="demo-workspace">
+      <div className="demo-workspace" id="demo-panel" role="tabpanel" aria-labelledby={`demo-tab-${scenario.id}`}>
         {/* Router Explanation Bar */}
         <div className="demo-router-panel" aria-label="Route Decision Facts">
           <div className="demo-route-pill">
