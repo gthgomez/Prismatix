@@ -18,7 +18,10 @@ async function assertKeyboardTabReveal(page: Page, width: number) {
   expect(endState.tabFullyVisible).toBe(true);
   expect(endState.pageOverflow).toBe(false);
   expect(endState.pageScrollY).toBe(pageScrollY);
-  if (width <= 393) expect(endState.scrollLeft).toBeGreaterThan(0);
+  if (width <= 393) {
+    expect(endState.scrollLeft).toBeGreaterThan(0);
+    expect(endState.rightInset).toBeGreaterThanOrEqual(4);
+  }
 
   await page.keyboard.press('ArrowLeft');
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
@@ -45,6 +48,7 @@ async function readRevealState(page: Page) {
     return {
       scrollLeft: list.scrollLeft,
       tabFullyVisible: tabRect.left >= scrollportLeft && tabRect.right <= scrollportRight,
+      rightInset: scrollportRight - tabRect.right,
       pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
       pageScrollY: window.scrollY,
     };
@@ -78,6 +82,7 @@ test('393px public demo reveals the last tab after two ArrowRight presses', asyn
   const revealState = await readRevealState(page);
   expect(revealState.tabFullyVisible).toBe(true);
   expect(revealState.scrollLeft).toBeGreaterThan(0);
+  expect(revealState.rightInset).toBeGreaterThanOrEqual(4);
   expect(revealState.pageOverflow).toBe(false);
   expect(revealState.pageScrollY).toBe(pageScrollY);
 });

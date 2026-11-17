@@ -343,6 +343,7 @@
     flex-wrap: nowrap;
     overflow-x: auto;
     padding-bottom: 0.25rem;
+    padding-inline-end: 0.5rem;
     scroll-padding-inline: 0.5rem;
     overscroll-behavior-inline: contain;
   }
