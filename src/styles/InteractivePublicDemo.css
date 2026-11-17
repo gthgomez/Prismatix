@@ -59,6 +59,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .demo-tab {
@@ -341,6 +343,8 @@
     flex-wrap: nowrap;
     overflow-x: auto;
     padding-bottom: 0.25rem;
+    scroll-padding-inline: 0.5rem;
+    overscroll-behavior-inline: contain;
   }
 
   .demo-tab {

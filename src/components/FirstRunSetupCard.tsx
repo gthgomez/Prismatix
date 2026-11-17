@@ -52,7 +52,7 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
       if (saved) {
         const message = verified
           ? 'Key saved and verified. You are ready to chat.'
-          : 'Key saved, but could not be verified. You can try it now or check it again in Provider Settings.';
+          : 'Key saved, but could not be verified. Chat is paused until you verify this key or update it in Provider Settings.';
         setStatusMessage(message);
         setStatusTone(verified ? 'success' : 'pending');
         onSaved?.(message, verified);
