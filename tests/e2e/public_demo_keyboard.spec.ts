@@ -1,11 +1,18 @@
 import { test, expect, type Page } from '@playwright/test';
 
+async function waitForPageFonts(page: Page) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+}
+
 async function assertKeyboardTabReveal(page: Page, width: number) {
   await page.setViewportSize({ width, height: 851 });
   await page.goto('/demo');
   const tablist = page.getByRole('tablist', { name: 'Demo scenarios' });
   const tabs = tablist.getByRole('tab');
   await expect(tabs).toHaveCount(3);
+  await waitForPageFonts(page);
 
   await tabs.first().focus();
   const pageScrollY = await page.evaluate(() => window.scrollY);
@@ -132,6 +139,7 @@ test('a late font metric change re-reveals the focused demo tab', async ({ page 
   await page.setViewportSize({ width: 320, height: 851 });
   await page.goto('/demo');
   const tabs = page.getByRole('tablist', { name: 'Demo scenarios' }).getByRole('tab');
+  await waitForPageFonts(page);
   await page.addStyleTag({
     content: '.demo-tab { box-sizing: border-box; width: 190.984375px; flex: 0 0 190.984375px; }',
   });
@@ -172,6 +180,7 @@ test('393px public demo reveals the last tab after two ArrowRight presses', asyn
   await page.goto('/demo');
   const tabs = page.getByRole('tablist', { name: 'Demo scenarios' }).getByRole('tab');
   await expect(tabs).toHaveCount(3);
+  await waitForPageFonts(page);
 
   await tabs.first().focus();
   const pageScrollY = await page.evaluate(() => window.scrollY);
