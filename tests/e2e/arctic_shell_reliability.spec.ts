@@ -144,6 +144,7 @@ test('slow spend preflight owns one logical send across rapid click and Enter', 
   let blockNextSpendRequest = false;
   let spendRequestBlocked = false;
   const spendStarted = new Promise<void>((resolve) => { signalSpendStarted = resolve; });
+  const spendResponseGate = new Promise<void>((resolve) => { releaseSpend = resolve; });
   let routerRequests = 0;
   await page.route('**/functions/v1/router*', async (route) => {
     routerRequests++;
@@ -151,10 +152,12 @@ test('slow spend preflight owns one logical send across rapid click and Enter', 
   });
   await signInAsMockUser(page);
   await page.route('**/functions/v1/spend_stats*', async (route) => {
-    if (blockNextSpendRequest && !spendRequestBlocked) {
-      spendRequestBlocked = true;
-      signalSpendStarted();
-      await new Promise<void>((done) => { releaseSpend = done; });
+    if (blockNextSpendRequest) {
+      if (!spendRequestBlocked) {
+        spendRequestBlocked = true;
+        signalSpendStarted();
+      }
+      await spendResponseGate;
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ today: 0 }) });
   });
@@ -181,12 +184,15 @@ test('a budget lookup that exceeds its deadline preserves the draft without disp
   let blockNextSpendRequest = false;
   let blocked = false;
   const spendStarted = new Promise<void>((resolve) => { signalSpendStarted = resolve; });
+  const spendResponseGate = new Promise<void>((resolve) => { releaseSpend = resolve; });
   await signInAsMockUser(page);
   await page.route('**/functions/v1/spend_stats*', async (route) => {
-    if (blockNextSpendRequest && !blocked) {
-      blocked = true;
-      signalSpendStarted();
-      await new Promise<void>((done) => { releaseSpend = done; });
+    if (blockNextSpendRequest) {
+      if (!blocked) {
+        blocked = true;
+        signalSpendStarted();
+      }
+      await spendResponseGate;
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ today: 0 }) });
   });
@@ -204,19 +210,24 @@ test('a budget lookup that exceeds its deadline preserves the draft without disp
   expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Keep me while the budget lookup stalls');
 });
 
-test('late budget response after sign-out cannot dispatch into another account', async ({ page }) => {
+test('late budget response after sign-out cannot dispatch into another account', async ({ page }, testInfo) => {
+  const narrowMobile = testInfo.project.name === 'mobile';
+  if (narrowMobile) await page.setViewportSize({ width: 390, height: 844 });
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   let releaseSpend!: () => void;
   let signalSpendStarted!: () => void;
   let blockNextSpendRequest = false;
   let blocked = false;
   const spendStarted = new Promise<void>((resolve) => { signalSpendStarted = resolve; });
+  const spendResponseGate = new Promise<void>((resolve) => { releaseSpend = resolve; });
   await signInAsMockUser(page);
   await page.route('**/functions/v1/spend_stats*', async (route) => {
-    if (blockNextSpendRequest && !blocked) {
-      blocked = true;
-      signalSpendStarted();
-      await new Promise<void>((done) => { releaseSpend = done; });
+    if (blockNextSpendRequest) {
+      if (!blocked) {
+        blocked = true;
+        signalSpendStarted();
+      }
+      await spendResponseGate;
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ today: 0 }) });
   });
@@ -228,7 +239,12 @@ test('late budget response after sign-out cannot dispatch into another account',
   blockNextSpendRequest = true;
   await page.getByRole('button', { name: 'Send message' }).click();
   await spendStarted;
-  await expect(page.getByRole('button', { name: /new chat/i })).toBeDisabled();
+  await expect(page.locator('.send-preflight-status')).toContainText('Checking your daily budget');
+  // The mobile drawer starts collapsed, so New Chat is intentionally not in
+  // the accessibility tree. Assert the visible send control is locked there;
+  // desktop additionally exposes and locks the New Chat action.
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  if (!narrowMobile) await expect(page.getByRole('button', { name: /new chat/i })).toBeDisabled();
   await page.getByRole('button', { name: 'Account menu' }).click();
   await page.getByRole('button', { name: 'Sign Out' }).click();
   await expect(page.locator('#email')).toBeVisible();
