@@ -538,6 +538,7 @@ test('Arctic tokens persist from sign-in through saved chat, settings, and reloa
   const colorToken = (name: string) => root.evaluate((el, token) => getComputedStyle(el).getPropertyValue(token).trim(), name);
   const lightSurface = await colorToken('--color-surface');
   await expect(auth).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(auth.locator('.auth-divider')).toHaveCSS('color', 'rgb(86, 102, 125)');
   await page.screenshot({ path: testInfo.outputPath('sign-in-light.png') });
   await page.goto('/reset-password');
   await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible();

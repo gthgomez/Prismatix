@@ -244,7 +244,7 @@
   align-items: center;
   gap: 1rem;
   margin: 1.5rem 0;
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--color-text-muted);
   font-size: 0.8rem;
 }
 
