@@ -552,6 +552,7 @@ test('Arctic tokens persist from sign-in through saved chat, settings, and reloa
   await themeToggle.press('Enter');
   await expect(themeToggle).toHaveAttribute('aria-pressed', 'true');
   await expect(root).toHaveAttribute('data-theme', 'dark');
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#03070b');
   const darkSurface = await colorToken('--color-surface');
   expect(darkSurface).not.toBe(lightSurface);
   await account.click();

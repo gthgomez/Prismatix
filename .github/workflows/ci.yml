@@ -58,5 +58,5 @@ jobs:
       - name: Run Playwright acceptance tests
         run: npx playwright test --project=chromium
 
-      - name: Run Pixel mobile authenticated journey
-        run: npx playwright test --project=mobile tests/e2e/auth_chat_journey.spec.ts
+      - name: Run Pixel mobile authentication and provider journeys
+        run: npx playwright test --project=mobile tests/e2e/auth_chat_journey.spec.ts tests/e2e/first_run_connection_journey.spec.ts

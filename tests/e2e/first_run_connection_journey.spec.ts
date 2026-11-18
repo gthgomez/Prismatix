@@ -6,7 +6,11 @@ const GENERATED_REPLY = 'Fixture generated reply: your synthetic request complet
 const EXECUTION_ID = '00000000-0000-4000-8000-000000000701';
 
 test('verified first-run connection sends once and reloads fixture-persisted output', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1024, height: 600 });
+  test.setTimeout(60_000);
+  const mobile = testInfo.project.name === 'mobile';
+  const viewport = mobile ? { width: 393, height: 851 } : { width: 1024, height: 600 };
+  const viewportName = `${viewport.width}x${viewport.height}`;
+  await page.setViewportSize(viewport);
   await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [], costLogs: [] });
 
   // Independent, stateful fixture. The router call creates its own conversation
@@ -137,7 +141,7 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await page.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
   await signInAsMockUser(page);
   await expect(page.locator('.first-run-card')).toBeVisible();
-  await capture('transition-first-run-1024x600');
+  await capture(`transition-first-run-${viewportName}`);
 
   // Settings dialog restores focus to the first-run trigger when closed.
   const settingsTrigger = page.getByRole('button', { name: /Use another provider/i });
@@ -155,29 +159,33 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await expect(keyInput).toHaveAttribute('aria-invalid', 'true');
   expect(fixture.connected).toBe(false);
 
-
   await page.locator('#first-run-openrouter-key').fill('sk-or-synthetic-fixture-0701');
   await page.getByRole('button', { name: 'Connect provider' }).click();
   await expect(page.getByRole('status').filter({ hasText: /Key saved and verified/ })).toBeVisible();
   await expect(page.locator('.first-run-card')).toHaveCount(0);
-  await capture('transition-configured-1024x600');
+  await capture(`transition-configured-${viewportName}`);
 
   const prompt = 'Return a short synthetic confirmation.';
   await page.getByRole('textbox', { name: /message prismatix/i }).fill(prompt);
   await page.getByRole('button', { name: 'Send message' }).click();
   await routerStarted;
-  await capture('transition-streaming-1024x600');
+  await capture(`transition-streaming-${viewportName}`);
   releaseRouterResponse();
   await expect(page.getByText(GENERATED_REPLY)).toBeVisible({ timeout: 15000 });
   await assertAccountControlFits();
-  await capture('transition-reply-1024x600');
+  await capture(`transition-reply-${viewportName}`);
   expect(fixture.routerRequests).toHaveLength(1);
   expect(fixture.routerRequests[0]?.query).toBe(prompt);
   expect(fixture.conversation).not.toBeNull();
   expect(fixture.messages.map((message) => message.content)).toContain(GENERATED_REPLY);
 
   // A later key removal must not leave the old ready-to-chat notice displayed.
-  await page.getByRole('button', { name: 'Provider plug-ins' }).click();
+  if (mobile) {
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await page.locator('.user-dropdown').getByRole('button', { name: 'Provider plug-ins' }).click();
+  } else {
+    await page.getByRole('button', { name: 'Provider plug-ins' }).click();
+  }
   const settings = page.getByRole('dialog', { name: 'Provider plug-ins' });
   await settings.getByRole('button', { name: 'Remove' }).click();
   await expect(settings.getByText('Not configured')).toBeVisible();
@@ -188,7 +196,7 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await expect(page.getByRole('textbox', { name: /message prismatix/i })).toBeVisible({ timeout: 15000 });
   await expect(page.getByText(GENERATED_REPLY)).toBeVisible({ timeout: 15000 });
   await assertAccountControlFits();
-  await capture('transition-reload-1024x600');
+  await capture(`transition-reload-${viewportName}`);
   expect(fixture.routerRequests).toHaveLength(1);
   expect(fixture.messages[0]?.conversation_id).toBe(fixture.conversation?.id);
   expect(fixture.conversation?.id).toMatch(/^[0-9a-f-]{36}$/i);

@@ -620,7 +620,6 @@ test('unconfigured first run keeps setup above a disabled composer and makes no 
   });
   await signInAsMockUser(page);
   await expect(page.locator('.first-run-card')).toBeVisible();
-  const setupCard = page.locator('.first-run-card');
   const compactStatus = page.locator('.provider-setup-composer-status');
   await expect(compactStatus).toBeVisible();
   await expect(page.locator('.composer-tool-row')).toBeHidden();
@@ -922,6 +921,7 @@ test('attachment-only route rejection removes only its optimistic turn and retry
 });
 
 test('saved chat keeps Routing details reachable at wide desktop sizes', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   const conversationId = 'wide-routing-chat';
   await setupAuthenticatedMock(page, {
     hasProviderKey: true,
