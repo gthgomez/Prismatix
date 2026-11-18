@@ -180,12 +180,8 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   expect(fixture.messages.map((message) => message.content)).toContain(GENERATED_REPLY);
 
   // A later key removal must not leave the old ready-to-chat notice displayed.
-  if (mobile) {
-    await page.getByRole('button', { name: 'Account menu' }).click();
-    await page.locator('.user-dropdown').getByRole('button', { name: 'Provider plug-ins' }).click();
-  } else {
-    await page.getByRole('button', { name: 'Provider plug-ins' }).click();
-  }
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await page.locator('.user-dropdown').getByRole('button', { name: 'Provider plug-ins' }).click();
   const settings = page.getByRole('dialog', { name: 'Provider plug-ins' });
   await settings.getByRole('button', { name: 'Remove' }).click();
   await expect(settings.getByText('Not configured')).toBeVisible();

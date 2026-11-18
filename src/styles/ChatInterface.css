@@ -4682,15 +4682,16 @@
    PR 1 — Daily-use Foundation Styles (F01–F05)
    ========================================================================== */
 
-@media (max-width: 1200px) {
-  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .memory-trigger-label { display: none; }
+.compact-cost-details-icon,
+.arctic-routing-toggle-icon {
+  display: none;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1200px) {
   .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-content {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
-    align-items: start;
+    align-items: center;
     gap: 0.375rem;
   }
 
@@ -4699,14 +4700,67 @@
     gap: 0.375rem;
   }
 
-  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar-trailing {
-    flex: 0 1 auto;
-    justify-content: flex-end;
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-utility-bar {
+    display: contents;
   }
 
-  /* Search stays in the sidebar. Provider settings stay in the account menu. */
-  .arctic-new-chat .header-actions :is(.search-button, .provider-plugins-button) {
+  /* These actions also have entry points in the sidebar, account, or routing panel. */
+  .arctic-new-chat .header-actions :is(.search-button, .provider-plugins-button, .memory-trigger, .shortcuts-toggle-button, .install-pwa-button),
+  .arctic-new-chat .header-actions > .header-utility-bar-leading .context-disclosure {
     display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions { gap: 0.25rem; }
+
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .header-actions :is(.arctic-routing-toggle, .compact-cost-details-button) {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0.25rem;
+    text-align: center;
+  }
+
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) :is(.arctic-routing-toggle-icon, .compact-cost-details-icon) { display: inline-block; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) :is(.arctic-routing-toggle-label, .compact-cost-details-label) { display: none; }
+
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .spend-pill {
+    min-height: 44px;
+    padding: 0.25rem 0.375rem;
+  }
+
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .spend-pill-label,
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .spend-pill-state,
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .routing-label-wide { display: none; }
+
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .spend-pill-value { font-size: 0.85rem; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .routing-label-compact { display: inline; }
+
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .model-selector-container {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .model-indicator-button {
+    min-height: 44px;
+    min-width: 44px;
+    max-width: 7rem;
+    padding: 0.25rem 0.375rem;
+    flex-wrap: nowrap;
+  }
+
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .model-indicator-button :is(.model-icon, .manual-badge, .debate-badge) { display: none; }
+}
+
+@media (max-width: 360px) {
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .chat-header {
+    padding-inline: max(0.375rem, env(safe-area-inset-left)) max(0.375rem, env(safe-area-inset-right));
+  }
+
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) :is(.header-content, .header-actions) { gap: 0.125rem; }
+  .arctic-new-chat:is(.arctic-has-history, .arctic-recovering) .model-indicator-button {
+    max-width: 3.375rem;
+    gap: 0.125rem;
   }
 }
 

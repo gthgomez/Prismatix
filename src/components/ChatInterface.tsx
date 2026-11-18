@@ -3414,7 +3414,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                 });
               }}
             >
-              Cost details
+              <span className='compact-cost-details-label'>Cost details</span>
+              <span className='compact-cost-details-icon' aria-hidden='true'>$</span>
             </button>
           )}
           <button
@@ -3423,9 +3424,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             ref={routingToggleRef}
             aria-expanded={routingPanelOpen}
             aria-controls='arctic-routing-panel'
+            aria-label={routingPanelOpen ? 'Close routing details' : 'Routing details'}
             onClick={() => setRoutingPanelOpen((open) => !open)}
           >
-            {routingPanelOpen ? 'Close routing details' : 'Routing details'}
+            <span className='arctic-routing-toggle-label'>{routingPanelOpen ? 'Close routing details' : 'Routing details'}</span>
+            <svg className='arctic-routing-toggle-icon' viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'>
+              <path d='M4 6h16M4 12h16M4 18h16M8 3v6m8 0v6m-6 0v6' />
+            </svg>
           </button>
           {catalogSkewed && (
             <span
