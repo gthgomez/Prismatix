@@ -31,7 +31,7 @@ describe('Auth component', () => {
 
     // Check heading
     expect(container?.textContent).toContain('Prismatix');
-    expect(container?.textContent).toContain('Adaptive Model Selection');
+    expect(container?.textContent).toContain('Sign in to your AI workspace.');
 
     // Tab switcher should not be rendered when signup is disabled
     expect(container?.querySelector('.auth-tabs')).toBeNull();

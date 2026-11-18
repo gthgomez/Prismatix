@@ -8,39 +8,6 @@
   --prismatix-chat-header-h: 4.5rem;
   --prismatix-model-dropdown-top: 5.25rem;
 
-  /* Colors - Core */
-  color-scheme: dark;
-  --color-bg: #03070b;
-  --color-surface: #0d141b;
-  --color-surface-elevated: #14212b;
-  --color-surface-selected: #09292f;
-  --color-surface-error: #2d141a;
-  --color-surface-disabled: #111820;
-  --color-surface-hover: #17232c;
-  --color-surface-glass: rgba(13, 20, 27, 0.94);
-  --color-content-on-selected: #ccfaff;
-  --color-content-on-error: #ffb4b4;
-  --color-content-disabled: #91a3b0;
-  --color-border: rgba(255, 255, 255, 0.1);
-  --color-border-subtle: rgba(255, 255, 255, 0.06);
-  --color-border-strong: rgba(178, 195, 206, 0.3);
-  --color-text: #ffffff;
-  --color-text-dim: #b2c3ce;
-  --color-text-muted: #91a3b0;
-
-  /* Colors - Semantic */
-  --color-primary: #4ECDC4;
-  --color-primary-dim: rgba(78, 205, 196, 0.2);
-  --color-accent: #44A3B3;
-  --color-danger: #FF6B6B;
-  --color-warning: #FFC446;
-  --color-success: #7EF3DB;
-  --color-content-on-primary: #031012;
-  --color-surface-success: #10251f;
-  --color-surface-warning: #2a2110;
-  --color-content-on-warning: #ffe0a0;
-  --color-content-on-success: #baf9e8;
-
   /* Spacing */
   --spacing-xs: 0.25rem;
   --spacing-sm: 0.5rem;
@@ -59,22 +26,17 @@
   --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Berkeley Mono', monospace;
 
-  /* Elevation & Glows */
-  --shadow-glow: 0 0 20px rgba(78, 205, 196, 0.15);
-  --shadow-elevated: 0 16px 36px rgba(0, 0, 0, 0.5);
   --glass-bg: var(--color-surface-glass);
-  --glass-fallback: #0d141b;
-  --glass-border: #477586;
+  --glass-fallback: var(--color-surface);
   --glass-blur: 16px;
-  --glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
-  --color-focus: #65e8ff;
+  --shadow-glow: 0 0 20px rgb(78 205 196 / 15%);
 }
 
 *,
 *::before,
 *::after { box-sizing: border-box; }
 
-:where(button, summary, input, textarea, select):focus-visible {
+:where(a, button, summary, input, textarea, select):focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 3px;
 }
@@ -102,7 +64,7 @@
 }
 
 @media (forced-colors: active) {
-  :where(button, summary, input, textarea, select):focus-visible {
+  :where(a, button, summary, input, textarea, select):focus-visible {
     outline: 2px solid Highlight;
   }
   .auth-container,

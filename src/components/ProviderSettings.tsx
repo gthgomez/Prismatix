@@ -3,7 +3,9 @@
 // the default BYOK gateway. The legacy server-key-only OpenCode path is shown
 // as disabled and is never reported as ready.
 
-import React, { useEffect, useRef, useState } from 'react';
+import '../styles/ProviderSettings.css';
+import React, { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ProviderPlugins } from '../hooks/useProviderPlugins';
 import { getProviderPlugin, isProviderId, type ProviderId } from '../providerRegistry';
 import { MODEL_ORDER, formatModelPriceLabel, getCatalogEntry } from '../modelCatalog';
@@ -17,9 +19,6 @@ interface ProviderSettingsProps {
   onClose: () => void;
 }
 
-const FOCUSABLE_SELECTOR =
-  'button:not(:disabled), input:not(:disabled), [href], select, textarea, [tabindex]:not([tabindex="-1"])';
-
 export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, preferences, onClose }) => {
   const { providers, defaultProvider, loading, error, refresh } = plugins;
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -27,7 +26,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
   const [notice, setNotice] = useState<string | null>(null);
   const [expandedModelsProvider, setExpandedModelsProvider] = useState<string | null>(null);
   const [showHistoricByProvider, setShowHistoricByProvider] = useState<Record<string, boolean>>({});
-  const panelRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  const panelRef = useRef<HTMLDialogElement>(null);
 
   const {
     toggleFavorite,
@@ -51,54 +51,35 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
     });
   };
 
-  // Modal lifecycle: lock background scroll, move focus into the dialog, and
-  // restore it when the dialog unmounts.
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    const previouslyFocused = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    document.body.style.overflow = 'hidden';
-    panelRef.current?.focus();
-
+    const dialog = panelRef.current;
+    const trigger = document.activeElement;
+    if (!dialog) return;
+    dialog.showModal();
     return () => {
-      document.body.style.overflow = previousOverflow;
-      previouslyFocused?.focus();
+      dialog.close();
+      if (trigger instanceof HTMLElement && trigger !== document.body && trigger.isConnected) {
+        trigger.focus();
+      }
+      if (document.activeElement === document.body) {
+        const fallback = trigger?.closest('.arctic-routing-panel')
+          ? document.querySelector<HTMLElement>('.arctic-routing-toggle')
+          : document.querySelector<HTMLElement>('.user-button');
+        fallback?.focus();
+      }
     };
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-        return;
-      }
-      if (e.key !== 'Tab' || !panelRef.current) return;
-      const focusable = Array.from(
-        panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
-      );
-      if (focusable.length === 0) return;
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
-      const active = document.activeElement;
-      if (e.shiftKey && (active === first || active === panelRef.current || !panelRef.current.contains(active))) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && active === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
-
   const run = async (key: string, fn: () => Promise<boolean>): Promise<boolean> => {
     setBusy(key);
+    setNotice(null);
     try {
       const ok = await fn();
       if (!ok) setNotice('That action failed. Check your key and try again.');
       return ok;
+    } catch {
+      setNotice('That action could not be completed. Try again.');
+      return false;
     } finally {
       setBusy(null);
     }
@@ -108,320 +89,326 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
     run(`connect:${id}`, async () => {
       const value = (drafts[id] ?? '').trim();
       if (!value) return false;
-      const ok = await plugins.setKey(id, value);
+      const validation = await plugins.validateKey(id, value);
+      if (validation.stale) return false;
+      if (validation.status === 'invalid_revoked') {
+        setNotice('The provider rejected this key. Check the key and try again.');
+        return true;
+      }
+      const ok = await plugins.setKey(id, value, validation);
+      if (ok) {
+        setNotice(validation.status === 'enabled'
+          ? 'Key saved and verified.'
+          : 'Key saved. Verification is unavailable. Try testing the saved key again.');
+      }
       // Only clear the field on success so a failed save never discards the key.
       if (ok) setDrafts((prev) => ({ ...prev, [id]: '' }));
       return ok;
     });
 
-  return (
-    <div
-      className='provider-settings-backdrop'
-      onClick={onClose}
-      aria-hidden='false'
+  return createPortal(
+    <dialog
+      className='provider-settings'
+      aria-labelledby={titleId}
+      ref={panelRef}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
     >
-      <div
-        className='provider-settings'
-        role='dialog'
-        aria-modal='true'
-        aria-label='Provider plug-ins'
-        ref={panelRef}
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className='provider-settings-header'>
-          <span>Provider plug-ins</span>
-          <button
-            type='button'
-            className='provider-settings-close'
-            onClick={onClose}
-            aria-label='Close provider plug-ins'
-          >
-            Close
+      <div className='provider-settings-header'>
+        <h2 id={titleId}>Provider plug-ins</h2>
+        <button
+          type='button'
+          className='provider-settings-close'
+          onClick={onClose}
+          aria-label='Close provider plug-ins'
+        >
+          Close
+        </button>
+      </div>
+
+      <p className='provider-settings-intro'>
+        Connect and manage your own provider keys. OpenRouter is recommended for access to multiple model providers.
+      </p>
+
+      {loading && <div className='provider-settings-note'>Loading providers…</div>}
+      {error && (
+        <div className='provider-settings-error' role='alert'>
+          Provider settings could not be loaded.
+          <button type='button' className='provider-settings-close' onClick={() => void refresh()}>
+            Retry
           </button>
         </div>
+      )}
+      {notice && <div className='provider-settings-notice' role='status'>{notice}</div>}
 
-        <p className='provider-settings-intro'>
-          Connect your own provider key and turn it on to make its models available. Prismatix uses
-          BYOK for all provider calls.
-        </p>
+      <div className='provider-settings-list'>
+        {[...providers].sort((a, b) => {
+          const rank = (id: string) => id === 'openrouter' ? 0 : id === 'opencode' ? 2 : 1;
+          return rank(a.id) - rank(b.id);
+        }).map((provider) => {
+          if (!isProviderId(provider.id)) return null;
+          const plugin = getProviderPlugin(provider.id);
+          const isOpencode = provider.id === 'opencode';
+          const canToggle = !isOpencode && provider.hasKey;
+          const draft = drafts[provider.id] ?? '';
 
-        {loading && <div className='provider-settings-note'>Loading providers…</div>}
-        {error && (
-          <div className='provider-settings-error' role='alert'>
-            {error}
-            <button type='button' className='provider-settings-close' onClick={() => void refresh()}>
-              Retry
-            </button>
-          </div>
-        )}
-        {notice && <div className='provider-settings-error' role='status'>{notice}</div>}
-
-        <div className='provider-settings-list'>
-          {providers.map((provider) => {
-            if (!isProviderId(provider.id)) return null;
-            const plugin = getProviderPlugin(provider.id);
-            const isOpencode = provider.id === 'opencode';
-            const canToggle = !isOpencode && provider.hasKey;
-            const draft = drafts[provider.id] ?? '';
-
-            return (
-              <div key={provider.id} className='provider-card'>
-                <div className='provider-card-head'>
-                  <div className='provider-card-title'>
-                    <span className='provider-card-label'>{provider.label}</span>
-                    {provider.defaultProvider && (
-                      <span className='provider-badge provider-badge--default'>Default</span>
-                    )}
-                    {isOpencode && (
-                      <span className='provider-badge provider-badge--setup'>
-                        BYOK only
-                      </span>
-                    )}
-                  </div>
-
-                  {!isOpencode && (
-                    <label className='provider-toggle'>
-                      <input
-                        type='checkbox'
-                        className='provider-switch'
-                        role='switch'
-                        checked={provider.enabled}
-                        disabled={!canToggle || busy !== null}
-                        aria-label={`Enable ${provider.label}`}
-                        onChange={(e) =>
-                          void run(`toggle:${provider.id}`, () =>
-                            plugins.setEnabled(provider.id, e.target.checked),
-                          )
-                        }
-                      />
-                      <span>{provider.enabled ? 'On' : 'Off'}</span>
-                    </label>
+          return (
+            <div key={provider.id} className='provider-card'>
+              <div className='provider-card-head'>
+                <div className='provider-card-title'>
+                  <span className='provider-card-label'>{provider.label}</span>
+                  {provider.defaultProvider && (
+                    <span className='provider-badge provider-badge--default'>Default</span>
+                  )}
+                  {isOpencode && (
+                    <span className='provider-badge provider-badge--setup'>
+                      Unavailable
+                    </span>
                   )}
                 </div>
 
-                {isOpencode ? (
-                  <div className='provider-card-note needs-setup'>
-                    OpenCode uses a deployment key and is disabled in BYOK-only mode. Connect your
-                    OpenRouter key to use models available through that provider.
-                  </div>
-                ) : (
-                  <>
-                    <div
-                      className={`provider-state-line ${
-                        !provider.hasKey
-                          ? 'needs-setup'
-                          : provider.status === 'invalid_revoked'
-                          ? 'is-error'
-                          : provider.status === 'unavailable'
-                          ? 'is-warning'
-                          : provider.enabled
-                          ? 'is-on'
-                          : 'is-off'
-                      }`}
-                      aria-live='polite'
-                    >
-                      {!provider.hasKey
-                        ? 'Not configured'
-                        : provider.status === 'invalid_revoked'
-                        ? 'Invalid / Revoked'
-                        : provider.status === 'unavailable'
-                        ? 'Unavailable'
-                        : provider.enabled
-                        ? 'Ready & Enabled'
-                        : 'Disabled'}
-                      {provider.statusMessage && (
-                        <span className='provider-status-detail'> — {provider.statusMessage}</span>
-                      )}
-                    </div>
-                    <div className='provider-key-row'>
-                      <input
-                        type='password'
-                        className='provider-key-input'
-                        aria-label={plugin.keyLabel}
-                        placeholder={
-                          provider.hasKey
-                            ? `Saved ••••${provider.keyLast4 ?? ''}`
-                            : plugin.keyPlaceholder
-                        }
-                        value={draft}
-                        onChange={(e) =>
-                          setDrafts((prev) => ({ ...prev, [provider.id]: e.target.value }))
-                        }
-                        autoComplete='off'
-                      />
-                      <button
-                        type='button'
-                        className='provider-key-save'
-                        disabled={busy !== null || draft.trim() === ''}
-                        onClick={() => void connect(provider.id)}
-                      >
-                        {provider.hasKey ? 'Update' : 'Connect'}
-                      </button>
-                      {(provider.hasKey || draft.trim().length >= 8) && (
-                        <button
-                          type='button'
-                          className='provider-key-test'
-                          disabled={busy !== null}
-                          aria-label={`Test connection for ${provider.label}`}
-                          onClick={() =>
-                            void run(`test:${provider.id}`, async () => {
-                              const res = await plugins.validateKey(provider.id, draft.trim() || undefined);
-                              setNotice(
-                                `${provider.label}: ${
-                                  res.status === 'enabled'
-                                    ? 'Key verified successfully'
-                                    : res.message || res.status
-                                }`,
-                              );
-                              return res.status === 'enabled';
-                            })
-                          }
-                        >
-                          Test
-                        </button>
-                      )}
-                      {provider.hasKey && (
-                        <button
-                          type='button'
-                          className='provider-key-remove'
-                          disabled={busy !== null}
-                          onClick={() =>
-                            void run(`remove:${provider.id}`, () => plugins.removeKey(provider.id))
-                          }
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </div>
-
-                    {!provider.hasKey && (
-                      <div className='provider-card-note'>Add a key to turn this provider on.</div>
-                    )}
-                  </>
+                {!isOpencode && (
+                  <label className='provider-toggle'>
+                    <input
+                      type='checkbox'
+                      className='provider-switch'
+                      role='switch'
+                      checked={provider.enabled}
+                      disabled={!canToggle || busy !== null}
+                      aria-label={`Enable ${provider.label}`}
+                      onChange={(e) =>
+                        void run(`toggle:${provider.id}`, () =>
+                          plugins.setEnabled(provider.id, e.target.checked),
+                        )
+                      }
+                    />
+                    <span>{provider.enabled ? 'On' : 'Off'}</span>
+                  </label>
                 )}
-
-                {plugin.offeredByDefault && (
-                  <button
-                    type='button'
-                    className='provider-set-default'
-                    disabled={busy !== null || provider.defaultProvider || (!isOpencode && !provider.hasKey)}
-                    onClick={() =>
-                      void run(`default:${provider.id}`, () => plugins.setDefault(provider.id))
-                    }
-                  >
-                    {provider.defaultProvider ? 'Default gateway' : 'Set as default'}
-                  </button>
-                )}
-
-                {/* Per-provider Model Management & Visibility */}
-                {(() => {
-                  const showHistoric = !!showHistoricByProvider[provider.id];
-                  const providerModels = getModelsForProvider(provider.id, showHistoric);
-                  const allProviderModels = getModelsForProvider(provider.id, true);
-                  const hasHistoric = allProviderModels.length > getModelsForProvider(provider.id, false).length;
-
-                  if (allProviderModels.length === 0) return null;
-                  const isExpanded = expandedModelsProvider === provider.id;
-                  const activeCount = allProviderModels.filter((m) => !isModelHidden(m)).length;
-
-                  return (
-                    <div className='provider-models-section'>
-                      <button
-                        type='button'
-                        className='provider-models-toggle'
-                        aria-expanded={isExpanded}
-                        onClick={() =>
-                          setExpandedModelsProvider((curr) =>
-                            curr === provider.id ? null : provider.id,
-                          )
-                        }
-                      >
-                        <span className='provider-models-toggle-title'>
-                          Models ({activeCount} active / {allProviderModels.length} available)
-                        </span>
-                        <span className='provider-models-toggle-chevron' aria-hidden='true'>
-                          {isExpanded ? '▴' : '▾'}
-                        </span>
-                      </button>
-
-                      {isExpanded && (
-                        <div className='provider-models-list' role='region' aria-label={`${provider.label} models`}>
-                          <p className='provider-models-help'>
-                            Unchecking a model removes it from quick model pickers. Intelligent Auto Routing can still select it when ideal.
-                          </p>
-
-                          {providerModels.map((modelId) => {
-                            const config = getCatalogEntry(modelId);
-                            const visible = !isModelHidden(modelId);
-                            const fav = isFavorite(modelId);
-                            const historic = isHistoricModel(modelId);
-
-                            return (
-                              <div key={modelId} className='provider-model-item'>
-                                <label className='provider-model-checkbox-label'>
-                                  <input
-                                    type='checkbox'
-                                    className='provider-model-checkbox'
-                                    checked={visible}
-                                    onChange={(e) => setModelVisible(modelId, e.target.checked)}
-                                    aria-label={`Enable ${config.shortName}`}
-                                  />
-                                  <span className='provider-model-icon' aria-hidden='true'>
-                                    {config.icon}
-                                  </span>
-                                  <div className='provider-model-item-info'>
-                                    <span className='provider-model-name'>
-                                      {config.shortName}
-                                      {historic && <span className='provider-model-historic-badge'>Historic</span>}
-                                    </span>
-                                    <span className='provider-model-price'>
-                                      {formatModelPriceLabel(modelId)}
-                                    </span>
-                                  </div>
-                                </label>
-
-                                <button
-                                  type='button'
-                                  className={`provider-model-star ${fav ? 'is-favorite' : ''}`}
-                                  title={fav ? 'Remove from pinned models' : 'Pin model to quick access'}
-                                  aria-label={fav ? `Unpin ${config.shortName}` : `Pin ${config.shortName}`}
-                                  onClick={() => toggleFavorite(modelId)}
-                                >
-                                  {fav ? '★' : '☆'}
-                                </button>
-                              </div>
-                            );
-                          })}
-
-                          {hasHistoric && (
-                            <button
-                              type='button'
-                              className='provider-models-historic-toggle'
-                              onClick={() =>
-                                setShowHistoricByProvider((prev) => ({
-                                  ...prev,
-                                  [provider.id]: !prev[provider.id],
-                                }))
-                              }
-                            >
-                              {showHistoric ? 'Hide older models' : `Show older models (${allProviderModels.length - getModelsForProvider(provider.id, false).length})`}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
               </div>
-            );
-          })}
-        </div>
 
-        {defaultProvider && (
-          <div className='provider-settings-footnote'>Default gateway: {defaultProvider}</div>
-        )}
+              {isOpencode ? (
+                <div className='provider-card-note needs-setup'>
+                  OpenCode uses a deployment key and is disabled in BYOK-only mode. Connect your
+                  OpenRouter key to use models available through that provider.
+                </div>
+              ) : (
+                <>
+                  <div
+                    className={`provider-state-line ${
+                      !provider.hasKey
+                        ? 'needs-setup'
+                        : provider.status === 'invalid_revoked'
+                        ? 'is-error'
+                        : provider.status === 'unavailable'
+                        ? 'is-warning'
+                        : provider.enabled
+                        ? 'is-on'
+                        : 'is-off'
+                    }`}
+                    aria-live='polite'
+                  >
+                    {!provider.hasKey
+                      ? 'Not configured'
+                      : provider.status === 'invalid_revoked'
+                      ? 'Invalid / Revoked'
+                      : provider.status === 'unavailable'
+                      ? 'Unavailable'
+                      : provider.enabled
+                      ? plugins.verifiedProviders?.has(provider.id) ? 'Enabled and verified' : 'Enabled · key unverified'
+                      : 'Disabled'}
+
+                  </div>
+                  <div className='provider-key-row'>
+                    <input
+                      type='password'
+                      className='provider-key-input'
+                      aria-label={plugin.keyLabel}
+                      placeholder={
+                        provider.hasKey
+                          ? `Saved ••••${provider.keyLast4 ?? ''}`
+                          : plugin.keyPlaceholder
+                      }
+                      value={draft}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({ ...prev, [provider.id]: e.target.value }))
+                      }
+                      autoComplete='off'
+                    />
+                    <button
+                      type='button'
+                      className='provider-key-save'
+                      disabled={busy !== null || draft.trim() === ''}
+                      onClick={() => void connect(provider.id)}
+                    >
+                      {busy === `connect:${provider.id}` ? 'Checking…' : provider.hasKey ? 'Update' : 'Connect'}
+                    </button>
+                    {(provider.hasKey || draft.trim().length >= 8) && (
+                      <button
+                        type='button'
+                        className='provider-key-test'
+                        disabled={busy !== null}
+                        aria-label={`Test connection for ${provider.label}`}
+                        onClick={() =>
+                          void run(`test:${provider.id}`, async () => {
+                            const res = await plugins.validateKey(provider.id, draft.trim() || undefined);
+                            setNotice(
+                              `${provider.label}: ${
+                                res.status === 'enabled'
+                                  ? draft.trim() ? 'Draft key verified. Save it to use it.' : 'Saved key verified.'
+                                  : res.status === 'invalid_revoked' ? 'Key rejected. Update the key and try again.' : 'Could not verify the key. Try again.'
+                              }`,
+                            );
+                            return true;
+                          })
+                        }
+                      >
+                        {busy === `test:${provider.id}` ? 'Testing…' : 'Test'}
+                      </button>
+                    )}
+                    {provider.hasKey && (
+                      <button
+                        type='button'
+                        className='provider-key-remove'
+                        disabled={busy !== null}
+                        onClick={() =>
+                          void run(`remove:${provider.id}`, () => plugins.removeKey(provider.id))
+                        }
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+
+                  {!provider.hasKey && (
+                    <div className='provider-card-note'>Add a key to turn this provider on.</div>
+                  )}
+                </>
+              )}
+
+              {plugin.offeredByDefault && (
+                <button
+                  type='button'
+                  className='provider-set-default'
+                  disabled={busy !== null || provider.defaultProvider || (!isOpencode && !provider.hasKey)}
+                  onClick={() =>
+                    void run(`default:${provider.id}`, () => plugins.setDefault(provider.id))
+                  }
+                >
+                  {provider.defaultProvider ? 'Default gateway' : 'Set as default'}
+                </button>
+              )}
+
+              {/* Per-provider Model Management & Visibility */}
+              {(() => {
+                const showHistoric = !!showHistoricByProvider[provider.id];
+                const providerModels = getModelsForProvider(provider.id, showHistoric);
+                const allProviderModels = getModelsForProvider(provider.id, true);
+                const hasHistoric = allProviderModels.length > getModelsForProvider(provider.id, false).length;
+
+                if (allProviderModels.length === 0) return null;
+                const isExpanded = expandedModelsProvider === provider.id;
+                const activeCount = allProviderModels.filter((m) => !isModelHidden(m)).length;
+
+                return (
+                  <div className='provider-models-section'>
+                    <button
+                      type='button'
+                      className='provider-models-toggle'
+                      aria-expanded={isExpanded}
+                      onClick={() =>
+                        setExpandedModelsProvider((curr) =>
+                          curr === provider.id ? null : provider.id,
+                        )
+                      }
+                    >
+                      <span className='provider-models-toggle-title'>
+                        Models ({activeCount} visible / {allProviderModels.length} in catalog)
+                      </span>
+                      <span className='provider-models-toggle-chevron' aria-hidden='true'>
+                        {isExpanded ? '▴' : '▾'}
+                      </span>
+                    </button>
+
+                    {isExpanded && (
+                      <div className='provider-models-list' role='region' aria-label={`${provider.label} models`}>
+                        <p className='provider-models-help'>
+                          Unchecking a model removes it from quick model pickers. Intelligent Auto Routing can still select it when ideal.
+                        </p>
+
+                        {providerModels.map((modelId) => {
+                          const config = getCatalogEntry(modelId);
+                          const visible = !isModelHidden(modelId);
+                          const fav = isFavorite(modelId);
+                          const historic = isHistoricModel(modelId);
+
+                          return (
+                            <div key={modelId} className='provider-model-item'>
+                              <label className='provider-model-checkbox-label'>
+                                <input
+                                  type='checkbox'
+                                  className='provider-model-checkbox'
+                                  checked={visible}
+                                  onChange={(e) => setModelVisible(modelId, e.target.checked)}
+                                  aria-label={`Enable ${config.shortName}`}
+                                />
+                                <span className='provider-model-icon' aria-hidden='true'>
+                                  {config.icon}
+                                </span>
+                                <div className='provider-model-item-info'>
+                                  <span className='provider-model-name'>
+                                    {config.shortName}
+                                    {historic && <span className='provider-model-historic-badge'>Historic</span>}
+                                  </span>
+                                  <span className='provider-model-price'>
+                                    {formatModelPriceLabel(modelId)}
+                                  </span>
+                                </div>
+                              </label>
+
+                              <button
+                                type='button'
+                                className={`provider-model-star ${fav ? 'is-favorite' : ''}`}
+                                title={fav ? 'Remove from pinned models' : 'Pin model to quick access'}
+                                aria-label={fav ? `Unpin ${config.shortName}` : `Pin ${config.shortName}`}
+                                onClick={() => toggleFavorite(modelId)}
+                              >
+                                {fav ? '★' : '☆'}
+                              </button>
+                            </div>
+                          );
+                        })}
+
+                        {hasHistoric && (
+                          <button
+                            type='button'
+                            className='provider-models-historic-toggle'
+                            onClick={() =>
+                              setShowHistoricByProvider((prev) => ({
+                                ...prev,
+                                [provider.id]: !prev[provider.id],
+                              }))
+                            }
+                          >
+                            {showHistoric ? 'Hide older models' : `Show older models (${allProviderModels.length - getModelsForProvider(provider.id, false).length})`}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })}
       </div>
-    </div>
+
+      {defaultProvider && (
+        <div className='provider-settings-footnote'>Default gateway: {defaultProvider}</div>
+      )}
+    </dialog>,
+    document.body,
   );
 };

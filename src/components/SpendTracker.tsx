@@ -162,7 +162,6 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
         ref={triggerRef}
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
-        aria-label={`Spend analytics — $${stats.today.toFixed(2)} today, ${stateLabel.toLowerCase()}`}
         title='View spend analytics'
       >
         <span className='spend-pill-value'>${stats.today.toFixed(2)}</span>

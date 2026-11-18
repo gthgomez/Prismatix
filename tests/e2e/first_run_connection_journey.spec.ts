@@ -27,6 +27,9 @@ test('verified first-run connection sends once and reloads fixture-persisted out
     const body = route.request().method() === 'POST'
       ? route.request().postDataJSON() as Record<string, unknown>
       : {};
+    if (body.action === 'validate_key' && body.apiKey === 'sk-or-invalid-fixture') {
+      return route.fulfill({ json: { provider: 'openrouter', status: 'invalid_revoked' } });
+    }
     if (body.action === 'validate_key') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider: 'openrouter', status: 'enabled' }) });
     }
@@ -137,17 +140,24 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await capture('transition-first-run-1024x600');
 
   // Settings dialog restores focus to the first-run trigger when closed.
-  const settingsTrigger = page.getByRole('button', { name: /Configure Other Providers/i });
+  const settingsTrigger = page.getByRole('button', { name: /Use another provider/i });
   await settingsTrigger.focus();
   await settingsTrigger.click();
   const dialog = page.getByRole('dialog', { name: 'Provider plug-ins' });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toBeFocused();
+  await expect(dialog.getByRole('button', { name: 'Close provider plug-ins' })).toBeFocused();
   await dialog.getByRole('button', { name: 'Close provider plug-ins' }).click();
   await expect(settingsTrigger).toBeFocused();
+  const keyInput = page.locator('#first-run-openrouter-key');
+  await keyInput.fill('sk-or-invalid-fixture');
+  await page.getByRole('button', { name: 'Connect provider' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Key rejected' })).toBeVisible();
+  await expect(keyInput).toHaveAttribute('aria-invalid', 'true');
+  expect(fixture.connected).toBe(false);
+
 
   await page.locator('#first-run-openrouter-key').fill('sk-or-synthetic-fixture-0701');
-  await page.getByRole('button', { name: 'Connect & Start' }).click();
+  await page.getByRole('button', { name: 'Connect provider' }).click();
   await expect(page.getByRole('status').filter({ hasText: /Key saved and verified/ })).toBeVisible();
   await expect(page.locator('.first-run-card')).toHaveCount(0);
   await capture('transition-configured-1024x600');

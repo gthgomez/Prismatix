@@ -185,19 +185,18 @@ export const Auth: React.FC<AuthProps> = ({
       <div className="auth-card">
         {/* Header */}
         <div className="auth-header">
-          <div className="auth-logo">🤖</div>
+          <img className="auth-logo" src="/prismatix-arctic-mark.svg" alt="" />
           <h1>Prismatix</h1>
-          <p>Adaptive Model Selection</p>
+          <p>{mode === 'signup' ? 'Create your AI workspace account.' : 'Sign in to your AI workspace.'}</p>
         </div>
 
         {/* Tab Switcher — hidden entirely when signup is disabled (PX01):
             a single-tab pill is a dead control and reads as a rendering bug */}
         {ALLOW_SIGNUP && (
-          <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+          <div className="auth-tabs" role="group" aria-label="Authentication mode">
             <button
               type="button"
-              role="tab"
-              aria-selected={mode === 'signin'}
+              aria-pressed={mode === 'signin'}
               className={`auth-tab ${mode === 'signin' ? 'active' : ''}`}
               onClick={() => setMode('signin')}
             >
@@ -205,8 +204,7 @@ export const Auth: React.FC<AuthProps> = ({
             </button>
             <button
               type="button"
-              role="tab"
-              aria-selected={mode === 'signup'}
+              aria-pressed={mode === 'signup'}
               className={`auth-tab ${mode === 'signup' ? 'active' : ''}`}
               onClick={() => setMode('signup')}
             >
@@ -228,7 +226,7 @@ export const Auth: React.FC<AuthProps> = ({
           </div>
         )}
         {successMessage && (
-          <div className="auth-message success">
+          <div className="auth-message success" role="status">
             <span>✓</span> {successMessage}
           </div>
         )}

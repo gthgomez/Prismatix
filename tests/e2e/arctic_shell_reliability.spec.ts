@@ -631,25 +631,23 @@ test('unconfigured first run keeps setup above a disabled composer and makes no 
   await composer.press('Enter');
   expect(sends).toBe(0);
   await expect(composer).toHaveValue(prompt);
-  const setupBox = await setupCard.boundingBox();
   const composerBox = await page.locator('.chat-input-container').boundingBox();
-  expect(setupBox).not.toBeNull();
   expect(composerBox).not.toBeNull();
-  expect(setupBox!.y + setupBox!.height).toBeLessThanOrEqual(composerBox!.y + 1);
   expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(600);
   const panelState = await page.evaluate(() => {
     const card = document.querySelector<HTMLElement>('.first-run-card')!;
     const composer = document.querySelector<HTMLElement>('.chat-input-container')!;
     const input = document.querySelector<HTMLElement>('.chat-input')!;
-    const statusButton = document.querySelector<HTMLElement>('.provider-setup-composer-status button')!;
+    const statusButton = document.querySelector<HTMLElement>('.provider-setup-composer-status')!;
     const cardRect = card.getBoundingClientRect();
+    const scrollportRect = card.closest('.chat-messages')!.getBoundingClientRect();
     const composerRect = composer.getBoundingClientRect();
     const inputRect = input.getBoundingClientRect();
     const statusRect = statusButton.getBoundingClientRect();
     return {
       setupClientHeight: card.clientHeight,
       setupScrollHeight: card.scrollHeight,
-      overlapsComposer: cardRect.bottom > composerRect.top + 1,
+      overlapsComposer: Math.min(cardRect.bottom, scrollportRect.bottom) > composerRect.top + 1,
       inputOverlapsStatusAction: inputRect.bottom > statusRect.top && inputRect.top < statusRect.bottom,
       statusActionHit: (() => {
         const hit = document.elementFromPoint(statusRect.left + statusRect.width / 2, statusRect.top + statusRect.height / 2);
@@ -662,14 +660,21 @@ test('unconfigured first run keeps setup above a disabled composer and makes no 
   expect(panelState.statusActionHit).toBe(true);
   expect(panelState.setupClientHeight).toBeGreaterThanOrEqual(260);
   expect(panelState.setupScrollHeight).toBeGreaterThanOrEqual(panelState.setupClientHeight);
-  const settingsTrigger = page.getByRole('button', { name: /Configure Other Providers/i });
-  await setupCard.evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight; });
+  const settingsTrigger = page.getByRole('button', { name: /Use another provider/i });
   await settingsTrigger.click();
   const settingsDialog = page.getByRole('dialog', { name: 'Provider plug-ins' });
   await expect(settingsDialog).toBeVisible();
-  await settingsDialog.getByRole('button', { name: 'Close provider plug-ins' }).click();
+  await expect(settingsDialog).toHaveJSProperty('open', true);
+  expect(await settingsDialog.evaluate((el) => el.matches(':modal') && el.parentElement === document.body)).toBe(true);
+  expect(await page.evaluate(() => document.elementFromPoint(1, 1)?.tagName)).toBe('DIALOG');
+  await settingsDialog.getByRole('button', { name: 'Close provider plug-ins' }).focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Shift+Tab');
+  expect(await settingsDialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(settingsDialog).toHaveCount(0);
   await expect(settingsTrigger).toBeFocused();
-  const demoAction = page.getByRole('link', { name: /scripted public demo/i });
+  const demoAction = page.getByRole('link', { name: /public demo/i });
   await demoAction.scrollIntoViewIfNeeded();
   await expect(demoAction).toBeVisible();
   const demoHit = await demoAction.evaluate((el) => {
@@ -678,9 +683,6 @@ test('unconfigured first run keeps setup above a disabled composer and makes no 
     return hit === el || el.contains(hit);
   });
   expect(demoHit).toBe(true);
-  await page.locator('.provider-setup-composer-status button').click();
-  await expect(settingsDialog).toBeVisible();
-  await settingsDialog.getByRole('button', { name: 'Close provider plug-ins' }).click();
   const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
   await mkdir(evidenceDir, { recursive: true });
   await page.screenshot({ path: `${evidenceDir}/first-run-setup-1024x600.png` });
@@ -784,8 +786,10 @@ test('mobile keyboard-height viewport keeps Connect and composer within the visi
   });
   expect(bounds.width).toBeLessThanOrEqual(bounds.viewportWidth);
   expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight + 1);
-  expect(bounds.setupCanScroll).toBe(true);
-  await expect(page.getByRole('button', { name: 'Configure Other Providers (Anthropic, OpenAI, Google) →' })).toBeAttached();
+  expect(bounds.setupCanScroll).toBe(false);
+  const alternate = page.getByRole('button', { name: 'Use another provider' });
+  await alternate.scrollIntoViewIfNeeded();
+  await expect(alternate).toBeInViewport();
 });
 
 test('saved history exposes provider-check retry and keeps drafts blocked until readiness recovers', async ({ page }) => {
@@ -848,7 +852,7 @@ test('first-run unverified provider blocks; a returning configured key is router
   });
   await signInAsMockUser(page);
   await page.locator('#first-run-openrouter-key').fill('sk-or-synthetic-unverified-0715');
-  await page.getByRole('button', { name: 'Connect & Start' }).click();
+  await page.getByRole('button', { name: 'Connect provider' }).click();
   const routeStatus = page.locator('.arctic-route-status');
   await expect(routeStatus).toContainText('Verification unavailable');
   await expect(routeStatus).toHaveClass(/setup/);

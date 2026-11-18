@@ -1,0 +1,165 @@
+.chat-container.is-empty .chat-messages:has(.first-run-card) {
+  align-content: start;
+}
+.first-run-card {
+  max-width: 42rem;
+  margin: 1.5rem auto 2rem;
+  padding: 1.75rem;
+  background: var(--color-surface-elevated, #1a222d);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-elevated);
+  text-align: left;
+}
+@media (max-height: 680px) {
+  .first-run-card { margin: 0.2rem auto 0.65rem; padding: 1rem; }
+  .first-run-form { margin-bottom: 0.65rem; }
+}
+.first-run-welcome {
+  margin: 0 0 0.5rem;
+  color: var(--color-primary);
+  font-weight: 650;
+}
+.first-run-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.625rem;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--color-text);
+}
+.first-run-desc {
+  margin: 0 0 1.25rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--color-text-dim, #94a3b8);
+}
+.first-run-status {
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-md, 8px);
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+.first-run-status.success {
+  background: rgba(78, 205, 196, 0.12);
+  border: 1px solid rgba(78, 205, 196, 0.4);
+  color: #4ecdc4;
+}
+.first-run-status.pending {
+  background: rgba(78, 205, 196, 0.08);
+  border: 1px solid rgba(78, 205, 196, 0.35);
+  color: var(--color-text, #f1f5f9);
+}
+.first-run-status.error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+}
+.first-run-form {
+  margin-bottom: 1.25rem;
+}
+.first-run-label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text, #f1f5f9);
+  margin-bottom: 0.4rem;
+}
+.first-run-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+@media (max-width: 640px) {
+  .first-run-input-row { flex-direction: column; }
+  .first-run-submit { width: 100%; }
+}
+.first-run-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  padding: 0.55rem 0.85rem;
+  background: var(--color-surface, #131922);
+  border: 1px solid var(--color-field-border);
+  border-radius: var(--radius-md, 8px);
+  color: var(--color-text, #f1f5f9);
+  font-size: 0.9rem;
+  min-height: var(--control-height);
+}
+@media (max-width: 640px) {
+  .first-run-input { flex: auto; }
+}
+.first-run-input:focus {
+  border-color: var(--color-primary, #4ecdc4);
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.first-run-submit {
+  padding: 0.55rem 1.25rem;
+  background: var(--color-primary, #4ecdc4);
+  color: var(--color-content-on-primary);
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  min-height: var(--control-height);
+  white-space: normal;
+}
+.first-run-submit:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.first-run-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.first-run-hint {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--color-text-dim, #94a3b8);
+}
+.first-run-link {
+  color: var(--color-primary, #4ecdc4);
+  text-decoration: underline;
+}
+.first-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border, #2a3441);
+}
+.first-run-secondary-btn {
+  min-height: var(--control-height);
+  background: transparent;
+  border: 1px solid var(--color-border, #2a3441);
+  color: var(--color-text, #f1f5f9);
+  padding: 0.45rem 0.85rem;
+  border-radius: var(--radius-md, 8px);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.first-run-secondary-btn:hover {
+  border-color: var(--color-primary, #4ecdc4);
+}
+.first-run-demo-link {
+  color: var(--color-text-dim, #94a3b8);
+  font-size: 0.8rem;
+  text-decoration: underline;
+}
+.first-run-demo-link:hover {
+  color: var(--color-primary, #4ecdc4);
+  text-decoration: underline;
+}
+.chat-container.is-empty.provider-setup-blocked .chat-messages:has(.first-run-card) .first-run-card {
+  width: 100%;
+  margin: 0.2rem auto 0.4rem;
+  padding: 0.9rem 1rem;
+}
+
+
+.chat-container:has(.first-run-card) .routing-intelligence-bar,
+.chat-container:has(.first-run-card) .provider-setup-composer-status button {
+  display: none;
+}

@@ -31,7 +31,7 @@ test.describe('PR 1 Daily-Use Foundation (E2E)', () => {
     // First run setup card must be displayed
     const setupCard = page.locator('.first-run-card');
     await expect(setupCard).toBeVisible();
-    await expect(setupCard).toContainText(/Connect an AI Provider to Start Chatting/i);
+    await expect(setupCard).toContainText(/Connect your AI provider/i);
 
     // Enter a key in the setup card
     const keyInput = setupCard.locator('#first-run-openrouter-key');
@@ -39,7 +39,7 @@ test.describe('PR 1 Daily-Use Foundation (E2E)', () => {
     await keyInput.fill('sk-or-v1-valid-test-key-mock');
 
     // Submit provider key
-    const saveBtn = setupCard.getByRole('button', { name: /connect & start/i });
+    const saveBtn = setupCard.getByRole('button', { name: /connect provider/i });
     await expect(saveBtn).toBeVisible();
     await saveBtn.click();
 

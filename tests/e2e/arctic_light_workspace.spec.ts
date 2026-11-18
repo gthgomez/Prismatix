@@ -525,3 +525,55 @@ for (const viewport of [
     }
   });
 }
+
+test('Arctic tokens persist from sign-in through saved chat, settings, and reload', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
+  await page.goto('/');
+  const auth = page.locator('.auth-card');
+  await expect(auth).toBeVisible();
+  await expect(auth.locator('img')).toHaveAttribute('src', '/prismatix-arctic-mark.svg');
+  const root = page.locator('html');
+  await expect(root).toHaveAttribute('data-theme', 'light');
+  const colorToken = (name: string) => root.evaluate((el, token) => getComputedStyle(el).getPropertyValue(token).trim(), name);
+  const lightSurface = await colorToken('--color-surface');
+  await expect(auth).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await page.screenshot({ path: testInfo.outputPath('sign-in-light.png') });
+  await page.goto('/reset-password');
+  await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('recovery-light.png') });
+
+  await setupAuthenticatedMock(page);
+  await signInAsMockUser(page);
+  expect(await colorToken('--color-surface')).toBe(lightSurface);
+  const account = page.getByRole('button', { name: 'Account menu' });
+  await account.click();
+  const themeToggle = page.getByRole('button', { name: 'Dark theme' });
+  await themeToggle.press('Enter');
+  await expect(themeToggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(root).toHaveAttribute('data-theme', 'dark');
+  const darkSurface = await colorToken('--color-surface');
+  expect(darkSurface).not.toBe(lightSurface);
+  await account.click();
+
+  const chat = page.locator('.conversation-item-button').first();
+  await chat.click();
+  await expect(chat).toHaveAttribute('aria-current', 'true');
+  expect(await colorToken('--color-surface')).toBe(darkSurface);
+  await page.screenshot({ path: testInfo.outputPath('saved-chat-dark.png') });
+  await page.reload();
+  await expect(root).toHaveAttribute('data-theme', 'dark');
+  await account.click();
+  await page.locator('.user-dropdown').getByRole('button', { name: 'Provider plug-ins', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Provider plug-ins' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveCSS('background-color', 'rgb(20, 33, 43)');
+  await expect(dialog.locator('.provider-models-toggle').first()).toContainText(/visible.*in catalog/);
+  await page.screenshot({ path: testInfo.outputPath('providers-dark.png') });
+  await page.keyboard.press('Escape');
+  await expect(account).toBeFocused();
+
+  await page.emulateMedia({ forcedColors: 'active' });
+  await account.focus();
+  await expect(account).toBeFocused();
+});

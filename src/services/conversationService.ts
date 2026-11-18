@@ -186,7 +186,7 @@ export async function listConversations(
   const limit = options.limit ?? DEFAULT_LIST_LIMIT;
   let query = client
     .from('conversations')
-    .select('id, title, last_activity_at, project_id, messages(content)')
+    .select('id, title, last_activity_at, project_id, archived, tags, messages(content)')
     .eq('messages.role', 'user')
     .order('created_at', { ascending: true, referencedTable: 'messages' })
     .order('id', { ascending: true, referencedTable: 'messages' })
@@ -210,7 +210,8 @@ export async function listConversations(
     );
   }
 
-  const { data, error } = await query;
+  const { data, error, status } = await query;
+  if (status === 401) throw new Error('list_conversations_failed: session');
   if (error) throw new Error(`list_conversations_failed: ${error.message ?? 'unknown'}`);
 
   return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {

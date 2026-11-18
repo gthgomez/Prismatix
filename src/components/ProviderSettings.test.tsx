@@ -64,35 +64,10 @@ function makePreferences(overrides = {}) {
 
 describe('ProviderSettings', () => {
   const roots: Root[] = [];
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; };
   afterEach(() => {
     roots.splice(0).forEach((root) => act(() => root.unmount()));
-  });
-
-  it('keeps reverse keyboard navigation inside the dialog from initial focus', () => {
-    const container = document.createElement('div');
-    document.body.append(container);
-    roots.push(
-      renderInto(
-        container,
-        <ProviderSettings
-          plugins={makePlugins(makeProvider(true))}
-          preferences={makePreferences()}
-          onClose={vi.fn()}
-        />,
-      ),
-    );
-    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
-    expect(document.activeElement).toBe(dialog);
-    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
-    act(() => dialog.dispatchEvent(event));
-    expect(event.defaultPrevented).toBe(true);
-    const focusables = container.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), input:not(:disabled), [href], select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    const lastFocusable = focusables[focusables.length - 1];
-    expect(document.activeElement).toBe(lastFocusable);
-    act(() => roots.pop()!.unmount());
-    container.remove();
   });
 
   it('clearly marks the server-key-only OpenCode path as disabled', () => {
@@ -107,13 +82,13 @@ describe('ProviderSettings', () => {
         />,
       ),
     );
-    const note = container.querySelector('.provider-card-note')?.textContent ?? '';
+    const note = document.body.querySelector('.provider-card-note')?.textContent ?? '';
     expect(note).toContain('disabled in BYOK-only mode');
     expect(note).toContain('OpenRouter key');
-    expect(container.querySelector('.provider-badge:not(.provider-badge--default)')?.textContent)
-      .toBe('BYOK only');
-    expect(container.querySelector('[role="switch"]')).toBeNull();
-    expect(container.querySelector('[aria-label="OpenCode API key"]')).toBeNull();
+    expect(document.body.querySelector('.provider-badge:not(.provider-badge--default)')?.textContent)
+      .toBe('Unavailable');
+    expect(document.body.querySelector('[role="switch"]')).toBeNull();
+    expect(document.body.querySelector('[aria-label="OpenCode API key"]')).toBeNull();
     act(() => roots.pop()!.unmount());
   });
 
@@ -132,22 +107,22 @@ describe('ProviderSettings', () => {
       ),
     );
 
-    const toggleBtn = container.querySelector<HTMLButtonElement>('.provider-models-toggle')!;
+    const toggleBtn = document.body.querySelector<HTMLButtonElement>('.provider-models-toggle')!;
     expect(toggleBtn).not.toBeNull();
     act(() => toggleBtn.click());
 
     // Check models list rendered
-    const modelsList = container.querySelector('.provider-models-list');
+    const modelsList = document.body.querySelector('.provider-models-list');
     expect(modelsList).not.toBeNull();
 
     // Check visibility toggle
-    const checkbox = container.querySelector<HTMLInputElement>('.provider-model-checkbox')!;
+    const checkbox = document.body.querySelector<HTMLInputElement>('.provider-model-checkbox')!;
     expect(checkbox).not.toBeNull();
     act(() => checkbox.click());
     expect(prefs.setModelVisible).toHaveBeenCalled();
 
     // Check favorite toggle
-    const starBtn = container.querySelector<HTMLButtonElement>('.provider-model-star')!;
+    const starBtn = document.body.querySelector<HTMLButtonElement>('.provider-model-star')!;
     expect(starBtn).not.toBeNull();
     act(() => starBtn.click());
     expect(prefs.toggleFavorite).toHaveBeenCalled();

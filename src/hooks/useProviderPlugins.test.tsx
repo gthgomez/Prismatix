@@ -109,4 +109,18 @@ describe('useProviderPlugins account-scoped verification', () => {
     expect(result?.isVerified).toBe(true);
     expect(result?.verificationStatus).toBe('verified');
   });
+  it('does not apply the result of testing a draft key to a saved key', async () => {
+    vi.mocked(validateProviderKey).mockResolvedValue({ provider: 'openrouter', status: 'enabled' });
+    root = createRoot(container);
+    await act(async () => root!.render(<Harness userId='account-a' />));
+
+    await act(async () => { await result!.validateKey('openrouter', 'sk-synthetic-draft'); });
+    expect(result?.verificationStatus).toBe('unverified');
+    expect(result?.verifiedProviders?.has('openrouter')).toBe(false);
+
+    await act(async () => { await result!.validateKey('openrouter'); });
+    expect(result?.verificationStatus).toBe('verified');
+    expect(result?.verifiedProviders?.has('openrouter')).toBe(true);
+  });
+
 });

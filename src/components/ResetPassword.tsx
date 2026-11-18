@@ -129,8 +129,8 @@ export const ResetPassword: React.FC = () => {
     <div className="reset-container">
       <div className="reset-card">
         <div className="reset-header">
-          <img className="reset-logo" src="/prismatix-icon-draft.svg" alt="" />
-          <h1>Reset Password</h1>
+          <img className="reset-logo" src="/prismatix-arctic-mark.svg" alt="" />
+          <h1>Reset your password</h1>
           <p>Set a new password for your account</p>
         </div>
 

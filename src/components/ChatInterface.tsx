@@ -180,6 +180,8 @@ import {
 } from '../debateMode';
 
 interface ChatInterfaceProps {
+  theme?: 'light' | 'dark';
+  onToggleTheme?: () => void;
   user: User | null;
   onSignOut: () => Promise<void>;
 }
@@ -324,7 +326,7 @@ function normalizeAttachmentKind(file: FileUploadPayload): FileUploadPayload {
   };
 }
 
-export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut }) => {
+export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, theme, onToggleTheme }) => {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -1152,11 +1154,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
       if (requestSeq !== conversationsRefreshSeqRef.current) return;
       setConversations(list);
       setHasMoreConversations(list.length === 50);
-      void listProjects(supabase).then(setProjects);
+      void listProjects(supabase).then((projects) => {
+        if (requestSeq === conversationsRefreshSeqRef.current) setProjects(projects);
+      }).catch((error) => {
+        console.warn('[ChatInterface] Failed to list workspaces:', error);
+      });
     } catch (error) {
       if (requestSeq !== conversationsRefreshSeqRef.current) return;
       console.warn('[ChatInterface] Failed to list conversations:', error);
-      setConversationsError('Failed to load conversations.');
+      setConversationsError(!navigator.onLine
+        ? 'You’re offline. Reconnect and retry.'
+        : error instanceof Error && error.message === 'list_conversations_failed: session'
+          ? 'Your session could not be verified. Sign in again to load conversations.'
+          : 'Could not load conversations.');
     } finally {
       if (requestSeq === conversationsRefreshSeqRef.current) setConversationsLoading(false);
     }
@@ -3128,6 +3138,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
 
   useEffect(() => {
     const handleGlobalShortcuts = (e: KeyboardEvent) => {
+      if (document.querySelector('dialog.provider-settings[open]')) return;
       const activeTag = (document.activeElement?.tagName || '').toLowerCase();
       const isInputFocused =
         activeTag === 'input' ||
@@ -3643,6 +3654,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     </svg>
                     Provider plug-ins
                   </button>
+                  {onToggleTheme && (
+                    <button type='button' className='dropdown-item' aria-pressed={theme === 'dark'} onClick={onToggleTheme}>
+                      Dark theme
+                    </button>
+                  )}
                   <button type='button' onClick={handleSignOut} className='dropdown-item dropdown-item-danger'>
                     <svg
                       width='16'
@@ -3828,7 +3844,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                   key={user?.id ?? 'anonymous'}
                   plugins={providerPlugins}
                   onOpenSettings={() => setShowProviderSettings(true)}
-                  onSaved={(message, verified) => setFirstRunOutcome({ message, verified })}
+                  onSaved={(message, verified) => {
+                    setFirstRunOutcome({ message, verified });
+                    if (verified) inputRef.current?.focus({ preventScroll: true });
+                  }}
                 />
               ) : (
                 <>
@@ -3836,7 +3855,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut })
                     <p className='arctic-provider-unknown-status' role='status'>{providerChecksNeedAttention ? 'One or more saved provider checks need attention. The router evaluates each route when you send.' : 'A saved key has not been checked this session. The router will authorize each send.'}</p>
                   )}
                   <img className='arctic-hero-mark' src='/prismatix-arctic-mark.svg' alt='' />
-                  <h2>What can I help you with?</h2>
+                  <h2 className="empty-state-hero-title">What can I help you with?</h2>
                   <p>Ask anything. Prismatix chooses a suitable model automatically, or let you choose the workflow.</p>
                   <div className='empty-state-capabilities'>
                 {CAPABILITY_PILLARS.map((card) => (

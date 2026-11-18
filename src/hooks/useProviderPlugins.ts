@@ -26,6 +26,7 @@ export interface ProviderPlugins {
   enabledProviders: ReadonlySet<ProviderId>;
   isConfigured: boolean;
   isVerified: boolean;
+  verifiedProviders?: ReadonlySet<ProviderId>;
   verificationStatus: 'unverified' | 'verified' | 'unavailable' | 'invalid';
   verificationLoading: boolean;
   verifyEnabledProviders: () => Promise<boolean>;
@@ -183,7 +184,7 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
       try {
         const result = await validateProviderKey(provider, apiKey);
         if (!isCurrentRequest()) return staleResult();
-        if (mountedRef.current) {
+        if (!apiKey && mountedRef.current) {
           setStatuses((prev) => ({
             ...prev,
             [provider]: { status: result.status, message: result.message },
@@ -197,7 +198,7 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
           status: 'unavailable',
           message: err instanceof Error ? err.message : 'Validation failed',
         };
-        if (mountedRef.current) {
+        if (!apiKey && mountedRef.current) {
           setStatuses((prev) => ({
             ...prev,
             [provider]: { status: 'unavailable', message: fallback.message },
@@ -277,6 +278,9 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     enabledProviders,
     isConfigured,
     isVerified,
+    verifiedProviders: new Set(enabledKeyProviders
+      .filter((provider) => statuses[provider.id]?.status === 'enabled')
+      .map((provider) => provider.id)),
     verificationStatus,
     verificationLoading,
     verifyEnabledProviders,
