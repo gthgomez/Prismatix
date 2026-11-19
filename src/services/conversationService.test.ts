@@ -117,7 +117,7 @@ describe('listConversations', () => {
       auth: { persistSession: false, autoRefreshToken: false },
       global: { fetch: async (input) => {
         requestUrl = String(input);
-        return new Response(JSON.stringify([{ id: CONV, title: null, last_activity_at: '2026-10-13', archived: true, tags: ['work'], messages: [] }]), { headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify([{ id: CONV, title: null, last_activity_at: '2026-10-13', archived: true, tags: ['work'], parent_conversation_id: MSG, forked_from_message_id: MSG, messages: [] }]), { headers: { 'Content-Type': 'application/json' } });
       } },
     });
     const rows = await listConversations(client, { limit: 20 });
@@ -128,8 +128,9 @@ describe('listConversations', () => {
     expect(params.get('limit')).toBe('20');
     expect(params.get('order')).toBe('last_activity_at.desc,id.desc');
     expect(params.get('select')).not.toContain('!inner');
-    expect(params.get('select')).toMatch(/archived,tags/);
-    expect(rows).toEqual([{ id: CONV, title: null, lastActivityAt: '2026-10-13', projectId: null, archived: true, tags: ['work'] }]);
+    expect(params.get('select')).toContain('archived,tags,parent_conversation_id,forked_from_message_id');
+    expect(params.get('select')).toContain('messages!messages_conversation_id_fkey(content)');
+    expect(rows).toEqual([{ id: CONV, title: null, lastActivityAt: '2026-10-13', projectId: null, archived: true, tags: ['work'], parentConversationId: MSG, forkedFromMessageId: MSG }]);
   });
   it('uses the first user message for legacy placeholder titles without replacing renamed chats', async () => {
     const fake = makeClient({ conversations: [{ data: [

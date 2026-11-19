@@ -186,7 +186,7 @@ export async function listConversations(
   const limit = options.limit ?? DEFAULT_LIST_LIMIT;
   let query = client
     .from('conversations')
-    .select('id, title, last_activity_at, project_id, archived, tags, messages(content)')
+    .select('id, title, last_activity_at, project_id, archived, tags, parent_conversation_id, forked_from_message_id, messages!messages_conversation_id_fkey(content)')
     .eq('messages.role', 'user')
     .order('created_at', { ascending: true, referencedTable: 'messages' })
     .order('id', { ascending: true, referencedTable: 'messages' })
