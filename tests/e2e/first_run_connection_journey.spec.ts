@@ -210,9 +210,9 @@ test('history distinguishes loading, failure, and a successfully empty result', 
   await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [] });
   let releaseList!: () => void;
   const listHeld = new Promise<void>((resolve) => { releaseList = resolve; });
-  let listCalls = 0;
+  let allowSuccess = false;
   await page.route('**/rest/v1/conversations*', async (route) => {
-    if (route.request().method() !== 'GET' || listCalls++ > 0) return route.fallback();
+    if (route.request().method() !== 'GET' || allowSuccess) return route.fallback();
     await listHeld;
     return route.fulfill({ status: 503, json: { message: 'Synthetic history outage' } });
   });
@@ -227,6 +227,7 @@ test('history distinguishes loading, failure, and a successfully empty result', 
   }
   await expect(history.getByRole('alert')).toContainText('Could not load conversations');
   await expect(history.getByText('No conversations yet')).toHaveCount(0);
+  allowSuccess = true;
   await history.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(history.getByText('No conversations yet')).toBeVisible();
 });
