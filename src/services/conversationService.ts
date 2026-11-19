@@ -11,6 +11,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { DebateParticipant, RouterModel, RouterProvider, RouteRole } from '../types';
 import { isKnownModel } from '../modelCatalog';
+import { parseCompareGroup } from './compareGroups';
 import {
   parseStorageReference,
   normalizeAttachments,
@@ -59,6 +60,9 @@ export interface LoadedMessage {
   debateProfile?: string;
   debateTrigger?: string;
   debateExecutionMode?: 'auto' | 'manual';
+  compareGroupId?: string;
+  compareGroupChild?: 'A' | 'B';
+  comparisonResults?: Pick<NonNullable<ReturnType<typeof parseCompareGroup>>, 'modelA' | 'modelB'>;
 }
 
 export interface ConversationListCursor {
@@ -326,7 +330,7 @@ export async function getConversationProjectId(
 export async function loadConversation(
   client: SupabaseClient,
   conversationId: string,
-  options: { limit?: number; before?: MessageListCursor } = {},
+  options: { limit?: number; before?: MessageListCursor; compareGroups?: boolean } = {},
 ): Promise<LoadedMessage[]> {
   const limit = options.limit ?? DEFAULT_MESSAGE_LIMIT;
   let query = client
@@ -475,6 +479,34 @@ export async function loadConversation(
     };
   });
 
+  if (options.compareGroups) {
+    const executionIds = [...new Set(rows.flatMap((row) => row.executionId ? [row.executionId] : []))];
+    if (executionIds.length) {
+      try {
+        const { data: groups, error: compareError } = await client.rpc('px08_get_compare_groups', {
+          p_conversation_id: conversationId,
+          p_execution_ids: executionIds,
+        });
+        if (!compareError && Array.isArray(groups)) {
+          const assistants = new Map(rows.filter((row) => row.role === 'assistant').map((row) => [row.id, row]));
+          for (const rawGroup of groups) {
+            const group = parseCompareGroup(rawGroup);
+            if (!group || group.conversationId !== conversationId) continue;
+            for (const [side, child] of [['A', group.modelA], ['B', group.modelB]] as const) {
+              const row = child.assistantMessageId && assistants.get(child.assistantMessageId);
+              if (!row || row.executionId !== child.executionId || row.compareGroupId) continue;
+              row.compareGroupId = group.id;
+              row.compareGroupChild = side;
+              row.comparisonResults = { modelA: group.modelA, modelB: group.modelB };
+            }
+          }
+        }
+      } catch {
+        // The independently saved assistant messages remain readable during rollout or an RPC outage.
+      }
+    }
+  }
+
   return rows.reverse();
 }
 
@@ -506,7 +538,7 @@ export async function signAttachment(
 export async function deleteConversation(
   client: SupabaseClient,
   conversationId: string,
-): Promise<void> {
+): Promise<{ cleanupIncomplete: boolean }> {
   const { data: rows, error: readError } = await client
     .from('messages')
     .select('attachments, image_url')
@@ -530,25 +562,40 @@ export async function deleteConversation(
     throw new Error(`delete_conversation_failed: ${deleteError.message ?? 'unknown'}`);
   }
 
+  let cleanupIncomplete = false;
   for (const storageRef of refs) {
     const parsed = parseStorageReference(storageRef);
-    if (!parsed) continue;
-    // Referenced by another message's attachments JSONB?
-    const { data: referencedByAttachments } = await client
-      .from('messages')
-      .select('id')
-      .contains('attachments', [{ storageRef }])
-      .limit(1);
-    if (referencedByAttachments && referencedByAttachments.length > 0) continue;
-    // …or by another message's legacy image_url projection?
-    const { data: referencedByLegacyUrl } = await client
-      .from('messages')
-      .select('id')
-      .eq('image_url', storageRef)
-      .limit(1);
-    if (referencedByLegacyUrl && referencedByLegacyUrl.length > 0) continue;
-    await client.storage.from(parsed.bucket).remove([parsed.path]);
+    if (!parsed || parsed.bucket !== 'chat-uploads') continue;
+    try {
+      const { data: referencedByAttachments, error: attachmentsError } = await client
+        .from('messages')
+        .select('id')
+        .contains('attachments', [{ storageRef }])
+        .limit(1);
+      if (attachmentsError) {
+        cleanupIncomplete = true;
+        continue;
+      }
+      if (referencedByAttachments?.length) continue;
+
+      const { data: referencedByLegacyUrl, error: legacyError } = await client
+        .from('messages')
+        .select('id')
+        .eq('image_url', storageRef)
+        .limit(1);
+      if (legacyError) {
+        cleanupIncomplete = true;
+        continue;
+      }
+      if (referencedByLegacyUrl?.length) continue;
+
+      const { error: removeError } = await client.storage.from(parsed.bucket).remove([parsed.path]);
+      if (removeError) cleanupIncomplete = true;
+    } catch {
+      cleanupIncomplete = true;
+    }
   }
+  return { cleanupIncomplete };
 }
 
 /**

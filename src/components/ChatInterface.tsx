@@ -1274,6 +1274,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       const projId = convSummary?.projectId !== undefined
         ? convSummary.projectId
         : await getConversationProjectId(supabase, conversationId);
+      if (loadSeq !== conversationLoadSeqRef.current || selectedConversationIdRef.current !== conversationId) return;
       setActiveProjectId(projId ?? null);
     } catch (error) {
       if (
@@ -1477,10 +1478,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     if (isStreaming || sendLockRef.current) return;
     setActionNotice(null);
     try {
-      await deleteConversation(supabase, conversationId);
+      const cleanup = await deleteConversation(supabase, conversationId);
       await refreshConversations();
       if (selectedConversationIdRef.current === conversationId) {
         handleNewChat();
+      }
+      if (cleanup?.cleanupIncomplete) {
+        setActionNotice({ message: 'Chat deleted. Some attachments could not be cleaned up.', type: 'error' });
       }
     } catch (error) {
       console.error('[ChatInterface] Failed to delete conversation:', error);
@@ -1705,7 +1709,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
   useEffect(() => {
     if (!user) return;
+    const generation = accountGenerationRef.current;
     void syncPreferences(supabase).then((prefs) => {
+      if (generation !== accountGenerationRef.current) return;
       if (prefs.routingProfile && !userInteractedPrefsRef.current.routingProfile) {
         setRoutingProfile(prefs.routingProfile);
       }

@@ -187,6 +187,38 @@ describe('listConversations', () => {
 });
 
 describe('loadConversation', () => {
+  it('hydrates the saved Compare group on a partial page and keeps history available on RPC failure', async () => {
+    const childA = { executionId: CONV, assistantMessageId: MSG, model: 'future-model', status: 'completed', content: 'Answer A', cost: 0, costStatus: 'settled', transcriptSaved: true };
+    const childB = { executionId: MSG, assistantMessageId: null, model: 'second-model', status: 'failed', costStatus: 'unknown', transcriptSaved: false };
+    let fail = false;
+    const rpcBodies: unknown[] = [];
+    const client = createClient('https://compare-fixture.invalid', 'synthetic-public-key', {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path.endsWith('/px08_get_compare_groups')) {
+          rpcBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify(fail ? { message: 'backend unavailable' } : [{ id: 'group', conversationId: CONV, modelA: childA, modelB: childB }]), {
+            status: fail ? 503 : 200, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        const data = path.endsWith('/messages') ? [{ id: MSG, role: 'assistant', content: 'Answer A', execution_id: CONV }] : [];
+        return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+      } },
+    });
+
+    const [message] = await loadConversation(client, CONV, { compareGroups: true, limit: 1 });
+    expect(rpcBodies).toEqual([{ p_conversation_id: CONV, p_execution_ids: [CONV] }]);
+    expect(message).toMatchObject({ id: MSG, compareGroupId: 'group', compareGroupChild: 'A', comparisonResults: {
+      modelA: { model: 'future-model', cost: 0, costStatus: 'settled' },
+      modelB: { model: 'second-model', status: 'failed', costStatus: 'unknown' },
+    } });
+    fail = true;
+    await expect(loadConversation(client, CONV, { compareGroups: true })).resolves.toMatchObject([{ id: MSG, content: 'Answer A' }]);
+    expect((await loadConversation(client, CONV))[0]?.compareGroupId).toBeUndefined();
+    expect(rpcBodies).toHaveLength(2);
+  });
+
   it('queries newest-first, reverses to chronological order, maps persisted attachments and adapts a legacy image_url', async () => {
     // Database returns the newest rows first (created_at descending)
     const fake = makeClient({
@@ -531,6 +563,18 @@ describe('deleteConversation', () => {
     const convCalls = fake.queries.conversations![0]!.calls;
     expect(convCalls).toContain('delete');
     expect(fake.removed).toEqual([{ bucket: 'chat-uploads', paths: ['u/sole.png'] }]);
+  });
+
+  it('keeps an object when the remaining reference check fails and reports incomplete cleanup', async () => {
+    const fake = makeClient({
+      messages: [
+        { data: [{ attachments: [imageRef('supabase://chat-uploads/u/a.png')], image_url: null }], error: null },
+        { data: null, error: { message: 'offline' } },
+      ],
+      conversations: [{ data: null, error: null }],
+    });
+    await expect(deleteConversation(fake.client as never, CONV)).resolves.toEqual({ cleanupIncomplete: true });
+    expect(fake.removed).toEqual([]);
   });
 
   it('throws and removes nothing when the conversation delete fails', async () => {
