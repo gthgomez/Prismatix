@@ -568,3 +568,9 @@ closed on persistence. Verification: `tests/routing/conversation_attachments.tes
 (vitest) and `tests/integration/px07_conversation_continuity.sql` (psql/staging;
 not available in the CI unit environment).
 
+
+## 2026-11-19 campaign evidence
+
+The sections above preserve the historical deployment baseline. The November
+campaign used the source and frontend observations recorded in its ledger.
+Hosted backend verification remains open. [Campaign evidence and release gates](campaigns/2026-11-19-prismatix-campaign.md)
