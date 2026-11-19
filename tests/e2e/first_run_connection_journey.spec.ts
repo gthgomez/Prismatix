@@ -204,3 +204,29 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await page.context().tracing.stop({ path: tracePath });
   await testInfo.attach('connection-journey-trace', { path: tracePath, contentType: 'application/zip' });
 });
+
+test('history distinguishes loading, failure, and a successfully empty result', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [] });
+  let releaseList!: () => void;
+  const listHeld = new Promise<void>((resolve) => { releaseList = resolve; });
+  let listCalls = 0;
+  await page.route('**/rest/v1/conversations*', async (route) => {
+    if (route.request().method() !== 'GET' || listCalls++ > 0) return route.fallback();
+    await listHeld;
+    return route.fulfill({ status: 503, json: { message: 'Synthetic history outage' } });
+  });
+
+  await signInAsMockUser(page);
+  const history = page.locator('.conversation-sidebar');
+  try {
+    await expect(history.getByRole('status').filter({ hasText: 'Loading' })).toBeVisible();
+    await expect(history.getByText('No conversations yet')).toHaveCount(0);
+  } finally {
+    releaseList();
+  }
+  await expect(history.getByRole('alert')).toContainText('Could not load conversations');
+  await expect(history.getByText('No conversations yet')).toHaveCount(0);
+  await history.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(history.getByText('No conversations yet')).toBeVisible();
+});

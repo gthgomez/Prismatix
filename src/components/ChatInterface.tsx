@@ -690,6 +690,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     if (activeUserIdRef.current === user?.id) return;
     activeUserIdRef.current = user?.id;
     accountGenerationRef.current += 1;
+    conversationsRefreshSeqRef.current += 1;
+    setConversations([]);
+    setProjects([]);
+    setActiveProjectId(null);
+    setHasMoreConversations(false);
+    setIsLoadingMoreConversations(false);
+    setLoadMoreConversationsError(null);
     sendLockRef.current = null;
     setIsSendPending(false);
     abortControllerRef.current?.abort();
@@ -1169,6 +1176,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
   const refreshConversations = useCallback(async (projectId?: string | null) => {
     const requestSeq = ++conversationsRefreshSeqRef.current;
+    setIsLoadingMoreConversations(false);
+    setLoadMoreConversationsError(null);
     setConversationsLoading(true);
     setConversationsError(null);
     const targetProjectId = projectId !== undefined ? projectId : activeProjectId;
@@ -1203,6 +1212,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     const last = conversations[conversations.length - 1];
     if (!last) return;
 
+    const requestSeq = conversationsRefreshSeqRef.current;
     setIsLoadingMoreConversations(true);
     setLoadMoreConversationsError(null);
     try {
@@ -1211,6 +1221,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         projectId: activeProjectId ?? undefined,
         before: { lastActivityAt: last.lastActivityAt, id: last.id },
       });
+      if (requestSeq !== conversationsRefreshSeqRef.current) return;
       setConversations((prev) => {
         const seen = new Set(prev.map((c) => c.id));
         const newRows = nextBatch.filter((c) => !seen.has(c.id));
@@ -1218,9 +1229,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       });
       setHasMoreConversations(nextBatch.length === 50);
     } catch (err) {
-      setLoadMoreConversationsError('Failed to load older conversations.');
+      if (requestSeq === conversationsRefreshSeqRef.current) {
+        setLoadMoreConversationsError('Failed to load older conversations.');
+      }
     } finally {
-      setIsLoadingMoreConversations(false);
+      if (requestSeq === conversationsRefreshSeqRef.current) setIsLoadingMoreConversations(false);
     }
   };
 
