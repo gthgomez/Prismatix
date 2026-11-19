@@ -4,7 +4,7 @@
 | --- | --- |
 | GitHub `main` | `6a5c4cb0ad364490a1a0d959dcc60f68f63d7314` |
 | Vercel production frontend | READY on the same SHA. Deployment identity only. [Production](https://prismatix-app.vercel.app/) |
-| Arctic UI baseline | Draft #72 at `54b80e4f9ca00ea352ddd0518b761dc697b954e1` with mergeable source. [PR #72](https://github.com/gthgomez/Prismatix/pull/72) |
+| Arctic UI baseline | Draft #72 at `54b80e4f9ca00ea352ddd0518b761dc697b954e1` with mergeable source and passing CI. [PR #72](https://github.com/gthgomez/Prismatix/pull/72) · [READY preview](https://prismatix-jqbcvzq43-jonathan-gomez-aguilars-projects.vercel.app) |
 | Overlapping onboarding work | Open #65 at `929284ac5bbe09a13b9b6b441b4153a0d30f7845`. Its source conflicted with main. [PR #65](https://github.com/gthgomez/Prismatix/pull/65) |
 | Prismatix production Supabase | **UNVERIFIED**. The connected inventory returned an unrelated project. |
 | Execution environment | Linux, five CPUs, 16 GiB available RAM and roughly 30 GiB free disk at start. Two isolated workers handled Compare and startup/spend. |
@@ -13,7 +13,7 @@
 
 | Severity | Lane and impact | Disposition |
 | --- | --- | --- |
-| P0 | B · The browser attempted to rewrite protected assistant content to save Compare. | Candidate removes the browser write. Qualify the owner-scoped RPC and front-end opt-in against the intended backend before enabling. |
+| P0 | B · The browser attempted to rewrite protected assistant content to save Compare. | The browser write was removed. The owner-scoped RPC and frontend opt-in passed isolated PostgreSQL and synthetic browser checks. Keep the flag off pending hosted qualification. With no saved assistant row, a failed pair has no history card. Compare preferences and Debate reload still need separate work. |
 | P0 | G · A frontend deployment SHA cannot establish hosted backend parity. | **Blocked** pending authorized read-only Prismatix Supabase inventory. Capture migrations, functions, auth controls, RLS and grants before release. |
 | P1 | A/F · Theme and onboarding changes overlap across #65 and #72. | Based the candidate on #72. Brought across coverage for alternate-provider/demo reachability, composer focus, and distinct history loading/error/empty states. Keep #65 available for maintainer housekeeping. |
 | P1 | C · Failed prompt text disappeared on reload. | Added account-scoped text recovery in the current tab. A recovered draft requires a deliberate restore, and the user is prompted to inspect history before sending again. Attachments require re-selection. Uncertain settlement, concurrent tabs, and additional stream failures still need broader real-backend qualification. |
@@ -26,6 +26,22 @@
 | P2 | J · Chat and router remain large. | Startup configuration stays lightweight. The local production build and bundle-boundary browser test provide a baseline. Transcript rendering and navigation-waterfall profiling remain open. |
 | P1 | K · Node runtime differed across local, CI and Vercel. | Full CI uses Node 24 with clean-install/build checks on Node 20 and 22. Browser artifact uploads contain only synthetic fixture evidence. Branch protection remains a maintainer decision. |
 | P2 | L · Public docs contradicted the default provider. | README now documents OpenRouter BYOK and the scope of synthetic testing. |
+
+## Evidence scope
+
+- The Compare PostgreSQL 17 harness executes prerequisite repo migrations and
+  the candidate migration against isolated Postgres. It supplies minimal local
+  auth and storage objects, and verifies replay, page-filtered reads, one failed
+  child, later stop and settlement state, owner isolation and write protection.
+  It does not launch Supabase Auth, Storage, PostgREST or the Edge runtime.
+- The opt-in Chromium fixture confirms two synthetic executions share one
+  logical Compare ID, make no browser writes to message rows, and reload both
+  saved answers. This is a browser contract check with synthetic responses.
+- A browser run against a build with backend configuration removed showed the
+  recovery screen for sign-in and reset, reached the scripted demo, and
+  observed zero Supabase requests.
+- The Web UI is qualified through synthetic browser fixtures. Paid provider
+  usage for the campaign was zero.
 
 ## Release sequence
 
