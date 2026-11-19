@@ -77,7 +77,7 @@ describe('smartFetch debate support', () => {
 
   it('sends the shared Compare identity without changing the requested execution mode', async () => {
     const compareId = '33333333-3333-4333-8333-333333333333';
-    const response = new Response(makeStream(''), { status: 200, headers: { 'X-Router-Model': 'gemini-2.5-flash' } });
+    const response = new Response(makeStream(''), { status: 200, headers: { 'X-Router-Model': 'gemini-3.8-flash' } });
     const fetchMock = vi.fn().mockResolvedValue(response);
     vi.stubGlobal('fetch', fetchMock);
 
@@ -96,7 +96,7 @@ describe('smartFetch debate support', () => {
     });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(brokenStream, {
       status: 200,
-      headers: { 'X-Prismatix-Execution-Id': executionId, 'X-Router-Model': 'gemini-2.5-flash' },
+      headers: { 'X-Prismatix-Execution-Id': executionId, 'X-Router-Model': 'gemini-3.8-flash' },
     })));
 
     const result = await askPrismatixSync('Compare these', [], [], null, 'high', {
