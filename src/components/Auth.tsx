@@ -5,8 +5,8 @@ import React, { useRef, useState } from 'react';
 import { CONFIG } from '../config';
 import '../styles/Auth.css';
 
-// PX01: signup UI is gated behind VITE_ALLOW_SIGNUP (default off). Server-side
-// signup is disabled independently; this only hides the client path.
+// PX01: signup UI is gated behind VITE_ALLOW_SIGNUP (default off). Supabase
+// server-side signup policy is configured independently and must be verified.
 const ALLOW_SIGNUP = CONFIG.ALLOW_SIGNUP;
 
 interface AuthProps {

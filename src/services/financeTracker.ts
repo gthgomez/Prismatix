@@ -158,10 +158,8 @@ export function getSpendStats(date = currentDate()): SpendStats {
 }
 
 /**
- * Fetches today's spend total from the server (Supabase cost_logs via spend_stats edge function).
- * Falls back to the localStorage total if the server is unreachable.
- *
- * Use this for budget enforcement — localStorage can be cleared or bypassed across tabs/devices.
+ * Fetches today's server-reported spend. The local total is an advisory cache
+ * only; server admission and budget enforcement remain owned by the router.
  */
 export async function fetchServerDailyTotal(): Promise<number> {
   try {
@@ -190,8 +188,9 @@ export async function fetchServerDailyTotal(): Promise<number> {
 }
 
 /**
- * Queries the authoritative `cost_logs` ledger from Supabase under RLS policy `cost_logs_select_own`.
- * Bypasses client-side 500-item localStorage truncation to provide the complete account spend history.
+ * Queries the server `cost_logs` ledger under RLS policy `cost_logs_select_own`.
+ * Fail explicitly so callers cannot mistake the incomplete browser cache for
+ * the authoritative ledger.
  */
 export async function fetchAuthoritativeCostLogs(
   client: SupabaseClient,
@@ -212,8 +211,7 @@ export async function fetchAuthoritativeCostLogs(
 
     const { data, error } = await query;
     if (error || !Array.isArray(data)) {
-      console.warn('[financeTracker] Authoritative cost_logs fetch failed, using local store:', error?.message);
-      return getFinanceStore().history;
+      throw new Error(error?.message || 'Could not load server cost records.');
     }
 
     return data.map((row) => ({
@@ -229,8 +227,7 @@ export async function fetchAuthoritativeCostLogs(
       executionId: row.id ? String(row.id) : undefined,
     }));
   } catch (err) {
-    console.warn('[financeTracker] Exception fetching authoritative cost_logs:', err);
-    return getFinanceStore().history;
+    throw err instanceof Error ? err : new Error('Could not load server cost records.');
   }
 }
 

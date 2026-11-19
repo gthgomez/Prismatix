@@ -30,9 +30,10 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'breakdown'>('overview');
   const [dateRange, setDateRange] = useState<DateRangeFilter>('all');
   const [groupBy, setGroupBy] = useState<GroupByFilter>('model');
-  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'error'>('idle');
+  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'error'>('syncing');
   const [syncMessage, setSyncMessage] = useState('');
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+  const [exportError, setExportError] = useState('');
   const refreshCycleRef = useRef(0);
   const refreshTimersRef = useRef<number[]>([]);
   const activeRequestIdRef = useRef(0);
@@ -141,10 +142,13 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const stateLabel =
-    syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : 'Live';
+  const stateLabel = syncState === 'syncing'
+    ? 'Syncing'
+    : syncState === 'error'
+      ? (lastSyncAt ? 'Stale' : 'Unavailable')
+      : 'Server';
   const popoverStatus =
-    syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : 'Connected';
+    syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync issue' : 'Server data';
   // Zero spend is secondary information: keep it readable but visually quiet so
   // the routing mode (the thing that actually changes behaviour) leads.
   const isQuiet = stats.today === 0 && syncState !== 'error';
@@ -164,7 +168,9 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
         aria-expanded={isOpen}
         title='View spend analytics'
       >
-        <span className='spend-pill-value'>${stats.today.toFixed(2)}</span>
+        <span className='spend-pill-value'>
+          {syncState === 'error' && !lastSyncAt ? '—' : `$${stats.today.toFixed(2)}`}
+        </span>
         <span className='spend-pill-label'>Today</span>
         <span
           className={`spend-pill-state ${
@@ -330,7 +336,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
                         <div>
                           <div style={{ fontWeight: 600, color: '#fff' }}>{g.groupKey}</div>
                           <div style={{ fontSize: '0.65rem', color: 'rgba(255, 255, 255, 0.4)' }}>
-                            {g.count} turn{g.count > 1 ? 's' : ''} • Settled: ${g.settledCost.toFixed(4)}
+                            {g.count} turn{g.count > 1 ? 's' : ''} • Locally marked settled: ${g.settledCost.toFixed(4)}
                             {g.estimatedCost > 0 && ` • Est: $${g.estimatedCost.toFixed(4)}`}
                           </div>
                         </div>
@@ -343,8 +349,12 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
                 );
               })()}
 
+              <div style={{ marginTop: '0.5rem', fontSize: '0.65rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                Breakdown uses a local browser cache and may be incomplete or stale. Server totals above are authoritative when connected.
+              </div>
+
               <div style={{ marginTop: '0.5rem', fontSize: '0.65rem', color: 'rgba(255, 255, 255, 0.35)', fontStyle: 'italic' }}>
-                * Settled values reflect completed receipts. Provider-side invoices may differ slightly.
+                * Local settled labels reflect client receipts and can be stale or incomplete. Provider invoices may differ.
               </div>
             </div>
           )}
@@ -354,8 +364,13 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
               type="button"
               className="spend-csv-btn"
               onClick={async () => {
-                const logs = await fetchAuthoritativeCostLogs(supabase);
-                downloadSpendCsv(logs);
+                setExportError('');
+                try {
+                  const logs = await fetchAuthoritativeCostLogs(supabase);
+                  downloadSpendCsv(logs);
+                } catch {
+                  setExportError('Server cost records could not be loaded. Retry when connected.');
+                }
               }}
               style={{
                 background: 'rgba(78, 205, 196, 0.1)',
@@ -378,9 +393,10 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
           </div>
 
           <div className='spend-sync-note'>
+            {exportError ? <span className="error-text">{exportError}</span> : null}
             {syncState === 'error' ? (
               <span className="error-text">
-                ⚠️ {syncMessage}
+                ⚠️ {syncMessage} {lastSyncAt && `Showing server data from ${new Date(lastSyncAt).toLocaleTimeString()}.`}
                 <button
                   type="button"
                   className="spend-retry-btn"

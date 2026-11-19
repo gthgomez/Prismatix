@@ -7,6 +7,7 @@ import {
   getDailyTotal,
   getFinanceStore,
   getSpendStats,
+  fetchAuthoritativeCostLogs,
   recordCost,
 } from './financeTracker';
 
@@ -149,5 +150,20 @@ describe('getSpendStats', () => {
     const stats = getSpendStats();
     expect(stats.thisWeek).toBe(0);
     expect(stats.thisMonth).toBe(5);
+  });
+});
+
+describe('fetchAuthoritativeCostLogs', () => {
+  it('does not substitute the local cache when the server ledger fails', async () => {
+    recordCost({ model: 'haiku-4.5', cost: 0.25 });
+    const client = {
+      from: () => ({
+        select: () => ({
+          order: async () => ({ data: null, error: { message: 'offline' } }),
+        }),
+      }),
+    } as never;
+
+    await expect(fetchAuthoritativeCostLogs(client)).rejects.toThrow('offline');
   });
 });

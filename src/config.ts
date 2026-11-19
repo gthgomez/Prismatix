@@ -15,16 +15,21 @@ function hostOf(value: string): string {
   }
 }
 
-const DEFAULT_MOCK_SUPABASE_URL = 'https://mock.supabase.co';
-const SUPABASE_URL = ENV_SUPABASE_URL || DERIVED_SUPABASE_URL || DEFAULT_MOCK_SUPABASE_URL;
+// The public demo is scripted and does not call Supabase. Keep a synthetic
+// client configuration only on that explicitly labelled route so importing
+// shared UI cannot accidentally make a real route look configured.
+const IS_SYNTHETIC_DEMO = typeof window !== 'undefined' && window.location.pathname === '/demo';
+const SUPABASE_URL = ENV_SUPABASE_URL || DERIVED_SUPABASE_URL || (IS_SYNTHETIC_DEMO ? 'https://mock.supabase.co' : '');
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || (IS_SYNTHETIC_DEMO ? 'synthetic-demo-anon-key' : '');
 const ENABLE_VIDEO_PIPELINE = (() => {
   const raw = String(import.meta.env.VITE_ENABLE_VIDEO_PIPELINE || '').trim().toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
 })();
 
 // PX01: signup UI is gated behind VITE_ALLOW_SIGNUP and defaults to OFF.
-// Server-side signup must stay disabled (supabase/config.toml + production
-// auth settings) regardless of this flag.
+// The committed local Supabase config enables beta signup, so production
+// signup/confirmation policy must be verified separately; this flag controls
+// only the client UI and is not a server authorization boundary.
 const ALLOW_SIGNUP = (() => {
   const raw = String(import.meta.env.VITE_ALLOW_SIGNUP || '').trim().toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
@@ -48,7 +53,7 @@ const ROUTER_ENDPOINT = (() => {
 export const CONFIG = {
   // Supabase Configuration
   SUPABASE_URL,
-  SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY || 'mock-anon-key',
+  SUPABASE_ANON_KEY,
   
   // Router Endpoint (modern format: https://[PROJECT_ID].supabase.co/functions/v1/[function-name])
   ROUTER_ENDPOINT,
@@ -73,10 +78,10 @@ export const CONFIG = {
 
 // Validate required config
 if (!CONFIG.SUPABASE_URL) {
-  console.warn('⚠️ VITE_SUPABASE_URL not set. Supabase client initialization will fail.');
+  console.warn('⚠️ Supabase URL not configured. Authenticated routes are unavailable.');
 }
 if (!CONFIG.SUPABASE_ANON_KEY) {
-  console.warn('⚠️ VITE_SUPABASE_ANON_KEY not set. Router requests will fail.');
+  console.warn('⚠️ VITE_SUPABASE_ANON_KEY not set. Authenticated routes are unavailable.');
 }
 if (!CONFIG.ROUTER_ENDPOINT) {
   console.warn('⚠️ VITE_ROUTER_ENDPOINT not set. Router requests will fail.');
