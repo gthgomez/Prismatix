@@ -152,6 +152,9 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await expect(dialog.getByRole('button', { name: 'Close provider plug-ins' })).toBeFocused();
   await dialog.getByRole('button', { name: 'Close provider plug-ins' }).click();
   await expect(settingsTrigger).toBeFocused();
+  const demo = page.getByRole('link', { name: 'Try the public demo' });
+  await demo.scrollIntoViewIfNeeded();
+  await expect(demo).toBeInViewport();
   const keyInput = page.locator('#first-run-openrouter-key');
   await keyInput.fill('sk-or-invalid-fixture');
   await page.getByRole('button', { name: 'Connect provider' }).click();
@@ -162,6 +165,7 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await page.locator('#first-run-openrouter-key').fill('sk-or-synthetic-fixture-0701');
   await page.getByRole('button', { name: 'Connect provider' }).click();
   await expect(page.getByRole('status').filter({ hasText: /Key saved and verified/ })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: /message prismatix/i })).toBeFocused();
   await expect(page.locator('.first-run-card')).toHaveCount(0);
   await capture(`transition-configured-${viewportName}`);
 

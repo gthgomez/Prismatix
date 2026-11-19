@@ -326,6 +326,27 @@ function normalizeAttachmentKind(file: FileUploadPayload): FileUploadPayload {
   };
 }
 
+interface FailedTurnDraft {
+  rawInput: string;
+  queryText: string;
+  attachments: FileUploadPayload[];
+  error?: string;
+  overrideModel?: RouterModel;
+  optimisticMessageId?: string;
+  optimisticMessageContent?: string;
+  restoredFromStorage?: boolean;
+}
+
+function readFailedTurnDraft(userId?: string): FailedTurnDraft | null {
+  if (!userId) return null;
+  try {
+    const rawInput = sessionStorage.getItem(`prismatix.failed-turn.${userId}`);
+    return rawInput ? { rawInput, queryText: rawInput, attachments: [], restoredFromStorage: true } : null;
+  } catch {
+    return null;
+  }
+}
+
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, theme, onToggleTheme }) => {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -438,17 +459,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const [earlierMessagesError, setEarlierMessagesError] = useState<string | null>(null);
   const [conversationLoadError, setConversationLoadError] = useState<string | null>(null);
 
-  // PR 1: F02 lossless draft recovery and retry state (in-memory session only)
-  const [failedTurnDraft, setFailedTurnDraft] = useState<{
-    rawInput: string;
-    queryText: string;
-    attachments: FileUploadPayload[];
-    error?: string;
-    failedUserIndex?: number;
-    overrideModel?: RouterModel;
-    optimisticMessageId?: string;
-    optimisticMessageContent?: string;
-  } | null>(null);
+  // Only the prompt text survives reload. An interrupted execution may
+  // have completed on the server, so a reloaded draft is restore-only.
+  const [failedTurnDraft, setFailedTurnDraftState] = useState<FailedTurnDraft | null>(
+    () => readFailedTurnDraft(user?.id),
+  );
+  const setFailedTurnDraft = (draft: FailedTurnDraft | null) => {
+    setFailedTurnDraftState(draft);
+    if (!user?.id) return;
+    try {
+      const key = `prismatix.failed-turn.${user.id}`;
+      if (draft?.rawInput.trim()) sessionStorage.setItem(key, draft.rawInput);
+      else sessionStorage.removeItem(key);
+    } catch {
+      // Keep in-memory recovery available when browser storage is blocked.
+    }
+  };
   const [showDraftCopyFallback, setShowDraftCopyFallback] = useState(false);
   const activeDraftRef = useRef<{
     rawInput: string;
@@ -657,8 +683,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const executionIdRef = useRef<string | undefined>(undefined);
   const [streamOutcome, setStreamOutcome] = useState<StreamOutcomeState | null>(null);
 
-  // Account-owned drafts and transport state must not survive an account
-  // switch. Abort best-effort; generation guards below also protect against
+  // Reset live draft and transport state on account switch. Recover only
+  // the incoming account’s saved text. Abort best-effort; generation guards below also protect against
   // transports or mocks that settle after ignoring their AbortSignal.
   useLayoutEffect(() => {
     if (activeUserIdRef.current === user?.id) return;
@@ -679,7 +705,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     }
     setInput('');
     setDraftAttachments([]);
-    setFailedTurnDraft(null);
+    setFailedTurnDraftState(readFailedTurnDraft(user?.id));
     setShowDraftCopyFallback(false);
     setFirstRunOutcome(null);
     setRejectedRoute(null);
@@ -1344,7 +1370,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   };
 
   const handleRetryTurn = async () => {
-    if (!failedTurnDraft || isStreaming || sendLockRef.current) return;
+    if (!failedTurnDraft || failedTurnDraft.restoredFromStorage || isStreaming || sendLockRef.current) return;
     if (providerPlugins.loading || providerPlugins.error || !providerPlugins.isConfigured || enabledProviders.size === 0 || providerVerificationRequiresAction) {
       setSendValidationError(providerPlugins.error
         ? 'Provider setup could not be checked. Retry the check or open Provider Settings.'
@@ -3992,7 +4018,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         <div className='draft-recovery-bar' role='alert'>
           <div className='draft-recovery-text'>
             <span className='draft-recovery-icon' aria-hidden='true'>⚠️</span>
-            <span>Send failed: {failedTurnDraft.error || 'The request could not be completed.'} This draft is kept only in this tab and will be lost on refresh. Copy the text now; attached files are not included.</span>
+            <span>{failedTurnDraft.restoredFromStorage ? 'Draft recovered. Check your chat history before sending again.' : `Send failed: ${failedTurnDraft.error || 'The request could not be completed.'}`} Draft text can survive a refresh in this tab when browser storage is available. Reattach files after refreshing.</span>
           </div>
           <div className='draft-recovery-actions'>
             <button
@@ -4009,14 +4035,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             >
               Copy draft
             </button>
-            <button
+            {!failedTurnDraft.restoredFromStorage && <button
               type='button'
               className='draft-recovery-retry-btn'
               onClick={() => void handleRetryTurn()}
               disabled={isStreaming}
             >
               Retry
-            </button>
+            </button>}
             <button
               type='button'
               className='draft-recovery-dismiss-btn'
