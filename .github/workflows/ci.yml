@@ -64,6 +64,15 @@ jobs:
       - name: Run Pixel mobile authentication and provider journeys
         run: npx playwright test --project=mobile tests/e2e/auth_chat_journey.spec.ts tests/e2e/first_run_connection_journey.spec.ts tests/e2e/first_run_accessibility.spec.ts
 
+      - name: Verify the opt-in Compare fixture
+        env:
+          VITE_SUPABASE_URL: https://prismatix-fixture.invalid
+          VITE_SUPABASE_ANON_KEY: synthetic-browser-anon-key
+          VITE_PX08_COMPARE_DURABILITY: 'true'
+        run: |
+          npm run build
+          npx playwright test --project=chromium tests/e2e/compare_persistence.spec.ts --output=test-results/compare
+
       - name: Upload synthetic browser evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
