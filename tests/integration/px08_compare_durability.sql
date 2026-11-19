@@ -10,6 +10,7 @@ declare
   a uuid := gen_random_uuid(); b uuid := gen_random_uuid(); c uuid := gen_random_uuid(); other_exec uuid := gen_random_uuid();
   compare_identity constant uuid := '33333333-3333-4333-8333-333333333333';
   result1 jsonb; result2 jsonb;
+  reloaded jsonb;
 begin
   insert into auth.users(id, aud, role, email, encrypted_password, created_at, updated_at)
   values (u1, 'authenticated', 'authenticated', u1 || '@example.invalid', 'unused', now(), now()),
@@ -48,10 +49,53 @@ begin
     raise exception 'PX08 accepted a foreign execution';
   exception when insufficient_privilege then null;
   end;
+  reloaded := public.px08_get_compare_groups(c1, array[b]);
+  if jsonb_array_length(reloaded) <> 1 or reloaded->0 is distinct from result1 then
+    raise exception 'PX08 did not return the complete group on a page with one child';
+  end if;
+  if public.px08_get_compare_groups(c1, array[c]) <> '[]'::jsonb then
+    raise exception 'PX08 returned a group outside the requested page';
+  end if;
+  begin
+    update public.messages set content = 'unauthorized fixture mutation' where execution_id = a;
+    raise exception 'The client could rewrite assistant content';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    insert into public.compare_groups(user_id, conversation_id, execution_a, execution_b, compare_identity)
+    values (u1, c1, b, c, gen_random_uuid());
+    raise exception 'The client could insert a Compare group directly';
+  exception when insufficient_privilege then null;
+  end;
+  execute 'reset role';
+  update prismatix_internal.executions set status = 'cancelled' where id = b;
+  insert into prismatix_internal.model_calls(execution_id, stage, participant, total_cost, cost_status)
+  values (b, 'primary', 'model-b', 0.0234, 'pending');
+  execute 'set local role authenticated';
+  reloaded := public.px08_get_compare_groups(c1, array[a])->0;
+  if reloaded#>>'{modelB,status}' <> 'stopped' or reloaded#>>'{modelB,costStatus}' <> 'pending' then
+    raise exception 'PX08 did not reflect the updated server receipt';
+  end if;
+  execute 'reset role';
+  update prismatix_internal.model_calls set cost_status = 'estimated_legacy' where execution_id = b;
+  execute 'set local role authenticated';
+  reloaded := public.px08_get_compare_groups(c1, array[a])->0;
+  if reloaded#>>'{modelB,costStatus}' <> 'estimated' then
+    raise exception 'PX08 did not preserve legacy estimate provenance';
+  end if;
   perform set_config('request.jwt.claim.sub', u2::text, true);
+  if exists (select 1 from public.compare_groups where conversation_id = c1) then
+    raise exception 'Direct read bypassed owner RLS';
+  end if;
   begin
     perform public.px08_get_compare_groups(c1, array[a, b]);
     raise exception 'PX08 exposed another owner conversation';
+  exception when insufficient_privilege then null;
+  end;
+  execute 'set local role anon';
+  begin
+    perform public.px08_get_compare_groups(c1, array[a]);
+    raise exception 'Anonymous role executed the Compare RPC';
   exception when insufficient_privilege then null;
   end;
 end $$;

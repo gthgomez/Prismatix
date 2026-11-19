@@ -132,6 +132,7 @@ import { ProviderSettings } from './ProviderSettings';
 import { MemorySettings } from './MemorySettings';
 import { FirstRunSetupCard } from './FirstRunSetupCard';
 import { reconcileFirstRunOutcome, type FirstRunOutcome } from './firstRunOutcome';
+import { parseCompareGroup } from '../services/compareGroups';
 import { GlobalSearchModal } from './GlobalSearchModal';
 import { ProjectModal } from './ProjectModal';
 import { ExportModal } from './ExportModal';
@@ -1202,9 +1203,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         ...(comparisonResults
           ? { comparisonResults, compareGroupId: item.compareGroupId, compareGroupChild: item.compareGroupChild }
           : {}),
-        ...(!comparisonResults && item.metadata?.comparisonResults
-          ? { comparisonResults: item.metadata.comparisonResults as any }
-          : {}),
         ...(item.metadata?.citations
           ? { citations: item.metadata.citations as any }
           : {}),
@@ -2203,29 +2201,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             });
             if (!requestStillCurrent()) return;
             if (error) throw error;
-            const group = data as {
-              id?: string;
-              modelA?: { content?: string | null; status?: string; cost?: number | string | null; costStatus?: string; transcriptSaved?: boolean; assistantMessageId?: string };
-              modelB?: { content?: string | null; status?: string; cost?: number | string | null; costStatus?: string; transcriptSaved?: boolean; assistantMessageId?: string };
-            } | null;
-            if (group?.id && group.modelA && group.modelB) {
+            const group = parseCompareGroup(data);
+            if (group?.conversationId === sendConversationId
+              && group.modelA.executionId === executionIdA
+              && group.modelB.executionId === executionIdB) {
               persistedId = group.id;
-              comparisonSaved = true;
-              const normalizeChild = (
-                child: NonNullable<typeof group.modelA>,
-                fallback: NonNullable<Message['comparisonResults']>['modelA'],
-              ): NonNullable<Message['comparisonResults']>['modelA'] => ({
-                ...fallback,
-                content: typeof child.content === 'string' ? child.content : fallback.content,
-                status: child.status === 'completed' || child.status === 'stopped' || child.status === 'failed' ? child.status : 'interrupted',
-                cost: child.cost == null ? undefined : Number(child.cost),
-                costStatus: child.costStatus === 'settled' || child.costStatus === 'pending' || child.costStatus === 'estimated' ? child.costStatus : 'unknown',
-                transcriptSaved: child.transcriptSaved === true,
-                assistantMessageId: child.assistantMessageId,
-              });
+              comparisonSaved = Boolean(group.modelA.assistantMessageId || group.modelB.assistantMessageId);
               comparisonResultsData = {
-                modelA: normalizeChild(group.modelA, comparisonResultsData.modelA),
-                modelB: normalizeChild(group.modelB, comparisonResultsData.modelB),
+                modelA: { ...group.modelA, content: group.modelA.transcriptSaved ? group.modelA.content : contentA },
+                modelB: { ...group.modelB, content: group.modelB.transcriptSaved ? group.modelB.content : contentB },
               };
             }
           } catch (err) {
