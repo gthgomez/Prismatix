@@ -17,7 +17,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -32,7 +32,10 @@ jobs:
       - name: Run tests
         run: npm run test
 
-      - name: Build
+      - name: Build synthetic browser fixture
+        env:
+          VITE_SUPABASE_URL: https://prismatix-fixture.invalid
+          VITE_SUPABASE_ANON_KEY: synthetic-browser-anon-key
         run: npm run build
 
       - name: Set up Deno
@@ -59,4 +62,28 @@ jobs:
         run: npx playwright test --project=chromium
 
       - name: Run Pixel mobile authentication and provider journeys
-        run: npx playwright test --project=mobile tests/e2e/auth_chat_journey.spec.ts tests/e2e/first_run_connection_journey.spec.ts
+        run: npx playwright test --project=mobile tests/e2e/auth_chat_journey.spec.ts tests/e2e/first_run_connection_journey.spec.ts tests/e2e/first_run_accessibility.spec.ts
+
+      - name: Upload synthetic browser evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-synthetic-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  runtime-compatibility:
+    name: Node ${{ matrix.node }} compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build

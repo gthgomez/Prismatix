@@ -158,6 +158,8 @@ used to dispatch user or background work.
 
 ## Development
 
+CI runs the full test suite on Node 24 to match the observed Vercel project runtime. Node 20 and 22 also run clean-install and build checks. The local `.nvmrc` pins Node 22.12.0.
+
 ### First-time setup
 
 1. **Install the Supabase CLI** — [docs](https://supabase.com/docs/guides/cli)

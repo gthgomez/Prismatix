@@ -1,26 +1,8 @@
 // config.ts - Configuration and environment variables
 import { MODEL_CATALOG } from './modelCatalog';
 
-const ENV_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
-const ENV_ROUTER_ENDPOINT = import.meta.env.VITE_ROUTER_ENDPOINT || '';
-const DERIVED_SUPABASE_URL = ENV_ROUTER_ENDPOINT
-  ? String(ENV_ROUTER_ENDPOINT).replace(/\/functions\/v1\/router$/, '')
-  : '';
+import { ENV_ROUTER_ENDPOINT, SUPABASE_URL, SUPABASE_ANON_KEY, hostOf } from './backendConfig';
 
-function hostOf(value: string): string {
-  try {
-    return new URL(value).host;
-  } catch {
-    return '';
-  }
-}
-
-// The public demo is scripted and does not call Supabase. Keep a synthetic
-// client configuration only on that explicitly labelled route so importing
-// shared UI cannot accidentally make a real route look configured.
-const IS_SYNTHETIC_DEMO = typeof window !== 'undefined' && window.location.pathname === '/demo';
-const SUPABASE_URL = ENV_SUPABASE_URL || DERIVED_SUPABASE_URL || (IS_SYNTHETIC_DEMO ? 'https://mock.supabase.co' : '');
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || (IS_SYNTHETIC_DEMO ? 'synthetic-demo-anon-key' : '');
 const ENABLE_VIDEO_PIPELINE = (() => {
   const raw = String(import.meta.env.VITE_ENABLE_VIDEO_PIPELINE || '').trim().toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';

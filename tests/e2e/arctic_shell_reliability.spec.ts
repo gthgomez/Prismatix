@@ -13,7 +13,7 @@ const successfulStream = (text: string, executionId: string) => ({
   ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
 });
 
-test('failed-send draft remains session-only and reload never auto-dispatches it', async ({ page }) => {
+test('failed-send text survives reload in its tab without auto-dispatch', async ({ page }) => {
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   let routerRequests = 0;
   await page.route('**/functions/v1/router*', async (route) => {
@@ -22,14 +22,19 @@ test('failed-send draft remains session-only and reload never auto-dispatches it
   });
   await signInAsMockUser(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
-  await composer.fill('Keep this only in memory');
+  await composer.fill('Recover this text after reload');
   await composer.press('Enter');
-  await expect(page.locator('.draft-recovery-bar')).toContainText('lost on refresh');
+  await expect(page.locator('.draft-recovery-bar')).toContainText('can survive a refresh');
   expect(routerRequests).toBe(1);
-  expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Keep this only in memory');
+  expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Recover this text after reload');
   await page.reload();
   await expect(page.getByRole('textbox', { name: 'Message Prismatix' })).toBeVisible();
-  await expect(page.locator('.draft-recovery-bar')).toBeHidden();
+  const recovery = page.locator('.draft-recovery-bar');
+  await expect(recovery).toContainText('Check your chat history before sending again');
+  await expect(recovery.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
+  await recovery.getByRole('button', { name: 'Restore draft' }).click();
+  await expect(composer).toHaveValue('Recover this text after reload');
+  await expect(recovery).toBeHidden();
   expect(routerRequests).toBe(1);
 });
 

@@ -169,7 +169,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
         title='View spend analytics'
       >
         <span className='spend-pill-value'>
-          {syncState === 'error' && !lastSyncAt ? '—' : `$${stats.today.toFixed(2)}`}
+          {lastSyncAt ? `$${stats.today.toFixed(2)}` : '—'}
         </span>
         <span className='spend-pill-label'>Today</span>
         <span
@@ -236,19 +236,19 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
               <div className='spend-grid'>
                 <div className='spend-card'>
                   <div className='spend-label'>Today</div>
-                  <div className='spend-value'>${stats.today.toFixed(4)}</div>
+                  <div className='spend-value'>{lastSyncAt ? `$${stats.today.toFixed(4)}` : '—'}</div>
                 </div>
                 <div className='spend-card'>
                   <div className='spend-label'>This Week</div>
-                  <div className='spend-value'>${stats.thisWeek.toFixed(4)}</div>
+                  <div className='spend-value'>{lastSyncAt ? `$${stats.thisWeek.toFixed(4)}` : '—'}</div>
                 </div>
                 <div className='spend-card'>
                   <div className='spend-label'>This Month</div>
-                  <div className='spend-value'>${stats.thisMonth.toFixed(4)}</div>
+                  <div className='spend-value'>{lastSyncAt ? `$${stats.thisMonth.toFixed(4)}` : '—'}</div>
                 </div>
                 <div className='spend-card'>
                   <div className='spend-label'>All Time</div>
-                  <div className='spend-value'>${stats.allTime.toFixed(4)}</div>
+                  <div className='spend-value'>{lastSyncAt ? `$${stats.allTime.toFixed(4)}` : '—'}</div>
                 </div>
               </div>
 
@@ -257,11 +257,11 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
               <div className='spend-last'>
                 <div className="last-msg-row">
                   <span className="label">Last message</span>
-                  <span className="value">${stats.lastMessageCost.toFixed(6)}</span>
+                  <span className="value">{lastSyncAt ? `$${stats.lastMessageCost.toFixed(6)}` : '—'}</span>
                 </div>
                 <div className="msg-count-row">
                   <span className="label">Total messages</span>
-                  <span className="value">{stats.messageCount}</span>
+                  <span className="value">{lastSyncAt ? stats.messageCount : '—'}</span>
                 </div>
               </div>
             </>
@@ -407,7 +407,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
                 </button>
               </span>
             ) : (
-              lastSyncAt && `Verified at ${new Date(lastSyncAt).toLocaleTimeString()}`
+              lastSyncAt && `Last synced at ${new Date(lastSyncAt).toLocaleTimeString()}`
             )}
           </div>
         </aside>

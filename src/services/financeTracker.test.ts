@@ -155,7 +155,7 @@ describe('getSpendStats', () => {
 
 describe('fetchAuthoritativeCostLogs', () => {
   it('does not substitute the local cache when the server ledger fails', async () => {
-    recordCost({ model: 'haiku-4.5', cost: 0.25 });
+    recordCost({ model: 'gemini-3.8-flash', cost: 0.25 });
     const client = {
       from: () => ({
         select: () => ({

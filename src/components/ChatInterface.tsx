@@ -1345,8 +1345,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       inputRef.current.style.height = 'auto';
       inputRef.current.focus();
     }
-    // Remove the failed assistant message from history if one was appended
-    setMessages((prev) => {
+    // A recovered tab draft has no corresponding in-memory error bubble.
+    if (!failedTurnDraft.restoredFromStorage) setMessages((prev) => {
       const last = prev[prev.length - 1];
       if (last && last.role === 'assistant' && typeof last.content === 'string' && last.content.startsWith('⚠️')) {
         return prev.slice(0, -1);
@@ -3476,7 +3476,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
               <div className='context-popover'><ContextStatus contextStatus={contextStatus} /></div>
             </details>
           )}
-            <SpendTracker refreshKey={spendRefreshKey} />
+            <SpendTracker key={user?.id} refreshKey={spendRefreshKey} />
             <button
               type='button'
               className='header-button shortcuts-toggle-button'
