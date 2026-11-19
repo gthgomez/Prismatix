@@ -124,7 +124,7 @@ import type {
   RouterModel,
   RoutingProfile,
 } from '../types';
-import { MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry } from '../modelCatalog';
+import { MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry, isKnownModel } from '../modelCatalog';
 import { filterVisibleModels, isModelVisible } from '../providerRegistry';
 import { useProviderPlugins } from '../hooks/useProviderPlugins';
 import { useModelPickerPreferences } from '../hooks/useModelPickerPreferences';
@@ -187,6 +187,8 @@ interface ChatInterfaceProps {
 }
 
 const DAILY_BUDGET_LIMIT_USD = 2.0;
+// Backend-first rollout: enable only after PX08 is applied in the target Supabase project.
+const PX08_COMPARE_DURABILITY_ENABLED = import.meta.env.VITE_PX08_COMPARE_DURABILITY === 'true';
 const VIDEO_NAME_PATTERN = /\.(mp4|mov|avi|mkv|webm|m4v)$/i;
 const CHATS_HIDDEN_KEY = 'prismatix.sidebar.chatsHidden';
 const spendCapSelectValue = (value: number | null) => value === null ? 'none' : value.toFixed(2);
@@ -1077,7 +1079,35 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   // ── PX07 conversation continuity ─────────────────────────────────────────
   const mapLoadedMessages = async (loaded: LoadedMessage[]): Promise<Message[]> => {
     const mapped: Message[] = [];
+    const compareAnchors = new Map<string, { executionId: string; comparisonResults: NonNullable<Message['comparisonResults']> }>();
     for (const item of loaded) {
+      if (item.role !== 'assistant' || !item.compareGroupId || !item.comparisonResults) continue;
+      const current = compareAnchors.get(item.compareGroupId);
+      if (!current || item.compareGroupChild === 'A') {
+        const preferredChild = item.compareGroupChild === 'B'
+          ? item.comparisonResults.modelB
+          : item.comparisonResults.modelA;
+        if (preferredChild.executionId) {
+          compareAnchors.set(item.compareGroupId, {
+            executionId: preferredChild.executionId,
+            comparisonResults: item.comparisonResults,
+          });
+        }
+      }
+    }
+
+    const messageBelongsToCompare = (item: LoadedMessage) => {
+      if (!item.executionId) return false;
+      for (const anchor of compareAnchors.values()) {
+        const a = anchor.comparisonResults.modelA.executionId;
+        const b = anchor.comparisonResults.modelB.executionId;
+        if (item.executionId === a || item.executionId === b) return item.executionId !== anchor.executionId;
+      }
+      return false;
+    };
+
+    for (const item of loaded) {
+      if (messageBelongsToCompare(item)) continue;
       const attachments: FileUploadPayload[] = [];
       for (const ref of item.attachments) {
         if (ref.kind === 'image') {
@@ -1108,11 +1138,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         }
       }
       const provenance = item.provenance;
+      const compareAnchor = item.compareGroupId ? compareAnchors.get(item.compareGroupId) : undefined;
+      const comparisonResults = compareAnchor && item.executionId === compareAnchor.executionId
+        ? compareAnchor.comparisonResults
+        : item.comparisonResults;
       mapped.push({
         id: item.id,
         createdAt: item.createdAt,
         role: item.role,
-        content: item.content,
+        content: comparisonResults
+          ? `Side-by-side comparison: **${comparisonResults.modelA.model}** vs **${comparisonResults.modelB.model}**`
+          : item.content,
         timestamp: Date.parse(item.createdAt) || Date.now(),
         ...(attachments.length > 0 ? { attachments } : {}),
         ...(provenance?.model ? { model: provenance.model } : {}),
@@ -1163,7 +1199,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
         ...(item.debateExecutionMode ? { debateExecutionMode: item.debateExecutionMode } : {}),
         ...(item.metadata ? { metadata: item.metadata } : {}),
-        ...(item.metadata?.comparisonResults
+        ...(comparisonResults
+          ? { comparisonResults, compareGroupId: item.compareGroupId, compareGroupChild: item.compareGroupChild }
+          : {}),
+        ...(!comparisonResults && item.metadata?.comparisonResults
           ? { comparisonResults: item.metadata.comparisonResults as any }
           : {}),
         ...(item.metadata?.citations
@@ -1247,7 +1286,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setConversationLoadError(null);
     setEarlierMessagesError(null);
     try {
-      const loaded = await loadConversation(supabase, conversationId, { limit: 200 });
+      const loaded = await loadConversation(supabase, conversationId, { limit: 200, compareGroups: PX08_COMPARE_DURABILITY_ENABLED });
       // Ignore a stale load: a newer selection (or a New Chat / account-change
       // clear) superseded this one.
       if (
@@ -1313,6 +1352,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       const earlier = await loadConversation(supabase, currentConvId, {
         limit: 50,
         before: { createdAt: cursorCreatedAt, id: cursorId },
+        compareGroups: PX08_COMPARE_DURABILITY_ENABLED,
       });
 
       if (
@@ -1332,7 +1372,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
       setMessages((prev) => {
         const seen = new Set(prev.map((m) => m.id).filter(Boolean));
-        const deduplicated = mappedEarlier.filter((m) => !m.id || !seen.has(m.id));
+        const seenCompareGroups = new Set(prev.map((m) => m.compareGroupId).filter((id): id is string => Boolean(id)));
+        const deduplicated = mappedEarlier.filter((m) =>
+          (!m.id || !seen.has(m.id)) && (!m.compareGroupId || !seenCompareGroups.has(m.compareGroupId))
+        );
         return [...deduplicated, ...prev];
       });
 
@@ -1580,7 +1623,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     try {
       let targetMessageId = messagesRef.current[index]?.id;
       if (!targetMessageId) {
-        const loaded = await loadConversation(supabase, currentConvId, { limit: 1000 });
+        const loaded = await loadConversation(supabase, currentConvId, { limit: 1000, compareGroups: PX08_COMPARE_DURABILITY_ENABLED });
         targetMessageId = loaded[index]?.id;
       }
       if (!targetMessageId) {
@@ -2057,6 +2100,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
       // F12: Side-by-side comparison mode execution
       if (comparisonMode) {
+        const compareRequestId = PX08_COMPARE_DURABILITY_ENABLED ? crypto.randomUUID() : undefined;
+        const compareRequestOptions = compareRequestId ? { comparisonGroupId: compareRequestId } : undefined;
         setIsStreaming(true);
         setIsWaitingFirstToken(false);
         const placeholderMsg: Message = {
@@ -2078,7 +2123,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             attachmentsToProcess,
             comparisonModelA,
             geminiFlashThinkingLevel,
-            undefined,
+            compareRequestOptions,
             routingProfile,
             maxSpendCap ?? undefined,
             abortController.signal,
@@ -2089,7 +2134,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             attachmentsToProcess,
             comparisonModelB,
             geminiFlashThinkingLevel,
-            undefined,
+            compareRequestOptions,
             routingProfile,
             maxSpendCap ?? undefined,
             abortController.signal,
@@ -2136,42 +2181,55 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           });
         }
 
-        const comparisonResultsData = {
-          modelA: { model: comparisonModelA, content: contentA, cost: costA, status: statusA, transcriptSaved: resA.status === 'fulfilled' && resA.value?.receipt?.transcript?.saved === true },
-          modelB: { model: comparisonModelB, content: contentB, cost: costB, status: statusB, transcriptSaved: resB.status === 'fulfilled' && resB.value?.receipt?.transcript?.saved === true },
+        const executionIdA = resA.status === 'fulfilled'
+          ? resA.value?.executionId ?? resA.value?.receipt?.executionId
+          : (resA.reason as { executionId?: string } | undefined)?.executionId;
+        const executionIdB = resB.status === 'fulfilled'
+          ? resB.value?.executionId ?? resB.value?.receipt?.executionId
+          : (resB.reason as { executionId?: string } | undefined)?.executionId;
+        let comparisonResultsData: NonNullable<Message['comparisonResults']> = {
+          modelA: { model: comparisonModelA, content: contentA, cost: costA, costStatus: costA === undefined ? 'unknown' as const : 'estimated' as const, status: statusA, transcriptSaved: resA.status === 'fulfilled' && resA.value?.receipt?.transcript?.saved === true, executionId: executionIdA },
+          modelB: { model: comparisonModelB, content: contentB, cost: costB, costStatus: costB === undefined ? 'unknown' as const : 'estimated' as const, status: statusB, transcriptSaved: resB.status === 'fulfilled' && resB.value?.receipt?.transcript?.saved === true, executionId: executionIdB },
         };
         const comparisonSummary = `Side-by-side comparison: **${comparisonModelA}** vs **${comparisonModelB}**`;
-
-        const execIdA = resA.status === 'fulfilled'
-          ? resA.value?.executionId ?? resA.value?.receipt?.executionId
-          : undefined;
         let persistedId: string | undefined;
         let comparisonSaved = false;
-        const bothTranscriptsSaved = comparisonResultsData.modelA.transcriptSaved
-          && comparisonResultsData.modelB.transcriptSaved;
-
-        if (execIdA && bothTranscriptsSaved) {
+        if (PX08_COMPARE_DURABILITY_ENABLED && executionIdA && executionIdB) {
           try {
-            const { data, error } = await supabase
-              .from('messages')
-              .update({
-                content: comparisonSummary,
-                metadata: {
-                  comparisonResults: comparisonResultsData,
-                  citations: citations && citations.length > 0 ? citations : undefined,
-                },
-              })
-              .eq('execution_id', execIdA)
-              .select('id')
-              .maybeSingle();
+            const { data, error } = await supabase.rpc('px08_persist_compare', {
+              p_conversation_id: sendConversationId,
+              p_execution_a: executionIdA,
+              p_execution_b: executionIdB,
+            });
             if (!requestStillCurrent()) return;
             if (error) throw error;
-            if (data?.id) {
-              persistedId = data.id;
+            const group = data as {
+              id?: string;
+              modelA?: { content?: string | null; status?: string; cost?: number | string | null; costStatus?: string; transcriptSaved?: boolean; assistantMessageId?: string };
+              modelB?: { content?: string | null; status?: string; cost?: number | string | null; costStatus?: string; transcriptSaved?: boolean; assistantMessageId?: string };
+            } | null;
+            if (group?.id && group.modelA && group.modelB) {
+              persistedId = group.id;
               comparisonSaved = true;
+              const normalizeChild = (
+                child: NonNullable<typeof group.modelA>,
+                fallback: NonNullable<Message['comparisonResults']>['modelA'],
+              ): NonNullable<Message['comparisonResults']>['modelA'] => ({
+                ...fallback,
+                content: typeof child.content === 'string' ? child.content : fallback.content,
+                status: child.status === 'completed' || child.status === 'stopped' || child.status === 'failed' ? child.status : 'interrupted',
+                cost: child.cost == null ? undefined : Number(child.cost),
+                costStatus: child.costStatus === 'settled' || child.costStatus === 'pending' || child.costStatus === 'estimated' ? child.costStatus : 'unknown',
+                transcriptSaved: child.transcriptSaved === true,
+                assistantMessageId: child.assistantMessageId,
+              });
+              comparisonResultsData = {
+                modelA: normalizeChild(group.modelA, comparisonResultsData.modelA),
+                modelB: normalizeChild(group.modelB, comparisonResultsData.modelB),
+              };
             }
           } catch (err) {
-            console.warn('[ChatInterface] Failed to persist comparison metadata to Supabase:', err);
+            console.warn('[ChatInterface] Failed to persist comparison group:', err);
           }
           if (!requestStillCurrent()) return;
         }
@@ -2182,7 +2240,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           if (last && last.role === 'assistant') {
             updated[updated.length - 1] = {
               ...last,
-              id: persistedId ?? last.id,
+              id: comparisonResultsData.modelA.assistantMessageId ?? comparisonResultsData.modelB.assistantMessageId ?? last.id,
+              compareGroupId: persistedId,
               content: comparisonSummary,
               comparisonResults: comparisonResultsData,
               transcriptSaved: comparisonSaved,
@@ -2191,6 +2250,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           }
           return updated;
         });
+
+        if (selectedConversationIdRef.current === null) {
+          selectedConversationIdRef.current = sendConversationId;
+          setSelectedConversationId(sendConversationId);
+          setConversationId(sendConversationId);
+          writeSelectedConversation(user?.id ?? null, sendConversationId);
+          if (activeProjectId) void assignConversationProject(supabase, sendConversationId, activeProjectId);
+        }
 
         setIsStreaming(false);
         setSpendRefreshKey((prev) => prev + 1);
@@ -3117,24 +3184,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           preferred === 'A'
             ? target.comparisonResults.modelA.model
             : target.comparisonResults.modelB.model;
-        void submitRoutingFeedback(supabase, {
+        if (isKnownModel(preferredModel)) void submitRoutingFeedback(supabase, {
           conversationId: selectedConversationIdRef.current,
           messageId: target.id,
           chosenModel: preferredModel,
           feedbackType: 'comparison_preference',
           comparisonPreferredModel: preferredModel,
         });
-        if (target.id) {
-          void supabase
-            .from('messages')
-            .update({
-              metadata: {
-                comparisonResults: nextComparisonResults,
-                citations: target.citations,
-              },
-            })
-            .eq('id', target.id);
-        }
       }
       return updated;
     });

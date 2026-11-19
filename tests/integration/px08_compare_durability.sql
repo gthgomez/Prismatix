@@ -1,0 +1,59 @@
+-- PX08: owner-scoped, idempotent durable Compare aggregation.
+-- Run against a local Supabase DB after `supabase db reset`; transaction rolls back.
+\set ON_ERROR_STOP on
+begin;
+
+do $$
+declare
+  u1 uuid := gen_random_uuid(); u2 uuid := gen_random_uuid();
+  c1 uuid := gen_random_uuid(); c2 uuid := gen_random_uuid();
+  a uuid := gen_random_uuid(); b uuid := gen_random_uuid(); c uuid := gen_random_uuid(); other_exec uuid := gen_random_uuid();
+  compare_identity constant uuid := '33333333-3333-4333-8333-333333333333';
+  result1 jsonb; result2 jsonb;
+begin
+  insert into auth.users(id, aud, role, email, encrypted_password, created_at, updated_at)
+  values (u1, 'authenticated', 'authenticated', u1 || '@example.invalid', 'unused', now(), now()),
+         (u2, 'authenticated', 'authenticated', u2 || '@example.invalid', 'unused', now(), now());
+  insert into public.conversations(id, user_id) values (c1, u1), (c2, u2);
+
+  insert into prismatix_internal.executions(id, subject_id, conversation_id, client_request_key, payload_hash, status, requested_mode, requested_model, served_model)
+  values (a, u1, c1, 'px08-a', 'a', 'completed', 'compare:' || compare_identity, 'model-a', 'model-a'),
+         (b, u1, c1, 'px08-b', 'b', 'failed', 'compare:' || compare_identity, 'model-b', 'model-b'),
+         (c, u1, c1, 'px08-c', 'c', 'failed', 'compare:' || compare_identity, 'model-c', 'model-c'),
+         (other_exec, u2, c2, 'px08-other', 'd', 'completed', 'chat', 'model-x', 'model-x');
+  insert into public.messages(conversation_id, role, content, execution_id, model_used)
+  values (c1, 'assistant', 'authentic A answer', a, 'model-a');
+  insert into prismatix_internal.model_calls(execution_id, stage, participant, total_cost, cost_status)
+  values (a, 'primary', 'model-a', 0.0123, 'settled');
+
+  perform set_config('request.jwt.claim.sub', u1::text, true);
+  perform set_config('request.jwt.claim.role', 'authenticated', true);
+  execute 'set local role authenticated';
+  result1 := public.px08_persist_compare(c1, a, b);
+  result2 := public.px08_persist_compare(c1, a, b);
+  if result1->>'id' is distinct from result2->>'id' then raise exception 'PX08 replay was not idempotent'; end if;
+  if result1#>>'{modelA,content}' <> 'authentic A answer' or result1#>>'{modelA,cost}' <> '0.012300' then
+    raise exception 'PX08 did not derive transcript and cost from server records: %', result1;
+  end if;
+  if result1#>>'{modelB,status}' <> 'failed' or result1#>>'{modelB,transcriptSaved}' <> 'false' then
+    raise exception 'PX08 failure status was not preserved: %', result1;
+  end if;
+  begin
+    perform public.px08_persist_compare(c1, a, c);
+    raise exception 'PX08 accepted a third execution for one logical Compare request';
+  exception when unique_violation then null;
+  end;
+  begin
+    perform public.px08_persist_compare(c1, a, other_exec);
+    raise exception 'PX08 accepted a foreign execution';
+  exception when insufficient_privilege then null;
+  end;
+  perform set_config('request.jwt.claim.sub', u2::text, true);
+  begin
+    perform public.px08_get_compare_groups(c1, array[a, b]);
+    raise exception 'PX08 exposed another owner conversation';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+
+rollback;

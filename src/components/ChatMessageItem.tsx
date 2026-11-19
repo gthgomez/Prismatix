@@ -560,8 +560,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                     <span className='comparison-model-badge'>{message.comparisonResults.modelA.model}</span>
                     {message.comparisonResults.modelA.status && message.comparisonResults.modelA.status !== 'completed' && <span role='status'>{message.comparisonResults.modelA.status === 'failed' ? 'Failed' : message.comparisonResults.modelA.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>}
                     {message.comparisonResults.modelA.cost !== undefined && (
-                      <span className='comparison-cost'>${message.comparisonResults.modelA.cost.toFixed(4)}</span>
+                      <span className='comparison-cost' aria-label={`Model A cost ${message.comparisonResults.modelA.costStatus ?? 'unknown'}: ${message.comparisonResults.modelA.cost.toFixed(4)} dollars`}>
+                        {message.comparisonResults.modelA.costStatus === 'settled' ? '$' : '~$'}{message.comparisonResults.modelA.cost.toFixed(4)} · {message.comparisonResults.modelA.costStatus ?? 'unknown'}
+                      </span>
                     )}
+                    {message.comparisonResults.modelA.cost === undefined && <span className='comparison-cost'>Cost unknown</span>}
                   </div>
                   <div className='comparison-content'>
                     <FormattedMessage content={message.comparisonResults.modelA.content} />
@@ -593,8 +596,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                     <span className='comparison-model-badge'>{message.comparisonResults.modelB.model}</span>
                     {message.comparisonResults.modelB.status && message.comparisonResults.modelB.status !== 'completed' && <span role='status'>{message.comparisonResults.modelB.status === 'failed' ? 'Failed' : message.comparisonResults.modelB.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>}
                     {message.comparisonResults.modelB.cost !== undefined && (
-                      <span className='comparison-cost'>${message.comparisonResults.modelB.cost.toFixed(4)}</span>
+                      <span className='comparison-cost' aria-label={`Model B cost ${message.comparisonResults.modelB.costStatus ?? 'unknown'}: ${message.comparisonResults.modelB.cost.toFixed(4)} dollars`}>
+                        {message.comparisonResults.modelB.costStatus === 'settled' ? '$' : '~$'}{message.comparisonResults.modelB.cost.toFixed(4)} · {message.comparisonResults.modelB.costStatus ?? 'unknown'}
+                      </span>
                     )}
+                    {message.comparisonResults.modelB.cost === undefined && <span className='comparison-cost'>Cost unknown</span>}
                   </div>
                   <div className='comparison-content'>
                     <FormattedMessage content={message.comparisonResults.modelB.content} />

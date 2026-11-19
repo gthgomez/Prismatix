@@ -184,10 +184,12 @@ export interface Message {
     snippet: string;
   }>;
   comparisonResults?: {
-    modelA: { model: RouterModel; content: string; cost?: number; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean };
-    modelB: { model: RouterModel; content: string; cost?: number; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean };
+    modelA: { model: string; content: string; cost?: number; costStatus?: 'settled' | 'pending' | 'estimated' | 'unknown'; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean; executionId?: string; assistantMessageId?: string };
+    modelB: { model: string; content: string; cost?: number; costStatus?: 'settled' | 'pending' | 'estimated' | 'unknown'; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean; executionId?: string; assistantMessageId?: string };
     preferred?: 'A' | 'B';
   };
+  compareGroupId?: string;
+  compareGroupChild?: 'A' | 'B';
   metadata?: Record<string, unknown>;
 }
 

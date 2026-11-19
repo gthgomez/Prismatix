@@ -75,6 +75,39 @@ describe('smartFetch debate support', () => {
     signOutMock.mockResolvedValue(undefined);
   });
 
+  it('sends the shared Compare identity without changing the requested execution mode', async () => {
+    const compareId = '33333333-3333-4333-8333-333333333333';
+    const response = new Response(makeStream(''), { status: 200, headers: { 'X-Router-Model': 'gemini-2.5-flash' } });
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await askPrismatix('Compare these options', [], [], null, 'high', { comparisonGroupId: compareId });
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.comparisonGroupId).toBe(compareId);
+    expect(body.mode).toBeUndefined();
+  });
+
+  it('retains the server execution identity when Compare stream reading fails', async () => {
+    const executionId = '44444444-4444-4444-8444-444444444444';
+    const brokenStream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new Error('connection dropped')); },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(brokenStream, {
+      status: 200,
+      headers: { 'X-Prismatix-Execution-Id': executionId, 'X-Router-Model': 'gemini-2.5-flash' },
+    })));
+
+    const result = await askPrismatixSync('Compare these', [], [], null, 'high', {
+      comparisonGroupId: '33333333-3333-4333-8333-333333333333',
+    });
+
+    expect(result?.executionId).toBe(executionId);
+    expect(result?.terminationStatus).toBe('error');
+    expect(result?.isDoneReceived).toBe(false);
+  });
+
   it('sends mode=debate and debateProfile when enabled and parses X-Debate-* headers', async () => {
     const sse = 'data: {"type":"content_block_delta","delta":{"text":"hello"}}\n\n';
     const response = new Response(makeStream(sse), {

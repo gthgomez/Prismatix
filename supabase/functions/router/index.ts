@@ -2746,7 +2746,9 @@ Deno.serve(async (req: Request) => {
       conversationId,
       clientRequestKey,
       payloadHash,
-      requestedMode: mode ?? null,
+      requestedMode: normalizedBody.value.comparisonGroupId
+        ? `compare:${normalizedBody.value.comparisonGroupId}`
+        : mode ?? null,
       requestedModel: normalizedOverride ?? manualModelOverride ?? null,
       routeVersion: RELEASE_IDENTITY.protocolVersion,
       pricingVersion: preFlightCost.pricingVersion,

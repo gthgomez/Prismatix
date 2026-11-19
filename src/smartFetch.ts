@@ -30,6 +30,8 @@ export interface DebateRequestOptions {
   debateProfile?: DebateProfile;
   routingProfile?: 'balanced' | 'economy' | 'capability';
   spendCapUsd?: number;
+  /** PX08: binds the two Compare executions to one server-validated group. */
+  comparisonGroupId?: string;
 }
 
 export interface DebateResponseMetadata {
@@ -61,6 +63,7 @@ interface RouterRequestPayload {
   debateProfile?: DebateProfile;
   routingProfile?: 'balanced' | 'economy' | 'capability';
   spendCapUsd?: number;
+  comparisonGroupId?: string;
 }
 
 export interface RouterResponseBase {
@@ -383,6 +386,9 @@ export async function askPrismatix(
       history: messagesToHistory(history),
       geminiFlashThinkingLevel,
     };
+    if (debateOptions?.comparisonGroupId) {
+      payload.comparisonGroupId = debateOptions.comparisonGroupId;
+    }
 
     // PX07: keep the user's ORIGINAL query for display/persistence. The model
     // still receives `finalQuery` (with text-file content); the persisted
@@ -696,6 +702,13 @@ export async function askPrismatixSync(
     };
   } catch (error) {
     devError('[smartFetch] Stream reading error:', error);
-    return null;
+    const { stream: _, ...base } = result;
+    return {
+      ...base,
+      content: '',
+      terminationStatus: 'error',
+      isDoneReceived: false,
+      streamError: error,
+    };
   }
 }
