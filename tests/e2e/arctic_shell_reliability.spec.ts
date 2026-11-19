@@ -66,22 +66,14 @@ test('Compare preserves interrupted model outcome and warns when either transcri
   expect(requests).toBe(2);
 });
 
-test('Compare marks completed answers unsaved when its metadata write returns a database error', async ({ page }) => {
+test('Compare keeps its rollout-disabled result visible without writing assistant rows', async ({ page }) => {
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   let requests = 0;
-  let metadataWrites = 0;
-  const messageMethods: string[] = [];
+  const writes: string[] = [];
   page.on('request', (request) => {
-    if (request.url().includes('/rest/v1/messages')) messageMethods.push(`observed:${request.method()}`);
-  });
-  await page.route('**/rest/v1/messages*', async (route) => {
-    messageMethods.push(`route:${route.request().method()}`);
-    if (route.request().method() === 'PATCH') {
-      metadataWrites++;
-      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ code: '08006', message: 'synthetic database unavailable' }) });
-      return;
-    }
-    await route.fallback();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith('/messages') && request.method() !== 'GET') writes.push(request.method());
+    if (path.endsWith('/px08_persist_compare')) writes.push(request.method());
   });
   await page.route('**/functions/v1/router*', async (route) => {
     requests++;
@@ -90,12 +82,12 @@ test('Compare marks completed answers unsaved when its metadata write returns a 
   await signInAsMockUser(page);
   await page.getByRole('button', { name: 'Compare', exact: true }).click();
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
-  await composer.fill('Report a failed durable comparison metadata write');
+  await composer.fill('Compare without rewriting an assistant row');
   await composer.press('Enter');
   await expect(page.getByText('Completed model 1')).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('could not be saved');
   expect(requests).toBe(2);
-  expect({ metadataWrites, messageMethods }).toEqual({ metadataWrites: 1, messageMethods: expect.arrayContaining(['route:PATCH']) });
+  expect(writes).toEqual([]);
 });
 
 test('ordinary Chat visibly marks a router-reported unsaved answer without retrying it', async ({ page }) => {
