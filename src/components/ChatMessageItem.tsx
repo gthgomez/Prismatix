@@ -573,7 +573,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                   <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
                     <button
                       type='button'
-                      disabled={message.comparisonResults.modelA.status !== undefined && message.comparisonResults.modelA.status !== 'completed'}
+                      aria-pressed={message.comparisonResults.preferred === 'A'}
+                      disabled={isStreaming || message.comparisonResults.preferencePending || (message.comparisonResults.modelA.status !== undefined && message.comparisonResults.modelA.status !== 'completed')}
                       onClick={() => onSelectComparisonPreference?.(index, 'A')}
                       style={{
                         padding: '0.25rem 0.6rem',
@@ -609,7 +610,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                   <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
                     <button
                       type='button'
-                      disabled={message.comparisonResults.modelB.status !== undefined && message.comparisonResults.modelB.status !== 'completed'}
+                      aria-pressed={message.comparisonResults.preferred === 'B'}
+                      disabled={isStreaming || message.comparisonResults.preferencePending || (message.comparisonResults.modelB.status !== undefined && message.comparisonResults.modelB.status !== 'completed')}
                       onClick={() => onSelectComparisonPreference?.(index, 'B')}
                       style={{
                         padding: '0.25rem 0.6rem',

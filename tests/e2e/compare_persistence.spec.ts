@@ -17,6 +17,7 @@ test('enabled Compare reloads both responses and never writes a message', async 
   const assistantRows: Array<Record<string, unknown>> = [];
   const browserWrites: string[] = [];
   let savedGroup: Record<string, unknown> | undefined;
+  let rejectPreference = true;
   const prompt = 'Compare the synthetic answers.';
   page.on('request', (request) => {
     if (new URL(request.url()).pathname.endsWith('/messages') && request.method() !== 'GET') {
@@ -76,6 +77,16 @@ test('enabled Compare reloads both responses and never writes a message', async 
     expect(new Set(body.p_execution_ids as string[])).toEqual(new Set(executions));
     await route.fulfill({ json: savedGroup ? [savedGroup] : [] });
   });
+  await page.route('**/rest/v1/rpc/px08_set_compare_preference', async (route) => {
+    const { p_compare_group_id: groupId, p_preferred_side: preferredSide } = route.request().postDataJSON();
+    expect(groupId).toBe(savedGroup?.id);
+    if (rejectPreference) {
+      await route.fulfill({ status: 503, json: { message: 'Synthetic preference outage' } });
+      return;
+    }
+    savedGroup!.preferredSide = preferredSide;
+    await route.fulfill({ json: { id: groupId, preferredSide } });
+  });
   await page.route('**/rest/v1/messages?*', async (route) => {
     await route.fulfill({ json: [...assistantRows].reverse() });
   });
@@ -95,9 +106,48 @@ test('enabled Compare reloads both responses and never writes a message', async 
   await expect.poll(() => savedGroup?.id).toBeTruthy();
   await expect(page.getByText('Persisted Compare response 1', { exact: true })).toHaveCount(1);
   await expect(page.getByText('Persisted Compare response 2', { exact: true })).toHaveCount(1);
+  const firstPreference = page.locator('.comparison-column.model-a').getByRole('button', { name: 'Prefer this model' });
+  await firstPreference.click();
+  await expect(page.getByText('The comparison preference could not be saved. Try again.')).toBeVisible();
+  await expect(firstPreference).toHaveAttribute('aria-pressed', 'false');
+  rejectPreference = false;
+  const secondPreference = page.locator('.comparison-column.model-b').getByRole('button', { name: /Prefer.* model/ });
+  await secondPreference.click();
+  await expect(secondPreference).toHaveAttribute('aria-pressed', 'true');
   await page.reload();
   await expect(page.getByText('Persisted Compare response 1', { exact: true })).toHaveCount(1);
   await expect(page.getByText('Persisted Compare response 2', { exact: true })).toHaveCount(1);
+  await expect(secondPreference).toHaveAttribute('aria-pressed', 'true');
   expect(requests).toHaveLength(2);
   expect(browserWrites).toEqual([]);
+});
+
+test('history restores a failed Compare card after its unchanged saved prompt', async ({ page }) => {
+  test.skip(process.env.VITE_PX08_COMPARE_DURABILITY !== 'true', 'Requires the opt-in synthetic Compare build');
+  const conversationId = '00000000-0000-4000-8000-000000000830';
+  const prompt = 'A saved prompt with no saved answers';
+  await setupAuthenticatedMock(page, { conversations: [
+    { id: conversationId, title: 'Failed comparison', last_activity_at: '2026-11-19T00:00:00Z', project_id: null },
+  ], messages: executions.map((id, index) => ({
+    id: assistantIds[index]!, role: 'user', content: prompt, conversation_id: conversationId,
+    execution_id: id, created_at: `2026-11-19T00:00:0${index}Z`,
+  })) });
+  await page.route('**/rest/v1/rpc/px08_get_compare_groups', async (route) => {
+    const request = route.request().postDataJSON();
+    expect(request.p_conversation_id).toBe(conversationId);
+    expect(new Set(request.p_execution_ids)).toEqual(new Set(executions));
+    await route.fulfill({ json: [{
+      id: '00000000-0000-4000-8000-000000000831', conversationId,
+      modelA: { executionId: executions[0], model: 'gemini-3.8-flash', content: '', status: 'failed', costStatus: 'unknown', transcriptSaved: false },
+      modelB: { executionId: executions[1], model: 'gpt-6-sol', content: '', status: 'failed', costStatus: 'unknown', transcriptSaved: false },
+    }] });
+  });
+  await signInAsMockUser(page);
+  await page.getByText('Failed comparison', { exact: true }).click();
+  await expect(page.getByText(prompt, { exact: true })).toHaveCount(1);
+  await expect(page.locator('.comparison-column').getByText('Failed', { exact: true })).toHaveCount(2);
+  await page.reload();
+  await expect(page.getByText(prompt, { exact: true })).toHaveCount(1);
+  await expect(page.locator('.comparison-column').getByText('Failed', { exact: true })).toHaveCount(2);
+  await expect(page.locator('.comparison-column').getByRole('button', { name: 'Prefer this model' }).first()).toBeDisabled();
 });

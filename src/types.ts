@@ -187,6 +187,7 @@ export interface Message {
     modelA: { model: string; content: string; cost?: number; costStatus?: 'settled' | 'pending' | 'estimated' | 'unknown'; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean; executionId?: string; assistantMessageId?: string };
     modelB: { model: string; content: string; cost?: number; costStatus?: 'settled' | 'pending' | 'estimated' | 'unknown'; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean; executionId?: string; assistantMessageId?: string };
     preferred?: 'A' | 'B';
+    preferencePending?: boolean;
   };
   compareGroupId?: string;
   compareGroupChild?: 'A' | 'B';

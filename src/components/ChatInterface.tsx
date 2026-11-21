@@ -359,8 +359,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSendPending, setIsSendPending] = useState(false);
-  const sendLockSeqRef = useRef(0);
-  const sendLockRef = useRef<{ id: number; userId?: string; accountGeneration: number; conversationId: string | null } | null>(null);
+  const sendLockRef = useRef<{ userId?: string; accountGeneration: number; conversationId: string | null } | null>(null);
   const [isWaitingFirstToken, setIsWaitingFirstToken] = useState(false);
   const [currentModel, setCurrentModel] = useState<RouterModel>('gemini-3.8-flash');
   const [currentComplexity, setCurrentComplexity] = useState<number>(50);
@@ -1115,9 +1114,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   // ── PX07 conversation continuity ─────────────────────────────────────────
   const mapLoadedMessages = async (loaded: LoadedMessage[]): Promise<Message[]> => {
     const mapped: Message[] = [];
-    const compareAnchors = new Map<string, { executionId: string; comparisonResults: NonNullable<Message['comparisonResults']> }>();
+    const compareAnchors = new Map<string, { executionId: string; comparisonResults: NonNullable<LoadedMessage['comparisonResults']> }>();
     for (const item of loaded) {
-      if (item.role !== 'assistant' || !item.compareGroupId || !item.comparisonResults) continue;
+      if ((item.role !== 'assistant' && !item.compareGroupFallback) || !item.compareGroupId || !item.comparisonResults) continue;
       const current = compareAnchors.get(item.compareGroupId);
       if (!current || item.compareGroupChild === 'A') {
         const preferredChild = item.compareGroupChild === 'B'
@@ -1175,16 +1174,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       }
       const provenance = item.provenance;
       const compareAnchor = item.compareGroupId ? compareAnchors.get(item.compareGroupId) : undefined;
-      const comparisonResults = compareAnchor && item.executionId === compareAnchor.executionId
+      const hydratedComparison = compareAnchor && item.executionId === compareAnchor.executionId
         ? compareAnchor.comparisonResults
         : item.comparisonResults;
+      const comparisonResults = hydratedComparison && {
+        modelA: hydratedComparison.modelA,
+        modelB: hydratedComparison.modelB,
+        preferred: hydratedComparison.preferredSide,
+      };
+      const comparisonSummary = comparisonResults
+        ? `Side-by-side comparison: **${comparisonResults.modelA.model}** vs **${comparisonResults.modelB.model}**`
+        : undefined;
       mapped.push({
         id: item.id,
         createdAt: item.createdAt,
         role: item.role,
-        content: comparisonResults
-          ? `Side-by-side comparison: **${comparisonResults.modelA.model}** vs **${comparisonResults.modelB.model}**`
-          : item.content,
+        content: !item.compareGroupFallback && comparisonSummary ? comparisonSummary : item.content,
         timestamp: Date.parse(item.createdAt) || Date.now(),
         ...(attachments.length > 0 ? { attachments } : {}),
         ...(provenance?.model ? { model: provenance.model } : {}),
@@ -1235,13 +1240,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         ...(item.debateTrigger ? { debateTrigger: item.debateTrigger as any } : {}),
         ...(item.debateExecutionMode ? { debateExecutionMode: item.debateExecutionMode } : {}),
         ...(item.metadata ? { metadata: item.metadata } : {}),
-        ...(comparisonResults
+        ...(comparisonResults && !item.compareGroupFallback
           ? { comparisonResults, compareGroupId: item.compareGroupId, compareGroupChild: item.compareGroupChild }
           : {}),
         ...(item.metadata?.citations
           ? { citations: item.metadata.citations as any }
           : {}),
       });
+      if (item.compareGroupFallback && comparisonResults && comparisonSummary) {
+        mapped.push({
+          id: `compare-${item.compareGroupId}`,
+          role: 'assistant',
+          content: comparisonSummary,
+          timestamp: Date.parse(item.createdAt) || Date.now(),
+          compareGroupId: item.compareGroupId,
+          comparisonResults,
+          transcriptSaved: false,
+        });
+      }
     }
     return mapped;
   };
@@ -1467,7 +1483,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     }
 
     const lock = {
-      id: ++sendLockSeqRef.current,
       userId: user?.id,
       accountGeneration: accountGenerationRef.current,
       conversationId: selectedConversationIdRef.current,
@@ -2287,14 +2302,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             if (!requestStillCurrent()) return;
             if (error) throw error;
             const group = parseCompareGroup(data);
-            if (group?.conversationId === sendConversationId
-              && group.modelA.executionId === executionIdA
-              && group.modelB.executionId === executionIdB) {
+            const childIds = group ? new Set([group.modelA.executionId, group.modelB.executionId]) : null;
+            if (group?.conversationId === sendConversationId && childIds?.has(executionIdA) && childIds.has(executionIdB)) {
               persistedId = group.id;
               comparisonSaved = Boolean(group.modelA.assistantMessageId || group.modelB.assistantMessageId);
               comparisonResultsData = {
-                modelA: { ...group.modelA, content: group.modelA.transcriptSaved ? group.modelA.content : contentA },
-                modelB: { ...group.modelB, content: group.modelB.transcriptSaved ? group.modelB.content : contentB },
+                modelA: { ...group.modelA, content: group.modelA.transcriptSaved ? group.modelA.content : group.modelA.executionId === executionIdA ? contentA : contentB },
+                modelB: { ...group.modelB, content: group.modelB.transcriptSaved ? group.modelB.content : group.modelB.executionId === executionIdA ? contentA : contentB },
+                preferred: group.preferredSide,
               };
             }
           } catch (err) {
@@ -3013,32 +3028,54 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     });
   }, []);
 
-  const handleSelectComparisonPreference = useCallback((index: number, preferred: 'A' | 'B') => {
-    setMessages((prev) => {
-      const updated = [...prev];
-      const target = updated[index];
-      if (target?.comparisonResults) {
-        const nextComparisonResults = {
-          ...target.comparisonResults,
-          preferred,
-        };
-        updated[index] = {
-          ...target,
-          comparisonResults: nextComparisonResults,
-        };
-        const preferredModel =
-          preferred === 'A'
-            ? target.comparisonResults.modelA.model
-            : target.comparisonResults.modelB.model;
-        if (isKnownModel(preferredModel)) void submitRoutingFeedback(supabase, {
-          conversationId: selectedConversationIdRef.current,
-          messageId: target.id,
-          chosenModel: preferredModel,
-          feedbackType: 'comparison_preference',
-          comparisonPreferredModel: preferredModel,
+  const pendingCompareVotes = useRef(new Set<string>());
+  const handleSelectComparisonPreference = useCallback(async (index: number, side: 'A' | 'B') => {
+    const target = messagesRef.current[index];
+    const results = target?.comparisonResults;
+    if (!results || isStreamingRef.current || sendLockRef.current) return;
+    const model = side === 'A' ? results.modelA : results.modelB;
+    if (model.status && model.status !== 'completed') return;
+    const groupId = target.compareGroupId;
+    const conversationId = selectedConversationIdRef.current;
+    const generation = accountGenerationRef.current;
+    const preferred = results.preferred === side ? undefined : side;
+    const stillCurrent = () => generation === accountGenerationRef.current && conversationId === selectedConversationIdRef.current;
+    const updateVote = (changes: Partial<NonNullable<Message['comparisonResults']>>) => {
+      setMessages((previous) => previous.map((message) => {
+        const matches = groupId ? message.compareGroupId === groupId : message === target;
+        return matches && message.comparisonResults
+          ? { ...message, comparisonResults: { ...message.comparisonResults, ...changes } }
+          : message;
+      }));
+    };
+    if (groupId) {
+      if (pendingCompareVotes.current.has(groupId)) return;
+      pendingCompareVotes.current.add(groupId);
+      updateVote({ preferencePending: true });
+      try {
+        const { data, error } = await supabase.rpc('px08_set_compare_preference', {
+          p_compare_group_id: groupId,
+          p_preferred_side: preferred ?? null,
         });
+        if (error || data?.id !== groupId || data?.preferredSide !== (preferred ?? null)) throw new Error('Compare preference write failed');
+      } catch {
+        if (stillCurrent()) {
+          updateVote({ preferencePending: false });
+          setActionNotice({ type: 'error', message: 'The comparison preference could not be saved. Try again.' });
+        }
+        return;
+      } finally {
+        pendingCompareVotes.current.delete(groupId);
       }
-      return updated;
+      if (!stillCurrent()) return;
+    }
+    updateVote({ preferred, preferencePending: false });
+    if (preferred && isKnownModel(model.model)) void submitRoutingFeedback(supabase, {
+      conversationId,
+      messageId: model.assistantMessageId ?? target.id,
+      chosenModel: model.model,
+      feedbackType: 'comparison_preference',
+      comparisonPreferredModel: model.model,
     });
   }, []);
 
@@ -3749,7 +3786,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             {firstRunOutcome.verified ? '✓ ' : 'ℹ️ '}{firstRunOutcome.message}
           </div>
         )}
-        {messages.length === 0
+        {messages.length === 0 && !conversationLoading && !conversationLoadError
           ? (
             <div className='empty-state'>
               <div className='arctic-mode-switch' role='group' aria-label='Chat workflow'>

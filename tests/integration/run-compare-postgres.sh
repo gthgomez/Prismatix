@@ -49,7 +49,8 @@ for file in \
   20261107020000_f15_routing_eval.sql \
   20261107030000_f15_feedback_lifecycle.sql \
   20261107040000_wave2_productivity.sql \
-  20261107070000_px08_compare_durability.sql; do
+  20261107070000_px08_compare_durability.sql \
+  20261121000000_px08_compare_preferences.sql; do
   sql < "$migration_dir/$file"
 done
 sql < "$fixture"
