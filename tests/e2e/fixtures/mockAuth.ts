@@ -276,7 +276,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ today: 0 }),
+      body: JSON.stringify({ today: 0, thisWeek: 0, thisMonth: 0, allTime: 0, lastMessageCost: 0, messageCount: 0 }),
     });
   });
 

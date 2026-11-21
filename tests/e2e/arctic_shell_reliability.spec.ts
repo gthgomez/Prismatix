@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 import { MODEL_ORDER, getCatalogEntry } from '../../src/modelCatalog';
@@ -12,6 +12,18 @@ const successfulStream = (text: string, executionId: string) => ({
     { type: 'receipt', executionId, status: 'completed', transcript: { saved: true }, settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
   ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
 });
+
+async function selectHistory(page: Page, title: string) {
+  const sidebar = page.getByRole('complementary', { name: 'Conversations' });
+  const toggle = page.getByRole('button', { name: 'Toggle conversations sidebar' });
+  const mobileDrawer = await toggle.isVisible();
+  if (mobileDrawer && await toggle.getAttribute('aria-expanded') !== 'true') {
+    await toggle.click();
+  }
+  await expect(sidebar).toBeVisible();
+  await sidebar.getByText(title, { exact: true }).click();
+  if (mobileDrawer) await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+}
 
 test('failed-send text survives reload in its tab without auto-dispatch', async ({ page }) => {
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
@@ -86,14 +98,14 @@ test('unsent text stays with the conversation across navigation and reload', asy
   ], messages: [] });
   await signInAsMockUser(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
-  await page.getByText('Draft history first', { exact: true }).click();
+  await selectHistory(page, 'Draft history first');
   await composer.fill('Draft for the first conversation');
-  await page.getByText('Draft history second', { exact: true }).click();
+  await selectHistory(page, 'Draft history second');
   await expect(composer).toHaveValue('');
   await composer.fill('Draft for the second conversation');
   await page.reload();
   await expect(composer).toHaveValue('Draft for the second conversation');
-  await page.getByText('Draft history first', { exact: true }).click();
+  await selectHistory(page, 'Draft history first');
   await expect(composer).toHaveValue('Draft for the first conversation');
 });
 
@@ -122,6 +134,11 @@ test('Compare preserves interrupted model outcome and warns when either transcri
   await expect(page.getByRole('alert')).toContainText('could not be saved');
   await expect(page.getByText('Interrupted · partial response')).toBeVisible();
   await expect(page.getByText('Complete answer B')).toBeVisible();
+  expect(requests).toBe(2);
+  await page.reload();
+  await expect(page.getByText(/Review recovered response/)).toHaveCount(1);
+  await page.getByText(/Review recovered response/).click();
+  await expect(page.getByRole('textbox', { name: 'Recovered response text' })).toHaveValue('Partial answer A');
   expect(requests).toBe(2);
 });
 
@@ -167,7 +184,208 @@ test('ordinary Chat visibly marks a router-reported unsaved answer without retry
   await expect(page.getByText('Keep this generated answer visible')).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('could not be saved');
   await expect(page.getByRole('button', { name: 'Copy response' })).toBeVisible();
+  for (const theme of ['light', 'dark']) {
+    const ratio = await page.locator('.transcript-unsaved-notice').evaluate((notice) => {
+      const luminance = (color: string) => {
+        const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map((value) => {
+          const channel = value / 255;
+          return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+      };
+      const style = getComputedStyle(notice);
+      const foreground = luminance(style.color);
+      const background = luminance(style.backgroundColor);
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    });
+    expect(ratio, `${theme} unsaved response warning`).toBeGreaterThanOrEqual(4.5);
+    if (theme === 'light') {
+      await page.getByRole('button', { name: 'Account menu' }).click();
+      await page.getByRole('button', { name: 'Dark theme' }).click();
+    }
+  }
   expect(requests).toBe(1);
+});
+
+test('pending settlement never turns streamed cost metadata into a final charge', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.route('**/functions/v1/router*', async (route) => {
+    const events = [
+      { type: 'meta', cost: { finalUsd: 0.42 } },
+      { type: 'content_block_delta', delta: { text: 'The answer is still settling.' } },
+      { type: 'receipt', executionId: 'pending-cost', status: 'completed', transcript: { saved: true }, settlement: { state: 'pending', committedUsd: 0, pendingCalls: 1 }, calls: [] },
+    ];
+    await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' }, body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n` });
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Show pending cost');
+  await composer.press('Enter');
+  await expect(page.getByText('The answer is still settling.')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Cost: .*pending/ })).toBeVisible();
+  await expect(page.locator('.cost-estimator-title')).toHaveText('Estimated total');
+});
+
+test('spend analytics separates recorded statuses on a narrow screen', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  const bucket = { settled: 1, pending: 0.5, estimatedLegacy: 0.2 };
+  await page.route('**/functions/v1/spend_stats*', (route) => route.fulfill({ json: {
+    today: 1.7, thisWeek: 1.7, thisMonth: 1.7, allTime: 1.7, lastMessageCost: 0.5, messageCount: 3,
+    qualified: { today: bucket, thisWeek: bucket, thisMonth: bucket, allTime: bucket },
+  } }));
+  await signInAsMockUser(page);
+  await expect(page.locator('.spend-pill-state')).toHaveText('Server');
+  await page.locator('.spend-pill').click();
+  const today = page.locator('.spend-card').first();
+  await expect(today).toContainText('Recorded as settled $1.0000');
+  await expect(today).toContainText('Pending $0.5000');
+  await expect(today).toContainText('Legacy estimate $0.2000');
+  const contrastRatios = async () => page.locator('.spend-popover').evaluate((popover) => {
+    const luminance = (color: string) => {
+      const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map((value) => {
+        const channel = value / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+    };
+    return ['.spend-qualification-note', '.spend-label', '.spend-value', '.spend-card-breakdown'].map((selector) => {
+      const element = popover.querySelector(selector)!;
+      let surface: Element = element;
+      while (getComputedStyle(surface).backgroundColor === 'rgba(0, 0, 0, 0)') surface = surface.parentElement!;
+      const foreground = luminance(getComputedStyle(element).color);
+      const background = luminance(getComputedStyle(surface).backgroundColor);
+      return { selector, ratio: (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05) };
+    });
+  });
+  for (const { selector, ratio } of await contrastRatios()) expect(ratio, `light ${selector}`).toBeGreaterThanOrEqual(4.5);
+  const bounds = await page.locator('.spend-popover').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: window.innerWidth, height: window.innerHeight, documentWidth: document.documentElement.scrollWidth };
+  });
+  expect(bounds.left).toBeGreaterThanOrEqual(0);
+  expect(bounds.right).toBeLessThanOrEqual(bounds.width);
+  expect(bounds.top).toBeGreaterThanOrEqual(0);
+  expect(bounds.bottom).toBeLessThanOrEqual(bounds.height);
+  expect(bounds.documentWidth).toBeLessThanOrEqual(bounds.width);
+  await page.screenshot({ path: testInfo.outputPath('spend-status-mobile.png'), animations: 'disabled' });
+  await page.getByRole('button', { name: 'Export Spend CSV' }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('button', { name: 'Export Spend CSV' })).toBeInViewport();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.spend-popover')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await page.getByRole('button', { name: 'Dark theme' }).click();
+  await page.locator('.spend-pill').click();
+  for (const { selector, ratio } of await contrastRatios()) expect(ratio, `dark ${selector}`).toBeGreaterThanOrEqual(4.5);
+});
+
+test('an interrupted response remains recoverable after reload without another request', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let requests = 0;
+  await page.route('**/functions/v1/router*', async (route) => {
+    requests++;
+    await route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' },
+      body: `data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: 'Useful partial response' } })}\n\n`,
+    });
+  });
+  await signInAsMockUser(page);
+  await page.getByRole('textbox', { name: 'Message Prismatix' }).fill('Keep the interrupted answer');
+  await page.getByRole('textbox', { name: 'Message Prismatix' }).press('Enter');
+  await expect(page.getByText(/Useful partial response/)).toBeVisible();
+  await expect(page.getByText(/Connection closed prematurely/)).toBeVisible();
+  await page.reload();
+  await page.getByText(/Review recovered response/).click();
+  const recovered = page.getByRole('textbox', { name: 'Recovered response text' });
+  await expect(recovered).toHaveValue('Useful partial response');
+  await expect(page.getByText(/may also be in your chat history/)).toBeVisible();
+  const dismiss = page.getByRole('button', { name: 'Dismiss recovered response' });
+  await dismiss.scrollIntoViewIfNeeded();
+  const canDismiss = await dismiss.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    const main = button.closest('main')!.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return rect.top >= main.top && rect.bottom <= main.bottom && (hit === button || button.contains(hit));
+  });
+  expect(canDismiss).toBe(true);
+  await expect(page.getByRole('textbox', { name: 'Message Prismatix' })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('response-recovery-mobile.png'), animations: 'disabled' });
+  expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Useful partial response');
+  expect(requests).toBe(1);
+});
+
+for (const action of ['reload', 'stop'] as const) test(`${action} during a streamed response keeps received text without resending`, async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.addInitScript(() => {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+      if (!url.pathname.endsWith('/functions/v1/router')) return realFetch(input, init);
+      const previous = Number(sessionStorage.getItem('synthetic-router-calls') ?? '0');
+      sessionStorage.setItem('synthetic-router-calls', String(previous + 1));
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: 'Partial text while streaming' } })}\n\n`));
+          init?.signal?.addEventListener('abort', () => controller.close(), { once: true });
+        },
+      });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash', 'X-Prismatix-Execution-Id': 'stream-reload-fixture' } });
+    };
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Preserve the stream in progress');
+  await composer.press('Enter');
+  await expect(page.getByText('Partial text while streaming')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Stop generating' })).toBeVisible();
+  if (action === 'stop') {
+    await page.getByRole('button', { name: 'Stop generating' }).click();
+    await expect(page.locator('.transcript-unsaved-notice')).toBeVisible();
+  }
+  await page.reload();
+  await page.getByText(/Review recovered response/).click();
+  await expect(page.getByRole('textbox', { name: 'Recovered response text' })).toHaveValue('Partial text while streaming');
+  expect(await page.evaluate(() => sessionStorage.getItem('synthetic-router-calls'))).toBe('1');
+});
+
+test('reload during Compare preserves each received response without resending', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.addInitScript(() => {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+      if (!url.pathname.endsWith('/functions/v1/router')) return realFetch(input, init);
+      const previous = Number(sessionStorage.getItem('synthetic-compare-calls') ?? '0');
+      sessionStorage.setItem('synthetic-compare-calls', String(previous + 1));
+      const request = JSON.parse(String(init?.body)) as { modelOverride: string };
+      const content = `Partial ${request.modelOverride}`;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: content } })}\n\n`));
+          init?.signal?.addEventListener('abort', () => controller.close(), { once: true });
+        },
+      });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': request.modelOverride } });
+    };
+  });
+  await signInAsMockUser(page);
+  await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Keep both partial responses');
+  await composer.press('Enter');
+  await expect.poll(() => page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith('prismatix.response-recovery.')).length)).toBe(2);
+  await page.reload();
+  const summaries = page.getByText(/Review recovered response/);
+  await expect(summaries).toHaveCount(2);
+  await summaries.nth(0).click();
+  await summaries.nth(1).click();
+  const recovered = page.getByRole('textbox', { name: 'Recovered response text' });
+  await expect(recovered).toHaveCount(2);
+  expect(await Promise.all((await recovered.all()).map((item) => item.inputValue()))).toEqual(expect.arrayContaining(['Partial gemini-3.8-flash', 'Partial gpt-6-sol']));
+  expect(await page.evaluate(() => sessionStorage.getItem('synthetic-compare-calls'))).toBe('2');
 });
 
 test('retry rechecks the daily budget and keeps the failed draft when spending is blocked', async ({ page }) => {
@@ -257,9 +475,9 @@ test('opening a slow conversation cannot send the previous transcript as context
     await route.fulfill(successfulStream('Reply in the second chat', 'history-context'));
   });
   await signInAsMockUser(page);
-  await page.getByText('First history', { exact: true }).click();
+  await selectHistory(page, 'First history');
   await expect(page.getByText('Old conversation context', { exact: true })).toBeVisible();
-  await page.getByText('Second history', { exact: true }).click();
+  await selectHistory(page, 'Second history');
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
   try {
     await expect(page.getByText('Old conversation context', { exact: true })).toHaveCount(0);
@@ -289,12 +507,13 @@ test('New Chat after visiting saved history gets a fresh router conversation ide
   await composer.fill('First new conversation');
   await composer.press('Enter');
   await expect(page.getByText('New chat answer 1', { exact: true })).toBeVisible();
-  const sidebarToggle = page.getByRole('button', { name: 'Toggle conversations sidebar' });
-  if (await sidebarToggle.isVisible()) await sidebarToggle.click();
-  await page.getByRole('button', { name: /^Architectural Discussion/ }).click();
+  await selectHistory(page, 'Architectural Discussion');
   await expect(page.getByText(/Paxos and Raft both solve/)).toBeVisible();
+  const sidebarToggle = page.getByRole('button', { name: 'Toggle conversations sidebar' });
   const newChat = page.getByRole('button', { name: '+ New Chat' });
-  if (!(await newChat.isVisible()) && await sidebarToggle.isVisible()) await sidebarToggle.click();
+  if (await sidebarToggle.isVisible() && await sidebarToggle.getAttribute('aria-expanded') !== 'true') {
+    await sidebarToggle.click();
+  }
   await newChat.click();
   await composer.fill('Second new conversation');
   await composer.press('Enter');

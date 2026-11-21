@@ -78,6 +78,42 @@ describe('useStreamHandler — readRouterStream', () => {
     expect(result.terminationStatus).toBe('interrupted');
   });
 
+  it.each(['close', 'error'] as const)('emits a complete trailing event when the stream ends with %s before a blank line', async (ending) => {
+    const finalEvent = 'data: {"type":"content_block_delta","delta":{"text":"Trailing useful text"}}';
+    const stream = ending === 'close' ? createMockStream([finalEvent]) : createErrorStream([finalEvent], new Error('network dropped'));
+    const callbacks = makeCallbacks();
+
+    const result = await readRouterStream(stream, 10, callbacks);
+
+    expect(result.assistantContent).toBe('Trailing useful text');
+    expect(callbacks.onContentUpdate).toHaveBeenLastCalledWith('Trailing useful text', []);
+    expect(result.terminationStatus).toBe(ending === 'close' ? 'interrupted' : 'error');
+  });
+
+  it('keeps an unterminated valid event when the user stops', async () => {
+    const abort = new AbortController();
+    const callbacks = makeCallbacks();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"type":"content_block_delta","delta":{"text":"Stopped tail"}}'));
+      },
+    });
+    const resultPromise = readRouterStream(stream, 10, callbacks, abort.signal);
+    await vi.waitFor(() => expect(callbacks.onContentUpdate).toHaveBeenCalled());
+    abort.abort();
+    const result = await resultPromise;
+    expect(result.terminationStatus).toBe('cancelled');
+    expect(result.assistantContent).toBe('Stopped tail');
+    expect(callbacks.onContentUpdate).toHaveBeenLastCalledWith('Stopped tail', []);
+  });
+
+  it('ignores malformed trailing JSON without fabricating content', async () => {
+    const callbacks = makeCallbacks();
+    const result = await readRouterStream(createMockStream(['data: {"type":"content_block_delta"']), 10, callbacks);
+    expect(result.terminationStatus).toBe('interrupted');
+    expect(result.assistantContent).toBe('');
+  });
+
   it('handles client cancellation via AbortSignal', async () => {
     const abortController = new AbortController();
     const sse = [

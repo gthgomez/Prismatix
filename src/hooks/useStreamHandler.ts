@@ -147,8 +147,6 @@ export async function readRouterStream(
 
       callbacks.onContentUpdate(assistantContent, [...thinkingLog]);
     }
-
-    processEvents(parser.flush());
   } catch (err) {
     streamError = err;
   } finally {
@@ -160,6 +158,25 @@ export async function readRouterStream(
     } catch {
       // ignore
     }
+  }
+
+  // A valid final event may arrive without its blank-line delimiter when a
+  // connection closes or fails. Flush it and notify the UI as well as the
+  // returned result so useful trailing text does not disappear on screen.
+  try {
+    const previousContent = assistantContent;
+    const previousThinkingCount = thinkingLog.length;
+    processEvents(parser.flush());
+    if (assistantContent !== previousContent || thinkingLog.length !== previousThinkingCount) {
+      callbacks.onUsageUpdate({
+        promptTokens: promptTokenEstimate,
+        completionTokens: estimateTokenCount(assistantContent),
+        thinkingTokens: estimateTokenCount(thinkingLog.join('')),
+      });
+      callbacks.onContentUpdate(assistantContent, [...thinkingLog]);
+    }
+  } catch (err) {
+    streamError ??= err;
   }
 
   let terminationStatus: StreamTerminationStatus;

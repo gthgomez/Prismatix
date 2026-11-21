@@ -99,6 +99,11 @@ import {
   writeSelectedConversation,
   writeTabDraft,
 } from '../services/conversationState';
+import {
+  createResponseCheckpoint,
+  readResponseRecoveries,
+  removeResponseRecovery,
+} from '../services/responseRecovery';
 import type { AttachmentRef } from '../../supabase/functions/_shared/conversation_attachments';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import { readRouterStream } from '../hooks/useStreamHandler';
@@ -496,6 +501,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const [failedTurnDraft, setFailedTurnDraftState] = useState<FailedTurnDraft | null>(
     () => readFailedTurnDraft(user?.id),
   );
+  const [recoveredResponses, setRecoveredResponses] = useState(() => readResponseRecoveries(user?.id));
+  const [openedRecoveries, setOpenedRecoveries] = useState<Set<string>>(() => new Set());
   const setFailedTurnDraft = (draft: FailedTurnDraft | null) => {
     setFailedTurnDraftState(draft);
     if (!user?.id) return;
@@ -738,6 +745,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setInput(user?.id ? readTabDraft(composerDraftKey(user.id, conversationId)) : '');
     setDraftAttachments([]);
     setFailedTurnDraftState(readFailedTurnDraft(user?.id));
+    setRecoveredResponses(readResponseRecoveries(user?.id));
+    setOpenedRecoveries(new Set());
     setShowDraftCopyFallback(false);
     setFirstRunOutcome(null);
     setRejectedRoute(null);
@@ -2225,6 +2234,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       if (comparisonMode) {
         const compareRequestId = PX08_COMPARE_DURABILITY_ENABLED ? crypto.randomUUID() : undefined;
         const compareRequestOptions = compareRequestId ? { comparisonGroupId: compareRequestId } : undefined;
+        const recoveryGroupId = compareRequestId ?? crypto.randomUUID();
+        const recoveryA = createResponseCheckpoint(requestUserId, { id: `compare-${recoveryGroupId}-a`, conversationId: sendConversationId, model: comparisonModelA });
+        const recoveryB = createResponseCheckpoint(requestUserId, { id: `compare-${recoveryGroupId}-b`, conversationId: sendConversationId, model: comparisonModelB });
+        const checkpointCompareOnPageHide = () => { recoveryA.flush(); recoveryB.flush(); };
+        const captureCompareResult = async (
+          request: ReturnType<typeof askPrismatixSync>,
+          checkpoint: ReturnType<typeof createResponseCheckpoint>,
+        ) => {
+          const value = await request;
+          if (value?.receipt?.transcript?.saved === true) checkpoint.clear();
+          else checkpoint.flush();
+          return value;
+        };
         setIsStreaming(true);
         setIsWaitingFirstToken(false);
         const placeholderMsg: Message = {
@@ -2239,8 +2261,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         };
         setMessages((prev) => [...prev, placeholderMsg]);
 
-        const [resA, resB] = await Promise.allSettled([
-          askPrismatixSync(
+        window.addEventListener('pagehide', checkpointCompareOnPageHide);
+        type SettledCompareResult = PromiseSettledResult<Awaited<ReturnType<typeof askPrismatixSync>>>;
+        let compareResults: [SettledCompareResult, SettledCompareResult];
+        try {
+          compareResults = await Promise.allSettled([
+          captureCompareResult(askPrismatixSync(
             queryWithContext,
             historyForRequest,
             attachmentsToProcess,
@@ -2251,8 +2277,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             maxSpendCap ?? undefined,
             abortController.signal,
             requestScope,
-          ),
-          askPrismatixSync(
+            (content) => recoveryA.update(content),
+          ), recoveryA),
+          captureCompareResult(askPrismatixSync(
             queryWithContext,
             historyForRequest,
             attachmentsToProcess,
@@ -2263,9 +2290,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             maxSpendCap ?? undefined,
             abortController.signal,
             requestScope,
-          ),
-        ]);
+            (content) => recoveryB.update(content),
+          ), recoveryB),
+          ]);
+        } finally {
+          checkpointCompareOnPageHide();
+          window.removeEventListener('pagehide', checkpointCompareOnPageHide);
+        }
         if (!requestStillCurrent()) return;
+        if (requestUserId) setRecoveredResponses(readResponseRecoveries(requestUserId));
+        const [resA, resB] = compareResults;
 
         type CompareResult = NonNullable<Message['comparisonResults']>;
         const childResult = (
@@ -2454,6 +2488,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       setCurrentComplexity(complexityScore);
 
       const streamStartMs = Date.now();
+      const recoveryId = executionId || clientRequestId || `${sendConversationId}-${streamStartMs}`;
+      const checkpoint = createResponseCheckpoint(requestUserId, { id: recoveryId, conversationId: sendConversationId, model });
+      const checkpointOnPageHide = () => checkpoint.flush();
+      window.addEventListener('pagehide', checkpointOnPageHide);
 
       setMessages((prev) => [...prev, {
         role: 'assistant',
@@ -2483,6 +2521,56 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         timestamp: Date.now(),
       }]);
 
+      let streamResult: Awaited<ReturnType<typeof readRouterStream>>;
+      try {
+        streamResult = await readRouterStream(
+          stream,
+          promptTokenEstimate,
+          {
+            onFirstToken: () => {
+              if (!requestStillCurrent()) return;
+              waitingFirstTokenRef.current = false;
+              setIsWaitingFirstToken(false);
+            },
+            onUsageUpdate: (usage) => {
+              if (!requestStillCurrent()) return;
+              setCurrentUsage(usage);
+            },
+            onContentUpdate: (content, log) => {
+              checkpoint.update(content);
+              if (!streamUpdateApplies(requestAccountGeneration)) return;
+              setMessages((prev) => {
+                const updated = [...prev];
+                const lastMessage = updated[updated.length - 1];
+                if (lastMessage) {
+                  const nextCost = lastMessage.cost
+                    ? { ...lastMessage.cost }
+                    : costEstimateUsd !== undefined
+                    ? { estimatedUsd: costEstimateUsd, pricingVersion: costPricingVersion }
+                    : undefined;
+                  updated[updated.length - 1] = {
+                    ...lastMessage,
+                    content,
+                    thinkingLog: log,
+                    thinkingDurationMs: Date.now() - streamStartMs,
+                    cost: nextCost,
+                  };
+                }
+                return updated;
+              });
+              if (shouldStickToBottomRef.current) {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+              }
+            },
+          },
+          abortController.signal,
+        );
+        checkpoint.update(streamResult.assistantContent);
+      } finally {
+        checkpoint.flush();
+        window.removeEventListener('pagehide', checkpointOnPageHide);
+      }
+
       const {
         assistantContent,
         thinkingLog,
@@ -2491,49 +2579,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         receipt,
         terminationStatus,
         error: streamError,
-      } = await readRouterStream(
-        stream,
-        promptTokenEstimate,
-        {
-          onFirstToken: () => {
-            if (!requestStillCurrent()) return;
-            waitingFirstTokenRef.current = false;
-            setIsWaitingFirstToken(false);
-          },
-          onUsageUpdate: (usage) => {
-            if (!requestStillCurrent()) return;
-            setCurrentUsage(usage);
-          },
-          onContentUpdate: (content, log) => {
-            if (!streamUpdateApplies(requestAccountGeneration)) return;
-            setMessages((prev) => {
-              const updated = [...prev];
-              const lastMessage = updated[updated.length - 1];
-              if (lastMessage) {
-                const nextCost = lastMessage.cost
-                  ? { ...lastMessage.cost }
-                  : costEstimateUsd !== undefined
-                  ? { estimatedUsd: costEstimateUsd, pricingVersion: costPricingVersion }
-                  : undefined;
-                updated[updated.length - 1] = {
-                  ...lastMessage,
-                  content,
-                  thinkingLog: log,
-                  thinkingDurationMs: Date.now() - streamStartMs,
-                  cost: nextCost,
-                };
-              }
-              return updated;
-            });
-            if (shouldStickToBottomRef.current) {
-              messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
-            }
-          },
-        },
-        abortController.signal,
-      );
+      } = streamResult;
+
+      if (requestUserId && receipt?.transcript?.saved === true) {
+        checkpoint.clear();
+      }
 
       if (!requestStillCurrent()) return;
+      if (requestUserId) setRecoveredResponses(readResponseRecoveries(requestUserId));
 
       // PX06: an abort mid-stream makes readRouterStream resolve with the
       // partial content; surface the cancellation instead of a completion.
@@ -2542,6 +2595,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           restoreComposerSafely();
         }
         setStreamOutcome({ status: 'cancelled', executionId });
+        if (assistantContent && receipt?.transcript?.saved !== true && streamUpdateApplies(requestAccountGeneration)) {
+          setMessages((prev) => prev.map((message, index) => index === prev.length - 1
+            ? { ...message, transcriptSaved: false } : message));
+        }
         scheduleCostEstimatorHide(1500);
         return;
       }
@@ -2610,7 +2667,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             if (lastMessage?.role === 'assistant') {
               updated[updated.length - 1] = {
                 ...lastMessage,
-                transcriptSaved: receipt?.transcript?.saved === false ? false : undefined,
+                transcriptSaved: assistantContent && receipt?.transcript?.saved !== true ? false : undefined,
                 content: assistantContent
                   ? `${assistantContent}\n\n⚠️ _[Response interrupted before completion]_`
                   : '⚠️ _[Connection interrupted before response started]_',
@@ -2643,22 +2700,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         terminalOutcome: receipt?.terminalOutcome ?? null,
       });
 
-      // Truthful cost settlement logic:
-      // Authoritative settled cost requires either a settled receipt committedUsd OR a server streamedFinalUsd.
+      // Only a settled execution receipt confirms spending. Stream metadata
+      // can be useful as an estimate, but cannot settle a pending execution.
       const hasReceiptSettled = receipt?.settlement.state === 'settled';
       const isPendingSettlement = receipt?.settlement.state === 'pending';
       const authoritativeFinalUsd = hasReceiptSettled
         ? receipt!.settlement.committedUsd
-        : typeof streamedFinalUsd === 'number' && Number.isFinite(streamedFinalUsd)
-        ? streamedFinalUsd
         : undefined;
+      const responseEstimateUsd = typeof streamedFinalUsd === 'number' && Number.isFinite(streamedFinalUsd) && streamedFinalUsd >= 0
+        ? streamedFinalUsd
+        : costEstimateUsd ?? computedCost.finalUsd;
 
       const costStatus: CostStatus = hasReceiptSettled
         ? 'settled'
         : isPendingSettlement
         ? 'pending'
-        : authoritativeFinalUsd !== undefined
-        ? 'settled'
         : 'estimated';
 
       setFinalMessageCost(authoritativeFinalUsd ?? null);
@@ -2705,10 +2761,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           if (lastMessage?.role === 'assistant') {
             updated[updated.length - 1] = {
               ...lastMessage,
-              transcriptSaved: receipt?.transcript?.saved === false ? false : undefined,
+              transcriptSaved: assistantContent && receipt?.transcript?.saved !== true ? false : undefined,
               id: regenerateTargetMessageId || lastMessage.id,
               cost: {
-                estimatedUsd: costEstimateUsd ?? computedCost.finalUsd,
+                estimatedUsd: responseEstimateUsd,
                 finalUsd: authoritativeFinalUsd,
                 status: costStatus,
                 pricingVersion: costPricingVersion || computedCost.pricingVersion,
@@ -3814,6 +3870,34 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           <div className={`first-run-status ${firstRunOutcome.verified ? 'success' : 'pending'}`} role="status">
             {firstRunOutcome.verified ? '✓ ' : 'ℹ️ '}{firstRunOutcome.message}
           </div>
+        )}
+        {recoveredResponses.length > 0 && (
+          <section className='response-recovery' aria-label='Recovered responses'>
+            <strong>Response recovery</strong>
+            <p>These copies are stored in this tab and may also be in your chat history. Select and copy anything you need before dismissing it or closing this tab.</p>
+            {recoveredResponses.map((response) => (
+              <details key={response.id} onToggle={(event) => {
+                const open = event.currentTarget.open;
+                setOpenedRecoveries((previous) => {
+                  const next = new Set(previous);
+                  if (open) next.add(response.id);
+                  else next.delete(response.id);
+                  return next;
+                });
+              }}>
+                <summary>Review recovered response · {response.model}</summary>
+                {openedRecoveries.has(response.id) && <><label>
+                  Recovered response text
+                  <textarea aria-label='Recovered response text' readOnly value={response.content} onFocus={(event) => event.currentTarget.select()} />
+                </label>
+                <button type='button' onClick={() => {
+                  if (!user?.id) return;
+                  removeResponseRecovery(user.id, response.id);
+                  setRecoveredResponses(readResponseRecoveries(user.id));
+                }}>Dismiss recovered response</button></>}
+              </details>
+            ))}
+          </section>
         )}
         {messages.length === 0 && !conversationLoading && !conversationLoadError
           ? (

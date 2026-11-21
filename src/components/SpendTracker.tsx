@@ -25,8 +25,48 @@ const EMPTY_STATS: SpendStats = {
   messageCount: 0,
 };
 
+function nonNegativeNumber(value: unknown): number | null {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+type SpendPeriod = 'today' | 'thisWeek' | 'thisMonth' | 'allTime';
+type SpendQualification = { settled: number; pending: number; estimatedLegacy: number };
+type QualifiedSpend = Record<SpendPeriod, SpendQualification>;
+
+function parseQualifiedSpend(value: unknown): QualifiedSpend | null {
+  if (!value || typeof value !== 'object') return null;
+  const input = value as Record<string, unknown>;
+  const result = {} as QualifiedSpend;
+  for (const period of ['today', 'thisWeek', 'thisMonth', 'allTime'] as const) {
+    const bucket = input[period];
+    if (!bucket || typeof bucket !== 'object') return null;
+    const fields = bucket as Record<string, unknown>;
+    const settled = nonNegativeNumber(fields.settled);
+    const pending = nonNegativeNumber(fields.pending);
+    const estimatedLegacy = nonNegativeNumber(fields.estimatedLegacy);
+    if (settled === null || pending === null || estimatedLegacy === null) return null;
+    result[period] = { settled, pending, estimatedLegacy };
+  }
+  return result;
+}
+
+const SpendCard: React.FC<{ label: string; value: number | null; qualified?: SpendQualification }> = ({ label, value, qualified }) => (
+  <div className='spend-card'>
+    <div className='spend-label'>{label}</div>
+    <div className='spend-value'>{value === null ? '—' : `$${value.toFixed(4)}`}</div>
+    {qualified && <div className='spend-card-breakdown'>
+      <span>Recorded as settled ${qualified.settled.toFixed(4)}</span>
+      <span>Pending ${qualified.pending.toFixed(4)}</span>
+      <span>Legacy estimate ${qualified.estimatedLegacy.toFixed(4)}</span>
+    </div>}
+  </div>
+);
+
 export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }) => {
   const [stats, setStats] = useState<SpendStats>(EMPTY_STATS);
+  const [qualifiedStats, setQualifiedStats] = useState<QualifiedSpend | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'breakdown'>('overview');
   const [dateRange, setDateRange] = useState<DateRangeFilter>('all');
@@ -45,7 +85,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
     triggerRef.current?.focus();
   };
 
-  const fetchServerStats = async (): Promise<SpendStats | null> => {
+  const fetchServerStats = async (): Promise<{ stats: SpendStats; qualified: QualifiedSpend | null } | null> => {
     const {
       data: { session },
       error: sessionError,
@@ -69,14 +109,18 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
 
       if (!response.ok) return null;
 
-      const data = await response.json() as SpendStats;
+      const data = await response.json() as Record<string, unknown>;
+      const today = nonNegativeNumber(data.today);
+      const thisWeek = nonNegativeNumber(data.thisWeek);
+      const thisMonth = nonNegativeNumber(data.thisMonth);
+      const allTime = nonNegativeNumber(data.allTime);
+      const lastMessageCost = nonNegativeNumber(data.lastMessageCost);
+      const messageCount = nonNegativeNumber(data.messageCount);
+      if (today === null || thisWeek === null || thisMonth === null || allTime === null
+        || lastMessageCost === null || messageCount === null || !Number.isSafeInteger(messageCount)) return null;
       return {
-        today: Number(data.today) || 0,
-        thisWeek: Number(data.thisWeek) || 0,
-        thisMonth: Number(data.thisMonth) || 0,
-        allTime: Number(data.allTime) || 0,
-        lastMessageCost: Number(data.lastMessageCost) || 0,
-        messageCount: Number(data.messageCount) || 0,
+        stats: { today, thisWeek, thisMonth, allTime, lastMessageCost, messageCount },
+        qualified: parseQualifiedSpend(data.qualified),
       };
     } catch {
       return null;
@@ -94,7 +138,8 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
     }
 
     if (serverStats) {
-      setStats(serverStats);
+      setStats(serverStats.stats);
+      setQualifiedStats(serverStats.qualified);
       setSyncState('idle');
       setLastSyncAt(Date.now());
       return;
@@ -167,7 +212,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
         ref={triggerRef}
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
-        title='View spend analytics'
+        title='View spend analytics; server totals can include pending and estimated costs'
       >
         <span className='spend-pill-value'>
           {lastSyncAt ? `$${stats.today.toFixed(2)}` : '—'}
@@ -192,6 +237,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
             </div>
             <button type='button' className='popover-close' aria-label='Close spend analytics' onClick={close}>×</button>
           </div>
+          <p className='spend-qualification-note'>Server totals include pending and estimated costs where present. {qualifiedStats ? 'Older recorded costs may include estimates; records may be incomplete or briefly out of sync.' : 'Confirmed spending is not separated in this view.'}</p>
 
           <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.85rem' }}>
             <button
@@ -200,12 +246,13 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
               style={{
                 flex: 1,
                 padding: '0.3rem 0.5rem',
+                minHeight: '44px',
                 borderRadius: '6px',
                 fontSize: '0.75rem',
                 fontWeight: 600,
                 border: '1px solid',
-                borderColor: activeTab === 'overview' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.1)',
-                background: activeTab === 'overview' ? 'rgba(78, 205, 196, 0.15)' : 'transparent',
+                borderColor: activeTab === 'overview' ? 'var(--color-primary)' : 'var(--color-border-strong)',
+                background: activeTab === 'overview' ? 'var(--color-primary-dim)' : 'transparent',
                 color: activeTab === 'overview' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
                 cursor: 'pointer',
               }}
@@ -218,12 +265,13 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
               style={{
                 flex: 1,
                 padding: '0.3rem 0.5rem',
+                minHeight: '44px',
                 borderRadius: '6px',
                 fontSize: '0.75rem',
                 fontWeight: 600,
                 border: '1px solid',
-                borderColor: activeTab === 'breakdown' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.1)',
-                background: activeTab === 'breakdown' ? 'rgba(78, 205, 196, 0.15)' : 'transparent',
+                borderColor: activeTab === 'breakdown' ? 'var(--color-primary)' : 'var(--color-border-strong)',
+                background: activeTab === 'breakdown' ? 'var(--color-primary-dim)' : 'transparent',
                 color: activeTab === 'breakdown' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
                 cursor: 'pointer',
               }}
@@ -235,22 +283,10 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
           {activeTab === 'overview' ? (
             <>
               <div className='spend-grid'>
-                <div className='spend-card'>
-                  <div className='spend-label'>Today</div>
-                  <div className='spend-value'>{lastSyncAt ? `$${stats.today.toFixed(4)}` : '—'}</div>
-                </div>
-                <div className='spend-card'>
-                  <div className='spend-label'>This Week</div>
-                  <div className='spend-value'>{lastSyncAt ? `$${stats.thisWeek.toFixed(4)}` : '—'}</div>
-                </div>
-                <div className='spend-card'>
-                  <div className='spend-label'>This Month</div>
-                  <div className='spend-value'>{lastSyncAt ? `$${stats.thisMonth.toFixed(4)}` : '—'}</div>
-                </div>
-                <div className='spend-card'>
-                  <div className='spend-label'>All Time</div>
-                  <div className='spend-value'>{lastSyncAt ? `$${stats.allTime.toFixed(4)}` : '—'}</div>
-                </div>
+                <SpendCard label='Today' value={lastSyncAt ? stats.today : null} qualified={qualifiedStats?.today} />
+                <SpendCard label='This Week' value={lastSyncAt ? stats.thisWeek : null} qualified={qualifiedStats?.thisWeek} />
+                <SpendCard label='This Month' value={lastSyncAt ? stats.thisMonth : null} qualified={qualifiedStats?.thisMonth} />
+                <SpendCard label='All Time' value={lastSyncAt ? stats.allTime : null} qualified={qualifiedStats?.allTime} />
               </div>
 
               <div className="spend-divider" />
@@ -275,10 +311,12 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
                   onChange={(e) => setDateRange(e.target.value as DateRangeFilter)}
                   style={{
                     flex: 1,
-                    background: 'rgba(255, 255, 255, 0.05)',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: 'var(--color-surface)',
+                    border: '1px solid var(--color-field-border)',
                     borderRadius: '6px',
-                    color: '#fff',
+                    color: 'var(--color-text)',
+                    minHeight: '44px',
+                    minWidth: 0,
                     padding: '0.25rem 0.4rem',
                     fontSize: '0.75rem',
                   }}
@@ -295,10 +333,12 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
                   onChange={(e) => setGroupBy(e.target.value as GroupByFilter)}
                   style={{
                     flex: 1,
-                    background: 'rgba(255, 255, 255, 0.05)',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: 'var(--color-surface)',
+                    border: '1px solid var(--color-field-border)',
                     borderRadius: '6px',
-                    color: '#fff',
+                    color: 'var(--color-text)',
+                    minHeight: '44px',
+                    minWidth: 0,
                     padding: '0.25rem 0.4rem',
                     fontSize: '0.75rem',
                   }}
@@ -314,7 +354,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
                 const grouped = filterAndGroupSpend(store.history, dateRange, groupBy);
                 if (grouped.length === 0) {
                   return (
-                    <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.4)', padding: '1rem 0' }}>
+                    <div style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '1rem 0' }}>
                       No spend records for this selection.
                     </div>
                   );
@@ -325,8 +365,8 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
                       <div
                         key={g.groupKey}
                         style={{
-                          background: 'rgba(255, 255, 255, 0.03)',
-                          border: '1px solid rgba(255, 255, 255, 0.06)',
+                          background: 'var(--color-surface)',
+                          border: '1px solid var(--color-border)',
                           borderRadius: '6px',
                           padding: '0.4rem 0.6rem',
                           display: 'flex',
@@ -335,8 +375,8 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
                         }}
                       >
                         <div>
-                          <div style={{ fontWeight: 600, color: '#fff' }}>{g.groupKey}</div>
-                          <div style={{ fontSize: '0.65rem', color: 'rgba(255, 255, 255, 0.4)' }}>
+                          <div style={{ fontWeight: 600, color: 'var(--color-text)' }}>{g.groupKey}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
                             {g.count} turn{g.count > 1 ? 's' : ''} • Locally marked settled: ${g.settledCost.toFixed(4)}
                             {g.estimatedCost > 0 && ` • Est: $${g.estimatedCost.toFixed(4)}`}
                           </div>
@@ -351,10 +391,10 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
               })()}
 
               <div style={{ marginTop: '0.5rem', fontSize: '0.65rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
-                Breakdown uses a local browser cache and may be incomplete or stale. Server totals above are authoritative when connected.
+                Breakdown uses a local browser cache and may be incomplete or stale. Server totals include pending and estimated costs where present.
               </div>
 
-              <div style={{ marginTop: '0.5rem', fontSize: '0.65rem', color: 'rgba(255, 255, 255, 0.35)', fontStyle: 'italic' }}>
+              <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
                 * Local settled labels reflect client receipts and can be stale or incomplete. Provider invoices may differ.
               </div>
             </div>
@@ -378,6 +418,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
                 border: '1px solid rgba(78, 205, 196, 0.3)',
                 color: 'var(--color-primary, #4ecdc4)',
                 padding: '0.4rem 0.85rem',
+                minHeight: '44px',
                 borderRadius: '6px',
                 fontSize: '0.75rem',
                 fontWeight: 600,
@@ -491,14 +532,27 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
           top: calc(100% + 12px);
           right: 0;
           width: 300px;
-          background: #141414;
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: var(--color-surface-elevated);
+          border: 1px solid var(--color-border);
           border-radius: 1rem;
           padding: 1.25rem;
           box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
           z-index: 1000;
           backdrop-filter: blur(20px);
           animation: dropdownIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @media (max-width: 480px) {
+          .spend-popover {
+            position: fixed;
+            top: calc(var(--prismatix-chat-header-h, 4rem) + 0.5rem);
+            left: 0.5rem;
+            right: 0.5rem;
+            box-sizing: border-box;
+            width: auto;
+            max-height: calc(100dvh - var(--prismatix-chat-header-h, 4rem) - 1rem);
+            overflow-y: auto;
+          }
         }
 
         .spend-popover-header {
@@ -524,13 +578,18 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
 
         .sync-indicator.error { color: var(--color-danger); }
 
+        .spend-qualification-note {
+          margin: 0 0 0.85rem;
+          color: var(--color-text-dim);
+          font-size: 0.75rem;
+          line-height: 1.4;
+        }
+
         .spend-popover h3 {
           margin: 0;
           font-size: 0.9rem;
           font-weight: 700;
-          background: linear-gradient(135deg, #4ECDC4, #FF6B6B);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
+          color: var(--color-text);
           text-transform: uppercase;
           letter-spacing: 0.05em;
         }
@@ -540,7 +599,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
           align-items: center;
           gap: 0.4rem;
           font-size: 0.6rem;
-          color: rgba(255, 255, 255, 0.4);
+          color: var(--color-text-muted);
           text-transform: uppercase;
           letter-spacing: 0.05em;
         }
@@ -563,8 +622,8 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
 
         .spend-card {
           padding: 0.75rem;
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid rgba(255, 255, 255, 0.06);
+          background: var(--color-surface);
+          border: 1px solid var(--color-border);
           border-radius: 0.75rem;
           transition: border-color 0.2s;
         }
@@ -573,9 +632,20 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
           border-color: rgba(78, 205, 196, 0.3);
         }
 
+        .spend-card-breakdown {
+          display: flex;
+          flex-direction: column;
+          gap: 0.15rem;
+          margin-top: 0.45rem;
+          color: var(--color-text-dim);
+          font-size: 0.75rem;
+          line-height: 1.35;
+          overflow-wrap: anywhere;
+        }
+
         .spend-label {
           font-size: 0.6rem;
-          color: rgba(255, 255, 255, 0.4);
+          color: var(--color-text-muted);
           text-transform: uppercase;
           letter-spacing: 0.05em;
           margin-bottom: 0.25rem;
@@ -584,12 +654,12 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
         .spend-value {
           font-size: 1rem;
           font-weight: 700;
-          color: #fff;
+          color: var(--color-text);
         }
 
         .spend-divider {
           height: 1px;
-          background: rgba(255, 255, 255, 0.06);
+          background: var(--color-border);
           margin: 1.25rem 0;
         }
 
@@ -608,28 +678,28 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
         }
 
         .last-msg-row .label, .msg-count-row .label {
-          color: rgba(255, 255, 255, 0.4);
+          color: var(--color-text-muted);
         }
 
         .last-msg-row .value {
-          color: #FF6B6B;
+          color: var(--color-danger);
           font-weight: 600;
         }
 
         .msg-count-row .value {
-          color: #fff;
+          color: var(--color-text);
           font-weight: 600;
         }
 
         .spend-sync-note {
           font-size: 0.65rem;
-          color: rgba(255, 255, 255, 0.3);
+          color: var(--color-text-muted);
           text-align: center;
           font-style: italic;
         }
 
         .error-text {
-          color: #FF6B6B;
+          color: var(--color-danger);
         }
 
         @keyframes pulse {

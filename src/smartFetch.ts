@@ -677,6 +677,7 @@ export async function askPrismatixSync(
   spendCapUsd?: number,
   signal?: AbortSignal,
   scope?: RouterRequestScope,
+  onStreamContent?: (content: string) => void,
 ): Promise<(RouterResponseBase & { content: string }) | null> {
   const result = await askPrismatix(
     query,
@@ -701,10 +702,12 @@ export async function askPrismatixSync(
       {
         onFirstToken: () => {},
         onUsageUpdate: () => {},
-        onContentUpdate: () => {},
+        onContentUpdate: (content) => onStreamContent?.(content),
       },
       signal,
     );
+
+    onStreamContent?.(streamResult.assistantContent);
 
     const { stream: _, ...base } = result;
     return {

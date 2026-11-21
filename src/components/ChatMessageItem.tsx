@@ -599,7 +599,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
             {message.transcriptSaved === false && (
               <div className='transcript-unsaved-notice' role='alert'>
-                This response was generated but could not be saved to chat history. Copy or select the response below before leaving; sending again may create a new paid request.
+                This response could not be saved, or its save could not be confirmed. Copy or select it before leaving; sending again may create a new paid request.
               </div>
             )}
             {copyFallback !== null && (
