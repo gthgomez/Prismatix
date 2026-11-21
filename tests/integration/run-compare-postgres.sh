@@ -2,6 +2,7 @@
 set -euo pipefail
 migration_dir="${1:-supabase/migrations}"
 fixture="${2:-tests/integration/px08_compare_durability.sql}"
+qualified_fixture="tests/integration/qualified_spend_stats.sql"
 db="prismatix-compare-$$"
 docker run --rm --detach --network none --name "$db" -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine >/dev/null
 trap 'docker stop "$db" >/dev/null' EXIT
@@ -55,7 +56,11 @@ for file in \
   20261107030000_f15_feedback_lifecycle.sql \
   20261107040000_wave2_productivity.sql \
   20261107070000_px08_compare_durability.sql \
-  20261121000000_px08_compare_preferences.sql; do
+  20261121000000_px08_compare_preferences.sql \
+  20261121140122_qualified_spend_stats.sql; do
   sql < "$migration_dir/$file"
 done
 sql < "$fixture"
+if [[ "$fixture" != "$qualified_fixture" ]]; then
+  sql < "$qualified_fixture"
+fi

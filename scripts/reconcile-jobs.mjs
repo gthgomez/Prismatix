@@ -58,6 +58,24 @@ export async function processReconciliationBatch(supabase, options = {}) {
 
   const isTerminalExecution = (status) =>
     status === 'completed' || status === 'cancelled' || status === 'failed' || status === 'indeterminate';
+  const asNonNegativeInteger = (value) => {
+    if (typeof value !== 'number' && typeof value !== 'string') return null;
+    if (typeof value === 'string' && value.trim() === '') return null;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+  };
+  const asNonNegativeUsd = (value) => {
+    if (typeof value !== 'number' && typeof value !== 'string') return null;
+    if (typeof value === 'string' && value.trim() === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  };
+  const deferJob = async (jobId, attempts, reason) => {
+    const status = attempts >= maxAttempts ? 'failed' : 'pending';
+    await updateJob(jobId, status, attempts, reason);
+    if (status === 'failed') summary.failed++;
+    return status;
+  };
 
   // 2. Process each pending job
   for (const job of pendingJobs ?? []) {
@@ -102,11 +120,20 @@ export async function processReconciliationBatch(supabase, options = {}) {
         }
       } else if (job.kind === 'budget_estimated') {
         // budget_estimated must remain pending until all relevant billable calls have authoritative settlement
-        if (target.pending_calls > 0) {
-          logger.log?.(`[reconcile-jobs] Execution ${job.execution_id} still has ${target.pending_calls} pending call(s); keeping job pending.`);
-          const status = attempts >= maxAttempts ? 'failed' : 'pending';
-          await updateJob(job.id, status, attempts, 'calls_still_pending');
-          if (status === 'failed') summary.failed++;
+        const pendingCalls = asNonNegativeInteger(target.pending_calls);
+        const totalCalls = asNonNegativeInteger(target.total_calls);
+        const settledCalls = asNonNegativeInteger(target.settled_calls);
+        if (pendingCalls === null || totalCalls === null || settledCalls === null) {
+          await deferJob(job.id, attempts, 'call_counts_unavailable');
+          continue;
+        }
+        if (pendingCalls > 0) {
+          logger.log?.(`[reconcile-jobs] Execution ${job.execution_id} still has ${pendingCalls} pending call(s); keeping job pending.`);
+          await deferJob(job.id, attempts, 'calls_still_pending');
+          continue;
+        }
+        if (!isTerminalExecution(execution.status)) {
+          await deferJob(job.id, attempts, 'execution_unsettled');
           continue;
         }
 
@@ -120,16 +147,20 @@ export async function processReconciliationBatch(supabase, options = {}) {
         }
 
         const resState = commitResult?.state;
-        if (resState !== 'committed' && resState !== 'released') {
+        const authoritativeCost = asNonNegativeUsd(commitResult?.committed_usd);
+        const allCallsSettled = settledCalls === totalCalls;
+        const validCommit = resState === 'committed'
+          && authoritativeCost !== null
+          && totalCalls > 0
+          && allCallsSettled;
+        const validRelease = resState === 'released' && authoritativeCost === 0 && totalCalls === 0;
+        if (!validCommit && !validRelease) {
           // Did not reach terminal settlement
-          const status = attempts >= maxAttempts ? 'failed' : 'pending';
-          await updateJob(job.id, status, attempts, `unresolved_reservation_state: ${resState}`);
-          if (status === 'failed') summary.failed++;
+          await deferJob(job.id, attempts, `unresolved_reservation_state: ${resState ?? 'unknown'}`);
           continue;
         }
 
-        const authoritativeCost = Number(commitResult?.committed_usd ?? 0);
-        const safeCost = Number.isFinite(authoritativeCost) ? authoritativeCost : 0;
+        const safeCost = authoritativeCost;
         const costStatus = resState === 'committed' ? 'settled' : 'released';
 
         // Synchronize public.cost_logs projection
@@ -192,9 +223,43 @@ export async function processReconciliationBatch(supabase, options = {}) {
           if (status === 'failed') summary.failed++;
         }
       } else if (job.kind === 'cost_projection_failed') {
-        // Recreate or update missing projection
-        const authoritativeCost = Number(reservation?.committed_usd ?? target.settled_cost ?? 0);
-        const safeCost = Number.isFinite(authoritativeCost) ? authoritativeCost : 0;
+        // Recreate a projection only after terminal execution and call settlement
+        // are confirmed. The reservation is authoritative when present; legacy
+        // executions without one may use their complete settled-call sum.
+        const totalCalls = asNonNegativeInteger(target.total_calls);
+        const pendingCalls = asNonNegativeInteger(target.pending_calls);
+        const settledCalls = asNonNegativeInteger(target.settled_calls);
+        let safeCost = null;
+        if (
+          !isTerminalExecution(execution.status)
+          || totalCalls === null || pendingCalls === null || settledCalls === null
+        ) {
+          await deferJob(job.id, attempts, 'settlement_unavailable');
+          continue;
+        }
+        if (pendingCalls > 0 || settledCalls !== totalCalls) {
+          await deferJob(job.id, attempts, 'calls_unsettled');
+          continue;
+        }
+
+        if (reservation?.state === 'committed') {
+          if (totalCalls > 0) {
+            safeCost = asNonNegativeUsd(reservation.committed_usd);
+            if (safeCost === null) {
+              safeCost = asNonNegativeUsd(target.settled_cost);
+            }
+          }
+        } else if (reservation?.state === 'released') {
+          const releasedCost = asNonNegativeUsd(reservation.committed_usd);
+          if (totalCalls === 0 && releasedCost === 0) safeCost = 0;
+        } else if (reservation == null && totalCalls > 0) {
+          safeCost = asNonNegativeUsd(target.settled_cost);
+        }
+
+        if (safeCost === null) {
+          await deferJob(job.id, attempts, 'reservation_unsettled_or_cost_invalid');
+          continue;
+        }
 
         const { data: existingCostLog, error: queryCostErr } = await supabase
           .from('cost_logs')

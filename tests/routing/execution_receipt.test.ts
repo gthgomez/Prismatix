@@ -148,6 +148,37 @@ describe('projectReceipt', () => {
     }
   });
 
+  it('keeps settled call rows pending while a present reservation is unresolved', () => {
+    for (const state of ['held', 'pending_reconcile'] as const) {
+      const receipt = projectReceipt({
+        execution: execution(),
+        calls: [call({ total_cost: 0.25 })],
+        reservation: reservation({ state, committed_usd: 0 }),
+      });
+      expect(receipt.settlement).toEqual({ state: 'pending', committedUsd: 0, pendingCalls: 0 });
+    }
+  });
+
+  it('does not report a released reservation as settled when call rows exist', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ total_cost: 0.25 })],
+      reservation: reservation({ state: 'released', committed_usd: 0 }),
+    });
+
+    expect(receipt.settlement).toEqual({ state: 'pending', committedUsd: 0, pendingCalls: 0 });
+  });
+
+  it('preserves a valid committed zero when all calls are settled', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ total_cost: 0 })],
+      reservation: reservation({ state: 'committed', committed_usd: 0 }),
+    });
+
+    expect(receipt.settlement).toEqual({ state: 'settled', committedUsd: 0, pendingCalls: 0 });
+  });
+
   it('reports pending for zero calls with no reservation row at all', () => {
     const receipt = projectReceipt({
       execution: execution({ status: 'started', terminal_outcome: null }),

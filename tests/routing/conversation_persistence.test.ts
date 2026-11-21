@@ -197,6 +197,7 @@ function receiptPayload(): Record<string, unknown> {
  */
 function makeRoutes(
   persist: (body: Record<string, unknown>, call: FetchCall) => Response | null,
+  receipt = receiptPayload(),
 ): (call: FetchCall) => Response | null {
   return (call) => {
     if (call.url.includes('/auth/v1/user')) {
@@ -270,7 +271,7 @@ function makeRoutes(
       return jsonResponse({ execution: { id: EXECUTION_ID, status: 'completed' }, finalized: true });
     }
     if (call.url.includes('/rest/v1/rpc/px03_get_execution_receipt')) {
-      return jsonResponse(receiptPayload());
+      return jsonResponse(receipt);
     }
     if (call.url.includes('api.anthropic.com')) {
       return new Response(STREAM_BODY, {
@@ -477,6 +478,73 @@ describe('PX07 idempotent replay', () => {
 });
 
 describe('PX07 post-inference assistant persistence failure', () => {
+  it('projects the settled receipt amount into cost_logs for ordinary chat', async () => {
+    const calls = installFetchRecorder(makeRoutes(() => null));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    expect(costLog?.total_cost).toBe(0.01);
+    expect(costLog?.cost_status).toBe('settled');
+  });
+
+  it('keeps a settled zero as zero in ordinary chat cost logs', async () => {
+    const settledZero = receiptPayload();
+    (settledZero.calls as Array<Record<string, unknown>>)[0]!.total_cost = 0;
+    (settledZero.reservation as Record<string, unknown>).committed_usd = '0';
+    const calls = installFetchRecorder(makeRoutes(() => null, settledZero));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    expect(costLog?.total_cost).toBe(0);
+    expect(costLog?.cost_status).toBe('settled');
+  });
+
+  it('keeps token-derived cost as pending when the receipt is unsettled', async () => {
+    const pendingReceipt = receiptPayload();
+    (pendingReceipt.calls as Array<Record<string, unknown>>)[0]!.cost_status = 'pending';
+    (pendingReceipt.calls as Array<Record<string, unknown>>)[0]!.total_cost = 0;
+    (pendingReceipt.reservation as Record<string, unknown>).committed_usd = '0';
+    const calls = installFetchRecorder(makeRoutes(() => null, pendingReceipt));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    expect(costLog?.total_cost).toBeGreaterThan(0);
+    expect(costLog?.cost_status).toBe('pending');
+  });
+
   it('still completes the stream but reports transcript.saved = false', async () => {
     const calls = installFetchRecorder(
       makeRoutes((body) =>

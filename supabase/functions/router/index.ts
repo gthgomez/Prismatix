@@ -3566,10 +3566,10 @@ Deno.serve(async (req: Request) => {
             }
           }
 
-          // Authoritative execution cost for user-facing cost logs:
-          // In Debate Mode, historical conversation costs derive from authoritative
-          // execution accounting rather than synthesis-only estimates.
-          const authoritativeTotalCost = (debateActive && interimReceipt?.settlement?.committedUsd && interimReceipt.settlement.committedUsd > 0)
+          // Settled execution accounting is authoritative for every mode. The
+          // token-derived breakdown is only a fallback when the ledger is not
+          // settled (and can differ from provider-reported usage).
+          const authoritativeTotalCost = interimReceipt?.settlement?.state === 'settled'
             ? interimReceipt.settlement.committedUsd
             : debateActive
             ? fallbackEstimateUsd

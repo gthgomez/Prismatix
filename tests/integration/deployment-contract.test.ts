@@ -1267,7 +1267,7 @@ function spendStatsStubClient(
         data: {
           today: '1.5',
           this_week: 2,
-          this_month: null,
+          this_month: 0,
           all_time: '10.25',
           last_message_cost: '0.01',
           message_count: '7',
@@ -1359,6 +1359,168 @@ describe('spend_stats manual auth seam (verify_jwt independent)', () => {
       lastMessageCost: 0.01,
       messageCount: 7,
     });
+    expect(rpcCalls).toEqual([
+      { fn: 'get_spend_stats', params: { p_user_id: SUBJECT_A } },
+      { fn: 'get_spend_stats_qualified', params: { p_user_id: SUBJECT_A } },
+    ]);
+  });
+
+  it('returns qualified spend buckets from the validated user RPC', async () => {
+    const rpcCalls: Array<{ fn: string; params?: Record<string, unknown> }> = [];
+    const { mod } = await loadModuleNamespace<SpendStatsModule>(
+      SPEND_STATS_ENTRY,
+      SPEND_STATS_ENV,
+    );
+    const qualified = {
+      today: { settled: 0.1, pending: 0.2, estimatedLegacy: 0.3 },
+      thisWeek: { settled: 0.4, pending: 0.5, estimatedLegacy: 0.6 },
+      thisMonth: { settled: 0.7, pending: 0.8, estimatedLegacy: 0.9 },
+      allTime: { settled: 1, pending: 1.1, estimatedLegacy: 1.2 },
+    };
+
+    const res = await mod.handleSpendStats(spendStatsRequest('Bearer px02-valid-token'), {
+      createClient: () => ({
+        ...spendStatsStubClient(rpcCalls),
+        rpc: async (fn: string, params?: Record<string, unknown>) => {
+          rpcCalls.push({ fn, params });
+          return fn === 'get_spend_stats_qualified'
+            ? { data: qualified, error: null }
+            : {
+              data: {
+                today: '1.5', this_week: 2, this_month: 0,
+                all_time: '10.25', last_message_cost: '0.01', message_count: '7',
+              },
+              error: null,
+            };
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      today: 1.5,
+      qualified,
+    });
+    expect(rpcCalls).toEqual([
+      { fn: 'get_spend_stats', params: { p_user_id: SUBJECT_A } },
+      { fn: 'get_spend_stats_qualified', params: { p_user_id: SUBJECT_A } },
+    ]);
+  });
+
+  it.each(['absent', 'malformed'] as const)('falls back to legacy spend fields when the qualified RPC is %s', async (failure) => {
+    const rpcCalls: Array<{ fn: string; params?: Record<string, unknown> }> = [];
+    const { mod } = await loadModuleNamespace<SpendStatsModule>(
+      SPEND_STATS_ENTRY,
+      SPEND_STATS_ENV,
+    );
+
+    const res = await mod.handleSpendStats(spendStatsRequest('Bearer px02-valid-token'), {
+      createClient: () => ({
+        ...spendStatsStubClient(rpcCalls),
+        rpc: async (fn: string, params?: Record<string, unknown>) => {
+          rpcCalls.push({ fn, params });
+          if (fn === 'get_spend_stats_qualified') {
+            return failure === 'absent'
+              ? { data: null, error: { code: 'PGRST202', message: 'function not found' } }
+              : { data: { today: { settled: '' } }, error: null };
+          }
+          return {
+            data: {
+              today: '1.5', this_week: 2, this_month: 0,
+              all_time: '10.25', last_message_cost: '0.01', message_count: '7',
+            },
+            error: null,
+          };
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      today: 1.5,
+      thisWeek: 2,
+      thisMonth: 0,
+      allTime: 10.25,
+      lastMessageCost: 0.01,
+      messageCount: 7,
+    });
+    expect(rpcCalls).toEqual([
+      { fn: 'get_spend_stats', params: { p_user_id: SUBJECT_A } },
+      { fn: 'get_spend_stats_qualified', params: { p_user_id: SUBJECT_A } },
+    ]);
+  });
+
+  it('returns legacy spend fields when the optional qualified RPC times out', async () => {
+    const rpcCalls: Array<{ fn: string; params?: Record<string, unknown> }> = [];
+    const { mod } = await loadModuleNamespace<SpendStatsModule>(
+      SPEND_STATS_ENTRY,
+      SPEND_STATS_ENV,
+    );
+    vi.useFakeTimers();
+    try {
+      const responsePromise = mod.handleSpendStats(spendStatsRequest('Bearer px02-valid-token'), {
+        createClient: () => ({
+          ...spendStatsStubClient(rpcCalls),
+          rpc: (fn: string, params?: Record<string, unknown>) => {
+            rpcCalls.push({ fn, params });
+            if (fn === 'get_spend_stats_qualified') return new Promise(() => {});
+            return Promise.resolve({
+              data: {
+                today: 1.5, this_week: 2, this_month: 0,
+                all_time: 10.25, last_message_cost: 0.01, message_count: 7,
+              },
+              error: null,
+            });
+          },
+        }),
+      });
+
+      await vi.runAllTimersAsync();
+      const res = await responsePromise;
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        today: 1.5,
+        thisWeek: 2,
+        thisMonth: 0,
+        allTime: 10.25,
+        lastMessageCost: 0.01,
+        messageCount: 7,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['missing a required aggregate', {
+      today: 0, this_week: 0, all_time: 0, last_message_cost: 0, message_count: 0,
+    }],
+    ['with a fractional message count', {
+      today: 0, this_week: 0, this_month: 0, all_time: 0, last_message_cost: 0, message_count: 1.5,
+    }],
+    ['with a blank aggregate', {
+      today: '', this_week: 0, this_month: 0, all_time: 0, last_message_cost: 0, message_count: 0,
+    }],
+  ])('fails unavailable for a legacy stats row %s', async (_description, malformedRow) => {
+    const rpcCalls: Array<{ fn: string; params?: Record<string, unknown> }> = [];
+    const { mod } = await loadModuleNamespace<SpendStatsModule>(
+      SPEND_STATS_ENTRY,
+      SPEND_STATS_ENV,
+    );
+
+    const res = await mod.handleSpendStats(spendStatsRequest('Bearer px02-valid-token'), {
+      createClient: () => ({
+        ...spendStatsStubClient(rpcCalls),
+        rpc: async (fn: string, params?: Record<string, unknown>) => {
+          rpcCalls.push({ fn, params });
+          return { data: malformedRow, error: null };
+        },
+      }),
+    });
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'Failed to load spend stats' });
     expect(rpcCalls).toEqual([{ fn: 'get_spend_stats', params: { p_user_id: SUBJECT_A } }]);
   });
 
