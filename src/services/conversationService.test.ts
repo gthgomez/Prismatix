@@ -198,7 +198,7 @@ describe('loadConversation', () => {
         const path = new URL(String(input)).pathname;
         if (path.endsWith('/px08_get_compare_groups')) {
           rpcBodies.push(JSON.parse(String(init?.body)));
-          return new Response(JSON.stringify(fail ? { message: 'backend unavailable' } : [{ id: 'group', conversationId: CONV, modelA: childA, modelB: childB }]), {
+          return new Response(JSON.stringify(fail ? { message: 'backend unavailable' } : [{ id: 'group', conversationId: CONV, preferredSide: 'B', modelA: childA, modelB: childB }]), {
             status: fail ? 503 : 200, headers: { 'Content-Type': 'application/json' },
           });
         }
@@ -212,6 +212,7 @@ describe('loadConversation', () => {
     expect(message).toMatchObject({ id: MSG, compareGroupId: 'group', compareGroupChild: 'A', comparisonResults: {
       modelA: { model: 'future-model', cost: 0, costStatus: 'settled' },
       modelB: { model: 'second-model', status: 'failed', costStatus: 'unknown' },
+      preferredSide: 'B',
     } });
     fail = true;
     await expect(loadConversation(client, CONV, { compareGroups: true })).resolves.toMatchObject([{ id: MSG, content: 'Answer A' }]);

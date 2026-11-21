@@ -9,7 +9,7 @@ declare
   c1 uuid := gen_random_uuid(); c2 uuid := gen_random_uuid();
   a uuid := gen_random_uuid(); b uuid := gen_random_uuid(); c uuid := gen_random_uuid(); other_exec uuid := gen_random_uuid();
   compare_identity constant uuid := '33333333-3333-4333-8333-333333333333';
-  result1 jsonb; result2 jsonb;
+  result1 jsonb; result2 jsonb; preference jsonb;
   reloaded jsonb;
 begin
   insert into auth.users(id, aud, role, email, encrypted_password, created_at, updated_at)
@@ -31,18 +31,23 @@ begin
   perform set_config('request.jwt.claim.role', 'authenticated', true);
   execute 'set local role authenticated';
   result1 := public.px08_persist_compare(c1, a, b);
-  result2 := public.px08_persist_compare(c1, a, b);
+  result2 := public.px08_persist_compare(c1, b, a);
   if result1->>'id' is distinct from result2->>'id' then raise exception 'PX08 replay was not idempotent'; end if;
+  if result2#>>'{modelA,executionId}' <> b::text or result2#>>'{modelB,executionId}' <> a::text then
+    raise exception 'PX08 replay did not preserve the requested side ordering: %', result2;
+  end if;
   if result1#>>'{modelA,content}' <> 'authentic A answer' or result1#>>'{modelA,cost}' <> '0.012300' then
     raise exception 'PX08 did not derive transcript and cost from server records: %', result1;
   end if;
   if result1#>>'{modelB,status}' <> 'failed' or result1#>>'{modelB,transcriptSaved}' <> 'false' then
     raise exception 'PX08 failure status was not preserved: %', result1;
   end if;
+  preference := public.px08_set_compare_preference((result1->>'id')::uuid, 'A');
+  if preference->>'preferredSide' <> 'A' then raise exception 'PX08 preference write did not select A'; end if;
   begin
     perform public.px08_persist_compare(c1, a, c);
     raise exception 'PX08 accepted a third execution for one logical Compare request';
-  exception when unique_violation then null;
+  exception when invalid_parameter_value then null;
   end;
   begin
     perform public.px08_persist_compare(c1, a, other_exec);
@@ -50,9 +55,14 @@ begin
   exception when insufficient_privilege then null;
   end;
   reloaded := public.px08_get_compare_groups(c1, array[b]);
-  if jsonb_array_length(reloaded) <> 1 or reloaded->0 is distinct from result1 then
+  if jsonb_array_length(reloaded) <> 1
+     or reloaded->0->>'id' is distinct from result1->>'id'
+     or reloaded->0->>'preferredSide' <> 'A' then
     raise exception 'PX08 did not return the complete group on a page with one child';
   end if;
+  perform public.px08_set_compare_preference((result1->>'id')::uuid, 'B');
+  preference := public.px08_set_compare_preference((result1->>'id')::uuid, null);
+  if preference->>'preferredSide' is not null then raise exception 'PX08 preference clear did not clear the vote'; end if;
   if public.px08_get_compare_groups(c1, array[c]) <> '[]'::jsonb then
     raise exception 'PX08 returned a group outside the requested page';
   end if;
@@ -90,6 +100,11 @@ begin
   begin
     perform public.px08_get_compare_groups(c1, array[a, b]);
     raise exception 'PX08 exposed another owner conversation';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    perform public.px08_set_compare_preference((result1->>'id')::uuid, 'A');
+    raise exception 'PX08 allowed another owner to change a preference';
   exception when insufficient_privilege then null;
   end;
   execute 'set local role anon';

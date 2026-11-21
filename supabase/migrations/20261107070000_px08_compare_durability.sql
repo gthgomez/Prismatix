@@ -8,6 +8,8 @@ create table if not exists public.compare_groups (
   execution_a uuid not null references prismatix_internal.executions(id) on delete cascade,
   execution_b uuid not null references prismatix_internal.executions(id) on delete cascade,
   compare_identity uuid not null,
+  preferred_side text check (preferred_side in ('A', 'B')),
+  preference_updated_at timestamptz,
   created_at timestamptz not null default now(),
   constraint compare_groups_distinct_executions check (execution_a <> execution_b),
   constraint compare_groups_identity unique (conversation_id, execution_a, execution_b),
@@ -67,14 +69,23 @@ begin
 
   insert into public.compare_groups(user_id, conversation_id, execution_a, execution_b, compare_identity)
   values (v_user, p_conversation_id, p_execution_a, p_execution_b, v_compare_identity)
-  on conflict (conversation_id, execution_a, execution_b) do nothing;
+  on conflict do nothing;
 
   select * into v_group from public.compare_groups g
-   where g.conversation_id = p_conversation_id
-     and g.execution_a = p_execution_a and g.execution_b = p_execution_b;
+   where g.conversation_id = p_conversation_id and g.compare_identity = v_compare_identity;
+  if not found or not (
+    (v_group.execution_a = p_execution_a and v_group.execution_b = p_execution_b)
+    or (v_group.execution_a = p_execution_b and v_group.execution_b = p_execution_a)
+  ) then
+    raise exception 'compare_identity_conflict' using errcode = '22023';
+  end if;
+
+  -- Keep the first durable ordering, but return the requested ordering so a
+  -- replay with swapped arguments still gets the expected modelA/modelB sides.
   v_result := jsonb_build_object(
     'id', v_group.id,
     'conversationId', v_group.conversation_id,
+    'preferredSide', v_group.preferred_side,
     'modelA', public.px08_compare_child(p_execution_a, p_conversation_id),
     'modelB', public.px08_compare_child(p_execution_b, p_conversation_id)
   );
@@ -139,7 +150,7 @@ begin
     raise exception 'invalid_conversation' using errcode = '42501';
   end if;
   select coalesce(jsonb_agg(jsonb_build_object(
-    'id', g.id, 'conversationId', g.conversation_id,
+    'id', g.id, 'conversationId', g.conversation_id, 'preferredSide', g.preferred_side,
     'modelA', public.px08_compare_child(g.execution_a, p_conversation_id),
     'modelB', public.px08_compare_child(g.execution_b, p_conversation_id)
   ) order by g.created_at, g.id), '[]'::jsonb)
@@ -151,8 +162,45 @@ begin
 end;
 $$;
 
+-- Store the owner's A/B selection on the durable group. A NULL side clears it.
+create or replace function public.px08_set_compare_preference(
+  p_compare_group_id uuid,
+  p_preferred_side text
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_group public.compare_groups;
+begin
+  if v_user is null then
+    raise exception 'authentication_required' using errcode = '42501';
+  end if;
+  if p_preferred_side is not null and p_preferred_side not in ('A', 'B') then
+    raise exception 'invalid_preferred_side' using errcode = '22023';
+  end if;
+  update public.compare_groups
+     set preferred_side = p_preferred_side,
+         preference_updated_at = case when p_preferred_side is null then null else now() end
+   where id = p_compare_group_id and user_id = v_user
+   returning * into v_group;
+  if not found then
+    raise exception 'invalid_compare_group' using errcode = '42501';
+  end if;
+  return jsonb_build_object(
+    'id', v_group.id,
+    'preferredSide', v_group.preferred_side,
+    'preferenceUpdatedAt', v_group.preference_updated_at
+  );
+end;
+$$;
+
 revoke all on function public.px08_persist_compare(uuid, uuid, uuid) from public, anon;
 revoke all on function public.px08_compare_child(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.px08_get_compare_groups(uuid, uuid[]) from public, anon;
+revoke all on function public.px08_set_compare_preference(uuid, text) from public, anon;
 grant execute on function public.px08_persist_compare(uuid, uuid, uuid) to authenticated;
 grant execute on function public.px08_get_compare_groups(uuid, uuid[]) to authenticated;
+grant execute on function public.px08_set_compare_preference(uuid, text) to authenticated;

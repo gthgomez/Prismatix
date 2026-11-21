@@ -62,7 +62,7 @@ export interface LoadedMessage {
   debateExecutionMode?: 'auto' | 'manual';
   compareGroupId?: string;
   compareGroupChild?: 'A' | 'B';
-  comparisonResults?: Pick<NonNullable<ReturnType<typeof parseCompareGroup>>, 'modelA' | 'modelB'>;
+  comparisonResults?: Pick<NonNullable<ReturnType<typeof parseCompareGroup>>, 'modelA' | 'modelB' | 'preferredSide'>;
 }
 
 export interface ConversationListCursor {
@@ -497,7 +497,11 @@ export async function loadConversation(
               if (!row || row.executionId !== child.executionId || row.compareGroupId) continue;
               row.compareGroupId = group.id;
               row.compareGroupChild = side;
-              row.comparisonResults = { modelA: group.modelA, modelB: group.modelB };
+              row.comparisonResults = {
+                modelA: group.modelA,
+                modelB: group.modelB,
+                preferredSide: group.preferredSide,
+              };
             }
           }
         }

@@ -12,6 +12,7 @@ interface CompareChild {
 interface CompareGroup {
   id: string;
   conversationId: string;
+  preferredSide?: 'A' | 'B';
   modelA: CompareChild;
   modelB: CompareChild;
 }
@@ -40,5 +41,11 @@ export function parseCompareGroup(value: unknown): CompareGroup | null {
   const modelA = parseCompareChild(group.modelA);
   const modelB = parseCompareChild(group.modelB);
   if (!modelA || !modelB || modelA.executionId === modelB.executionId) return null;
-  return { id: group.id, conversationId: group.conversationId, modelA, modelB };
+  return {
+    id: group.id,
+    conversationId: group.conversationId,
+    preferredSide: group.preferredSide === 'A' || group.preferredSide === 'B' ? group.preferredSide : undefined,
+    modelA,
+    modelB,
+  };
 }
