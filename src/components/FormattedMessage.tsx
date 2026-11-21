@@ -330,6 +330,33 @@ function renderProse(text: string): React.ReactNode {
     }
 
     // Headers
+    if (trimmed.startsWith('###### ')) {
+      flushAll();
+      elements.push(
+        <h6 key={`h6-${i}`} className='formatted-h6'>
+          {parseInline(trimmed.slice(7))}
+        </h6>,
+      );
+      continue;
+    }
+    if (trimmed.startsWith('##### ')) {
+      flushAll();
+      elements.push(
+        <h6 key={`h5-${i}`} className='formatted-h5'>
+          {parseInline(trimmed.slice(6))}
+        </h6>,
+      );
+      continue;
+    }
+    if (trimmed.startsWith('#### ')) {
+      flushAll();
+      elements.push(
+        <h5 key={`h4-${i}`} className='formatted-h4'>
+          {parseInline(trimmed.slice(5))}
+        </h5>,
+      );
+      continue;
+    }
     if (trimmed.startsWith('### ')) {
       flushAll();
       elements.push(

@@ -30,6 +30,14 @@ function render(ui: React.ReactNode): Root {
 }
 
 describe('FormattedMessage', () => {
+  it('renders nested Markdown headings without displaying their markers', () => {
+    root = render(<FormattedMessage content={'#### Stage **One**\n##### Detail\n###### Note\n####### Literal'} />);
+    expect(container.querySelector('h5')?.textContent).toBe('Stage One');
+    expect(container.querySelector('h5 strong')?.textContent).toBe('One');
+    expect([...container.querySelectorAll('h6')].map((node) => node.textContent)).toEqual(['Detail', 'Note']);
+    expect(container.querySelector('p')?.textContent).toBe('####### Literal');
+  });
+
   it('renders plain prose paragraphs cleanly', () => {
     root = render(<FormattedMessage content='Hello world\nThis is a second line.' />);
     expect(container.textContent).toContain('Hello world');

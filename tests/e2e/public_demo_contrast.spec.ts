@@ -1,5 +1,17 @@
 import { expect, test } from '@playwright/test';
 
+test('public demo describes provider routes and saved keys without unsupported security claims', async ({ page }) => {
+  await page.goto('/demo');
+  const routing = page.locator('.feature-subcard').filter({ hasText: 'Dynamic Multi-Model Routing' });
+  await expect(routing).toContainText('OpenRouter or enabled direct providers');
+  const credentials = page.locator('.feature-subcard').filter({ hasText: 'Encrypted Provider Keys' });
+  await expect(credentials).toContainText('sent from your browser when you connect them');
+  await expect(page.getByText('100% Server-Side')).toHaveCount(0);
+  await expect(page.getByText('Client Token Exposure')).toHaveCount(0);
+  await expect(page.getByText('All architecture assertions verified against repository AST.')).toHaveCount(0);
+  await expect(page.getByText(/synthetic.*no live billable queries/i)).toBeVisible();
+});
+
 test('public demo text stays readable on its dark panels in both themes', async ({ page }, testInfo) => {
   await page.goto('/demo');
   const skip = page.getByRole('button', { name: 'Skip animation and display full response' });
@@ -34,7 +46,7 @@ test('public demo text stays readable on its dark panels in both themes', async 
           '.route-model-name', '.demo-route-meta', '.demo-message-sender', '.demo-message-content',
           '.code-block-lang', '.code-copy-btn', '.code-block-content',
           '.bento-card-arch h2', '.node-name', '.node-role', '.arch-desc',
-          '.metric-caption', '.feature-subcard h3', '.feature-subcard p',
+          '.proof-text', '.feature-subcard h3', '.feature-subcard p',
           '.safety-paragraph', '.safety-item', '.safety-btn',
         ];
         return selectors.map((selector) => {

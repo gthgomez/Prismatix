@@ -19,7 +19,9 @@
 .formatted-h1,
 .formatted-h2,
 .formatted-h3,
-.formatted-h4 {
+.formatted-h4,
+.formatted-h5,
+.formatted-h6 {
   margin: 0.5rem 0 0.25rem 0;
   font-weight: 600;
   color: var(--color-text);
@@ -29,7 +31,9 @@
 .formatted-h1 { font-size: 1.25rem; }
 .formatted-h2 { font-size: 1.15rem; }
 .formatted-h3 { font-size: 1.05rem; }
-.formatted-h4 { font-size: 0.95rem; }
+.formatted-h4,
+.formatted-h5,
+.formatted-h6 { font-size: 0.95rem; }
 
 .formatted-ul,
 .formatted-ol {
