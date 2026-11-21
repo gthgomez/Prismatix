@@ -106,7 +106,9 @@ Their implementation and tests were reviewed reciprocally by two collaborators
 with shared task context; this is not a GitHub approval or an independent
 blind security assessment. The implementation commits are `194cc44` (PXQ-10),
 `42e543e` (PXQ-11, PXQ-12 and PXQ-15, plus spend presentation), `807e8b2`
-(PXQ-13, PXQ-14 and PXQ-17), and `4cec56f` (PXQ-16).
+(PXQ-13, PXQ-14 and PXQ-17), `4cec56f` (PXQ-16), `e339f70` and `c5be7e8`
+(PXQ-18), `e026b5b` (PXQ-19 and PXQ-21), `50cc201` (PXQ-20),
+`832b9ff` (PXQ-22), and `7f09f7a` (PXQ-23).
 
 | ID / priority | Reproduction and cause | Correction and evidence |
 | --- | --- | --- |
@@ -118,18 +120,29 @@ blind security assessment. The implementation commits are `194cc44` (PXQ-10),
 | PXQ-15 / P2 | The unsaved-response warning and spend analytics text were nearly invisible in Arctic Light. At 320px the spend panel extended beyond the viewport. | Use shared theme tokens, a bounded scrollable mobile panel and larger touch targets. Browser regressions measure warning and spend text contrast in both themes and check mobile bounds, scrolling and Escape. |
 | PXQ-16 / P1 | `npm audit --omit=dev` reported high-severity `ws` advisories for the locked `8.19.0` used by Supabase Realtime. | Updated the existing compatible transitive lock to `8.23.0`; the production-dependency audit then reported zero vulnerabilities. |
 | PXQ-17 / P0 | A `cost_projection_failed` reconciliation job could mark unresolved calls or a held reservation settled, and could substitute zero for an invalid amount. `budget_estimated` could also run before execution finalized or accept a committed zero-call reservation. | Require terminal execution, valid call counts and authoritative nonnegative amounts. Defer unresolved jobs, permit a committed zero only with settled calls, and permit a released zero only with no calls. Reconciliation tests cover the original failures, both zero-call guards, terminality, retry, and valid zero cases. |
+| PXQ-18 / P1 | Open the public demo in the default light theme: its dark panels inherit dark foreground tokens, leaving labels and body text unreadable (the brand measured 1.88:1). On a narrow screen, code is clipped because the shared message renderer's CSS was only loaded by the chat route. | Scope the Arctic dark palette to the intentionally dark panels and load the renderer's existing styles with the shared component. A browser regression composites translucent backgrounds and checks representative text at 4.5:1 in both themes and at desktop/mobile widths; another verifies focused code scrolls by keyboard without page overflow. |
+| PXQ-19 / P0 | Select a direct-provider model whose April 13 price audit is more than 60 days old. The freshness test warned but the server still used the stale rate for admission and settlement, potentially understating paid usage. | Fail closed for stale, malformed, missing or future audit dates on the four legacy pricing sources, and explain the unavailable estimate in the UI. A real router-handler regression verifies rejection before admission or provider calls. The tariff version changes so frontend/backend skew remains detectable. The 15 affected rates remain unchanged and require verification; manual routes and no-OpenCode fallback paths using them, and Debate plans containing them, remain unavailable until reviewed. |
+| PXQ-20 / P1 | A router response without an exposed model header was attributed to a hardcoded legacy model; when that model's price was unknown, the cost details also displayed a fabricated zero breakdown while hiding a confirmed receipt total. | Treat an unreported model as unknown without replacing the selected model or calculating a guessed price. Preserve a settled receipt amount and hide unavailable client breakdowns. Browser fixtures now expose the model headers that the Edge router exposes; missing-header and unknown-cost cases have separate regressions. |
+| PXQ-21 / P1 | A model identifier such as `constructor` matched an inherited JavaScript object property in catalog and router lookup code. It could be treated as a known model or rate even though it was not in either registry. | Require own properties in model and tariff lookup and override normalization. Unit checks cover inherited names and non-NaN unknown costs; real router-handler tests reject them before any provider call. |
+| PXQ-22 / P1 | Reload a transcript containing a model ID newer than the local catalog: the ID could disappear, and a route rationale could be attached to the currently selected model instead. An interrupted stream with a genuinely settled $0 receipt also lost that confirmation. | Retain unknown model identity and rationale without inventing a model tier; preserve and record a settled zero while keeping the stream marked interrupted. Service and UI regressions cover both paths. |
+| PXQ-23 / P1 | A malformed streamed receipt was cast directly to the trusted receipt type. Missing settlement fields could crash a turn, while invalid amounts or transcript markers could be mistaken for confirmation. | Validate receipt identity, status, settlement amounts, pending-call counts and call-state consistency; drop malformed receipts and untrusted transcript markers while retaining streamed content. Parser regressions cover missing and inconsistent fields, valid zero and pending cases, and malformed transcript data. |
+
+The stale-model coupling budget reflects five new test-fixture references and
+two source-classification references needed to test and block PXQ-19, offset by
+three removed legacy references. No legacy route was added; the ratchet permits
+no unaccounted increase over the resulting counts.
 
 ### Follow-up verification
 
-- The full local Vitest run passed 992 tests in 103 files. TypeScript and the
+- The full local Vitest run passed 1,029 tests in 105 files. TypeScript and the
   build passed; lint reported zero errors and 136 warnings. All ten Deno Edge
   entrypoints and the stale-model coupling budget passed. The production-only
   dependency audit reported zero vulnerabilities after the `ws` lock update;
   the full development-dependency audit was not completed.
-- The synthetic Chromium suite passed 120 tests with two opt-in Compare cases
+- The synthetic Chromium suite passed 123 tests with two opt-in Compare cases
   skipped in its default build; both passed with the opt-in build and test
   environment. The updated history helper also passed its targeted desktop
-  rerun. The expanded Pixel 5 emulation suite passed 42 tests;
+  rerun. The expanded Pixel 5 emulation suite passed 43 tests;
   earlier mobile runs exposed drawer-transition races in test helpers, which
   were corrected and rerun. CI now includes the expanded mobile suite.
 - An isolated PGlite PostgreSQL 18.7 fixture applied the 17 migrations used by
@@ -156,8 +169,6 @@ identified by the frontend, and no provider key or paid-call budget was
 available. Hosted migrations, Auth/RLS policy, Edge versions, real-provider
 streaming and spending, physical-device keyboards, and screen-reader behavior
 remain unverified. The Compare durability flag must remain off until the
-documented staging and production gates are satisfied. The pricing freshness
-test also reports 15 legacy direct-provider rates dated 2026-04-13; they can be
-reached by manual selection or a no-OpenCode posture and require a verified
-provider-rate review before cost accuracy can be certified. Their dates and
-prices were not changed without evidence.
+documented staging and production gates are satisfied. The 15 legacy
+direct-provider rates dated 2026-04-13 are blocked by PXQ-19 until a verified
+provider-rate review; their dates and prices were not changed without evidence.
