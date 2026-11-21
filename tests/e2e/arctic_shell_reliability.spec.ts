@@ -38,6 +38,54 @@ test('failed-send text survives reload in its tab without auto-dispatch', async 
   expect(routerRequests).toBe(1);
 });
 
+test('reload during a send preserves the prompt without automatically sending again', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let routerRequests = 0;
+  let releaseRouter!: () => void;
+  const routerGate = new Promise<void>((resolve) => { releaseRouter = resolve; });
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    await routerGate;
+    await route.abort().catch(() => {});
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Hold my exact prompt during a reload');
+  await composer.press('Enter');
+  await expect.poll(() => routerRequests).toBe(1);
+  expect(await page.evaluate(() => Object.values(sessionStorage))).toContain('Hold my exact prompt during a reload');
+  try {
+    await page.reload();
+    const recovery = page.locator('.draft-recovery-bar');
+    await expect(recovery).toContainText('Check your chat history before sending again');
+    await recovery.getByRole('button', { name: 'Restore draft' }).click();
+    await expect(composer).toHaveValue('Hold my exact prompt during a reload');
+    expect(routerRequests).toBe(1);
+  } finally {
+    releaseRouter();
+  }
+});
+
+test('unsent text stays with the conversation across navigation and reload', async ({ page }) => {
+  const first = 'draft-history-first';
+  const second = 'draft-history-second';
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [
+    { id: first, title: 'Draft history first', last_activity_at: '2026-11-16T00:00:00Z', project_id: null },
+    { id: second, title: 'Draft history second', last_activity_at: '2026-11-15T00:00:00Z', project_id: null },
+  ], messages: [] });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await page.getByText('Draft history first', { exact: true }).click();
+  await composer.fill('Draft for the first conversation');
+  await page.getByText('Draft history second', { exact: true }).click();
+  await expect(composer).toHaveValue('');
+  await composer.fill('Draft for the second conversation');
+  await page.reload();
+  await expect(composer).toHaveValue('Draft for the second conversation');
+  await page.getByText('Draft history first', { exact: true }).click();
+  await expect(composer).toHaveValue('Draft for the first conversation');
+});
+
 test('Compare preserves interrupted model outcome and warns when either transcript was not saved', async ({ page }) => {
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   let requests = 0;
@@ -109,6 +157,113 @@ test('ordinary Chat visibly marks a router-reported unsaved answer without retry
   await expect(page.getByRole('alert')).toContainText('could not be saved');
   await expect(page.getByRole('button', { name: 'Copy response' })).toBeVisible();
   expect(requests).toBe(1);
+});
+
+test('retry rechecks the daily budget and keeps the failed draft when spending is blocked', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let routerRequests = 0;
+  let today = 0;
+  await page.route('**/functions/v1/spend_stats*', (route) => route.fulfill({ json: { today } }));
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    if (routerRequests === 1) await route.abort('failed');
+    else await route.fulfill(successfulStream('Retry completed', 'retry-budget'));
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Keep my failed draft while spending is blocked');
+  await composer.press('Enter');
+  const recovery = page.locator('.draft-recovery-bar');
+  await expect(recovery).toBeVisible();
+  const retry = recovery.getByRole('button', { name: 'Retry', exact: true });
+
+  today = 2;
+  await retry.click();
+  await expect(page.getByText(/Daily budget exceeded/)).toBeVisible();
+  await expect(recovery).toBeVisible();
+  expect(routerRequests).toBe(1);
+
+  today = 0;
+  await retry.click();
+  await expect(page.getByText('Retry completed')).toBeVisible();
+  expect(routerRequests).toBe(2);
+});
+
+test('regenerate claims a single paid turn while its budget check is pending', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let routerRequests = 0;
+  let holdSpend = false;
+  let releaseSpend!: () => void;
+  const spendGate = new Promise<void>((resolve) => { releaseSpend = resolve; });
+  await page.route('**/functions/v1/spend_stats*', async (route) => {
+    if (holdSpend) await spendGate;
+    await route.fulfill({ json: { today: 0 } });
+  });
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    await route.fulfill(successfulStream(`Answer ${routerRequests}`, `regenerate-${routerRequests}`));
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('A prompt to regenerate');
+  await composer.press('Enter');
+  await expect(page.getByText('Answer 1', { exact: true })).toBeVisible();
+  const regenerate = page.getByRole('button', { name: 'Regenerate response', exact: true });
+  holdSpend = true;
+  await regenerate.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
+  });
+  try {
+    await expect(page.locator('.send-preflight-status')).toBeVisible({ timeout: 1500 });
+  } finally {
+    holdSpend = false;
+    releaseSpend();
+  }
+  await expect(page.getByText('Answer 2', { exact: true })).toBeVisible();
+  expect(routerRequests).toBe(2);
+});
+
+test('opening a slow conversation cannot send the previous transcript as context', async ({ page }) => {
+  const first = 'history-context-first';
+  const second = 'history-context-second';
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [
+    { id: first, title: 'First history', last_activity_at: '2026-11-16T00:00:00Z', project_id: null },
+    { id: second, title: 'Second history', last_activity_at: '2026-11-15T00:00:00Z', project_id: null },
+  ], messages: [
+    { id: 'history-context-message', conversation_id: first, role: 'user', content: 'Old conversation context', created_at: '2026-11-16T00:00:00Z' },
+  ] });
+  let releaseHistory!: () => void;
+  const historyGate = new Promise<void>((resolve) => { releaseHistory = resolve; });
+  await page.route('**/rest/v1/messages?*', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('conversation_id') !== `eq.${second}`) return route.fallback();
+    await historyGate;
+    await route.fulfill({ json: [] });
+  });
+  const paidRequests: unknown[] = [];
+  await page.route('**/functions/v1/router*', async (route) => {
+    paidRequests.push(route.request().postDataJSON());
+    await route.fulfill(successfulStream('Reply in the second chat', 'history-context'));
+  });
+  await signInAsMockUser(page);
+  await page.getByText('First history', { exact: true }).click();
+  await expect(page.getByText('Old conversation context', { exact: true })).toBeVisible();
+  await page.getByText('Second history', { exact: true }).click();
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  try {
+    await expect(page.getByText('Old conversation context', { exact: true })).toHaveCount(0);
+    await composer.fill('Continue the second conversation');
+    await composer.press('Enter');
+    await expect(page.getByRole('status').filter({ hasText: 'Loading conversation' })).toBeVisible();
+    expect(paidRequests).toEqual([]);
+  } finally {
+    releaseHistory();
+  }
+  await expect(page.getByRole('status').filter({ hasText: 'Loading conversation' })).toHaveCount(0);
+  await composer.press('Enter');
+  await expect(page.getByText('Reply in the second chat')).toBeVisible();
+  expect(paidRequests).toHaveLength(1);
+  expect(JSON.stringify(paidRequests[0])).not.toContain('Old conversation context');
 });
 
 test('Arctic shell persists through send and history; saved-chat layout has no horizontal overflow', async ({ page }) => {

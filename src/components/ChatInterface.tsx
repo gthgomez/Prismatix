@@ -94,10 +94,13 @@ import {
 } from '../services/conversationService';
 import {
   NEW_CHAT_SELECTION,
+  composerDraftKey,
   planInitialConversation,
   readSelectedConversation,
+  readTabDraft,
   streamUpdateAppliesToActive,
   writeSelectedConversation,
+  writeTabDraft,
 } from '../services/conversationState';
 import type { AttachmentRef } from '../../supabase/functions/_shared/conversation_attachments';
 import { useAutoScroll } from '../hooks/useAutoScroll';
@@ -338,20 +341,21 @@ interface FailedTurnDraft {
   optimisticMessageId?: string;
   optimisticMessageContent?: string;
   restoredFromStorage?: boolean;
+  conversationId?: string | null;
 }
 
 function readFailedTurnDraft(userId?: string): FailedTurnDraft | null {
   if (!userId) return null;
-  try {
-    const rawInput = sessionStorage.getItem(`prismatix.failed-turn.${userId}`);
-    return rawInput ? { rawInput, queryText: rawInput, attachments: [], restoredFromStorage: true } : null;
-  } catch {
-    return null;
-  }
+  const rawInput = readTabDraft(`prismatix.pending-turn.${userId}`) || readTabDraft(`prismatix.failed-turn.${userId}`);
+  return rawInput ? { rawInput, queryText: rawInput, attachments: [], restoredFromStorage: true } : null;
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, theme, onToggleTheme }) => {
-  const [input, setInput] = useState('');
+  const [initialDraftConversation] = useState(() => planInitialConversation(readSelectedConversation(user?.id)).conversationId);
+  const draftScope = useRef({ userId: user?.id, conversationId: initialDraftConversation });
+  const draftTexts = useRef(new Map<string | null, string>());
+  const draftFiles = useRef(new Map<string | null, FileUploadPayload[]>());
+  const [input, setInput] = useState(() => user?.id ? readTabDraft(composerDraftKey(user.id, initialDraftConversation)) : '');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSendPending, setIsSendPending] = useState(false);
@@ -442,6 +446,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   ]);
 
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
+  useLayoutEffect(() => {
+    const { userId, conversationId } = draftScope.current;
+    if (input.trim()) draftTexts.current.set(conversationId, input);
+    else draftTexts.current.delete(conversationId);
+    if (userId) writeTabDraft(composerDraftKey(userId, conversationId), input);
+  }, [input]);
+
+  const switchComposerDraft = (conversationId: string | null) => {
+    const current = draftScope.current;
+    if (conversationId === current.conversationId) return;
+    if (draftAttachments.length) draftFiles.current.set(current.conversationId, draftAttachments);
+    else draftFiles.current.delete(current.conversationId);
+    draftScope.current = { userId: user?.id, conversationId };
+    setInput(draftTexts.current.get(conversationId) ?? (user?.id ? readTabDraft(composerDraftKey(user.id, conversationId)) : ''));
+    setDraftAttachments(draftFiles.current.get(conversationId) ?? []);
+    setSendValidationError(null);
+  };
+
+  const promoteComposerDraft = (conversationId: string) => {
+    draftScope.current = { userId: user?.id, conversationId };
+  };
   const hasPendingVideoUploads = draftAttachments.some(
     (file) => file.kind === 'video' && file.status !== 'ready',
   );
@@ -461,6 +486,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const [isLoadingEarlierMessages, setIsLoadingEarlierMessages] = useState(false);
   const [earlierMessagesError, setEarlierMessagesError] = useState<string | null>(null);
   const [conversationLoadError, setConversationLoadError] = useState<string | null>(null);
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const conversationReadyRef = useRef(true);
 
   // Only the prompt text survives reload. An interrupted execution may
   // have completed on the server, so a reloaded draft is restore-only.
@@ -470,13 +497,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const setFailedTurnDraft = (draft: FailedTurnDraft | null) => {
     setFailedTurnDraftState(draft);
     if (!user?.id) return;
-    try {
-      const key = `prismatix.failed-turn.${user.id}`;
-      if (draft?.rawInput.trim()) sessionStorage.setItem(key, draft.rawInput);
-      else sessionStorage.removeItem(key);
-    } catch {
-      // Keep in-memory recovery available when browser storage is blocked.
-    }
+    writeTabDraft(`prismatix.failed-turn.${user.id}`, draft?.rawInput ?? '');
+    writeTabDraft(`prismatix.pending-turn.${user.id}`, '');
   };
   const [showDraftCopyFallback, setShowDraftCopyFallback] = useState(false);
   const activeDraftRef = useRef<{
@@ -662,6 +684,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   } = useAutoScroll(32);
   const pendingActionRef = useRef<(() => void) | null>(null);
 
+  useLayoutEffect(() => () => {
+    accountGenerationRef.current += 1;
+    conversationLoadSeqRef.current += 1;
+    conversationsRefreshSeqRef.current += 1;
+    sendLockRef.current = null;
+    pendingActionRef.current = null;
+    abortControllerRef.current?.abort();
+  }, []);
+
   const handleScrollToBottom = useCallback(() => {
     resetAutoScroll();
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -713,7 +744,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       window.clearTimeout(costEstimatorHideTimeoutRef.current);
       costEstimatorHideTimeoutRef.current = null;
     }
-    setInput('');
+    const conversationId = planInitialConversation(readSelectedConversation(user?.id)).conversationId;
+    draftScope.current = { userId: user?.id, conversationId };
+    draftTexts.current.clear();
+    draftFiles.current.clear();
+    setInput(user?.id ? readTabDraft(composerDraftKey(user.id, conversationId)) : '');
     setDraftAttachments([]);
     setFailedTurnDraftState(readFailedTurnDraft(user?.id));
     setShowDraftCopyFallback(false);
@@ -1276,6 +1311,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
   const openConversation = async (conversationId: string) => {
     const loadSeq = ++conversationLoadSeqRef.current;
+    if (selectedConversationIdRef.current !== conversationId) {
+      switchComposerDraft(conversationId);
+      messagesRef.current = [];
+      setMessages([]);
+    }
+    conversationReadyRef.current = false;
+    setConversationLoading(true);
+    setHasEarlierMessages(false);
+    setIsLoadingEarlierMessages(false);
     selectedConversationIdRef.current = conversationId;
     setSelectedConversationId(conversationId);
     setConversationId(conversationId);
@@ -1313,6 +1357,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         : await getConversationProjectId(supabase, conversationId);
       if (loadSeq !== conversationLoadSeqRef.current || selectedConversationIdRef.current !== conversationId) return;
       setActiveProjectId(projId ?? null);
+      conversationReadyRef.current = true;
     } catch (error) {
       if (
         loadSeq !== conversationLoadSeqRef.current ||
@@ -1322,11 +1367,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       }
       console.warn('[ChatInterface] Failed to load conversation:', error);
       setConversationLoadError('Failed to load conversation history.');
+    } finally {
+      if (loadSeq === conversationLoadSeqRef.current) setConversationLoading(false);
     }
   };
 
   const handleLoadEarlierMessages = async () => {
-    if (isLoadingEarlierMessages || !hasEarlierMessages || messages.length === 0) return;
+    if (isLoadingEarlierMessages || !hasEarlierMessages || messages.length === 0 || sendLockRef.current) return;
     const currentConvId = selectedConversationIdRef.current;
     if (!currentConvId) return;
 
@@ -1386,14 +1433,111 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         }
       });
     } catch (err) {
-      setEarlierMessagesError('Failed to load earlier messages.');
+      if (loadSeq === conversationLoadSeqRef.current) setEarlierMessagesError('Failed to load earlier messages.');
     } finally {
-      setIsLoadingEarlierMessages(false);
+      if (loadSeq === conversationLoadSeqRef.current) setIsLoadingEarlierMessages(false);
     }
   };
 
+  const estimatePaidTurn = useCallback((
+    queryText: string,
+    history: Message[],
+    attachments: FileUploadPayload[],
+    model: RouterModel,
+  ) => {
+    const historyText = history.map((message) => `${message.role}: ${extractTextContent(message.content)}`).join('\n');
+    const prompt = `${historyText}\nuser: ${queryText}`;
+    const imageCount = attachments.filter((file) => file.isImage).length;
+    const estimate = debateSelection !== 'off' && debateSelection !== 'auto'
+      ? calculateDebatePreFlightCost(debateSelection, model, prompt, imageCount)
+      : calculatePreFlightCost(model, prompt, imageCount);
+    if (!comparisonMode) return estimate;
+    const a = calculatePreFlightCost(comparisonModelA, prompt, imageCount);
+    const b = calculatePreFlightCost(comparisonModelB, prompt, imageCount);
+    return { ...estimate, estimatedUsd: a.estimatedUsd + b.estimatedUsd };
+  }, [comparisonMode, comparisonModelA, comparisonModelB, debateSelection]);
+
+  const approvePaidTurn = useCallback(async (estimateUsd: number, run: () => Promise<void>) => {
+    if (sendLockRef.current || !conversationReadyRef.current) return;
+    if (maxSpendCap !== null && estimateUsd > maxSpendCap) {
+      setSendValidationError(
+        `Estimated ${comparisonMode ? 'combined ' : ''}cost of $${estimateUsd.toFixed(4)} exceeds your configured spend cap of $${maxSpendCap.toFixed(2)}. Adjust your spend cap or choose different models.`,
+      );
+      return;
+    }
+
+    const lock = {
+      id: ++sendLockSeqRef.current,
+      userId: user?.id,
+      accountGeneration: accountGenerationRef.current,
+      conversationId: selectedConversationIdRef.current,
+    };
+    sendLockRef.current = lock;
+    setSendValidationError(null);
+    setIsSendPending(true);
+
+    const ownsTurn = () => sendLockRef.current === lock
+      && lock.userId === activeUserIdRef.current
+      && lock.accountGeneration === accountGenerationRef.current
+      && lock.conversationId === selectedConversationIdRef.current;
+    const release = () => {
+      if (sendLockRef.current !== lock) return;
+      sendLockRef.current = null;
+      setIsSendPending(false);
+    };
+    const execute = async () => {
+      try {
+        if (!ownsTurn()) return;
+        setIsSendPending(false);
+        await run();
+      } finally {
+        release();
+      }
+    };
+
+    let timeoutId: number | undefined;
+    let dailyTotalUsd: number;
+    try {
+      dailyTotalUsd = await Promise.race([
+        fetchServerDailyTotal(),
+        new Promise<never>((_, reject) => {
+          timeoutId = window.setTimeout(() => reject(new Error('budget_check_timeout')), 8000);
+        }),
+      ]);
+    } catch {
+      if (ownsTurn()) {
+        setSendValidationError('Daily budget check did not finish. Your draft is still here; retry the check before sending.');
+      }
+      release();
+      return;
+    } finally {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    }
+    if (!ownsTurn()) {
+      release();
+      return;
+    }
+
+    const decision = evaluateBudget({ estimateUsd, dailyTotalUsd, dailyLimitUsd: DAILY_BUDGET_LIMIT_USD });
+    if (decision.blocked) {
+      setSendValidationError(decision.reason ?? 'Daily budget limit reached.');
+      release();
+      return;
+    }
+    if (decision.requiresConfirm) {
+      pendingActionRef.current = () => void execute();
+      setBudgetConfirm({ estimateUsd, dailyTotalUsd });
+      return;
+    }
+    await execute();
+  }, [comparisonMode, maxSpendCap, user?.id]);
+
   const handleRestoreDraft = () => {
-    if (!failedTurnDraft) return;
+    if (!failedTurnDraft || isStreaming || sendLockRef.current) return;
+    if (input.trim() && input !== failedTurnDraft.rawInput) {
+      setActionNotice({ type: 'error', message: 'Copy the recovered text or clear the current draft before restoring it.' });
+      return;
+    }
     setInput(failedTurnDraft.rawInput);
     setDraftAttachments(failedTurnDraft.attachments);
     if (inputRef.current) {
@@ -1401,7 +1545,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       inputRef.current.focus();
     }
     // A recovered tab draft has no corresponding in-memory error bubble.
-    if (!failedTurnDraft.restoredFromStorage) setMessages((prev) => {
+    if (!failedTurnDraft.restoredFromStorage && failedTurnDraft.conversationId === selectedConversationIdRef.current) setMessages((prev) => {
       const last = prev[prev.length - 1];
       if (last && last.role === 'assistant' && typeof last.content === 'string' && last.content.startsWith('⚠️')) {
         return prev.slice(0, -1);
@@ -1426,6 +1570,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
   const handleRetryTurn = async () => {
     if (!failedTurnDraft || failedTurnDraft.restoredFromStorage || isStreaming || sendLockRef.current) return;
+    if (failedTurnDraft.conversationId !== selectedConversationIdRef.current) return;
     if (providerPlugins.loading || providerPlugins.error || !providerPlugins.isConfigured || enabledProviders.size === 0 || providerVerificationRequiresAction) {
       setSendValidationError(providerPlugins.error
         ? 'Provider setup could not be checked. Retry the check or open Provider Settings.'
@@ -1439,54 +1584,48 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       return;
     }
     const { rawInput, queryText, attachments, overrideModel, optimisticMessageId, optimisticMessageContent } = failedTurnDraft;
-    setFailedTurnDraft(null);
-    setShowDraftCopyFallback(false);
-
-    // Remove the failed assistant message if present
-    setMessages((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && last.role === 'assistant' && typeof last.content === 'string' && last.content.startsWith('⚠️')) {
-        return prev.slice(0, -1);
-      }
-      return prev;
-    });
-
     const optimisticIndex = optimisticMessageId
       ? messages.findIndex((message) => message.id === optimisticMessageId)
       : -1;
     const historyBeforeUser = optimisticIndex >= 0
       ? messages.slice(0, optimisticIndex)
       : messages.filter((message, index) => !(index === messages.length - 1 && message.role === 'assistant' && typeof message.content === 'string' && message.content.startsWith('⚠️')));
+    const estimate = estimatePaidTurn(queryText, historyBeforeUser, attachments, overrideModel ?? manualModelOverride ?? currentModel);
 
-    if (optimisticMessageId && optimisticIndex < 0) {
-      const attachmentSummary = attachments.length > 0
-        ? `[${attachments.length} file${attachments.length > 1 ? 's' : ''} attached]`
-        : '';
-      setMessages((prev) => prev.some((message) => message.id === optimisticMessageId)
-        ? prev
-        : [...prev, {
-            id: optimisticMessageId,
-            role: 'user',
-            content: optimisticMessageContent ?? (rawInput.trim() || attachmentSummary),
-            timestamp: Date.now(),
-            attachments: attachments.length > 0 ? attachments : undefined,
-          }]);
-    }
-    setInput('');
-    setDraftAttachments([]);
-
-    await executeTurn({
-      queryText,
-      attachmentsToProcess: attachments,
-      historyMessages: historyBeforeUser,
-      overrideModel: overrideModel || undefined,
-      skipBudgetCheck: true,
-      optimisticMessageId,
+    await approvePaidTurn(estimate.estimatedUsd, async () => {
+      setFailedTurnDraft(null);
+      setShowDraftCopyFallback(false);
+      setMessages((previous) => {
+        const last = previous[previous.length - 1];
+        const withoutError = last?.role === 'assistant' && typeof last.content === 'string' && last.content.startsWith('⚠️')
+          ? previous.slice(0, -1)
+          : previous;
+        if (!optimisticMessageId || withoutError.some((message) => message.id === optimisticMessageId)) return withoutError;
+        return [...withoutError, {
+          id: optimisticMessageId,
+          role: 'user',
+          content: optimisticMessageContent ?? (rawInput.trim() || `[${attachments.length} file${attachments.length === 1 ? '' : 's'} attached]`),
+          timestamp: Date.now(),
+          attachments: attachments.length ? attachments : undefined,
+        }];
+      });
+      activeDraftRef.current = { rawInput, queryText, attachments, overrideModel, optimisticMessageId, optimisticMessageContent };
+      setInput('');
+      setDraftAttachments([]);
+      await executeTurn({
+        queryText,
+        attachmentsToProcess: attachments,
+        historyMessages: historyBeforeUser,
+        overrideModel,
+        promptTokenEstimate: estimate.promptTokens,
+        optimisticMessageId,
+      });
     });
   };
 
   const handleSelectSearchResult = async (targetConvId: string, targetMsgId: string | null) => {
     setIsGlobalSearchOpen(false);
+    if (isStreaming || sendLockRef.current) return;
     if (selectedConversationIdRef.current !== targetConvId) {
       writeSelectedConversation(user?.id ?? null, targetConvId);
       await openConversation(targetConvId);
@@ -1542,12 +1681,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const handleNewChat = () => {
     if (isStreaming || sendLockRef.current) return;
     conversationLoadSeqRef.current += 1;
+    conversationReadyRef.current = true;
+    setConversationLoading(false);
+    setIsLoadingEarlierMessages(false);
+    setHasEarlierMessages(false);
+    setEarlierMessagesError(null);
+    switchComposerDraft(null);
     selectedConversationIdRef.current = null;
     setSelectedConversationId(null);
     writeSelectedConversation(user?.id ?? null, NEW_CHAT_SELECTION);
     resetConversation();
     setMessages([]);
-    setDraftAttachments([]);
     setDuplicateNotice(null);
     setContextExcludedCount(0);
     setConversationLoadError(null);
@@ -1803,6 +1947,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       // Account-change isolation also invalidates any in-flight load from the
       // prior account so its messages can never be applied to the new account.
       conversationLoadSeqRef.current += 1;
+      conversationReadyRef.current = true;
+      setConversationLoading(false);
+      setConversationLoadError(null);
       selectedConversationIdRef.current = null;
       setSelectedConversationId(null);
       setMessages([]);
@@ -1828,7 +1975,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     historyMessages,
     overrideModel,
     promptTokenEstimate: passedPromptTokenEstimate,
-    skipBudgetCheck = false,
     regenerateTargetMessageId,
     optimisticMessageId,
   }: {
@@ -1837,7 +1983,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     historyMessages: Message[];
     overrideModel?: RouterModel | null;
     promptTokenEstimate?: number;
-    skipBudgetCheck?: boolean;
     regenerateTargetMessageId?: string;
     optimisticMessageId?: string;
   }) => {
@@ -1851,74 +1996,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       && activeUserIdRef.current === requestUserId;
     if (!requestStillCurrent()) return;
     const estimatedModel = overrideModel || manualModelOverride || currentModel;
-    const historyText = historyMessages.map((msg) => {
-      const content = extractTextContent(msg.content);
-      return `${msg.role}: ${content}`;
-    }).join('\n');
-    const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
-    const isDebate = debateSelection !== 'off' && debateSelection !== 'auto';
-    const preflight = isDebate
-      ? calculateDebatePreFlightCost(
-          debateSelection,
-          estimatedModel,
-          `${historyText}\nuser: ${queryText}`,
-          imageCount,
-        )
-      : calculatePreFlightCost(
-          estimatedModel,
-          `${historyText}\nuser: ${queryText}`,
-          imageCount,
-        );
-    const promptTokenEstimate = passedPromptTokenEstimate ?? preflight.promptTokens;
-    const comparisonBudgetEstimate = comparisonMode
-      ? calculatePreFlightCost(comparisonModelA, `${historyText}\nuser: ${queryText}`, imageCount).estimatedUsd
-        + calculatePreFlightCost(comparisonModelB, `${historyText}\nuser: ${queryText}`, imageCount).estimatedUsd
-      : preflight.estimatedUsd;
-
-    if (!skipBudgetCheck) {
-      const dailyTotalUsd = await fetchServerDailyTotal();
-      if (!requestStillCurrent()) return;
-      const budgetDecision = evaluateBudget({
-        estimateUsd: comparisonBudgetEstimate,
-        dailyTotalUsd,
-        dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
-      });
-
-      if (budgetDecision.blocked) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
-            timestamp: Date.now(),
-          },
-        ]);
-        return;
-      }
-
-      if (budgetDecision.requiresConfirm) {
-        pendingActionRef.current = () => {
-          if (!requestStillCurrent()) return;
-          void executeTurn({
-            queryText,
-            attachmentsToProcess,
-            historyMessages,
-            overrideModel,
-            promptTokenEstimate,
-            skipBudgetCheck: true,
-          });
-        };
-        setBudgetConfirm({
-          estimateUsd: comparisonBudgetEstimate,
-          dailyTotalUsd,
-        });
-        return;
-      }
-    }
+    const promptTokenEstimate = passedPromptTokenEstimate
+      ?? estimatePaidTurn(queryText, historyMessages, attachmentsToProcess, estimatedModel).promptTokens;
 
     // PX07: pin the active conversation for this logical send (the selected
     // conversation, or the deterministic New Chat id).
     const sendConversationId = selectedConversationIdRef.current ?? getConversationId();
+    const pendingDraftKey = requestUserId ? `prismatix.pending-turn.${requestUserId}` : undefined;
+    if (pendingDraftKey) writeTabDraft(pendingDraftKey, activeDraftRef.current?.rawInput ?? queryText);
     if (selectedConversationIdRef.current) {
       setConversationId(selectedConversationIdRef.current);
     }
@@ -2236,6 +2321,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         });
 
         if (selectedConversationIdRef.current === null) {
+          promoteComposerDraft(sendConversationId);
           selectedConversationIdRef.current = sendConversationId;
           setSelectedConversationId(sendConversationId);
           setConversationId(sendConversationId);
@@ -2243,6 +2329,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           if (activeProjectId) void assignConversationProject(supabase, sendConversationId, activeProjectId);
         }
 
+        if (pendingDraftKey && comparisonResultsData.modelA.transcriptSaved && comparisonResultsData.modelB.transcriptSaved) writeTabDraft(pendingDraftKey, '');
+        activeDraftRef.current = null;
         setIsStreaming(false);
         setSpendRefreshKey((prev) => prev + 1);
         void refreshConversations();
@@ -2312,6 +2400,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       // A New Chat becomes a real, selected conversation once its first send
       // creates the durable execution, so reload reopens it.
       if (selectedConversationIdRef.current === null) {
+        promoteComposerDraft(sendConversationId);
         selectedConversationIdRef.current = sendConversationId;
         setSelectedConversationId(sendConversationId);
         writeSelectedConversation(user?.id ?? null, sendConversationId);
@@ -2605,7 +2694,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         });
       }
       scheduleCostEstimatorHide(3000);
-      setFailedTurnDraft(null);
+      if (receipt?.transcript?.saved === true && pendingDraftKey) writeTabDraft(pendingDraftKey, '');
       activeDraftRef.current = null;
       // PX07: the list/title changed server-side; refresh in the background.
       void refreshConversations();
@@ -2638,6 +2727,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           queryText,
           attachments: attachmentsToProcess,
           error: 'Generation cancelled',
+          conversationId: selectedConversationIdRef.current,
           overrideModel: overrideModel || undefined,
           optimisticMessageId,
           optimisticMessageContent: activeDraftRef.current?.optimisticMessageContent,
@@ -2676,6 +2766,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           queryText,
           attachments: attachmentsToProcess,
           error: errorDesc,
+          conversationId: selectedConversationIdRef.current,
           overrideModel: overrideModel || undefined,
           optimisticMessageId,
           optimisticMessageContent: activeDraftRef.current?.optimisticMessageContent,
@@ -2686,6 +2777,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       }
     } finally {
       if (requestStillCurrent()) {
+        activeDraftRef.current = null;
         if (abortControllerRef.current === abortController) abortControllerRef.current = null;
         if (activeStreamRef.current?.accountGeneration === requestAccountGeneration) activeStreamRef.current = null;
         setIsStreaming(false);
@@ -2695,10 +2787,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     }
   };
 
-  const handleSend = async (skipBudgetCheck = false, existingLockId?: number) => {
+  const handleSend = async () => {
     // Allow send if there's text OR attachments
     const hasContent = input.trim() || draftAttachments.length > 0;
-    if (!hasContent || isStreaming) return;
+    if (!hasContent || isStreaming || sendLockRef.current || !conversationReadyRef.current) return;
     if (hasPendingVideoUploads) {
       setSendValidationError('Attachments are still processing. Please wait for completion before sending.');
       return;
@@ -2754,185 +2846,55 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       }
     }
 
-    const estimatedModel = manualModelOverride || currentModel;
-    const historyText = messages.map((msg) => {
-      const content = extractTextContent(msg.content);
-      return `${msg.role}: ${content}`;
-    }).join('\n');
-    const imageCount = draftAttachments.filter((file) => file.isImage).length;
-    const isDebate = debateSelection !== 'off' && debateSelection !== 'auto';
-    const preflight = isDebate
-      ? calculateDebatePreFlightCost(
-          debateSelection,
-          estimatedModel,
-          `${historyText}\nuser: ${queryText}`,
-          imageCount,
-        )
-      : calculatePreFlightCost(
-          estimatedModel,
-          `${historyText}\nuser: ${queryText}`,
-          imageCount,
-        );
-    const promptTokenEstimate = preflight.promptTokens;
-    const budgetEstimateUsd = comparisonMode
-      ? calculatePreFlightCost(comparisonModelA, `${historyText}\nuser: ${queryText}`, imageCount).estimatedUsd
-        + calculatePreFlightCost(comparisonModelB, `${historyText}\nuser: ${queryText}`, imageCount).estimatedUsd
-      : preflight.estimatedUsd;
+    const estimate = estimatePaidTurn(queryText, messages, draftAttachments, manualModelOverride || currentModel);
+    await approvePaidTurn(estimate.estimatedUsd, async () => {
+      // Build display content for user message
+      const attachmentSummary = draftAttachments.length > 0
+        ? `[${draftAttachments.length} file${draftAttachments.length > 1 ? 's' : ''} attached]`
+        : '';
 
-    // F13: Spend cap enforcement
-    if (comparisonMode) {
-      const preflightA = calculatePreFlightCost(
-        comparisonModelA,
-        `${historyText}\nuser: ${queryText}`,
-        imageCount,
-      );
-      const preflightB = calculatePreFlightCost(
-        comparisonModelB,
-        `${historyText}\nuser: ${queryText}`,
-        imageCount,
-      );
-      const combined = preflightA.estimatedUsd + preflightB.estimatedUsd;
-      if (maxSpendCap !== null && combined > maxSpendCap) {
-        setSendValidationError(
-          `Estimated combined cost of $${combined.toFixed(4)} exceeds your configured spend cap of $${maxSpendCap.toFixed(2)}. Adjust your spend cap or choose different models.`,
-        );
-        return;
-      }
-    } else if (maxSpendCap !== null && preflight.estimatedUsd > maxSpendCap) {
-      setSendValidationError(
-        `Estimated cost of $${preflight.estimatedUsd.toFixed(4)} exceeds your configured spend cap of $${maxSpendCap.toFixed(2)}. Adjust your spend cap or choose an economy model.`,
-      );
-      return;
-    }
-
-    let sendLock = sendLockRef.current;
-    if (sendLock) {
-      if (existingLockId !== sendLock.id) return;
-    } else {
-      if (existingLockId !== undefined) return;
-      sendLock = {
-        id: ++sendLockSeqRef.current,
-        userId: user?.id,
-        accountGeneration: accountGenerationRef.current,
-        conversationId: selectedConversationIdRef.current,
+      const firstImage = draftAttachments.find((f) => f.isImage);
+      const optimisticMessageId = `optimistic-${crypto.randomUUID()}`;
+      const userMessage: Message = {
+        id: optimisticMessageId,
+        role: 'user',
+        content: input.trim() || attachmentSummary,
+        timestamp: Date.now(),
+        ...(firstImage?.imageData && {
+          imageData: firstImage.imageData,
+          mediaType: firstImage.mediaType,
+        }),
+        attachments: draftAttachments.length > 0 ? [...draftAttachments] : undefined,
       };
-      sendLockRef.current = sendLock;
-    }
-    const releaseSendLock = () => {
-      if (sendLockRef.current?.id === sendLock!.id) {
-        sendLockRef.current = null;
-        setIsSendPending(false);
-      }
-    };
 
-    if (!skipBudgetCheck) {
-      setIsSendPending(true);
-      // Fetch from server first so budget cannot be bypassed by clearing localStorage or opening a new tab.
-      // Falls back to localStorage total if the server is unreachable.
-      let timeoutId: number | undefined;
-      let dailyTotalUsd: number;
-      try {
-        dailyTotalUsd = await Promise.race([
-          fetchServerDailyTotal(),
-          new Promise<never>((_, reject) => {
-            timeoutId = window.setTimeout(() => reject(new Error('budget_check_timeout')), 8000);
-          }),
-        ]);
-      } catch {
-        setSendValidationError('Daily budget check did not finish. Your draft is still here; retry the check before sending.');
-        releaseSendLock();
-        return;
-      } finally {
-        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
-      }
-      if (sendLockRef.current?.id !== sendLock.id
-        || sendLock.accountGeneration !== accountGenerationRef.current
-        || sendLock.userId !== user?.id
-        || sendLock.conversationId !== selectedConversationIdRef.current) {
-        releaseSendLock();
-        return;
-      }
-      const budgetDecision = evaluateBudget({
-        estimateUsd: budgetEstimateUsd,
-        dailyTotalUsd,
-        dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
-      });
+      const historyForRequest = [...messages];
+      setMessages((prev) => [...prev, userMessage]);
 
-      if (budgetDecision.blocked) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
-            timestamp: Date.now(),
-          },
-        ]);
-        releaseSendLock();
-        return;
-      }
+      // Preserve draft in activeDraftRef before clearing inputs so it is recoverable if anything fails
+      activeDraftRef.current = {
+        rawInput: input,
+        queryText,
+        attachments: [...draftAttachments],
+        overrideModel: manualModelOverride || undefined,
+        optimisticMessageId,
+        optimisticMessageContent: String(userMessage.content),
+      };
 
-      if (budgetDecision.requiresConfirm) {
-        pendingActionRef.current = () => void handleSend(true, sendLock!.id);
-        setBudgetConfirm({
-          estimateUsd: budgetEstimateUsd,
-          dailyTotalUsd,
-        });
-        return;
-      }
-    }
+      // Clear inputs
+      setInput('');
+      const attachmentsToProcess = [...draftAttachments];
+      setDraftAttachments([]);
+      if (inputRef.current) inputRef.current.style.height = 'auto';
 
-    // Build display content for user message
-    const attachmentSummary = draftAttachments.length > 0
-      ? `[${draftAttachments.length} file${draftAttachments.length > 1 ? 's' : ''} attached]`
-      : '';
-
-    const firstImage = draftAttachments.find((f) => f.isImage);
-    const optimisticMessageId = `optimistic-${crypto.randomUUID()}`;
-    const userMessage: Message = {
-      id: optimisticMessageId,
-      role: 'user',
-      content: input.trim() || attachmentSummary,
-      timestamp: Date.now(),
-      ...(firstImage?.imageData && {
-        imageData: firstImage.imageData,
-        mediaType: firstImage.mediaType,
-      }),
-      attachments: draftAttachments.length > 0 ? [...draftAttachments] : undefined,
-    };
-
-    const historyForRequest = [...messages];
-    setMessages((prev) => [...prev, userMessage]);
-
-    // Preserve draft in activeDraftRef before clearing inputs so it is recoverable if anything fails
-    activeDraftRef.current = {
-      rawInput: input,
-      queryText,
-      attachments: [...draftAttachments],
-      overrideModel: manualModelOverride || undefined,
-      optimisticMessageId,
-      optimisticMessageContent: String(userMessage.content),
-    };
-
-    // Clear inputs
-    setInput('');
-    const attachmentsToProcess = [...draftAttachments];
-    setDraftAttachments([]);
-    if (inputRef.current) inputRef.current.style.height = 'auto';
-
-    setIsSendPending(false);
-    try {
       await executeTurn({
         queryText,
         attachmentsToProcess,
         historyMessages: historyForRequest,
-        overrideModel: manualModelOverride || undefined,
-        promptTokenEstimate,
-        skipBudgetCheck: true,
+        overrideModel: manualModelOverride,
+        promptTokenEstimate: estimate.promptTokens,
         optimisticMessageId,
       });
-    } finally {
-      releaseSendLock();
-    }
+    });
   };
 
   const handleVerifyProviders = async () => {
@@ -2979,73 +2941,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     const selectedOverride = manualModelOverrideRef.current;
     const selectedModel = currentModelRef.current;
 
-    const targetModel = modelOverride !== undefined ? modelOverride : (selectedOverride || selectedModel);
-    const historyText = historyBeforeUser.map((msg) => {
-      const content = extractTextContent(msg.content);
-      return `${msg.role}: ${content}`;
-    }).join('\n');
-    const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
-    const isDebate = debateSelection !== 'off' && debateSelection !== 'auto';
-    const preflight = isDebate
-      ? calculateDebatePreFlightCost(
-          debateSelection,
-          targetModel,
-          `${historyText}\nuser: ${userPrompt}`,
-          imageCount,
-        )
-      : calculatePreFlightCost(
-          targetModel,
-          `${historyText}\nuser: ${userPrompt}`,
-          imageCount,
-        );
-
-    const dailyTotalUsd = await fetchServerDailyTotal();
-    const budgetDecision = evaluateBudget({
-      estimateUsd: preflight.estimatedUsd,
-      dailyTotalUsd,
-      dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
-    });
-
-    if (budgetDecision.blocked) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
-          timestamp: Date.now(),
-        },
-      ]);
-      return;
-    }
-
-    const targetAssistantMsg = snapshot[index];
-    const regenerateTargetMessageId = targetAssistantMsg?.id;
-
-    const executeRegenerateAction = () => {
+    const overrideModel = modelOverride ?? selectedOverride;
+    const estimate = estimatePaidTurn(userPrompt, historyBeforeUser, attachmentsToProcess, overrideModel ?? selectedModel);
+    const run = executeTurnRef.current;
+    await approvePaidTurn(estimate.estimatedUsd, async () => {
       setMessages(snapshot.slice(0, userIndex + 1));
       resetAutoScroll();
-      void executeTurnRef.current({
+      await run({
         queryText: userPrompt,
         attachmentsToProcess,
         historyMessages: historyBeforeUser,
-        overrideModel: modelOverride !== undefined ? modelOverride : selectedOverride,
-        promptTokenEstimate: preflight.promptTokens,
-        skipBudgetCheck: true,
-        regenerateTargetMessageId,
+        overrideModel,
+        promptTokenEstimate: estimate.promptTokens,
+        regenerateTargetMessageId: snapshot[index]?.id,
       });
-    };
-
-    if (budgetDecision.requiresConfirm) {
-      pendingActionRef.current = executeRegenerateAction;
-      setBudgetConfirm({
-        estimateUsd: preflight.estimatedUsd,
-        dailyTotalUsd,
-      });
-      return;
-    }
-
-    executeRegenerateAction();
-  }, [resetAutoScroll, debateSelection]);
+    });
+  }, [approvePaidTurn, estimatePaidTurn, resetAutoScroll]);
 
   const handleEditPrompt = useCallback(async (index: number, newPrompt: string) => {
     if (isStreamingRef.current || sendLockRef.current) return;
@@ -3064,69 +2975,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       timestamp: Date.now(),
     };
 
-    const targetModel = selectedOverride || selectedModel;
-    const historyText = historyBeforeUser.map((msg) => {
-      const content = extractTextContent(msg.content);
-      return `${msg.role}: ${content}`;
-    }).join('\n');
-    const imageCount = attachmentsToProcess.filter((file) => file.isImage).length;
-    const isDebate = debateSelection !== 'off' && debateSelection !== 'auto';
-    const preflight = isDebate
-      ? calculateDebatePreFlightCost(
-          debateSelection,
-          targetModel,
-          `${historyText}\nuser: ${newPrompt}`,
-          imageCount,
-        )
-      : calculatePreFlightCost(
-          targetModel,
-          `${historyText}\nuser: ${newPrompt}`,
-          imageCount,
-        );
-
-    const dailyTotalUsd = await fetchServerDailyTotal();
-    const budgetDecision = evaluateBudget({
-      estimateUsd: preflight.estimatedUsd,
-      dailyTotalUsd,
-      dailyLimitUsd: DAILY_BUDGET_LIMIT_USD,
-    });
-
-    if (budgetDecision.blocked) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `⚠️ ${budgetDecision.reason || 'Daily budget limit reached.'}`,
-          timestamp: Date.now(),
-        },
-      ]);
-      return;
-    }
-
-    const executeEditAction = () => {
+    const estimate = estimatePaidTurn(newPrompt, historyBeforeUser, attachmentsToProcess, selectedOverride ?? selectedModel);
+    const run = executeTurnRef.current;
+    await approvePaidTurn(estimate.estimatedUsd, async () => {
       setMessages([...historyBeforeUser, updatedUserMessage]);
       resetAutoScroll();
-      void executeTurnRef.current({
+      await run({
         queryText: newPrompt,
         attachmentsToProcess,
         historyMessages: historyBeforeUser,
         overrideModel: selectedOverride,
-        promptTokenEstimate: preflight.promptTokens,
-        skipBudgetCheck: true,
+        promptTokenEstimate: estimate.promptTokens,
       });
-    };
-
-    if (budgetDecision.requiresConfirm) {
-      pendingActionRef.current = executeEditAction;
-      setBudgetConfirm({
-        estimateUsd: preflight.estimatedUsd,
-        dailyTotalUsd,
-      });
-      return;
-    }
-
-    executeEditAction();
-  }, [resetAutoScroll, debateSelection]);
+    });
+  }, [approvePaidTurn, estimatePaidTurn, resetAutoScroll]);
 
   const handleFeedback = useCallback((index: number, type: 'up' | 'down') => {
     setMessages((prev) => {
@@ -3185,6 +3047,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
@@ -3385,9 +3248,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     ? 'streaming'
     : isSendPending
       ? 'pending'
+      : conversationLoading
+      ? 'history'
       : hasPendingVideoUploads
       ? 'video'
-      : sendValidationError
+      : sendValidationError || conversationLoadError
         ? 'invalid'
         : !providerCanAttemptRouterSend
           ? 'invalid'
@@ -3975,6 +3840,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           )
           : (
             <div className='messages-list'>
+              {conversationLoading && <div className='conversation-load-error-banner' role='status'>Loading conversation…</div>}
               {conversationLoadError && (
                 <div className='conversation-load-error-banner' role='alert'>
                   <span>{conversationLoadError}</span>
@@ -4084,6 +3950,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
               type='button'
               className='draft-recovery-restore-btn'
               onClick={handleRestoreDraft}
+              disabled={isStreaming || isSendPending}
             >
               Restore draft
             </button>
@@ -4094,11 +3961,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             >
               Copy draft
             </button>
-            {!failedTurnDraft.restoredFromStorage && <button
+            {!failedTurnDraft.restoredFromStorage && failedTurnDraft.conversationId === selectedConversationId && <button
               type='button'
               className='draft-recovery-retry-btn'
               onClick={() => void handleRetryTurn()}
-              disabled={isStreaming}
+              disabled={isStreaming || isSendPending}
             >
               Retry
             </button>}
@@ -4107,6 +3974,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
               className='draft-recovery-dismiss-btn'
               onClick={() => { setFailedTurnDraft(null); setShowDraftCopyFallback(false); }}
               aria-label='Dismiss recovery notice'
+              disabled={isStreaming || isSendPending}
             >
               ✕
             </button>
