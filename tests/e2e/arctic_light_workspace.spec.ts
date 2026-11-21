@@ -95,7 +95,7 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
     const events = [
       { type: 'meta', model: body.modelOverride || 'gemini-3.8-flash', cost: { finalUsd: 0.00032 } },
       { type: 'content_block_delta', delta: { text: `Mock reply ${execution}` } },
-      { type: 'receipt', executionId: `mock-arctic-${execution}`, status: 'completed', settlement: { state: 'settled', committedUsd: 0.00032, pendingCalls: 0 }, calls: [] },
+      { type: 'receipt', executionId: `mock-arctic-${execution}`, status: 'completed', settlement: { state: 'settled', committedUsd: 0.00032, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: body.modelOverride || 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0.00032 }] },
     ];
     await route.fulfill({
       status: 200,

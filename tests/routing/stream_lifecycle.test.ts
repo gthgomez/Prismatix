@@ -52,7 +52,14 @@ const RECEIPT: TerminalReceipt = {
   createdAt: '2026-10-06T00:00:00.000Z',
   finalizedAt: '2026-10-06T00:00:05.000Z',
   settlement: { state: 'settled', committedUsd: 0.25, pendingCalls: 0 },
-  calls: [],
+  calls: [{
+    stage: 'baseline',
+    participant: 'openrouter',
+    attemptNumber: 1,
+    servedModel: 'gpt-6-sol',
+    costStatus: 'settled',
+    totalCost: 0.25,
+  }],
 };
 
 describe('createNormalizedProxyStream completion', () => {

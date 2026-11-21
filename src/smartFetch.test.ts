@@ -294,7 +294,7 @@ describe('smartFetch debate support', () => {
   });
 
   it('preserves terminal receipt and interruption status in sync responses', async () => {
-    const receipt = { executionId: 'exec-1', status: 'indeterminate', terminalOutcome: 'upstream_interrupted', transcript: { saved: true }, settlement: { state: 'pending' }, calls: [] };
+    const receipt = { executionId: 'exec-1', status: 'indeterminate', terminalOutcome: 'upstream_interrupted', transcript: { saved: true }, settlement: { state: 'pending', committedUsd: 0, pendingCalls: 1 }, calls: [] };
     const sse = [
       { type: 'content_block_delta', delta: { text: 'partial answer' } },
       { type: 'receipt', ...receipt },

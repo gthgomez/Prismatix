@@ -8,7 +8,7 @@ const response = (id: string, reply = 'Synthetic compact-chat reply.') => ({
   body: [
     { type: 'meta', model: 'gemini-3.8-flash', cost: { finalUsd: 0.0001 } },
     { type: 'content_block_delta', delta: { text: reply } },
-    { type: 'receipt', executionId: id, status: 'completed', settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
+    { type: 'receipt', executionId: id, status: 'completed', settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0.0001 }] },
   ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
 });
 

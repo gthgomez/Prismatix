@@ -43,7 +43,7 @@ describe('useStreamHandler — readRouterStream', () => {
       'data: {"type":"content_block_delta","delta":{"text":"Hello "}}\n\n',
       'data: {"type":"content_block_delta","delta":{"text":"world!"}}\n\n',
       'data: {"type":"meta","cost":{"finalUsd":0.00042}}\n\n',
-      'data: {"type":"receipt","executionId":"ex-123","status":"completed","settlement":{"state":"settled","committedUsd":0.00042,"pendingCalls":0},"calls":[]}\n\n',
+      'data: {"type":"receipt","executionId":"ex-123","status":"completed","settlement":{"state":"settled","committedUsd":0.00042,"pendingCalls":0},"calls":[{"costStatus":"settled","totalCost":0.00042}]}\n\n',
       'data: [DONE]\n\n',
     ];
     const stream = createMockStream(sse);
@@ -76,6 +76,40 @@ describe('useStreamHandler — readRouterStream', () => {
     expect(result.receipt).toBeUndefined();
     expect(result.streamedFinalUsd).toBeUndefined();
     expect(result.terminationStatus).toBe('interrupted');
+  });
+
+  it.each([
+    ['missing settlement', { type: 'receipt', executionId: 'bad-missing', status: 'completed', calls: [] }],
+    ['null settled amount', { type: 'receipt', executionId: 'bad-null', status: 'completed', settlement: { state: 'settled', committedUsd: null, pendingCalls: 0 }, calls: [{ costStatus: 'settled', totalCost: 0 }] }],
+    ['negative settled amount', { type: 'receipt', executionId: 'bad-negative', status: 'completed', settlement: { state: 'settled', committedUsd: -1, pendingCalls: 0 }, calls: [{ costStatus: 'settled', totalCost: 0 }] }],
+    ['non-numeric settled amount', { type: 'receipt', executionId: 'bad-nan', status: 'completed', settlement: { state: 'settled', committedUsd: 'NaN', pendingCalls: 0 }, calls: [{ costStatus: 'settled', totalCost: 0 }] }],
+    ['settled with pending calls', { type: 'receipt', executionId: 'bad-pending', status: 'completed', settlement: { state: 'settled', committedUsd: 0, pendingCalls: 1 }, calls: [{ costStatus: 'settled', totalCost: 0 }] }],
+    ['settled without calls', { type: 'receipt', executionId: 'bad-empty', status: 'completed', settlement: { state: 'settled', committedUsd: 0, pendingCalls: 0 }, calls: [] }],
+    ['released with a charge', { type: 'receipt', executionId: 'bad-released', status: 'failed', settlement: { state: 'released', committedUsd: 1, pendingCalls: 0 }, calls: [] }],
+    ['released with calls', { type: 'receipt', executionId: 'bad-released-call', status: 'failed', settlement: { state: 'released', committedUsd: 0, pendingCalls: 0 }, calls: [{ costStatus: 'settled', totalCost: 1 }] }],
+    ['settled with an unresolved call', { type: 'receipt', executionId: 'bad-settled-call', status: 'completed', settlement: { state: 'settled', committedUsd: 1, pendingCalls: 0 }, calls: [{ costStatus: 'pending', totalCost: 1 }] }],
+  ])('ignores malformed receipt settlement (%s) without dropping streamed content', async (_case, event) => {
+    const result = await readRouterStream(createMockStream([
+      'data: {"type":"content_block_delta","delta":{"text":"Keep the answer"}}\n\n',
+      `data: ${JSON.stringify(event)}\n\n`,
+      'data: [DONE]\n\n',
+    ]), 0, makeCallbacks());
+
+    expect(result.assistantContent).toBe('Keep the answer');
+    expect(result.receipt).toBeUndefined();
+    expect(result.isDoneReceived).toBe(true);
+  });
+
+  it('does not confirm a malformed transcript marker, while preserving valid settlement and content', async () => {
+    const result = await readRouterStream(createMockStream([
+      'data: {"type":"content_block_delta","delta":{"text":"Keep the answer"}}\n\n',
+      `data: ${JSON.stringify({ type: 'receipt', executionId: 'transcript-bad', status: 'completed', settlement: { state: 'settled', committedUsd: 0, pendingCalls: 0 }, calls: [{ costStatus: 'settled', totalCost: 0 }], transcript: { saved: 'true' } })}\n\n`,
+      'data: [DONE]\n\n',
+    ]), 0, makeCallbacks());
+
+    expect(result.assistantContent).toBe('Keep the answer');
+    expect(result.receipt?.settlement).toEqual({ state: 'settled', committedUsd: 0, pendingCalls: 0 });
+    expect(result.receipt).not.toHaveProperty('transcript');
   });
 
   it.each(['close', 'error'] as const)('emits a complete trailing event when the stream ends with %s before a blank line', async (ending) => {
@@ -181,7 +215,7 @@ describe('useStreamHandler — readRouterStream', () => {
   it('marks early stream close as interrupted even when a receipt was emitted before [DONE]', async () => {
     const sse = [
       'data: {"type":"content_block_delta","delta":{"text":"Tokens before drop"}}\n\n',
-      'data: {"type":"receipt","executionId":"ex-interrupted","status":"started","settlement":{"state":"settled","committedUsd":0.00015,"pendingCalls":0},"calls":[]}\n\n',
+      'data: {"type":"receipt","executionId":"ex-interrupted","status":"started","settlement":{"state":"settled","committedUsd":0.00015,"pendingCalls":0},"calls":[{"costStatus":"settled","totalCost":0.00015}]}\n\n',
       // socket dropped abruptly without [DONE]
     ];
     const stream = createMockStream(sse);

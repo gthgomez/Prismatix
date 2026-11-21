@@ -42,7 +42,7 @@ test('enabled Compare reloads both responses and never writes a message', async 
     const events = [
       { type: 'meta', model },
       { type: 'content_block_delta', delta: { text: content } },
-      { type: 'receipt', executionId, status: 'completed', transcript: { saved: true }, settlement: { state: 'settled', committedUsd: 0.001, pendingCalls: 0 }, calls: [] },
+      { type: 'receipt', executionId, status: 'completed', transcript: { saved: true }, settlement: { state: 'settled', committedUsd: 0.001, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: String(model), costStatus: 'settled', totalCost: 0.001 }] },
     ];
     await route.fulfill({
       headers: { 'Content-Type': 'text/event-stream', 'X-Prismatix-Execution-Id': executionId! },

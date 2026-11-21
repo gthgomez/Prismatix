@@ -98,7 +98,7 @@ test('verified first-run connection sends once and reloads fixture-persisted out
     const events = [
       { type: 'meta', model: 'gemini-3.8-flash' },
       { type: 'content_block_delta', delta: { text: GENERATED_REPLY } },
-      { type: 'receipt', executionId: EXECUTION_ID, status: 'completed', settlement: { state: 'settled', committedUsd: 0, pendingCalls: 0 }, calls: [] },
+      { type: 'receipt', executionId: EXECUTION_ID, status: 'completed', settlement: { state: 'settled', committedUsd: 0, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0 }] },
     ];
     const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n';
     signalRouterStarted();

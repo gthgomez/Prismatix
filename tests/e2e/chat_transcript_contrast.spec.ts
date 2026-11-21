@@ -18,7 +18,7 @@ test('Compare, Markdown and code remain readable in both Arctic themes', async (
     ].join('\n');
     const events = [
       { type: 'content_block_delta', delta: { text: answer } },
-      { type: 'receipt', executionId: modelOverride, status: 'completed', transcript: { saved: true }, settlement: { state: 'settled', committedUsd: 0.0012, pendingCalls: 0 }, calls: [] },
+      { type: 'receipt', executionId: modelOverride, status: 'completed', transcript: { saved: true }, settlement: { state: 'settled', committedUsd: 0.0012, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: modelOverride, costStatus: 'settled', totalCost: 0.0012 }] },
     ];
     await route.fulfill({
       headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': modelOverride },
