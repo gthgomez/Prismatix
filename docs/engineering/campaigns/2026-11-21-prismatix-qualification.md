@@ -126,6 +126,11 @@ blind security assessment. The implementation commits are `194cc44` (PXQ-10),
 | PXQ-21 / P1 | A model identifier such as `constructor` matched an inherited JavaScript object property in catalog and router lookup code. It could be treated as a known model or rate even though it was not in either registry. | Require own properties in model and tariff lookup and override normalization. Unit checks cover inherited names and non-NaN unknown costs; real router-handler tests reject them before any provider call. |
 | PXQ-22 / P1 | Reload a transcript containing a model ID newer than the local catalog: the ID could disappear, and a route rationale could be attached to the currently selected model instead. An interrupted stream with a genuinely settled $0 receipt also lost that confirmation. | Retain unknown model identity and rationale without inventing a model tier; preserve and record a settled zero while keeping the stream marked interrupted. Service and UI regressions cover both paths. |
 | PXQ-23 / P1 | A malformed streamed receipt was cast directly to the trusted receipt type. Missing settlement fields could crash a turn, while invalid amounts or transcript markers could be mistaken for confirmation. | Validate receipt identity, status, settlement amounts, pending-call counts and call-state consistency; drop malformed receipts and untrusted transcript markers while retaining streamed content. Parser regressions cover missing and inconsistent fields, valid zero and pending cases, and malformed transcript data. |
+| PXQ-24 / P0 | Inject an unexpected provider metadata error containing a decrypted saved key. `provider-settings/index.ts` returned the exception message, exposing key material in the authenticated response. Google validation also placed the key in the request URL. | Return fixed safe error messages, recognize native timeouts, and use the same `x-goog-api-key` header as the router. The frontend uses its own safe inconclusive-status copy even if an older function returns raw error text. Handler tests exercise draft and decrypted saved keys, network errors, timeouts and request construction; UI tests cover older-backend responses. The modified Edge entrypoint passes Deno check. Live Google behavior remains unverified. `7478f9b`, `de3e8db` |
+| PXQ-25 / P1 | Test an NVIDIA key: the fallback returned `enabled` without making a validation request, so Provider Settings reported it verified. In first-run recovery, requiring every enabled provider to verify could prevent a verified OpenRouter key from unblocking the workspace. | Report an unsupported check as inconclusive, reject the older function's saved-only success response as verification, explain it in Provider Settings, and target the first-run recovery check to OpenRouter. All-provider verification and ordinary router authorization retain their existing scope. Handler, hook and UI regressions cover the unsupported check, truthful state, timeout and recovery. `7478f9b`, `de3e8db` |
+| PXQ-26 / P1 | The candidate preview selected Node 26 because `engines.node` admitted every future major, while CI tested 20, 22 and 24. The full npm audit reported 19 development-tool advisories, including two critical findings; the production-only audit was clean. Vercel used `npm install` while CI used `npm ci`. | Limit the engine range to the tested major versions, use `npm ci` for deployment, update compatible lockfile resolutions and use Vitest 4.1.12. Vitest 5 would have dropped Node 20 support. Full and production-only audits both report zero vulnerabilities; `npm ci`, TypeScript, build, lint and the full unit suite pass on Node 24. Release verification must include Vercel's selected Node and CI on Node 20/22. `5015544` |
+| PXQ-27 / P1 | Open `/demo`: it described the disabled OpenCode path as the default, claimed keys were kept in Edge Function secrets, and displayed unsupported `100%` and `0 ms` security metrics. | Describe the implemented BYOK routes and server-side encryption, remove invented metrics and label the interactive scenario as prerecorded. A browser regression checks the public routing, credential and synthetic-data copy. Hosted isolation is not certified. `681e9f3` |
+| PXQ-28 / P2 | Open the public debate demo or a response containing `####`–`######` headings. The shared Markdown renderer displayed the marker as prose because it only recognized three heading levels. | Render these headings with bounded semantic heading levels and existing visual tokens. Unit coverage checks all three levels, inline formatting and a seven-marker literal. `681e9f3` |
 
 The stale-model coupling budget reflects five new test-fixture references and
 two source-classification references needed to test and block PXQ-19, offset by
@@ -134,17 +139,20 @@ no unaccounted increase over the resulting counts.
 
 ### Follow-up verification
 
-- The full local Vitest run passed 1,029 tests in 105 files. TypeScript and the
-  build passed; lint reported zero errors and 136 warnings. All ten Deno Edge
-  entrypoints and the stale-model coupling budget passed. The production-only
-  dependency audit reported zero vulnerabilities after the `ws` lock update;
-  the full development-dependency audit was not completed.
-- The synthetic Chromium suite passed 123 tests with two opt-in Compare cases
-  skipped in its default build; both passed with the opt-in build and test
-  environment. The updated history helper also passed its targeted desktop
-  rerun. The expanded Pixel 5 emulation suite passed 43 tests;
+- The latest integrated local Vitest run passed 1,042 tests in 105 files.
+  TypeScript and the build passed; lint reported zero errors and 136 warnings.
+  All ten Deno Edge entrypoints passed earlier checks, and the changed provider
+  settings function was checked again. The stale-model coupling budget passed.
+  Full and production-only npm audits each reported zero vulnerabilities after
+  the runtime `ws` and development-tool lock updates.
+- The synthetic Chromium suite passed 124 tests with two opt-in Compare cases
+  skipped on `5015544`. The later `de3e8db` change only affects provider
+  verification compatibility, which also has focused unit coverage. The latest
+  Pixel 5 emulation run passed 46 cases on the integrated product code;
   earlier mobile runs exposed drawer-transition races in test helpers, which
-  were corrected and rerun. CI now includes the expanded mobile suite.
+  were corrected and rerun. CI includes the expanded mobile suite and runs
+  the opt-in Compare fixture separately; both opt-in cases also passed locally
+  against the integrated product code.
 - An isolated PGlite PostgreSQL 18.7 fixture applied the 17 migrations used by
   the repository's Compare harness and passed the Compare durability and
   qualified-spend SQL fixtures, including separate owners, anonymous denial,
@@ -162,7 +170,9 @@ does not rewrite rows. Rollout must apply it before deploying the matching
 `spend_stats` function; the Edge function also falls back to the old response
 when the new RPC is missing. Rollback may deploy the previous function and
 leave the additive RPC and all records intact. Neither this migration nor any
-function was deployed by this follow-up.
+function was deployed by this follow-up. Deploy the matching `provider-settings`
+function before the frontend so that the new validation semantics and safe
+failure messages are present together.
 
 The authorized Supabase connection still cannot access the production project
 identified by the frontend, and no provider key or paid-call budget was
