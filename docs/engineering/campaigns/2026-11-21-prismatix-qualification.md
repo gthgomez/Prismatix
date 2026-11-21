@@ -74,6 +74,13 @@ The failing lazy-chunk recovery case passed its isolated rerun.
 
 ## Release sequence
 
+**Nonproduction migration stop:** `20261006120000_video_worker_cron_vault_secret.sql`
+contains the production Supabase URL in a scheduled command. Do not replay it
+against staging, or apply the earlier placeholder cron migration there, until
+the scheduler target has an environment-safe rollout plan and the staging
+project identity has been independently confirmed. The local test below uses
+an inert scheduler; it is not evidence that the hosted job is safe.
+
 1. Confirm the Prismatix Supabase target and inventory its migration, function,
    Auth, RLS and budget configuration. Exercise sign-up, recovery and two-account
    isolation against an authorized candidate environment.
@@ -183,3 +190,119 @@ remain unverified. The Compare durability flag must remain off until the
 documented staging and production gates are satisfied. The 15 legacy
 direct-provider rates dated 2026-04-13 are blocked by PXQ-19 until a verified
 provider-rate review; their dates and prices were not changed without evidence.
+
+## Handoff qualification on 2026-11-21
+
+The handoff began from #73 head `6d55d638700cccb1faf8b194e7d536e0a8182bb3`.
+Its exact-head [CI run](https://github.com/gthgomez/Prismatix/actions/runs/44923904307)
+passed four jobs and its matching Vercel preview was ready. The integrated
+Arctic branch remains the candidate. Durable Compare remains disabled for the
+candidate build; the existing CI opt-in fixture is isolated synthetic coverage.
+The handoff implementation commits are `1ef0d20` (PXQ-33, PXQ-34 and PXQ-38),
+`0c19703` (the auth, account isolation, mobile, cost and image-preview
+changes), and `30be28e` (the deterministic stalled-session fixture).
+`bb499df` corrects the desktop starter-card layout.
+Reciprocal reviews used shared task context; they are not a GitHub
+approval or a blind security audit.
+
+| ID / priority | Finding and root cause | Correction / evidence |
+| --- | --- | --- |
+| PXQ-30 / P1 | A stalled password sign-in on the starting preview left the submit button indefinitely loading. A saved-session refresh can also be retried by the Auth SDK after an individual request times out. | Bound Auth fetches, including response bodies, without allowing a late successful response to reach the SDK. Show loading status and offer a retry when the saved-session check fails. The SDK may retry within its own window, so initialization can take longer than one fetch deadline. |
+| PXQ-31 / P1 | On the starting preview at 320×568, failed-send recovery actions were 25–32 CSS pixels high and Dismiss extended beyond the viewport. | Wrap the recovery actions and use reachable touch targets. A narrow-viewport browser regression checks their bounds and the composer. |
+| PXQ-32 / P1 | The streaming cost popover added a live estimate to a session subtotal labelled as a total. | Label the live value as an estimate and show only confirmed receipts in the session subtotal. |
+| PXQ-33 / P0 | A settled model-call or reservation amount of `NaN`, a negative number, or another malformed value was projected as a confirmed zero or negative receipt. PostgreSQL `numeric(12,6)` accepts `NaN`. | Reject malformed values from settled receipt projection and retain a pending status. Handler and projection tests cover malformed values and genuine zero. This does not repair historical database rows. |
+| PXQ-34 / P0 | The final ledger and budget RPCs accept a settled call with `NaN` or negative cost and can commit that value to budget windows. They also turn an omitted or NULL settled amount into zero. A pre-existing negative window can understate spending on later admission. Reproduced through the actual RPCs in rolled-back local PostgreSQL transactions. | The forward-only PX13 migration rejects new invalid amounts, blocks settlement of legacy invalid calls and refuses writes to invalid reservation/window balances without rewriting rows; the router also rejects invalid settled inputs before the RPC. The SQL fixture checks retained holds, corrupt project/user windows, late settlement, explicit zero, missing values and role denial. Pre-existing invalid records require operator review. |
+| PXQ-35 / P0 | The live image function supplies fewer admission arguments than the candidate database requires, has no stable caller-supplied execution identity, treats an estimate as settled, and can reconcile an ambiguous provider failure to zero. The local preview also attached the estimate to an unmetered mock and its dialog lacked keyboard focus handling. | Keep live image dispatch closed in both candidate client and Edge handler until those safeguards are repaired and verified. Explain the limitation and retain a free local placeholder, labelled as such, with zero cost. The handler test proves rejection before key access, budget mutation or provider dispatch; browser checks cover focus trapping, Escape and focus return. This containment has not been deployed. |
+| PXQ-36 / P0 deployment blocker | The historical video-worker cron migration hardcodes the production project URL; an earlier migration contains a placeholder. Applying either unchanged to a hosted staging environment can schedule the wrong target. | The local migration exercise uses nonexecuting cron/network stand-ins. Do not apply these historical jobs to staging until an environment-specific safe rollout is designed and reviewed. |
+| PXQ-37 / P1 deployment uncertainty | The repository's local SQL harness grants authenticated table privileges by default. It therefore cannot prove the actual hosted Data API grants or exposed schema settings. | Verify effective grants, RLS and PostgREST exposure on the identified nonproduction project; test separate authenticated owners and anonymous denial there. |
+| PXQ-38 / P0 test safety | The admission concurrency fixture recommended staging, re-applied an older migration, and deleted budget rows for the current day. The ledger and receipt fixtures also re-applied older RPC definitions, masking the integrated schema. | Require a fresh empty disposable `_test` database before any concurrency writes, remove broad deletions and historical migration replays, and use two asynchronous dblink batches. Re-run the fixtures against the final migrated schema. |
+| PXQ-39 / P0 | Switch directly from account A to B while B's saved selection points at A's conversation and B's history request is denied. The selected-id comparison could leave A's transcript displayed; an open A workspace dialog also remained mounted. | Clear the transcript, selection and pending history synchronously on account change, and key the workspace by account so all account-owned dialog and component state remounts. A direct rerender regression checks the denied load, and a synthetic two-account browser event checks the open-dialog case. |
+| PXQ-40 / P2 | At 1440×900 the starter cards extended about 23 CSS pixels beneath the composer in the initial desktop view. | Reduce excess space above the cards. A geometry regression checks their bottom against both the message viewport and composer; compact/mobile scroll-reachability checks still pass. |
+
+The local PostgreSQL 17 cluster is disposable and listens only on its private
+Unix socket. An independently run replay applied all 32 pre-existing migrations
+and PX13 in order to a fresh UTF-8 database. Both cron migrations used inert SQL
+stubs which record commands but have no scheduler and no `net.http_post`. Before
+PX13, a rolled-back fixture seeded legacy invalid amounts and applied PX13 to
+verify the guard; after PX13, SQL fixtures exercised receipt ownership, ledger
+isolation, spend qualification and 50 admission attempts across two connections.
+They do not exercise managed Auth, Storage, Vault, PostgREST, Edge deployment
+or real cron/network behavior.
+
+On the combined implementation, TypeScript, the production build, 1,077
+Vitest tests, the model-coupling budget and the changed router, provider-settings
+and image-generation Deno checks passed. Lint had zero errors and 136 warnings;
+the npm audit reported zero known vulnerabilities. A full synthetic desktop
+Chromium run passed 130 tests with two durable-Compare opt-in tests skipped;
+the focused mobile run passed 54. Those full runs preceded the final desktop
+spacing-only change and the last refresh-fixture refinement; the revised
+refresh case passed six repeated desktop/mobile runs and the spacing change
+passed targeted desktop and mobile geometry checks. Exact-head CI remains a
+separate required check.
+
+The browser journey on the starting exact preview entered credentials through
+the mobile sign-in form, connected a provider, sent, reloaded, continued and
+reloaded again. Auth, provider, database and router responses were synthetic;
+two intentional router calls were observed and no live provider call was
+made. The stalled-sign-in and clipped-recovery reproductions were also on that
+preview. Physical-device keyboards and screen readers were not observed.
+
+The first combined browser runs exposed a test setup error: the expired session
+was stored under a key that did not match the synthetic build's Supabase host.
+The corrected fixture checks that a refresh was actually requested and reads
+the key derived from that request. A later run found that the test clock stayed
+paused after retry; the test now resumes it before loading the workspace. The
+held mock network requests are released after the explicit retry, matching a
+restored connection and avoiding a synthetic lock that never resolves. The
+image-dialog keyboard check also initially failed on the missing focus behavior
+and passed after the repair. These intermediate failures are not treated as
+passing evidence.
+
+### Minimum staging access and rollout gate
+
+1. Identify an existing **nonproduction Prismatix** project by project reference
+   and grant read access to its migration history, database schema and effective
+   grants/RLS, exposed Data API schemas, Auth policy, Edge function versions,
+   and scheduled jobs. Inspect secret names/configuration only; no secret values
+   are needed for this inventory. The connected project observed in this task
+   belongs to a different application and must not be used.
+2. For actual acceptance, authorize disposable staging database changes and
+   matching test-function deployment only after the cron target is made safe;
+   provide two disposable Auth identities, anonymous access and a controlled
+   service-role test path. This permits owner/cross-owner/anonymous negative
+   tests, receipt and spend RPC checks, and authenticated browser journeys.
+   A deterministic non-billable provider stub is required for execution tests;
+   no live provider calls or spend are authorized in this handoff.
+3. Keep durable Compare disabled. Apply reviewed pending database changes in
+   order after the scheduler gate, then deploy compatible router, provider
+   settings and spend functions before the matching frontend. Verify the API
+   schema cache sees the updated ledger RPC signature. Inspect legacy invalid
+   money records and their associated reservations/windows without rewriting
+   them automatically; a mixed valid/invalid call history may have left a
+   numerically valid but incorrect aggregate. PX13 adds `NOT VALID` checks,
+   which avoid scanning old rows but still require table locks and reject later
+   writes to invalid rows; plan and monitor that rollout. A full PX13
+   rollback requires dropping its trigger, trigger function and check
+   constraints and restoring only the prior `px03_record_model_call` definition
+   and grants from `20261018000000_debate_settlement_and_continuity.sql`; retain
+   all rows and do not replay that entire historical migration. Rollback restores
+   the invalid-settlement defect. Production rollout or a merge that triggers it
+   requires separate authorization.
+
+The following read-only preflight returns counts, not user records. Any nonzero
+result requires scoped operator investigation before enabling paid workflows;
+zero counts alone do not prove that historical totals are accurate.
+
+```sql
+select 'model_calls' as source, count(*) from prismatix_internal.model_calls
+ where total_cost::text in ('NaN', 'Infinity', '-Infinity') or total_cost < 0
+union all
+select 'budget_reservations', count(*) from prismatix_internal.budget_reservations
+ where amount_usd::text in ('NaN', 'Infinity', '-Infinity') or amount_usd < 0
+    or committed_usd::text in ('NaN', 'Infinity', '-Infinity') or committed_usd < 0
+union all
+select 'budget_windows', count(*) from prismatix_internal.budget_windows
+ where limit_usd::text in ('NaN', 'Infinity', '-Infinity') or limit_usd < 0
+    or held_usd::text in ('NaN', 'Infinity', '-Infinity') or held_usd < 0
+    or committed_usd::text in ('NaN', 'Infinity', '-Infinity') or committed_usd < 0;
+```
