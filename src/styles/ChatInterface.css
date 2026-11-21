@@ -3927,7 +3927,7 @@
   gap: 1.25rem;
   width: min(966px, calc(100% + 15px));
   max-width: 966px;
-  margin: 49px auto 0;
+  margin: 1.25rem auto 0;
   transform: translateX(2px);
 }
 .arctic-new-chat .capability-card {

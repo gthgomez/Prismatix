@@ -334,6 +334,20 @@ test('saved-chat model picker stays hittable outside the compact scrolling heade
   await page.screenshot({ path: `${evidenceDir}/model-picker-390x844-dismissed.png`, animations: 'disabled' });
 });
 
+test('desktop New Chat shows the starter cards above the composer', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await signInAsMockUser(page);
+  const cards = page.locator('.empty-state-capabilities');
+  await expect(cards).toBeVisible();
+  const bounds = await page.evaluate(() => ({
+    cardsBottom: document.querySelector('.empty-state-capabilities')!.getBoundingClientRect().bottom,
+    messagesBottom: document.querySelector('.chat-messages')!.getBoundingClientRect().bottom,
+    composerTop: document.querySelector('.chat-input-container')!.getBoundingClientRect().top,
+  }));
+  expect(bounds.cardsBottom).toBeLessThanOrEqual(Math.min(bounds.messagesBottom, bounds.composerTop) + 1);
+});
+
 test('compact-height New Chat keeps the welcome heading intact and starter cards scroll-reachable', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1024, height: 600 });
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
