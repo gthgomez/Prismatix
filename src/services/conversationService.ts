@@ -62,6 +62,7 @@ export interface LoadedMessage {
   debateExecutionMode?: 'auto' | 'manual';
   compareGroupId?: string;
   compareGroupChild?: 'A' | 'B';
+  compareGroupFallback?: boolean;
   comparisonResults?: Pick<NonNullable<ReturnType<typeof parseCompareGroup>>, 'modelA' | 'modelB' | 'preferredSide'>;
 }
 
@@ -502,6 +503,20 @@ export async function loadConversation(
                 modelB: group.modelB,
                 preferredSide: group.preferredSide,
               };
+            }
+            if (!group.modelA.assistantMessageId && !group.modelB.assistantMessageId) {
+              const anchor = rows.find((row) => row.role === 'user' && row.executionId === group.modelA.executionId && !row.compareGroupId)
+                ?? rows.find((row) => row.role === 'user' && row.executionId === group.modelB.executionId && !row.compareGroupId);
+              if (anchor) {
+                anchor.compareGroupId = group.id;
+                anchor.compareGroupChild = anchor.executionId === group.modelA.executionId ? 'A' : 'B';
+                anchor.compareGroupFallback = true;
+                anchor.comparisonResults = {
+                  modelA: group.modelA,
+                  modelB: group.modelB,
+                  preferredSide: group.preferredSide,
+                };
+              }
             }
           }
         }

@@ -33,8 +33,8 @@ begin
   result1 := public.px08_persist_compare(c1, a, b);
   result2 := public.px08_persist_compare(c1, b, a);
   if result1->>'id' is distinct from result2->>'id' then raise exception 'PX08 replay was not idempotent'; end if;
-  if result2#>>'{modelA,executionId}' <> b::text or result2#>>'{modelB,executionId}' <> a::text then
-    raise exception 'PX08 replay did not preserve the requested side ordering: %', result2;
+  if result2#>>'{modelA,executionId}' <> a::text or result2#>>'{modelB,executionId}' <> b::text then
+    raise exception 'PX08 replay changed the durable side ordering: %', result2;
   end if;
   if result1#>>'{modelA,content}' <> 'authentic A answer' or result1#>>'{modelA,cost}' <> '0.012300' then
     raise exception 'PX08 did not derive transcript and cost from server records: %', result1;

@@ -220,6 +220,35 @@ describe('loadConversation', () => {
     expect(rpcBodies).toHaveLength(2);
   });
 
+  it('anchors a no-assistant Compare group to one saved user prompt without changing its text', async () => {
+    const group = {
+      id: 'failed-group', conversationId: CONV, preferredSide: 'B',
+      modelA: { executionId: CONV, model: 'model-a', content: '', status: 'failed', transcriptSaved: false },
+      modelB: { executionId: MSG, model: 'model-b', content: '', status: 'stopped', transcriptSaved: false },
+    };
+    const client = createClient('https://compare-fixture.invalid', 'synthetic-public-key', {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input) => {
+        const path = new URL(String(input)).pathname;
+        const data = path.endsWith('/px08_get_compare_groups') ? [group] : [
+          { id: 'user-b', role: 'user', content: 'Original prompt', execution_id: MSG, created_at: '2026-01-01T00:00:01.000Z' },
+          { id: 'user-a', role: 'user', content: 'Original prompt', execution_id: CONV, created_at: '2026-01-01T00:00:00.000Z' },
+        ];
+        return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+      } },
+    });
+
+    const loaded = await loadConversation(client, CONV, { compareGroups: true });
+    expect(loaded).toHaveLength(2);
+    expect(loaded[0]).toMatchObject({
+      id: 'user-a', role: 'user', content: 'Original prompt',
+      compareGroupId: 'failed-group', compareGroupChild: 'A', compareGroupFallback: true,
+      comparisonResults: { modelA: { status: 'failed' }, modelB: { status: 'stopped' }, preferredSide: 'B' },
+    });
+    expect(loaded[1]).toMatchObject({ id: 'user-b', role: 'user', content: 'Original prompt' });
+    expect(loaded[1]?.compareGroupId).toBeUndefined();
+  });
+
   it('queries newest-first, reverses to chronological order, maps persisted attachments and adapts a legacy image_url', async () => {
     // Database returns the newest rows first (created_at descending)
     const fake = makeClient({

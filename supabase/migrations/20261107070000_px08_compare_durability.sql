@@ -80,14 +80,14 @@ begin
     raise exception 'compare_identity_conflict' using errcode = '22023';
   end if;
 
-  -- Keep the first durable ordering, but return the requested ordering so a
-  -- replay with swapped arguments still gets the expected modelA/modelB sides.
+  -- Keep modelA/modelB tied to the durable group's first ordering. Replayed
+  -- calls with reversed argument order must not move an existing A/B vote.
   v_result := jsonb_build_object(
     'id', v_group.id,
     'conversationId', v_group.conversation_id,
     'preferredSide', v_group.preferred_side,
-    'modelA', public.px08_compare_child(p_execution_a, p_conversation_id),
-    'modelB', public.px08_compare_child(p_execution_b, p_conversation_id)
+    'modelA', public.px08_compare_child(v_group.execution_a, p_conversation_id),
+    'modelB', public.px08_compare_child(v_group.execution_b, p_conversation_id)
   );
   return v_result;
 end;
