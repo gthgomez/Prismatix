@@ -382,10 +382,10 @@ export function normalizeModelOverride(input?: string): RouterModel | undefined 
   const value = String(input).toLowerCase().trim();
   if (!value || value === 'auto') return undefined;
 
-  if (value in MODEL_REGISTRY) {
+  if (Object.prototype.hasOwnProperty.call(MODEL_REGISTRY, value)) {
     return value;
   }
-  if (value in OVERRIDE_SYNONYMS) {
+  if (Object.prototype.hasOwnProperty.call(OVERRIDE_SYNONYMS, value)) {
     return OVERRIDE_SYNONYMS[value];
   }
   return undefined;

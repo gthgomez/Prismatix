@@ -7,7 +7,7 @@
 //  - Fallbacks remain deterministic and preserve explainability metadata
 // All providers/discovery are mocked — no real credits are used.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CURATED_OPENCODE_REGISTRY,
   CURATED_ROUTE_POLICY,
@@ -221,6 +221,17 @@ describe('fallback chains preserve explainability', () => {
 });
 
 describe('provider-unavailable fallback cost guard', () => {
+  beforeEach(() => {
+    // These comparison assertions use named legacy tariffs. Freeze only this
+    // focused suite to the date when those fixture rates were still current.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-05-01T12:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const fixtureDecision = (
     modelTier: string,
     provider: 'deepinfra' | 'nvidia' | 'google' | 'anthropic',

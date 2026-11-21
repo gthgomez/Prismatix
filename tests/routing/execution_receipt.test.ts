@@ -9,7 +9,7 @@
 // in tests/integration/deployment-contract.test.ts) to prove the authenticated
 // `{ action: 'execution_receipt' }` contract: owned → 200 receipt, unknown or
 // foreign → 404, missing id → 400, zero provider calls, no entitlement check.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   TERMINAL_EXECUTION_STATUSES,
   projectReceipt,
@@ -427,8 +427,16 @@ function ownedPayload(): Record<string, unknown> {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+function freezeLegacyPricingFixtureDate(): void {
+  // PX06 stream-finalization tests use the legacy Anthropic Haiku fixture;
+  // keep their clock explicit while pricing freshness has separate coverage.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-05-01T12:00:00Z'));
+}
 
 describe("action execution_receipt (real router handler)", () => {
   function receiptRoutes(receipt: unknown): (call: FetchCall) => Response | null {
@@ -575,6 +583,7 @@ function streamGrantRow(): Record<string, unknown> {
 }
 
 describe('PX06 finding 1: abort-driven upstream error finalizes cancelled', () => {
+  beforeEach(freezeLegacyPricingFixtureDate);
   it('finalizes cancelled/client_cancelled when a disconnect rejects the upstream read', async () => {
     // Silence the intentional error-path logging for clean output.
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -868,6 +877,7 @@ describe('PX06 finding 1: abort-driven upstream error finalizes cancelled', () =
 // ---------------------------------------------------------------------------
 
 describe('PX06 outer catch: post-admission crash finalizes indeterminate', () => {
+  beforeEach(freezeLegacyPricingFixtureDate);
   it('finalizes indeterminate/aborted when the handler throws after admission', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 

@@ -28,7 +28,7 @@
 // their Deno-style `npm:` specifiers are resolved by the `deno-npm-stubs`
 // plugin in vite.config.ts — the same handler-invocation seam pattern used by
 // tests/security/entitlements.test.ts.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PROTOCOL_VERSION,
   releaseHeaders,
@@ -408,7 +408,16 @@ function flushAsync(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 150));
 }
 
+function freezeLegacyPricingFixtures(): void {
+  // These handler contracts exercise legacy direct-provider routes rather
+  // than date freshness. Keep only those suites at their deliberate historic
+  // fixture date; the freshness regression advances time explicitly.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-05-01T12:00:00Z'));
+}
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -761,6 +770,7 @@ describe('capabilities size guards & body-error precedence (PX02 fix round 1)', 
 // ---------------------------------------------------------------------------
 
 describe('strict unknown manual model rejection (F17)', () => {
+  beforeEach(freezeLegacyPricingFixtures);
   it('rejects an unknown manual model ID with 400 unknown_model and ZERO provider calls', async () => {
     const calls = installFetchRecorder(supabaseRoutes());
     const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
@@ -794,6 +804,40 @@ describe('strict unknown manual model rejection (F17)', () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'unknown_model', code: 'unknown_model' });
     expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    'rejects inherited property model override %s before any provider call',
+    async (modelOverride) => {
+      const calls = installFetchRecorder(supabaseRoutes());
+      const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+      const res = await handler(routerRequest(chatBody({ platform: 'web', modelOverride }), 'px02-user-token'));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'unknown_model', code: 'unknown_model' });
+      expect(providerCalls(calls)).toEqual([]);
+    },
+  );
+
+  it('fails closed on stale legacy direct-provider pricing before any provider call', async () => {
+    vi.setSystemTime(new Date('2026-11-21T12:00:00Z'));
+    const happy = supabaseRoutes();
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+        return jsonResponse({ default_provider: 'google', providers: [{ provider: 'google', enabled: true, has_key: true }] });
+      }
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(routerRequest(
+      chatBody({ platform: 'web', modelOverride: 'gemini-2.5-flash' }),
+      'px02-user-token',
+    ));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: 'unknown_model_pricing' });
+    expect(providerCalls(calls)).toEqual([]);
+    expect(calls.some((call) => call.url.includes('/rest/v1/rpc/px05_admit_execution'))).toBe(false);
   });
 
   it('rejects a paid router path without a user key even when a fake server key exists', async () => {
@@ -953,6 +997,7 @@ describe('strict unknown manual model rejection (F17)', () => {
 // ---------------------------------------------------------------------------
 
 describe('mobile memory isolation (real handler)', () => {
+  beforeEach(freezeLegacyPricingFixtures);
   it('web recall dispatches bounded OpenRouter memory tools through the real handler', async () => {
     const { CURATED_OPENCODE_REGISTRY } = await import('../../supabase/functions/router/models_hub.ts');
     const { isHistoricModel } = await import('../../supabase/functions/_shared/model_lifecycle.ts');
@@ -1044,6 +1089,7 @@ describe('mobile memory isolation (real handler)', () => {
 // ---------------------------------------------------------------------------
 
 describe('PX03 execution ledger fail-closed (real handler)', () => {
+  beforeEach(freezeLegacyPricingFixtures);
   it('returns 503 accounting_unavailable with ZERO provider calls when execution create fails', async () => {
     const happy = supabaseRoutes();
     const calls = installFetchRecorder((call) => {
@@ -1084,6 +1130,7 @@ describe('PX03 execution ledger fail-closed (real handler)', () => {
 // ---------------------------------------------------------------------------
 
 describe('PX05 admission gate (real handler)', () => {
+  beforeEach(freezeLegacyPricingFixtures);
   function denyRoutes(reason: string, retryAfterSeconds = 0): (call: FetchCall) => Response | null {
     const happy = supabaseRoutes();
     return (call: FetchCall): Response | null => {

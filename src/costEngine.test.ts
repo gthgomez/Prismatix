@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PRICING_REGISTRY, PRICING_VERSION } from './pricingRegistry';
 import {
   calculateCostBreakdown,
@@ -7,6 +7,15 @@ import {
   calculatePreFlightCost,
   estimateTokenCount,
 } from './costEngine';
+
+// These arithmetic fixtures intentionally assert recorded legacy rates while
+// they were still within the 60-day audit window.
+const useHistoricTariff = () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-05-01T12:00:00Z'));
+};
+
+afterEach(() => vi.useRealTimers());
 
 describe('estimateTokenCount', () => {
   it('returns 0 for empty string', () => {
@@ -34,6 +43,7 @@ describe('estimateTokenCount', () => {
 });
 
 describe('calculatePreFlightCost', () => {
+  beforeEach(useHistoricTariff);
   it('returns the correct pricing version', () => {
     const result = calculatePreFlightCost('haiku-4.5', 'hello world');
     expect(result.pricingVersion).toBe(PRICING_VERSION);
@@ -80,6 +90,7 @@ describe('calculatePreFlightCost', () => {
 });
 
 describe('calculateFinalCost', () => {
+  beforeEach(useHistoricTariff);
   it('returns the correct pricing version', () => {
     const result = calculateFinalCost('sonnet-4.6', { promptTokens: 100, completionTokens: 50 });
     expect(result.pricingVersion).toBe(PRICING_VERSION);
@@ -130,6 +141,7 @@ describe('calculateFinalCost', () => {
 });
 
 describe('calculateCostBreakdown', () => {
+  beforeEach(useHistoricTariff);
   it('returns zero costs for zero usage', () => {
     const result = calculateCostBreakdown('haiku-4.5', {
       promptTokens: 0,

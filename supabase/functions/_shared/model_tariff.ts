@@ -6,7 +6,7 @@
 // asOfDate policy: first-party rates carry the audit date; anything else is
 // isEstimated: true until verified.
 
-export const MODEL_TARIFF_VERSION = '2026-10-15-v12' as const;
+export const MODEL_TARIFF_VERSION = '2026-11-21-v13' as const;
 
 export interface TariffEntry {
   asOfDate?: number | string | boolean;
@@ -443,12 +443,14 @@ export const MODEL_TARIFF: Record<string, TariffEntry> = {
 export class StalePriceError extends Error {
   readonly code = 'stale_price';
   readonly model: string;
-  readonly reason: 'unknown' | 'expired';
+  readonly reason: 'unknown' | 'expired' | 'stale';
 
-  constructor(model: string, reason: 'unknown' | 'expired') {
+  constructor(model: string, reason: 'unknown' | 'expired' | 'stale') {
     super(
       reason === 'expired'
         ? `Pricing for model '${model}' has expired (effectiveTo is in the past).`
+        : reason === 'stale'
+        ? `Pricing for model '${model}' has an unverified or out-of-date legacy audit date.`
         : `Pricing for model '${model}' is unknown.`,
     );
     this.name = 'StalePriceError';
@@ -480,6 +482,35 @@ function parseIsoDateUtc(value: unknown): Date | undefined {
   return date;
 }
 
+const LEGACY_PRICING_SOURCES = new Set([
+  'anthropic-pricing',
+  'google-pricing',
+  'openai-pricing',
+  'deepinfra-pricing',
+]);
+const LEGACY_PRICE_MAX_AGE_DAYS = 60;
+
+/**
+ * Legacy direct-provider cards have no reliable live refresh path. Their audit
+ * date is valid for at most 60 UTC calendar days; malformed, missing and future
+ * dates fail closed for these exact sources only.
+ */
+export function isLegacyPriceStale(
+  entry: Pick<TariffEntry, 'asOfDate' | 'sourceRef'> | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!entry || typeof entry.sourceRef !== 'string' || !LEGACY_PRICING_SOURCES.has(entry.sourceRef)) {
+    return false;
+  }
+  const asOf = parseIsoDateUtc(entry.asOfDate);
+  if (!asOf || !Number.isFinite(now.getTime())) return true;
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const ageMs = todayUtc - asOf.getTime();
+  if (ageMs < 0) return true;
+  const ageDays = Math.floor(ageMs / 86_400_000);
+  return ageDays > LEGACY_PRICE_MAX_AGE_DAYS;
+}
+
 /**
  * True when `entry.effectiveTo` has passed. `effectiveTo` is INCLUSIVE: it is
  * the last UTC day the rate may be billed, so this returns false for any time
@@ -502,12 +533,15 @@ export function isPriceExpired(
 }
 
 /**
- * Throws a typed `StalePriceError` when `model` is unknown or its price has
- * expired. Use before any admission/settlement decision that must not act on a
+ * Throws a typed `StalePriceError` when `model` is unknown, expired, or has an
+ * unverified legacy audit date. Use before decisions that must not act on a
  * stale rate.
  */
 export function assertPricingCurrent(model: string, now: Date = new Date()): void {
-  const entry = MODEL_TARIFF[model];
+  const entry = Object.prototype.hasOwnProperty.call(MODEL_TARIFF, model)
+    ? MODEL_TARIFF[model]
+    : undefined;
   if (!entry) throw new StalePriceError(model, 'unknown');
   if (isPriceExpired(entry, now)) throw new StalePriceError(model, 'expired');
+  if (isLegacyPriceStale(entry, now)) throw new StalePriceError(model, 'stale');
 }

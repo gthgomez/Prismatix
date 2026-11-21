@@ -13,6 +13,7 @@ export interface ModelCatalogEntry {
 
 export function formatModelPriceLabel(model: string): string {
   const pricing = getPricingForModel(model);
+  if (pricing.isStale) return 'Pricing needs review';
   if (pricing.isUnknown) return 'Custom rate';
   if (pricing.outputRatePer1M === 0 && pricing.inputRatePer1M === 0) return 'Free · $0 per 1M input/output tokens';
   return `USD $${pricing.inputRatePer1M.toFixed(2)} per 1M input · $${pricing.outputRatePer1M.toFixed(2)} per 1M output tokens`;
@@ -291,11 +292,11 @@ export const UNKNOWN_MODEL_ENTRY: ModelCatalogEntry = {
 
 /** Catalog entry for any ID, with the neutral fallback for unknown ones. */
 export function getCatalogEntry(modelId: string): ModelCatalogEntry {
-  return MODEL_CATALOG[modelId as RouterModel] ?? UNKNOWN_MODEL_ENTRY;
+  return isKnownModel(modelId) ? MODEL_CATALOG[modelId] : UNKNOWN_MODEL_ENTRY;
 }
 
 export function isKnownModel(modelId: string): modelId is RouterModel {
-  return modelId in MODEL_CATALOG;
+  return Object.prototype.hasOwnProperty.call(MODEL_CATALOG, modelId);
 }
 
 /** Curated subset for empty state and compact override UI. */
