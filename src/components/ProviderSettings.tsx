@@ -19,6 +19,12 @@ interface ProviderSettingsProps {
   onClose: () => void;
 }
 
+function inconclusiveVerificationMessage(provider: ProviderId): string {
+  return provider === 'nvidia'
+    ? 'A metadata verification check is not available in Prismatix for this provider.'
+    : 'Verification was inconclusive.';
+}
+
 export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, preferences, onClose }) => {
   const { providers, defaultProvider, loading, error, refresh } = plugins;
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -100,7 +106,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
         setNotice(validation.status === 'enabled'
           ? 'Key saved and verified.'
           : validation.status === 'unknown'
-          ? `Key saved. ${validation.message || 'Verification was inconclusive.'}`
+          ? `Key saved. ${inconclusiveVerificationMessage(id)}`
           : 'Key saved. Verification is unavailable. Try testing the saved key again.');
       }
       // Only clear the field on success so a failed save never discards the key.
@@ -261,7 +267,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                                 res.status === 'enabled'
                                   ? draft.trim() ? 'Draft key verified. Save it to use it.' : 'Saved key verified.'
                                   : res.status === 'invalid_revoked' ? 'Key rejected. Update the key and try again.'
-                                  : res.status === 'unknown' ? res.message || 'Verification was inconclusive.'
+                                  : res.status === 'unknown' ? inconclusiveVerificationMessage(provider.id)
                                   : 'Could not verify the key. Try again.'
                               }`,
                             );

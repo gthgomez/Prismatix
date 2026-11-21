@@ -142,6 +142,25 @@ describe('useProviderPlugins account-scoped verification', () => {
     expect(result?.verifiedProviders?.has('nvidia')).toBe(false);
   });
 
+  it('does not treat the old backend saved-only response as a verified NVIDIA key', async () => {
+    vi.mocked(fetchProviderSettings).mockResolvedValue({
+      providers: [{
+        id: 'nvidia', label: 'NVIDIA', enabled: true, hasKey: true, keyLast4: '5678',
+        offeredByDefault: false, defaultProvider: false, status: 'enabled',
+      }],
+      defaultProvider: 'openrouter',
+    });
+    vi.mocked(validateProviderKey).mockResolvedValue({ provider: 'nvidia', status: 'enabled', message: 'Key saved' });
+    root = createRoot(container);
+    await act(async () => root!.render(<Harness userId='account-a' />));
+
+    let verified = true;
+    await act(async () => { verified = await result!.verifyEnabledProviders(); });
+    expect(verified).toBe(false);
+    expect(result?.verifiedProviders?.has('nvidia')).toBe(false);
+    expect(result?.providers[0]?.status).toBe('unknown');
+  });
+
   it('does not apply the result of testing a draft key to a saved key', async () => {
     vi.mocked(validateProviderKey).mockResolvedValue({ provider: 'openrouter', status: 'enabled' });
     root = createRoot(container);

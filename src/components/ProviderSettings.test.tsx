@@ -113,6 +113,50 @@ describe('ProviderSettings', () => {
     container.remove();
   });
 
+  it('does not display unknown validation messages from an older backend', async () => {
+    const provider: ProviderState = { ...makeProvider(true), id: 'openrouter', label: 'OpenRouter', enabled: true };
+    const plugins = makePlugins(provider);
+    plugins.validateKey = vi.fn(async () => ({
+      provider: 'openrouter' as const,
+      status: 'unknown' as const,
+      message: 'Unexpected upstream error with synthetic-private-key',
+    }));
+    const container = document.createElement('div');
+    document.body.append(container);
+    roots.push(renderInto(container, <ProviderSettings plugins={plugins} preferences={makePreferences()} onClose={vi.fn()} />));
+
+    await act(async () => {
+      document.body.querySelector<HTMLButtonElement>('[aria-label="Test connection for OpenRouter"]')!.click();
+    });
+    expect(document.body.querySelector('.provider-settings-notice')?.textContent).toContain('Verification was inconclusive.');
+    expect(document.body.textContent).not.toContain('synthetic-private-key');
+    container.remove();
+  });
+
+  it('does not display older backend error details after saving a key', async () => {
+    const provider: ProviderState = { ...makeProvider(false), id: 'openrouter', label: 'OpenRouter' };
+    const plugins = makePlugins(provider);
+    plugins.validateKey = vi.fn(async () => ({
+      provider: 'openrouter' as const,
+      status: 'unknown' as const,
+      message: 'Unexpected upstream error with synthetic-private-key',
+    }));
+    const container = document.createElement('div');
+    document.body.append(container);
+    roots.push(renderInto(container, <ProviderSettings plugins={plugins} preferences={makePreferences()} onClose={vi.fn()} />));
+
+    const input = document.body.querySelector<HTMLInputElement>('[aria-label="OpenRouter API key"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'sk-synthetic-key');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { document.body.querySelector<HTMLButtonElement>('.provider-key-save')!.click(); });
+    expect(plugins.setKey).toHaveBeenCalled();
+    expect(document.body.querySelector('.provider-settings-notice')?.textContent).toContain('Key saved. Verification was inconclusive.');
+    expect(document.body.querySelector('.provider-settings-notice')?.textContent).not.toContain('synthetic-private-key');
+    container.remove();
+  });
+
   it('allows expanding provider models and toggling visibility and favorites', () => {
     const container = document.createElement('div');
     document.body.append(container);

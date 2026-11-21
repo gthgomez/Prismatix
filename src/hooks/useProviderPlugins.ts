@@ -191,7 +191,12 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
       });
       try {
         if (!userId) return staleResult();
-        const result = await validateProviderKey(userId, provider, apiKey);
+        const response = await validateProviderKey(userId, provider, apiKey);
+        // Older Edge versions used this saved-only result for providers with no
+        // metadata check. It is not evidence that a credential was verified.
+        const result: ProviderValidationResult = response.status === 'enabled' && response.message === 'Key saved'
+          ? { ...response, status: 'unknown' }
+          : response;
         if (!isCurrentRequest()) return staleResult();
         if (!apiKey && mountedRef.current) {
           setStatuses((prev) => ({
