@@ -26,10 +26,17 @@ begin
   values (c1, 'assistant', 'authentic A answer', a, 'model-a');
   insert into prismatix_internal.model_calls(execution_id, stage, participant, total_cost, cost_status)
   values (a, 'primary', 'model-a', 0.0123, 'settled');
+  insert into public.cost_logs(user_id, conversation_id, model, total_cost)
+  values (u1, c1, 'model-a', 0.0123);
 
   perform set_config('request.jwt.claim.sub', u1::text, true);
   perform set_config('request.jwt.claim.role', 'authenticated', true);
   execute 'set local role authenticated';
+  if not exists (select 1 from public.conversations where id = c1)
+    or not exists (select 1 from public.messages where execution_id = a)
+    or not exists (select 1 from public.cost_logs where conversation_id = c1) then
+    raise exception 'The owner could not read its conversation, transcript, or cost row';
+  end if;
   result1 := public.px08_persist_compare(c1, a, b);
   result2 := public.px08_persist_compare(c1, b, a);
   if result1->>'id' is distinct from result2->>'id' then raise exception 'PX08 replay was not idempotent'; end if;
@@ -94,6 +101,21 @@ begin
     raise exception 'PX08 did not preserve legacy estimate provenance';
   end if;
   perform set_config('request.jwt.claim.sub', u2::text, true);
+  if exists (select 1 from public.conversations where id = c1)
+    or exists (select 1 from public.messages where execution_id = a)
+    or exists (select 1 from public.cost_logs where conversation_id = c1) then
+    raise exception 'An unrelated account could read a conversation, transcript, or cost row';
+  end if;
+  begin
+    perform public.px03_get_execution_receipt(u1, a);
+    raise exception 'The client invoked the service-only receipt RPC';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    perform public.get_spend_stats(u1);
+    raise exception 'The client invoked the service-only spend RPC';
+  exception when insufficient_privilege then null;
+  end;
   if exists (select 1 from public.compare_groups where conversation_id = c1) then
     raise exception 'Direct read bypassed owner RLS';
   end if;
@@ -113,6 +135,11 @@ begin
     raise exception 'Anonymous role executed the Compare RPC';
   exception when insufficient_privilege then null;
   end;
+  execute 'reset role';
+  execute 'set local role service_role';
+  if public.px03_get_execution_receipt(u1, a) is null or public.px03_get_execution_receipt(u2, a) is not null then
+    raise exception 'Receipt lookup returned the wrong result for the authenticated subject';
+  end if;
 end $$;
 
 rollback;

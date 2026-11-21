@@ -21,6 +21,9 @@ create schema extensions;
 create schema auth;
 create schema storage;
 create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
+create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
+create function storage.foldername(name text) returns text[] language sql immutable as
+  $$ select (string_to_array(name, '/'))[1:greatest(array_length(string_to_array(name, '/'), 1) - 1, 0)] $$;
 create table auth.users (
   id uuid primary key, aud text, role text, email text unique, encrypted_password text,
   created_at timestamptz, updated_at timestamptz
@@ -34,6 +37,7 @@ for file in \
   20260210000000_init_conversations_messages.sql \
   20260212090000_add_cost_logs.sql \
   20260410000000_add_routing_eval_columns.sql \
+  20260519000000_harden_router_security.sql \
   20260601000000_add_cost_log_idempotency.sql; do
   sql < "$migration_dir/$file"
 done
@@ -43,6 +47,7 @@ sql -c 'create schema prismatix_internal'
 for file in \
   20261006010000_px03_execution_ledger.sql \
   20261006020000_px05_budgets_leases.sql \
+  20261006030000_px06_execution_receipt.sql \
   20261006040000_px07_conversation_continuity.sql \
   20261018000000_debate_settlement_and_continuity.sql \
   20261107010000_f09_project_workspaces.sql \
