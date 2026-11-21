@@ -151,6 +151,8 @@ export interface Message {
   content: string | unknown[]; // Supports multimodal content
   timestamp: number;
   model?: RouterModel;
+  /** Raw router model id unknown to this client; never use it for price lookup. */
+  reportedModel?: string;
   provider?: RouterProvider;
   modelId?: string;
   modelOverride?: string;

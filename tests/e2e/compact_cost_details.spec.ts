@@ -4,7 +4,7 @@ import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 const response = (id: string, reply = 'Synthetic compact-chat reply.') => ({
   status: 200,
-  headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': id },
+  headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model, X-Provider, X-Prismatix-Execution-Id', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': id },
   body: [
     { type: 'meta', model: 'gemini-3.8-flash', cost: { finalUsd: 0.0001 } },
     { type: 'content_block_delta', delta: { text: reply } },

@@ -8,6 +8,8 @@ import {
   getFinanceStore,
   getSpendStats,
   fetchAuthoritativeCostLogs,
+  exportSpendToCsv,
+  filterAndGroupSpend,
   recordCost,
 } from './financeTracker';
 
@@ -70,6 +72,22 @@ describe('recordCost', () => {
     expect(store.history[0]!.date).toBe(today);
     expect(store.history[0]!.model).toBe('haiku-4.5');
     expect(store.history[0]!.cost).toBe(0.001);
+  });
+
+  it('keeps settled spend with an explicit unreported model label through grouping and CSV export', () => {
+    const store = recordCost({
+      model: 'Unreported model',
+      cost: 0.023,
+      costStatus: 'settled',
+      executionId: 'execution-unreported-model',
+    }, 'first-user');
+
+    expect(store.history[0]).toMatchObject({ model: 'Unreported model', cost: 0.023, costStatus: 'settled' });
+    expect(filterAndGroupSpend(store.history, 'all', 'model')).toMatchObject([
+      { groupKey: 'Unreported model', totalCost: 0.023, settledCost: 0.023 },
+    ]);
+    expect(exportSpendToCsv(store.history)).toContain('Unreported model');
+    expect(exportSpendToCsv(store.history)).toContain('0.0230');
   });
 
   it('accepts a custom date', () => {

@@ -1,4 +1,3 @@
-import type { RouterModel } from '../types';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../config';
@@ -11,7 +10,8 @@ function financeKey(userId?: string): string {
 
 export interface FinanceEntry {
   date: string;
-  model: RouterModel;
+  /** Server model id, or an explicit label when the router did not report it. */
+  model: string;
   cost: number;
   pricingVersion?: string;
   provider?: string;
@@ -97,7 +97,7 @@ export function getDailyTotal(date = currentDate(), userId?: string): number {
 }
 
 export function recordCost(entry: {
-  model: RouterModel;
+  model: string;
   cost: number;
   pricingVersion?: string;
   date?: string;
@@ -230,7 +230,7 @@ export async function fetchAuthoritativeCostLogs(
 
     return data.map((row) => ({
       date: String(row.created_at || currentDate()),
-      model: row.model as RouterModel,
+      model: String(row.model || 'Unreported model'),
       cost: roundUsd(Number(row.total_cost || 0)),
       pricingVersion: row.pricing_version ? String(row.pricing_version) : undefined,
       provider: row.provider ? String(row.provider) : undefined,

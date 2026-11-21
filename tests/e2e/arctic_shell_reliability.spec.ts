@@ -1,11 +1,11 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
-import { MODEL_ORDER, getCatalogEntry } from '../../src/modelCatalog';
+import { getCatalogEntry } from '../../src/modelCatalog';
 
 const successfulStream = (text: string, executionId: string) => ({
   status: 200,
-  headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': executionId },
+  headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model, X-Provider, X-Prismatix-Execution-Id', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': executionId },
   body: [
     { type: 'meta', model: 'gemini-3.8-flash', cost: { finalUsd: 0.0001 } },
     { type: 'content_block_delta', delta: { text } },
@@ -120,7 +120,7 @@ test('Compare preserves interrupted model outcome and warns when either transcri
         { type: 'content_block_delta', delta: { text: 'Partial answer A' } },
         { type: 'receipt', executionId: 'compare-a', status: 'indeterminate', terminalOutcome: 'upstream_interrupted', transcript: { saved: false }, settlement: { state: 'pending', committedUsd: null, pendingCalls: 1 }, calls: [] },
       ];
-      await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' }, body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') });
+      await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': 'gemini-3.8-flash' }, body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') });
       return;
     }
     await route.fulfill(successfulStream('Complete answer B', `compare-${requests}`));
@@ -131,7 +131,7 @@ test('Compare preserves interrupted model outcome and warns when either transcri
   await composer.fill('Compare without hiding a partial result');
   await composer.press('Enter');
   await expect(page.getByText('Partial answer A')).toBeVisible();
-  await expect(page.getByRole('alert')).toContainText('could not be saved');
+  await expect(page.locator('.transcript-unsaved-notice')).toContainText('could not be saved');
   await expect(page.getByText('Interrupted · partial response')).toBeVisible();
   await expect(page.getByText('Complete answer B')).toBeVisible();
   expect(requests).toBe(2);
@@ -175,7 +175,7 @@ test('ordinary Chat visibly marks a router-reported unsaved answer without retry
       { type: 'content_block_delta', delta: { text: 'Keep this generated answer visible' } },
       { type: 'receipt', executionId: 'single-unsaved', status: 'completed', transcript: { saved: false }, settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
     ];
-    await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' }, body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n` });
+    await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': 'gemini-3.8-flash' }, body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n` });
   });
   await signInAsMockUser(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
@@ -215,7 +215,7 @@ test('pending settlement never turns streamed cost metadata into a final charge'
       { type: 'content_block_delta', delta: { text: 'The answer is still settling.' } },
       { type: 'receipt', executionId: 'pending-cost', status: 'completed', transcript: { saved: true }, settlement: { state: 'pending', committedUsd: 0, pendingCalls: 1 }, calls: [] },
     ];
-    await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' }, body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n` });
+    await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': 'gemini-3.8-flash' }, body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n` });
   });
   await signInAsMockUser(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
@@ -287,7 +287,7 @@ test('an interrupted response remains recoverable after reload without another r
     requests++;
     await route.fulfill({
       status: 200,
-      headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' },
+      headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': 'gemini-3.8-flash' },
       body: `data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: 'Useful partial response' } })}\n\n`,
     });
   });
@@ -332,7 +332,7 @@ for (const action of ['reload', 'stop'] as const) test(`${action} during a strea
           init?.signal?.addEventListener('abort', () => controller.close(), { once: true });
         },
       });
-      return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash', 'X-Prismatix-Execution-Id': 'stream-reload-fixture' } });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model, X-Prismatix-Execution-Id', 'X-Router-Model': 'gemini-3.8-flash', 'X-Prismatix-Execution-Id': 'stream-reload-fixture' } });
     };
   });
   await signInAsMockUser(page);
@@ -368,7 +368,7 @@ test('reload during Compare preserves each received response without resending',
           init?.signal?.addEventListener('abort', () => controller.close(), { once: true });
         },
       });
-      return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': request.modelOverride } });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': request.modelOverride } });
     };
   });
   await signInAsMockUser(page);
@@ -929,10 +929,9 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
 }
 
 for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
-  test(`unrelated ${unrelatedStatus} provider does not block healthy Google manual or Auto routes`, async ({ page }) => {
-    const healthyGoogleModel = MODEL_ORDER.find((id) => getCatalogEntry(id).provider === 'google');
-    expect(healthyGoogleModel).toBeTruthy();
-    const healthyGoogleModelName = getCatalogEntry(healthyGoogleModel!).shortName;
+  test(`unrelated ${unrelatedStatus} provider does not block Auto or current-priced manual sends`, async ({ page }) => {
+    const currentPricedModel = 'gemini-3.8-flash';
+    const currentPricedModelName = getCatalogEntry(currentPricedModel).shortName;
     await page.setViewportSize({ width: 1440, height: 900 });
     await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
     await page.route('**/functions/v1/provider-settings*', async (route) => {
@@ -969,18 +968,73 @@ for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
 
     await page.getByRole('button', { name: 'Choose routing mode: automatic' }).click();
     await page.getByRole('tab', { name: 'Models' }).click();
-    await page.getByRole('region', { name: 'Historic model catalog' }).getByRole('button', { name: /Historic models/ }).click();
-    await page.locator('.model-option').filter({ hasText: healthyGoogleModelName }).click();
-    await expect(page.getByRole('button', { name: `Choose model: ${healthyGoogleModelName}` })).toBeVisible();
-    await composer.fill('Use a healthy Google model manually');
+    await page.getByRole('searchbox', { name: 'Search models' }).fill(currentPricedModelName);
+    await page.locator('.model-option').filter({ hasText: currentPricedModelName }).click();
+    await expect(page.getByRole('button', { name: `Choose model: ${currentPricedModelName}` })).toBeVisible();
+    await composer.fill('Use a current-priced model manually');
     await composer.press('Enter');
     await expect(page.getByText('Mock response 2')).toBeVisible();
 
     expect(routerRequests).toHaveLength(2);
     expect(routerRequests[0]?.modelOverride).toBeUndefined();
-    expect(routerRequests[1]?.modelOverride).toBe(healthyGoogleModel);
+    expect(routerRequests[1]?.modelOverride).toBe(currentPricedModel);
   });
 }
+
+test('stale legacy model is labeled and rejected with a safe next step without retry', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.route('**/functions/v1/provider-settings*', async (route) => {
+    const body = route.request().method() === 'POST' ? route.request().postDataJSON() as Record<string, unknown> : {};
+    if (body.action === 'validate_key') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider: body.provider, status: 'enabled' }) });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        providers: [{ id: 'google', label: 'Google', enabled: true, hasKey: true, status: 'enabled' }],
+        defaultProvider: 'google',
+      }),
+    });
+  });
+  let routerRequests = 0;
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    if (routerRequests === 1) {
+      await route.fulfill(successfulStream('Initial current-priced response', 'stale-pricing-setup'));
+      return;
+    }
+    await route.fulfill({
+      status: 409,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'unknown_model_pricing', message: 'Pricing for this model is not verified or current.' }),
+    });
+  });
+
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Establish a chat before selecting a model');
+  await composer.press('Enter');
+  await expect(page.getByText('Initial current-priced response')).toBeVisible();
+  await page.getByRole('button', { name: 'Choose routing mode: automatic' }).click();
+  await page.getByRole('tab', { name: 'Models' }).click();
+  const staleModelId = 'gemini-2.5-flash';
+  const staleModelName = getCatalogEntry(staleModelId).shortName;
+  await page.getByRole('region', { name: 'Historic model catalog' }).getByRole('button', { name: /Historic models/ }).click();
+  const staleModelOption = page.locator('.model-option').filter({ hasText: staleModelName });
+  await expect(staleModelOption).toContainText('Pricing needs review');
+  await staleModelOption.click();
+  await expect(page.getByRole('button', { name: `Choose model: ${staleModelName}` })).toBeVisible();
+
+  await composer.fill('Use the stale model only once');
+  await composer.press('Enter');
+  await expect(page.getByRole('alert')).toContainText('Pricing for this model is not verified or current');
+  await expect(page.getByRole('alert')).toContainText('Choose a model with current pricing');
+  await expect(composer).toHaveValue('Use the stale model only once');
+  expect(routerRequests).toBe(2);
+});
 
 test('provider settings lookup failure blocks send, keeps draft, and retry restores router-authorized readiness', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

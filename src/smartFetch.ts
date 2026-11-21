@@ -6,6 +6,7 @@ import { CONFIG } from './config';
 import { devLog, devWarn, devError } from './utils';
 import { noteServerTariffVersion } from './catalogSkew';
 import { readRouterStream } from './hooks/useStreamHandler';
+import { isKnownModel } from './modelCatalog';
 import type { StreamTerminationStatus } from './hooks/useStreamHandler';
 import type { TerminalReceipt } from '../supabase/functions/_shared/execution_receipt';
 import type { AttachmentRef } from '../supabase/functions/_shared/conversation_attachments';
@@ -68,7 +69,10 @@ interface RouterRequestPayload {
 
 export interface RouterResponseBase {
   memoryHits?: number;
-  model: RouterModel;
+  /** Absent when the router does not identify the model that served the turn. */
+  model?: RouterModel;
+  /** Raw nonempty server identifier when it is not in this client's model catalog. */
+  reportedModel?: string;
   provider?: RouterProvider;
   complexityScore: number;
   modelId?: string;
@@ -557,10 +561,7 @@ export async function askPrismatix(
     }
 
     // Extract model info from headers
-    const modelHeader = (
-      response.headers.get('X-Router-Model') ||
-      'gemini-2.5-flash'
-    ) as RouterModel;
+    const modelHeader = response.headers.get('X-Router-Model');
     const modelIdHeader = response.headers.get('X-Router-Model-Id') || '';
     const providerHeader = response.headers.get('X-Provider') as RouterProvider | null;
     const overrideHeader = response.headers.get('X-Model-Override') || '';
@@ -577,6 +578,11 @@ export async function askPrismatix(
     noteServerTariffVersion(response.headers.get('X-Prismatix-Tariff'));
     const routeDecisionHeader = response.headers.get('X-Route-Decision');
     const routeInfo = parseRouteDecisionHeader(routeDecisionHeader);
+    // Use only an identified catalog model. The request selection is not proof
+    // of which route actually served the turn, so missing/invalid server
+    // identity stays explicitly unknown instead of inheriting a guessed rate.
+    const reportedModel = modelHeader?.trim() || undefined;
+    const model = reportedModel && isKnownModel(reportedModel) ? reportedModel : undefined;
     const debateModeHeader = response.headers.get('X-Debate-Mode');
     const debateProfileHeader = response.headers.get('X-Debate-Profile');
     const debateTriggerHeader = response.headers.get('X-Debate-Trigger');
@@ -611,7 +617,7 @@ export async function askPrismatix(
     };
 
     devLog('[smartFetch] Response:', {
-      model: modelHeader,
+      model: model ?? reportedModel ?? 'unreported',
       provider: providerHeader || undefined,
       modelId: modelIdHeader,
       override: overrideHeader,
@@ -635,7 +641,8 @@ export async function askPrismatix(
 
     return {
       stream: response.body,
-      model: modelHeader,
+      model,
+      reportedModel,
       provider: providerHeader || undefined,
       complexityScore,
       modelId: modelIdHeader || undefined,

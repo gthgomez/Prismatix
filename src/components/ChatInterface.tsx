@@ -267,6 +267,8 @@ export function describeStreamError(error: unknown): string {
       case 'unknown_pricing':
       case 'pricing_unknown':
         return 'Pricing for this model is unknown \u2014 send was blocked for cost safety. Please select a calibrated model.';
+      case 'unknown_model_pricing':
+        return 'Pricing for this model is not verified or current, so the send was blocked for cost safety. Choose a model with current pricing.';
       case 'admission_unavailable':
       case 'accounting_unavailable':
       case 'transcript_unavailable':
@@ -384,7 +386,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     dailyTotalUsd: number;
   } | null>(null);
   const [currentUsage, setCurrentUsage] = useState<UsageEstimate | null>(null);
-  const [costModel, setCostModel] = useState<RouterModel>('gemini-2.5-flash');
+  const [costModel, setCostModel] = useState<RouterModel | null>(null);
+  const [reportedCostModel, setReportedCostModel] = useState<string | undefined>(undefined);
   const [sessionCostTotal, setSessionCostTotal] = useState(0);
   const [spendRefreshKey, setSpendRefreshKey] = useState(0);
   const [showCostEstimator, setShowCostEstimator] = useState(false);
@@ -759,6 +762,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setIsWaitingFirstToken(false);
     setShowCostEstimator(false);
     setCurrentUsage(null);
+    setCostModel(null);
+    setReportedCostModel(undefined);
     setFinalMessageCost(null);
     setRouterPricingVersion(undefined);
     setSessionCostTotal(0);
@@ -2076,6 +2081,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setFinalMessageCost(null);
     setRouterPricingVersion(undefined);
     setCostModel(estimatedModel);
+    setReportedCostModel(undefined);
     setCurrentUsage({
       promptTokens: promptTokenEstimate,
       completionTokens: 0,
@@ -2322,7 +2328,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             ?? (result.status === 'rejected' ? (result.reason as { executionId?: string } | undefined)?.executionId : undefined);
           if (cost !== undefined) {
             recordCost({
-              model: value?.model ?? requestedModel,
+              model: value?.model ?? (value?.reportedModel ? `Unrecognized model (${value.reportedModel})` : 'Unreported model'),
               cost,
               costStatus,
               conversationId: sendConversationId,
@@ -2330,7 +2336,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             }, requestUserId);
           }
           return {
-            model: value?.model ?? requestedModel,
+              model: value
+                ? value.model ?? (value.reportedModel ? `Unrecognized model (${value.reportedModel})` : 'Unreported model')
+                : requestedModel,
             content: value?.content || (stopped ? 'Generation stopped before a response arrived.'
               : result.status === 'rejected' ? describeStreamError(result.reason) : 'No response was received.'),
             cost,
@@ -2439,6 +2447,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       const {
         stream,
         model,
+        reportedModel,
         provider,
         complexityScore,
         modelId,
@@ -2458,6 +2467,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         executionId,
         clientRequestId,
       } = result;
+      const responseModelLabel = model ?? (reportedModel ? `Unrecognized model (${reportedModel})` : 'Unreported model');
 
       executionIdRef.current = executionId;
       if (result.memoryHits !== undefined) setLastRecall({ conversationId: sendConversationId, hits: result.memoryHits });
@@ -2480,23 +2490,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         }
       }
 
-      if (!manualModelOverride && !overrideModel) {
+      if (model && !manualModelOverride && !overrideModel) {
         setCurrentModel(model);
       }
-      setCostModel(model);
+      setCostModel(model ?? null);
+      setReportedCostModel(model ? undefined : reportedModel);
       setRouterPricingVersion(costPricingVersion ?? undefined);
       setCurrentComplexity(complexityScore);
 
       const streamStartMs = Date.now();
       const recoveryId = executionId || clientRequestId || `${sendConversationId}-${streamStartMs}`;
-      const checkpoint = createResponseCheckpoint(requestUserId, { id: recoveryId, conversationId: sendConversationId, model });
+      const checkpoint = createResponseCheckpoint(requestUserId, {
+        id: recoveryId,
+        conversationId: sendConversationId,
+        model: responseModelLabel,
+      });
       const checkpointOnPageHide = () => checkpoint.flush();
       window.addEventListener('pagehide', checkpointOnPageHide);
 
       setMessages((prev) => [...prev, {
         role: 'assistant',
         content: '',
-        model,
+        ...(model ? { model } : {}),
+        ...(!model && reportedModel ? { reportedModel } : {}),
         provider,
         modelId,
         modelOverride: appliedOverride,
@@ -2608,7 +2624,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         estimateTokenCount(queryText) +
         attachmentsToProcess.filter((file) => file.isImage).length * 1600;
       const completionTokens = estimateTokenCount(assistantContent);
-      const computedCost = calculateFinalCost(model, { promptTokens, completionTokens });
+      const computedCost = model
+        ? calculateFinalCost(model, { promptTokens, completionTokens })
+        : undefined;
+      const computedEstimateUsd = computedCost && !computedCost.hasUnknownRate
+        ? computedCost.finalUsd
+        : undefined;
 
       // Handle premature stream termination without terminal receipt/[DONE]
       if (terminationStatus === 'interrupted' || terminationStatus === 'error') {
@@ -2644,9 +2665,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
         if (authoritativeCost !== undefined && authoritativeCost > 0) {
           recordCost({
-            model,
+            model: responseModelLabel,
             cost: authoritativeCost,
-            pricingVersion: costPricingVersion || computedCost.pricingVersion,
+            pricingVersion: costPricingVersion || computedCost?.pricingVersion,
             provider,
             conversationId: sendConversationId,
             costStatus,
@@ -2672,10 +2693,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                   ? `${assistantContent}\n\n⚠️ _[Response interrupted before completion]_`
                   : '⚠️ _[Connection interrupted before response started]_',
                 cost: {
-                  estimatedUsd: authoritativeCost ?? computedCost.finalUsd,
+                  estimatedUsd: authoritativeCost ?? computedEstimateUsd,
                   finalUsd: authoritativeCost,
                   status: costStatus,
-                  pricingVersion: costPricingVersion || computedCost.pricingVersion,
+                  pricingVersion: costPricingVersion || computedCost?.pricingVersion,
                   promptTokens,
                   completionTokens,
                   durationMs: Date.now() - streamStartMs,
@@ -2709,21 +2730,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         : undefined;
       const responseEstimateUsd = typeof streamedFinalUsd === 'number' && Number.isFinite(streamedFinalUsd) && streamedFinalUsd >= 0
         ? streamedFinalUsd
-        : costEstimateUsd ?? computedCost.finalUsd;
+        : costEstimateUsd ?? computedEstimateUsd;
 
       const costStatus: CostStatus = hasReceiptSettled
         ? 'settled'
         : isPendingSettlement
         ? 'pending'
-        : 'estimated';
+        : responseEstimateUsd !== undefined ? 'estimated' : 'unknown';
 
       setFinalMessageCost(authoritativeFinalUsd ?? null);
 
       if (authoritativeFinalUsd !== undefined && authoritativeFinalUsd > 0) {
         recordCost({
-          model,
+          model: responseModelLabel,
           cost: authoritativeFinalUsd,
-          pricingVersion: costPricingVersion || computedCost.pricingVersion,
+          pricingVersion: costPricingVersion || computedCost?.pricingVersion,
           provider,
           conversationId: sendConversationId,
           costStatus,
@@ -2767,7 +2788,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                 estimatedUsd: responseEstimateUsd,
                 finalUsd: authoritativeFinalUsd,
                 status: costStatus,
-                pricingVersion: costPricingVersion || computedCost.pricingVersion,
+                pricingVersion: costPricingVersion || computedCost?.pricingVersion,
                 promptTokens,
                 completionTokens,
                 durationMs: Date.now() - streamStartMs,
@@ -3304,7 +3325,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       setBudgetConfirm(null);
       setCurrentUsage(null);
       setSessionCostTotal(0);
-      setCostModel('gemini-2.5-flash');
+      setCostModel(null);
+      setReportedCostModel(undefined);
       setShowCostEstimator(false);
       setFinalMessageCost(null);
       setRouterPricingVersion(undefined);
@@ -4056,6 +4078,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
               })}
               <CostEstimator
                 model={costModel}
+                reportedModel={reportedCostModel}
                 usage={currentUsage}
                 isVisible={showCostEstimator && !showProviderSettings}
                 isStreaming={isStreaming}

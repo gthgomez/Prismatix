@@ -75,6 +75,48 @@ describe('smartFetch debate support', () => {
     signOutMock.mockResolvedValue(undefined);
   });
 
+  it('leaves the served model unreported when the router model header is absent', async () => {
+    const sse = 'data: {"type":"content_block_delta","delta":{"text":"answer"}}\n\n';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(makeStream(sse), { status: 200 })));
+
+    const result = await askPrismatix('Use the selected model');
+
+    expect(result?.model).toBeUndefined();
+    expect(result?.stream).toBeDefined();
+    expect(await readStream(result!.stream)).toBe(sse);
+  });
+
+  it('preserves the router model when its response header is present', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(makeStream(''), {
+      status: 200,
+      headers: { 'X-Router-Model': 'gemini-3.8-flash' },
+    })));
+
+    const result = await askPrismatix('Use the selected model');
+
+    expect(result?.model).toBe('gemini-3.8-flash');
+  });
+
+  it('preserves but does not treat an unknown server model id as a catalog model', async () => {
+    const routeDecision = encodeURIComponent(JSON.stringify({
+      selection: 'auto',
+      modelTier: 'gemini-3.8-flash',
+      reason: 'planned route',
+    }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(makeStream(''), {
+      status: 200,
+      headers: {
+        'X-Router-Model': 'gemini-4.2-flash',
+        'X-Route-Decision': routeDecision,
+      },
+    })));
+
+    const result = await askPrismatix('Use the selected model');
+
+    expect(result?.model).toBeUndefined();
+    expect(result?.reportedModel).toBe('gemini-4.2-flash');
+  });
+
   it('sends the shared Compare identity without changing the requested execution mode', async () => {
     const compareId = '33333333-3333-4333-8333-333333333333';
     const response = new Response(makeStream(''), { status: 200, headers: { 'X-Router-Model': 'gemini-3.8-flash' } });

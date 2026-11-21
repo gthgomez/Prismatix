@@ -49,7 +49,14 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   onOpenArtifact,
 }) => {
   if (import.meta.env.MODE === 'test') chatMessageItemRenderLog.push(index);
-  const modelPillMeta = message.model ? assistantModelPillDisplay(message) : null;
+  const modelPillMeta = message.model
+    ? assistantModelPillDisplay(message)
+    : message.reportedModel
+    ? {
+        label: `Unrecognized model: ${message.reportedModel}`,
+        title: 'The router reported this model id, but it is not in the current catalog. No catalog price is applied.',
+      }
+    : null;
   const isStreamingAssistant = isStreaming && message.role === 'assistant';
   const textContent = extractTextContent(message.content);
 
@@ -183,7 +190,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               </button>
             </div>
           )}
-          {message.model && (
+          {(message.model || message.reportedModel) && (
             <div className='message-metadata-container'>
               <button
                 type='button'
@@ -213,6 +220,12 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                     <div className='metadata-item'>
                       <span className='item-label'>API ID</span>
                       <span className='item-value metadata-value-break'>{message.modelId}</span>
+                    </div>
+                  )}
+                  {message.reportedModel && (
+                    <div className='metadata-item'>
+                      <span className='item-label'>Server model ID</span>
+                      <span className='item-value metadata-value-break'>{message.reportedModel}</span>
                     </div>
                   )}
                   {message.modelOverride && message.modelOverride !== 'auto' && (

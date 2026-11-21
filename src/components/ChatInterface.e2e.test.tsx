@@ -85,6 +85,11 @@ function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 30));
 }
 
+function setTextareaValue(input: HTMLTextAreaElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function createSseStream(textChunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
@@ -93,6 +98,29 @@ function createSseStream(textChunks: string[]): ReadableStream<Uint8Array> {
         const payload = `data: ${JSON.stringify({ type: 'content_block_delta', delta: { text } })}\n\n`;
         controller.enqueue(encoder.encode(payload));
       }
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+}
+
+function createSettledReceiptStream(text: string, settledUsd: number): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const events = [
+    { type: 'content_block_delta', delta: { text } },
+    {
+      type: 'receipt',
+      executionId: 'exec-unreported-model',
+      status: 'completed',
+      terminalOutcome: 'ok',
+      settlement: { state: 'settled', committedUsd: settledUsd },
+      transcript: { saved: true },
+      calls: [],
+    },
+  ];
+  return new ReadableStream({
+    start(controller) {
+      for (const event of events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       controller.close();
     },
@@ -278,6 +306,63 @@ describe('ChatInterface End-to-End Integration Flow', () => {
     act(() => host.querySelector<HTMLButtonElement>('.conversation-new-button')!.click());
     expect(host.querySelector('textarea')).toBe(originalInput);
     expect(host.querySelector('.prompt-starters-section')).not.toBeNull();
+  });
+
+  it('keeps the selection and settled amount when the router omits model identity', async () => {
+    vi.mocked(askPrismatix).mockResolvedValue({
+      executionId: 'exec-unreported-model',
+      model: undefined,
+      provider: 'openrouter',
+      complexityScore: 50,
+      costEstimateUsd: undefined,
+      stream: createSettledReceiptStream('Answer without a model header.', 0.023),
+    });
+
+    root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);
+    await act(async () => { await flushPromises(); });
+    const selector = host.querySelector<HTMLButtonElement>('.model-indicator-button')!;
+    const selectionBefore = selector.textContent;
+    const input = host.querySelector<HTMLTextAreaElement>('textarea')!;
+    act(() => setTextareaValue(input, 'Which model answered?'));
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.send-button')!.click();
+      await flushPromises();
+      await flushPromises();
+    });
+
+    expect(selector.textContent).toBe(selectionBefore);
+    expect(host.querySelector('.message-assistant .message-model-pill')).toBeNull();
+    expect(host.querySelector('.cost-estimator')?.textContent).toContain('The router did not report the model');
+    expect(host.querySelector('.cost-estimator')?.textContent).toContain('$0.0230');
+    expect(host.querySelector('.cost-estimator')?.textContent).not.toContain('$0.0000');
+  });
+
+  it('shows an unknown server-reported model id without applying a catalog price', async () => {
+    vi.mocked(askPrismatix).mockResolvedValue({
+      executionId: 'exec-newer-model',
+      model: undefined,
+      reportedModel: 'gemini-4.2-flash',
+      provider: 'openrouter',
+      complexityScore: 50,
+      stream: createSettledReceiptStream('Answer from a newer model.', 0.031),
+    });
+
+    root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);
+    await act(async () => { await flushPromises(); });
+    const input = host.querySelector<HTMLTextAreaElement>('textarea')!;
+    act(() => setTextareaValue(input, 'Which new model answered?'));
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.send-button')!.click();
+      await flushPromises();
+      await flushPromises();
+    });
+
+    const modelPill = host.querySelector<HTMLButtonElement>('.message-assistant .message-model-pill');
+    expect(modelPill?.textContent).toContain('Unrecognized model: gemini-4.2-flash');
+    act(() => modelPill?.click());
+    expect(host.querySelector('.message-assistant .metadata-popover')?.textContent).toContain('Server model IDgemini-4.2-flash');
+    expect(host.querySelector('.cost-estimator')?.textContent).toContain('gemini-4.2-flash');
+    expect(host.querySelector('.cost-estimator')?.textContent).toContain('$0.0310');
   });
 
   it('resets conversation state cleanly when clicking New Chat', async () => {

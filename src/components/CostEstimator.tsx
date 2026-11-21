@@ -15,7 +15,9 @@ function readDetailsExpanded(): boolean {
 }
 
 interface CostEstimatorProps {
-  model: RouterModel;
+  model: RouterModel | null;
+  /** Raw identifier reported by a router newer than this client's catalog. */
+  reportedModel?: string;
   usage: UsageEstimate | null;
   isVisible: boolean;
   isStreaming: boolean;
@@ -32,6 +34,7 @@ interface CostEstimatorProps {
 
 export const CostEstimator: React.FC<CostEstimatorProps> = ({
   model,
+  reportedModel,
   usage,
   isVisible,
   isStreaming,
@@ -55,14 +58,14 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   }, [detailsOpen]);
 
   const breakdown = useMemo(() => {
-    if (!usage) {
+    if (!usage || !model) {
       return {
         inputCost: 0,
         outputCost: 0,
         thinkingCost: 0,
         totalCost: 0,
         pricingVersion: PRICING_VERSION,
-        hasUnknownRate: false,
+        hasUnknownRate: !model,
       };
     }
     return calculateCostBreakdown(model, usage);
@@ -82,6 +85,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
     !isStreaming && finalCostUsd !== null && finalCostUsd !== undefined;
   const clientVsServerDiffers =
     serverFinalApplied &&
+    !breakdown.hasUnknownRate &&
     Math.abs((finalCostUsd as number) - clientMessageTotal) > TOTAL_COMPARE_EPS;
 
   const routerVersionTrimmed = routerPricingVersion?.trim() || null;
@@ -110,9 +114,21 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
         {isStreaming ? 'This message' : serverFinalApplied ? 'Settled total' : 'Estimated total'}
       </div>
       {breakdown.hasUnknownRate ? (
-        <p className='cost-estimator-unknown-pricing' role='alert'>
-          Pricing for {model} is unknown — no cost estimate shown, and Auto will not send it.
-        </p>
+        <>
+          <p className='cost-estimator-unknown-pricing' role='alert'>
+            {model
+              ? `Pricing for ${model} is unverified or out of date.`
+              : reportedModel
+                ? `Pricing for the unrecognized model ${reportedModel} is unavailable in this client.`
+                : 'The router did not report the model.'} A detailed estimate is unavailable.
+          </p>
+          {serverFinalApplied && (
+            <div className='cost-estimator-total'>
+              <span>Confirmed receipt</span>
+              <span>${(finalCostUsd as number).toFixed(4)}</span>
+            </div>
+          )}
+        </>
       ) : (
         <div className='cost-estimator-rows'>
           <div className='cost-estimator-row'>
@@ -138,7 +154,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
 
       {clientVsServerDiffers && (
         <p className='cost-estimator-reconcile-note' role='status'>
-          Shown total uses stream / logged final (
+          Shown total uses the confirmed receipt (
           ${(finalCostUsd as number).toFixed(4)}). Client breakdown sum is $
           {clientMessageTotal.toFixed(4)} — see details.
         </p>
@@ -164,7 +180,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
         <div className='cost-estimator-details' id='cost-estimator-details-panel'>
           <div className='cost-estimator-detail-block'>
             <div className='cost-estimator-detail-label'>Model (client breakdown)</div>
-            <div className='cost-estimator-detail-value'>{model}</div>
+            <div className='cost-estimator-detail-value'>{model ?? reportedModel ?? 'Not reported'}</div>
           </div>
 
           <div className='cost-estimator-detail-block'>
@@ -208,7 +224,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
             <p className='cost-estimator-detail-hint'>No usage snapshot yet.</p>
           )}
 
-          <div className='cost-estimator-detail-block'>
+          {!breakdown.hasUnknownRate && <div className='cost-estimator-detail-block'>
             <div className='cost-estimator-detail-label'>High precision (client, USD)</div>
             <div className='cost-estimator-micro-rows'>
               <div className='cost-estimator-micro-row'>
@@ -228,11 +244,11 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
                 <span>${clientMessageTotal.toFixed(6)}</span>
               </div>
             </div>
-          </div>
+          </div>}
 
           {serverFinalApplied && (
             <div className='cost-estimator-detail-block'>
-              <div className='cost-estimator-detail-label'>Stream / logged final (USD)</div>
+              <div className='cost-estimator-detail-label'>Confirmed receipt (USD)</div>
               <div className='cost-estimator-detail-value'>
                 ${(finalCostUsd as number).toFixed(6)}
               </div>
