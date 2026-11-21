@@ -99,6 +99,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
       if (ok) {
         setNotice(validation.status === 'enabled'
           ? 'Key saved and verified.'
+          : validation.status === 'unknown'
+          ? `Key saved. ${validation.message || 'Verification was inconclusive.'}`
           : 'Key saved. Verification is unavailable. Try testing the saved key again.');
       }
       // Only clear the field on success so a failed save never discards the key.
@@ -258,7 +260,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                               `${provider.label}: ${
                                 res.status === 'enabled'
                                   ? draft.trim() ? 'Draft key verified. Save it to use it.' : 'Saved key verified.'
-                                  : res.status === 'invalid_revoked' ? 'Key rejected. Update the key and try again.' : 'Could not verify the key. Try again.'
+                                  : res.status === 'invalid_revoked' ? 'Key rejected. Update the key and try again.'
+                                  : res.status === 'unknown' ? res.message || 'Verification was inconclusive.'
+                                  : 'Could not verify the key. Try again.'
                               }`,
                             );
                             return true;

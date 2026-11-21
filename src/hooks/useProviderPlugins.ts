@@ -29,7 +29,7 @@ export interface ProviderPlugins {
   verifiedProviders?: ReadonlySet<ProviderId>;
   verificationStatus: 'unverified' | 'verified' | 'unavailable' | 'invalid';
   verificationLoading: boolean;
-  verifyEnabledProviders: () => Promise<boolean>;
+  verifyEnabledProviders: (provider?: ProviderId) => Promise<boolean>;
   invalidateVerification: () => void;
   loading: boolean;
   error: string | null;
@@ -219,10 +219,11 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     [userId],
   );
 
-  const verifyEnabledProviders = useCallback(async (): Promise<boolean> => {
+  const verifyEnabledProviders = useCallback(async (provider?: ProviderId): Promise<boolean> => {
     const accountGeneration = accountGenerationRef.current;
     const verificationRequest = ++verificationRequestRef.current;
-    const targets = providers.filter((provider) => provider.hasKey && provider.enabled);
+    const targets = providers.filter((candidate) => candidate.hasKey && candidate.enabled
+      && (!provider || candidate.id === provider));
     if (targets.length === 0) return false;
     setVerificationLoading(true);
     try {

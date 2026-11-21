@@ -92,6 +92,27 @@ describe('ProviderSettings', () => {
     act(() => roots.pop()!.unmount());
   });
 
+  it('explains when a saved provider key cannot be checked rather than claiming verification', async () => {
+    const provider: ProviderState = { ...makeProvider(true), id: 'nvidia', label: 'NVIDIA', enabled: true };
+    const plugins = makePlugins(provider);
+    plugins.validateKey = vi.fn(async () => ({
+      provider: 'nvidia' as const,
+      status: 'unknown' as const,
+      message: 'A metadata verification check is not available in Prismatix for this provider.',
+    }));
+    const container = document.createElement('div');
+    document.body.append(container);
+    roots.push(renderInto(container, <ProviderSettings plugins={plugins} preferences={makePreferences()} onClose={vi.fn()} />));
+
+    await act(async () => {
+      document.body.querySelector<HTMLButtonElement>('[aria-label="Test connection for NVIDIA"]')!.click();
+    });
+    expect(document.body.querySelector('.provider-settings-notice')?.textContent)
+      .toContain('A metadata verification check is not available in Prismatix for this provider.');
+    expect(document.body.textContent).not.toContain('Saved key verified.');
+    container.remove();
+  });
+
   it('allows expanding provider models and toggling visibility and favorites', () => {
     const container = document.createElement('div');
     document.body.append(container);

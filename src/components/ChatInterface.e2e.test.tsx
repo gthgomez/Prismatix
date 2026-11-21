@@ -50,6 +50,7 @@ const providerPlugins = vi.hoisted(() => ({
   verificationStatus: 'verified',
   verificationLoading: false,
   verifyEnabledProviders: vi.fn(async () => true),
+  validateKey: vi.fn(async () => ({ provider: 'openrouter', status: 'unknown', clientAccountGeneration: 0 })),
   invalidateVerification: vi.fn(),
   loading: false,
   error: null,
@@ -159,6 +160,13 @@ describe('ChatInterface End-to-End Integration Flow', () => {
 
   beforeEach(() => {
     localStorage.clear();
+    providerPlugins.providers = [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }];
+    providerPlugins.isConfigured = true;
+    providerPlugins.isVerified = true;
+    providerPlugins.verificationStatus = 'verified';
+    providerPlugins.validateKey = vi.fn(async () => ({ provider: 'openrouter', status: 'unknown', clientAccountGeneration: 0 }));
+    providerPlugins.setKey = vi.fn(async () => true);
+    providerPlugins.verifyEnabledProviders = vi.fn(async () => true);
     host = document.createElement('div');
     document.body.appendChild(host);
   });
@@ -185,6 +193,43 @@ describe('ChatInterface End-to-End Integration Flow', () => {
     act(() => host.querySelector<HTMLButtonElement>('.auto-mode-btn')!.click());
     expect(selector.textContent).toContain('Auto routing');
     expect(selector.textContent).not.toContain('Manual');
+  });
+
+  it('recovers first-run OpenRouter without requiring unsupported providers to verify', async () => {
+    providerPlugins.isConfigured = false;
+    providerPlugins.isVerified = false;
+    providerPlugins.verificationStatus = 'unverified';
+    providerPlugins.providers = [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: false, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }];
+    providerPlugins.validateKey = vi.fn(async () => ({ provider: 'openrouter', status: 'unknown', clientAccountGeneration: 0 }));
+    providerPlugins.setKey = vi.fn(async () => true);
+    providerPlugins.verifyEnabledProviders = vi.fn(async () => true);
+
+    root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);
+    await act(async () => { await flushPromises(); });
+    const keyInput = host.querySelector<HTMLInputElement>('#first-run-openrouter-key')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(keyInput, 'sk-unverified-synthetic-key');
+      keyInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => host.querySelector<HTMLButtonElement>('.first-run-submit')!.click());
+    await act(async () => { await flushPromises(); });
+    const verifyButton = Array.from(host.querySelectorAll('button')).find((button) => button.textContent === 'Verify provider keys')!;
+    expect(verifyButton).toBeTruthy();
+    act(() => verifyButton.click());
+    await act(async () => { await flushPromises(); });
+
+    expect(providerPlugins.verifyEnabledProviders).toHaveBeenCalledWith('openrouter');
+  });
+
+  it('does not describe an inconclusive provider check as never checked', async () => {
+    Object.assign(providerPlugins.providers[0]!, { status: 'unknown' });
+    providerPlugins.isVerified = false;
+    providerPlugins.verificationStatus = 'unverified';
+    root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);
+    await act(async () => { await flushPromises(); });
+
+    expect(host.querySelector('.arctic-provider-unknown-status')?.textContent).toContain('checks need attention');
+    expect(host.querySelector('.arctic-provider-unknown-status')?.textContent).not.toContain('not been checked');
   });
 
   afterEach(() => {

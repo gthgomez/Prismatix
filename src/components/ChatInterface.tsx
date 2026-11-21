@@ -418,7 +418,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const openRouterProvider = providerPlugins.providers.find((provider) => provider.id === 'openrouter');
   const providerChecksNeedAttention = providerPlugins.verificationStatus === 'invalid'
     || providerPlugins.verificationStatus === 'unavailable'
-    || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked' || provider.status === 'unavailable');
+    || providerPlugins.providers.some((provider) => provider.status === 'invalid_revoked'
+      || provider.status === 'unavailable'
+      || (provider.hasKey && provider.enabled && provider.status === 'unknown'));
   useEffect(() => {
     setFirstRunOutcome((current) => reconcileFirstRunOutcome(current, openRouterProvider));
   }, [openRouterProvider]);
@@ -3021,7 +3023,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const handleVerifyProviders = async () => {
     const requestUserId = user?.id;
     const resolvingFirstRun = Boolean(firstRunOutcome && !firstRunOutcome.verified);
-    const verified = await providerPlugins.verifyEnabledProviders();
+    const verified = await providerPlugins.verifyEnabledProviders(resolvingFirstRun ? 'openrouter' : undefined);
     if (activeUserIdRef.current !== requestUserId) return;
     // A user-driven provider check resolves the UI's route-recovery pause;
     // the router remains authoritative if this route still cannot dispatch.

@@ -109,6 +109,39 @@ describe('useProviderPlugins account-scoped verification', () => {
     expect(result?.isVerified).toBe(true);
     expect(result?.verificationStatus).toBe('verified');
   });
+
+  it('can resolve first-run OpenRouter recovery without certifying an unsupported enabled provider', async () => {
+    vi.mocked(fetchProviderSettings).mockResolvedValue({
+      providers: [
+        configuredPayload.providers[0]!,
+        {
+          id: 'nvidia', label: 'NVIDIA', enabled: true, hasKey: true, keyLast4: '5678',
+          offeredByDefault: false, defaultProvider: false, status: 'enabled',
+        },
+      ],
+      defaultProvider: 'openrouter',
+    });
+    vi.mocked(validateProviderKey).mockImplementation(async (_userId, provider) => ({
+      provider,
+      status: provider === 'openrouter' ? 'enabled' : 'unknown',
+      message: provider === 'nvidia' ? 'No safe metadata check exists.' : undefined,
+    }));
+    root = createRoot(container);
+    await act(async () => root!.render(<Harness userId='account-a' />));
+
+    let allVerified = true;
+    await act(async () => { allVerified = await result!.verifyEnabledProviders(); });
+    expect(allVerified).toBe(false);
+    expect(result?.isVerified).toBe(false);
+
+    let openRouterVerified = false;
+    await act(async () => { openRouterVerified = await result!.verifyEnabledProviders('openrouter'); });
+    expect(openRouterVerified).toBe(true);
+    expect(result?.isVerified).toBe(false);
+    expect(result?.verifiedProviders?.has('openrouter')).toBe(true);
+    expect(result?.verifiedProviders?.has('nvidia')).toBe(false);
+  });
+
   it('does not apply the result of testing a draft key to a saved key', async () => {
     vi.mocked(validateProviderKey).mockResolvedValue({ provider: 'openrouter', status: 'enabled' });
     root = createRoot(container);
