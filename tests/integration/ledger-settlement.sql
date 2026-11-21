@@ -2,8 +2,7 @@
 -- PX03 execution / model-call ledger settlement & isolation assertions.
 --
 -- Self-contained psql script: everything runs inside ONE transaction and is
--- ROLLED BACK, so no database state is modified. It re-applies the real PX03
--- migration file (idempotent) and then asserts the identity/constraint/RLS
+-- ROLLED BACK, so no database state is modified. It asserts the identity/constraint/RLS
 -- behaviour that the execution ledger depends on:
 --   * execution identity is (subject_id, client_request_key) bound to a payload
 --     hash; reusing a key with a different hash raises request_key_conflict and
@@ -25,8 +24,7 @@
 --     supabase start && supabase db reset
 --     psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
 --          -v ON_ERROR_STOP=1 -f tests/integration/ledger-settlement.sql
---   Staging (already-migrated schema):
---     psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -f tests/integration/ledger-settlement.sql
+-- Run only against an isolated database with all repository migrations applied.
 
 \set ON_ERROR_STOP on
 
@@ -63,12 +61,7 @@ values
   );
 
 -- ---------------------------------------------------------------------------
--- Apply the REAL migration under test (idempotent; rolled back at the end).
--- ---------------------------------------------------------------------------
-\i supabase/migrations/20261006010000_px03_execution_ledger.sql
-
--- ---------------------------------------------------------------------------
--- 1) Schema / constraint shape.
+-- Schema / constraint shape.
 -- ---------------------------------------------------------------------------
 do $$
 declare
@@ -310,8 +303,9 @@ end $$;
 reset role;
 
 -- ---------------------------------------------------------------------------
--- 5) Isolation: SELECT-own for authenticated, no writes, anon denied, RPCs
---    service-role only.
+-- 5) Isolation: PX12 intentionally removes authenticated schema usage for the
+--    internal ledger. Clients must be unable to read or write it directly;
+--    service-role-only RPCs remain the supported transport.
 -- ---------------------------------------------------------------------------
 
 -- 5a) service_role creates an execution for user B so cross-tenant reads can be
@@ -325,32 +319,22 @@ begin
 end $$;
 reset role;
 
--- 5b) User A sees only its own execution and own model calls.
+-- 5b) User A has no direct path to the internal ledger. This also protects
+--     against callers bypassing the owner-scoped RPC surface.
 set local role authenticated;
 select set_config('request.jwt.claims', json_build_object('sub', current_setting('px03.user_a'), 'role', 'authenticated')::text, true);
 select set_config('request.jwt.claim.sub', current_setting('px03.user_a'), true);
 do $$
-declare
-  mine bigint;
-  others bigint;
 begin
-  select count(*) into mine from prismatix_internal.executions
-   where subject_id = current_setting('px03.user_a')::uuid;
-  if mine <> 1 then
-    raise exception 'PX03 FAIL: A cannot select its own execution (saw %)', mine;
+  if has_schema_privilege('authenticated', 'prismatix_internal', 'USAGE') then
+    raise exception 'PX03 FAIL: authenticated can resolve the internal schema';
   end if;
-
-  select count(*) into others from prismatix_internal.executions
-   where subject_id = current_setting('px03.user_b')::uuid;
-  if others <> 0 then
-    raise exception 'PX03 FAIL: A can see B''s execution (cross-tenant read)';
-  end if;
-
-  -- Own model calls visible, B's not (B has none, but the policy must not leak).
-  select count(*) into mine from prismatix_internal.model_calls;
-  if mine < 1 then
-    raise exception 'PX03 FAIL: A cannot select its own model calls';
-  end if;
+  begin
+    perform 1 from prismatix_internal.executions;
+    raise exception 'PX03 FAIL: authenticated read the internal ledger';
+  exception
+    when insufficient_privilege then null; -- expected: PX12 hides the schema
+  end;
 end $$;
 
 do $$

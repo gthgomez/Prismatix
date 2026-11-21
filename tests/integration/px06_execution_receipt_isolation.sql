@@ -2,8 +2,7 @@
 -- PX06 terminal-receipt RPC isolation assertions.
 --
 -- Self-contained psql script: everything runs inside ONE transaction and is
--- ROLLED BACK, so no database state is modified. It (re-)applies the real PX03,
--- PX05 and PX06 migrations (all additive/idempotent) and then asserts the
+-- ROLLED BACK, so no database state is modified. It asserts the
 -- ownership + privilege contract of the read RPC that backs the terminal
 -- receipt:
 --   * the real fn is SECURITY DEFINER with a fixed search_path;
@@ -21,9 +20,7 @@
 --     supabase start && supabase db reset
 --     psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
 --          -v ON_ERROR_STOP=1 -f tests/integration/px06_execution_receipt_isolation.sql
---   Staging (already-migrated schema):
---     psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 \
---          -f tests/integration/px06_execution_receipt_isolation.sql
+-- Run only against an isolated database with all repository migrations applied.
 
 \set ON_ERROR_STOP on
 
@@ -60,14 +57,7 @@ values
   );
 
 -- ---------------------------------------------------------------------------
--- Apply the REAL migrations under test (idempotent; rolled back at the end).
--- ---------------------------------------------------------------------------
-\i supabase/migrations/20261006010000_px03_execution_ledger.sql
-\i supabase/migrations/20261006020000_px05_budgets_leases.sql
-\i supabase/migrations/20261006030000_px06_execution_receipt.sql
-
--- ---------------------------------------------------------------------------
--- 1) Function posture: SECURITY DEFINER + fixed search_path.
+-- Function posture: SECURITY DEFINER + fixed search_path.
 -- ---------------------------------------------------------------------------
 do $$
 declare
@@ -117,6 +107,10 @@ begin
     raise exception 'PX06 FAIL: could not seed an execution for subject A';
   end if;
   v_id := (v_exec->'execution'->>'id')::uuid;
+  -- Retain the opaque ID for the authenticated denial check below. PX12
+  -- intentionally removes authenticated schema usage, so that check must
+  -- call the RPC directly rather than first selecting the internal table.
+  perform set_config('px06.execution_id', v_id::text, true);
 
   perform public.px03_record_model_call(
     v_id, 'baseline', 'anthropic', 1,
@@ -221,16 +215,29 @@ do $$
 declare
   v_exec uuid;
 begin
-  select id into v_exec
-    from prismatix_internal.executions
-   where subject_id = current_setting('px06.user_a')::uuid
-     and client_request_key = 'req-receipt-A';
+  v_exec := current_setting('px06.execution_id')::uuid;
 
   begin
     perform public.px03_get_execution_receipt(
       current_setting('px06.user_a')::uuid, v_exec
     );
     raise exception 'PX06 FAIL: authenticated executed the receipt RPC';
+  exception
+    when insufficient_privilege then null; -- expected
+  end;
+end $$;
+reset role;
+
+-- Anonymous clients are denied independently of authenticated clients.
+set local role anon;
+do $$
+begin
+  begin
+    perform public.px03_get_execution_receipt(
+      current_setting('px06.user_a')::uuid,
+      current_setting('px06.execution_id')::uuid
+    );
+    raise exception 'PX06 FAIL: anon executed the receipt RPC';
   exception
     when insufficient_privilege then null; -- expected
   end;

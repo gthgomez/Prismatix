@@ -4,7 +4,9 @@ migration_dir="${1:-supabase/migrations}"
 fixture="${2:-tests/integration/px08_compare_durability.sql}"
 qualified_fixture="tests/integration/qualified_spend_stats.sql"
 db="prismatix-compare-$$"
-docker run --rm --detach --network none --name "$db" -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine >/dev/null
+docker run --rm --detach --network none --name "$db" \
+  -v "$PWD:/repo:ro" -w /repo \
+  -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine >/dev/null
 trap 'docker stop "$db" >/dev/null' EXIT
 for retry in {1..30}; do
   if docker exec "$db" pg_isready -U postgres -h localhost >/dev/null 2>&1; then break; fi
@@ -45,6 +47,7 @@ done
 # The PX01 migration also updates video entitlements. Create its shared schema
 # here and limit this harness to the Compare and message provenance contracts.
 sql -c 'create schema prismatix_internal'
+sql -c 'grant usage on schema prismatix_internal to service_role'
 for file in \
   20261006010000_px03_execution_ledger.sql \
   20261006020000_px05_budgets_leases.sql \
@@ -64,3 +67,13 @@ sql < "$fixture"
 if [[ "$fixture" != "$qualified_fixture" ]]; then
   sql < "$qualified_fixture"
 fi
+# The PX13 fixture seeds malformed legacy rows, applies the forward guard in a
+# transaction, asserts fail-closed settlement and new-write behavior, then rolls
+# back. It is intentionally run against the PX03/PX05/PX06/PX07/PX18 test schema
+# before PX13 is applied by any later migration step.
+sql < tests/integration/invalid_ledger_settlement.sql
+# Apply PX13 outside the fixture's rollback and verify the regular Compare and
+# qualified-spend acceptance against the integrated post-migration schema too.
+sql < "$migration_dir/20261121220000_px13_budget_settlement_cost_guards.sql"
+sql < "$fixture"
+sql < "$qualified_fixture"

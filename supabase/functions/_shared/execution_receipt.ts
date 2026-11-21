@@ -72,14 +72,14 @@ export interface RawReceiptCall {
   attempt_number: number;
   served_model: string | null;
   cost_status: ReceiptCostStatus;
-  total_cost: number | string;
+  total_cost?: number | string | null;
 }
 
 // Mirrors prismatix_internal.budget_reservations (subset). `null` when no
 // reservation row exists for the execution.
 export interface RawReceiptReservation {
   state: 'held' | 'committed' | 'released' | 'pending_reconcile';
-  committed_usd: number | string | null;
+  committed_usd?: number | string | null;
 }
 
 export interface RawReceiptPayload {
@@ -100,14 +100,17 @@ export const TERMINAL_EXECUTION_STATUSES: ReadonlySet<ExecutionReceiptStatus> = 
   'indeterminate',
 ]);
 
-/** numeric(12,6) may arrive as a string from PostgREST. Never invent a value. */
-function toUsd(value: number | string | null | undefined): number {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-  if (typeof value === 'string') {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
+/** numeric(12,6) may arrive as a string from PostgREST. Reject invalid money. */
+function parseUsd(value: number | string | null | undefined): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? value : undefined;
   }
-  return 0;
+  if (typeof value === 'string') {
+    if (value.trim() === '') return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function roundUsd(value: number): number {
@@ -127,21 +130,36 @@ function roundUsd(value: number): number {
  *     reservation is `committed`; unresolved or released reservations remain
  *     `pending`;
  *   * settled calls with no reservation retain the legacy settled-call sum.
- * `committedUsd` prefers the reservation's committed amount and falls back to
- * the sum of settled call costs (e.g. for legacy rows with no reservation).
+ * `committedUsd` prefers a valid reservation amount. The settled call sum is
+ * used only for legacy rows with no reservation; a present malformed amount
+ * keeps the receipt pending rather than fabricating a settled zero.
  */
 export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
   const execution = payload.execution;
   const calls = payload.calls ?? [];
   const reservation = payload.reservation ?? null;
 
-  const settledSum = calls
-    .filter((call) => call.cost_status === 'settled')
-    .reduce((sum, call) => sum + toUsd(call.total_cost), 0);
-  const pendingCalls = calls.filter((call) => call.cost_status !== 'settled').length;
+  const projectedCalls = calls.map((call) => {
+    const totalCost = parseUsd(call.total_cost);
+    return {
+      call,
+      totalCost: totalCost ?? 0,
+      costStatus: call.cost_status === 'settled' && totalCost === undefined
+        ? 'pending' as const
+        : call.cost_status,
+    };
+  });
+  const settledSum = projectedCalls
+    .filter((item) => item.costStatus === 'settled')
+    .reduce((sum, item) => sum + item.totalCost, 0);
+  const pendingCalls = projectedCalls.filter((item) => item.costStatus !== 'settled').length;
+  const reservationAmount = reservation ? parseUsd(reservation.committed_usd) : undefined;
+  const reservationAmountInvalid = reservation !== null && reservationAmount === undefined;
 
   let state: SettlementState;
-  if (calls.length === 0) {
+  if (reservationAmountInvalid) {
+    state = 'pending';
+  } else if (calls.length === 0) {
     state = reservation?.state === 'released' ? 'released' : 'pending';
   } else if (pendingCalls > 0) {
     state = 'pending';
@@ -151,9 +169,7 @@ export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
     state = 'settled';
   }
 
-  const committedUsd = roundUsd(
-    toUsd(reservation?.committed_usd ?? settledSum),
-  );
+  const committedUsd = roundUsd(reservation ? reservationAmount ?? 0 : settledSum);
 
   const finalizedAt = TERMINAL_EXECUTION_STATUSES.has(execution.status)
     ? execution.updated_at
@@ -169,13 +185,13 @@ export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
     createdAt: execution.created_at,
     finalizedAt,
     settlement: { state, committedUsd, pendingCalls },
-    calls: calls.map((call) => ({
+    calls: projectedCalls.map(({ call, costStatus, totalCost }) => ({
       stage: call.stage,
       participant: call.participant,
       attemptNumber: call.attempt_number,
       servedModel: call.served_model,
-      costStatus: call.cost_status,
-      totalCost: roundUsd(toUsd(call.total_cost)),
+      costStatus,
+      totalCost: roundUsd(totalCost),
     })),
     ...(payload.transcript ? { transcript: payload.transcript } : {}),
   };

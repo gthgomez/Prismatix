@@ -7,7 +7,6 @@ do $$
 declare
   u1 constant uuid := '11111111-1111-4111-8111-111111111111';
   u2 constant uuid := '22222222-2222-4222-8222-222222222222';
-  qualified jsonb;
   function_id regprocedure := 'public.get_spend_stats_qualified(uuid)'::regprocedure;
 begin
   if not has_function_privilege('service_role', function_id, 'EXECUTE') then
@@ -31,7 +30,18 @@ begin
     (u1, 'fixture', 1, 1, 0, 0, 0, 0, 0.300000, now(), 'estimated_legacy'),
     (u1, 'fixture', 1, 1, 0, 0, 0, 0, 0.400000, now() - interval '45 days', 'settled'),
     (u2, 'fixture', 1, 1, 0, 0, 0, 0, 0.900000, now(), 'pending');
+end;
+$$;
 
+-- Exercise the RPC under its actual service-role grant, not as the migration
+-- owner. The two IDs prove the SECURITY DEFINER query remains user-scoped.
+set local role service_role;
+do $$
+declare
+  u1 constant uuid := '11111111-1111-4111-8111-111111111111';
+  u2 constant uuid := '22222222-2222-4222-8222-222222222222';
+  qualified jsonb;
+begin
   qualified := public.get_spend_stats_qualified(u1);
   if (qualified #>> '{today,settled}')::numeric <> 0.1
      or (qualified #>> '{today,pending}')::numeric <> 0.2
@@ -63,5 +73,30 @@ begin
   end if;
 end;
 $$;
+reset role;
+
+-- Client roles cannot invoke the RPC even when they know another user's UUID.
+set local role authenticated;
+do $$
+begin
+  begin
+    perform public.get_spend_stats_qualified('11111111-1111-4111-8111-111111111111');
+    raise exception 'authenticated executed the qualified spend RPC';
+  exception when insufficient_privilege then null;
+  end;
+end;
+$$;
+reset role;
+set local role anon;
+do $$
+begin
+  begin
+    perform public.get_spend_stats_qualified('11111111-1111-4111-8111-111111111111');
+    raise exception 'anon executed the qualified spend RPC';
+  exception when insufficient_privilege then null;
+  end;
+end;
+$$;
+reset role;
 
 rollback;

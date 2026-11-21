@@ -410,6 +410,7 @@ describe('recordModelCall', () => {
       attempt_number: 1,
       input_tokens: 10,
       output_tokens: 5,
+      total_cost: 0,
       cost_status: 'settled',
     });
     await recordModelCall(fake.client, {
@@ -419,6 +420,7 @@ describe('recordModelCall', () => {
       attempt_number: 1,
       input_tokens: 10,
       output_tokens: 5,
+      total_cost: 0,
       cost_status: 'settled',
     });
 
@@ -437,12 +439,56 @@ describe('recordModelCall', () => {
       attempt_number: 1,
       input_tokens: 10,
       output_tokens: 5,
+      total_cost: 0,
       cost_status: 'settled' as const,
     };
     await recordModelCall(fake.client, record);
     await recordModelCall(fake.client, record);
 
     expect(fake.modelCalls).toHaveLength(1);
+  });
+
+  it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY, -0.01])(
+    'rejects settled calls with invalid total_cost %s before the RPC',
+    async (total_cost) => {
+      const fake = createFakeClient();
+      const execution = await seedExecution(fake);
+      const before = fake.modelCalls.length;
+
+      await expect(recordModelCall(fake.client, {
+        execution_id: execution.id,
+        stage: 'settled-invalid',
+        participant: 'fixture',
+        cost_status: 'settled',
+        ...(total_cost === undefined ? {} : { total_cost }),
+      })).rejects.toMatchObject({ code: 'invalid_settled_model_call_cost' });
+
+      expect(fake.modelCalls).toHaveLength(before);
+    },
+  );
+
+  it('allows pending calls to omit total_cost and preserves explicit settled zero', async () => {
+    const fake = createFakeClient();
+    const execution = await seedExecution(fake);
+
+    await recordModelCall(fake.client, {
+      execution_id: execution.id,
+      stage: 'pending-placeholder',
+      participant: 'fixture',
+      cost_status: 'pending',
+    });
+    await recordModelCall(fake.client, {
+      execution_id: execution.id,
+      stage: 'settled-zero',
+      participant: 'fixture',
+      cost_status: 'settled',
+      total_cost: 0,
+    });
+
+    expect(fake.modelCalls.map(({ cost_status, total_cost }) => [cost_status, total_cost])).toEqual([
+      ['pending', 0],
+      ['settled', 0],
+    ]);
   });
 });
 

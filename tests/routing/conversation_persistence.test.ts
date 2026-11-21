@@ -533,6 +533,57 @@ describe('PX07 post-inference assistant persistence failure', () => {
     expect(costLog?.cost_status).toBe('settled');
   });
 
+  it('keeps the final receipt and cost log pending when a settled call has an invalid amount', async () => {
+    const malformedReceipt = receiptPayload();
+    (malformedReceipt.calls as Array<Record<string, unknown>>)[0]!.total_cost = 'NaN';
+    const calls = installFetchRecorder(makeRoutes(() => null, malformedReceipt));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    const wire = await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    const finalReceipt = receiptFromStream(wire) as {
+      settlement?: { state?: string };
+      calls?: Array<Record<string, unknown>>;
+    } | undefined;
+    expect(costLog?.cost_status).toBe('pending');
+    expect(costLog?.total_cost).toBeGreaterThan(0);
+    expect(finalReceipt?.settlement?.state).toBe('pending');
+    expect(finalReceipt?.calls?.[0]).toMatchObject({ costStatus: 'pending', totalCost: 0 });
+  });
+
+  it('keeps the final receipt and cost log pending when a committed reservation amount is invalid', async () => {
+    const malformedReceipt = receiptPayload();
+    (malformedReceipt.reservation as Record<string, unknown>).committed_usd = 'NaN';
+    const calls = installFetchRecorder(makeRoutes(() => null, malformedReceipt));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    const wire = await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    expect(costLog?.cost_status).toBe('pending');
+    expect(costLog?.total_cost).toBeGreaterThan(0);
+    expect(receiptFromStream(wire)?.settlement).toMatchObject({ state: 'pending', committedUsd: 0 });
+  });
+
   it('keeps token-derived cost as pending when the receipt is unsettled', async () => {
     const pendingReceipt = receiptPayload();
     (pendingReceipt.calls as Array<Record<string, unknown>>)[0]!.cost_status = 'pending';

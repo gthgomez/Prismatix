@@ -179,6 +179,17 @@ describe('projectReceipt', () => {
     expect(receipt.settlement).toEqual({ state: 'settled', committedUsd: 0, pendingCalls: 0 });
   });
 
+  it('preserves a valid committed zero on a started execution with a settled call', () => {
+    const receipt = projectReceipt({
+      execution: execution({ status: 'started', terminal_outcome: null }),
+      calls: [call({ total_cost: 0 })],
+      reservation: reservation({ state: 'committed', committed_usd: 0 }),
+    });
+
+    expect(receipt.settlement).toEqual({ state: 'settled', committedUsd: 0, pendingCalls: 0 });
+    expect(receipt.finalizedAt).toBeNull();
+  });
+
   it('reports pending for zero calls with no reservation row at all', () => {
     const receipt = projectReceipt({
       execution: execution({ status: 'started', terminal_outcome: null }),
@@ -200,15 +211,76 @@ describe('projectReceipt', () => {
     expect(receipt.settlement.committedUsd).toBeCloseTo(0.3, 6);
   });
 
-  it('falls back to the settled call sum when the reservation committed_usd is null', () => {
+  it('does not treat a present reservation with null committed_usd as a legacy fallback', () => {
     const receipt = projectReceipt({
       execution: execution(),
       calls: [call({ total_cost: 0.1 }), call({ participant: 'openai', total_cost: 0.2 })],
       reservation: reservation({ state: 'committed', committed_usd: null }),
     });
 
-    expect(receipt.settlement.state).toBe('settled');
-    expect(receipt.settlement.committedUsd).toBeCloseTo(0.3, 6);
+    expect(receipt.settlement).toEqual({ state: 'pending', committedUsd: 0, pendingCalls: 0 });
+  });
+
+  it('does not treat a present reservation with a missing committed_usd as a legacy fallback', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ total_cost: 0.3 })],
+      reservation: reservation({ state: 'committed', committed_usd: undefined }),
+    });
+
+    expect(receipt.settlement).toEqual({ state: 'pending', committedUsd: 0, pendingCalls: 0 });
+  });
+
+  it.each(['NaN', 'Infinity', '-Infinity', '-0.000001', '', '   '])(
+    'does not settle with invalid committed reservation amount %j',
+    (committed_usd) => {
+      const receipt = projectReceipt({
+        execution: execution(),
+        calls: [call({ total_cost: 0.42 })],
+        reservation: reservation({ state: 'committed', committed_usd }),
+      });
+
+      expect(receipt.settlement).toEqual({ state: 'pending', committedUsd: 0, pendingCalls: 0 });
+    },
+  );
+
+  it.each(['NaN', 'Infinity', '-Infinity', '-0.000001', '', '   '])(
+    'does not settle or report settled cost for invalid call amount %j',
+    (total_cost) => {
+      const receipt = projectReceipt({
+        execution: execution(),
+        calls: [call({ total_cost })],
+        reservation: null,
+      });
+
+      expect(receipt.settlement).toEqual({ state: 'pending', committedUsd: 0, pendingCalls: 1 });
+      expect(receipt.calls[0]).toMatchObject({ costStatus: 'pending', totalCost: 0 });
+    },
+  );
+
+  it('does not settle when a numeric non-finite call amount reaches the projector', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ total_cost: Number.NaN })],
+      reservation: null,
+    });
+
+    expect(receipt.settlement.state).toBe('pending');
+    expect(receipt.settlement.pendingCalls).toBe(1);
+    expect(receipt.calls[0]).toMatchObject({ costStatus: 'pending', totalCost: 0 });
+  });
+
+  it('does not settle a call with a missing total_cost', () => {
+    const missingCostCall = call();
+    delete missingCostCall.total_cost;
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [missingCostCall],
+      reservation: null,
+    });
+
+    expect(receipt.settlement).toEqual({ state: 'pending', committedUsd: 0, pendingCalls: 1 });
+    expect(receipt.calls[0]).toMatchObject({ costStatus: 'pending', totalCost: 0 });
   });
 
   it('coerces numeric(12,6) strings from PostgREST', () => {
