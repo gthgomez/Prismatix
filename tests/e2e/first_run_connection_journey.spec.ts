@@ -259,11 +259,15 @@ test('first run directs users to a saved but disabled provider instead of prompt
   const setup = page.locator('.first-run-card');
   await expect(setup.getByRole('heading', { name: 'OpenRouter is saved but turned off' })).toBeVisible();
   await expect(setup.locator('#first-run-openrouter-key')).toHaveCount(0);
+  const composerStatus = page.locator('.provider-setup-composer-status');
+  await expect(composerStatus).toContainText('Enable a provider in Provider Settings to send');
+  await expect(composerStatus.getByRole('button', { name: 'Provider Settings', exact: true })).toBeVisible();
   const { violations } = await new AxeBuilder({ page }).include('.first-run-card').analyze();
   expect(violations.filter(({ impact }) => impact === 'critical' || impact === 'serious')).toEqual([]);
   const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
   await mkdir(evidenceDir, { recursive: true });
-  await page.screenshot({ path: `${evidenceDir}/first-run-saved-disabled-1024x600.png`, animations: 'disabled' });
+  const viewport = page.viewportSize();
+  await page.screenshot({ path: `${evidenceDir}/first-run-saved-disabled-${viewport?.width}x${viewport?.height}.png`, animations: 'disabled' });
   await setup.getByRole('button', { name: 'Open Provider Settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Provider plug-ins' });
   await expect(settings).toBeVisible();

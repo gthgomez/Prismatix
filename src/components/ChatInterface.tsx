@@ -4262,6 +4262,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         duplicateNotice={duplicateNotice}
         composerValidationView={composerValidationView}
         providerSetupBlocked={messages.length === 0 && !providerCanAttemptRouterSend}
+        providerSetupNeedsEnable={!providerPlugins.isConfigured && providerPlugins.providers.some((provider) => provider.hasKey && !provider.enabled)}
         providerSetupVerifyAvailable={messages.length === 0 && Boolean(failedTurnDraft) && providerPlugins.isConfigured && !providerPlugins.loading && !providerPlugins.error && !providerVerified}
         onVerifyProviderKeys={() => void handleVerifyProviders()}
         onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}

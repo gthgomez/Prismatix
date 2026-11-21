@@ -10,6 +10,7 @@ const viewports = [
   { name: 'tablet', width: 768, height: 1024 },
   { name: 'small-phone', width: 320, height: 568 },
   { name: 'phone-360x740', width: 360, height: 740 },
+  { name: 'phone-375x667', width: 375, height: 667 },
   { name: 'phone-390x667', width: 390, height: 667 },
   { name: 'phone-390x844', width: 390, height: 844 },
   { name: 'landscape-568x320', width: 568, height: 320 },
