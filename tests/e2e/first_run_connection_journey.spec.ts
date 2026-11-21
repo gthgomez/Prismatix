@@ -261,7 +261,7 @@ test('first run directs users to a saved but disabled provider instead of prompt
   await expect(setup.locator('#first-run-openrouter-key')).toHaveCount(0);
   const composerStatus = page.locator('.provider-setup-composer-status');
   await expect(composerStatus).toContainText('Enable a provider in Provider Settings to send');
-  await expect(composerStatus.getByRole('button', { name: 'Provider Settings', exact: true })).toBeVisible();
+  await expect(composerStatus.getByRole('button', { name: 'Provider Settings', exact: true })).toHaveCount(0);
   const { violations } = await new AxeBuilder({ page }).include('.first-run-card').analyze();
   expect(violations.filter(({ impact }) => impact === 'critical' || impact === 'serious')).toEqual([]);
   const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
