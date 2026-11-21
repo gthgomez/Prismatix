@@ -9,6 +9,7 @@ test('public demo text stays readable on its dark panels in both themes', async 
     await page.evaluate((value) => document.documentElement.setAttribute('data-theme', value), theme);
     for (const width of [390, 1440]) {
       await page.setViewportSize({ width, height: 900 });
+      await page.locator('.resume-demo-button-primary').hover();
       const samples = await page.evaluate(() => {
         type Color = [number, number, number, number];
         const parse = (value: string): Color => {
@@ -28,7 +29,7 @@ test('public demo text stays readable on its dark panels in both themes', async 
           return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
         };
         const selectors = [
-          '.resume-demo-brand', '.resume-demo-nav-links a', '.spec-label', '.spec-val',
+          '.resume-demo-brand', '.resume-demo-nav-links a', '.resume-demo-button-primary', '.spec-label', '.spec-val',
           '.demo-badge-synthetic', '.demo-title', '.demo-subtitle', '.demo-tab.active',
           '.route-model-name', '.demo-route-meta', '.demo-message-sender', '.demo-message-content',
           '.code-block-lang', '.code-copy-btn', '.code-block-content',
