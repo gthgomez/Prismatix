@@ -4689,9 +4689,11 @@
 
 .draft-recovery-actions {
   display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  flex-shrink: 0;
+  min-width: 0;
 }
 
 .draft-recovery-restore-btn {
@@ -4703,7 +4705,7 @@
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
-  min-height: 32px;
+  min-height: 44px;
 }
 
 .draft-recovery-restore-btn:hover {
@@ -4719,7 +4721,7 @@
   font-size: 0.8rem;
   font-weight: 700;
   cursor: pointer;
-  min-height: 32px;
+  min-height: 44px;
 }
 
 .draft-recovery-retry-btn:hover:not(:disabled) {
@@ -4727,12 +4729,62 @@
 }
 
 .draft-recovery-dismiss-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
   background: transparent;
-  border: none;
+  border: 1px solid var(--color-border);
   color: var(--color-text-dim);
   cursor: pointer;
-  padding: 0.2rem 0.4rem;
+  padding: 0.35rem;
   font-size: 0.85rem;
+  border-radius: var(--radius-sm, 6px);
+}
+
+.draft-recovery-copy-btn {
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.draft-recovery-actions button:focus-visible {
+  outline: 3px solid var(--color-focus, #4ecdc4);
+  outline-offset: 2px;
+}
+
+@media (max-width: 480px) {
+  .draft-recovery-bar {
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    margin-right: 0.5rem;
+    margin-left: 0.5rem;
+  }
+
+  .draft-recovery-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .draft-recovery-actions button {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    height: auto;
+    white-space: normal;
+  }
 }
 
 /* F04: Older-message pagination & context boundary */

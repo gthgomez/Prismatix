@@ -460,9 +460,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
             {(() => {
               const imageGen = message.metadata?.imageGeneration as
-                | { imageUrl?: string; prompt?: string; modelId?: string; costUsd?: number }
+                | { imageUrl?: string; prompt?: string; modelId?: string; costUsd?: number; isMock?: boolean }
                 | undefined;
               if (!imageGen?.imageUrl) return null;
+              const isPreview = imageGen.isMock === true
+                || (imageGen.isMock == null && imageGen.imageUrl.startsWith('data:image/svg+xml'));
               return (
                 <div
                   className='generated-image-card'
@@ -476,7 +478,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 >
                   <img
                     src={imageGen.imageUrl}
-                    alt={imageGen.prompt || 'Generated image'}
+                    alt={isPreview ? `Preview placeholder for: ${imageGen.prompt || 'your prompt'}` : imageGen.prompt || 'Generated image'}
                     style={{
                       maxWidth: '100%',
                       maxHeight: '400px',
@@ -497,11 +499,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                     }}
                   >
                     <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
-                      🎨 {imageGen.modelId} • ${imageGen.costUsd?.toFixed(4) ?? '0.0000'}
+                      {isPreview ? 'Preview placeholder • Free' : `🎨 ${imageGen.modelId} • $${imageGen.costUsd?.toFixed(4) ?? '0.0000'}`}
                     </span>
                     <a
                       href={imageGen.imageUrl}
-                      download='prismatix-generated-image.png'
+                      download={isPreview ? 'prismatix-preview.svg' : 'prismatix-generated-image.png'}
                       target='_blank'
                       rel='noopener noreferrer'
                       style={{ fontSize: '0.75rem', color: '#4ECDC4', textDecoration: 'none', fontWeight: 500 }}

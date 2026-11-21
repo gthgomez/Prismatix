@@ -22,6 +22,27 @@ describe('CostEstimator pricing freshness', () => {
     vi.useRealTimers();
   });
 
+  it('keeps a live message estimate separate from router-confirmed session receipts', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model='gemini-3.8-flash'
+      usage={{ promptTokens: 1000, completionTokens: 1000 }}
+      isVisible
+      isStreaming
+      totalCost={0.0123}
+      finalCostUsd={null}
+    />));
+
+    expect(container.querySelector('.cost-estimator-title')?.textContent).toBe('Live message estimate');
+    expect(container.querySelector('.cost-estimator-total')?.textContent).toContain('Live estimate');
+    expect(container.querySelector('.cost-estimator-session')?.textContent).toContain('Confirmed receipts in this session');
+    expect(container.querySelector('.cost-estimator-session strong')?.textContent).toBe('$0.0123');
+    expect(container.querySelector('.cost-estimator-session')?.textContent).not.toContain('0.0123 +');
+  });
+
   it('explains when an estimate is unavailable because the legacy price is stale', () => {
     container = document.createElement('div');
     document.body.appendChild(container);

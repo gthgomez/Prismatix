@@ -47,6 +47,8 @@ export function AuthenticatedApp() {
     signOut,
     resetPassword,
     signInWithProvider,
+    sessionCheckError,
+    retrySessionCheck,
   } = useAuth();
 
   if (isRecoveryFlow()) {
@@ -63,7 +65,7 @@ export function AuthenticatedApp() {
         <div className="loading-content">
           <img className="loading-logo loading-logo-mark" src="/prismatix-arctic-mark.svg" alt="" />
           <div className="loading-spinner-large" />
-          <p>Initializing Prismatix...</p>
+          <p role="status" aria-live="polite">Checking your saved session. This can take a little while on a slow connection.</p>
         </div>
       </div>
     );
@@ -77,6 +79,8 @@ export function AuthenticatedApp() {
           onSignUp={signUp}
           onSignInWithProvider={signInWithProvider}
           onResetPassword={resetPassword}
+          sessionCheckError={sessionCheckError}
+          onRetrySessionCheck={retrySessionCheck}
         />
       </div>
     );
@@ -92,6 +96,7 @@ export function AuthenticatedApp() {
         </div>
       )}>
         <ChatInterface
+          key={user?.id ?? 'no-user'}
           user={user}
           onSignOut={signOut}
           theme={theme}

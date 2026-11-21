@@ -12,6 +12,10 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-client-info, apikey',
 };
 
+// Keep live dispatch closed until idempotency, admission and spending
+// settlement have been qualified against the deployed schema and provider.
+const LIVE_IMAGE_GENERATION_ENABLED: boolean = false;
+
 interface ImageModelConfig {
   id: string;
   provider: 'openai' | 'openrouter';
@@ -199,6 +203,16 @@ export async function handleImageGeneration(req: Request): Promise<Response> {
 
     return new Response(JSON.stringify(mockResult), {
       status: 200,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!LIVE_IMAGE_GENERATION_ENABLED) {
+    return new Response(JSON.stringify({
+      success: false,
+      error: 'Live image generation is temporarily unavailable while spending safeguards are verified. Use the free preview instead.',
+    }), {
+      status: 503,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });
   }

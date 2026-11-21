@@ -713,8 +713,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     if (activeUserIdRef.current === user?.id) return;
     activeUserIdRef.current = user?.id;
     accountGenerationRef.current += 1;
+    conversationLoadSeqRef.current += 1;
     conversationsRefreshSeqRef.current += 1;
     newConversationIdRef.current = null;
+    selectedConversationIdRef.current = null;
+    setSelectedConversationId(null);
+    messagesRef.current = [];
+    setMessages([]);
+    conversationReadyRef.current = false;
+    setConversationLoading(false);
+    setConversationLoadError(null);
+    setHasEarlierMessages(false);
+    setIsLoadingEarlierMessages(false);
+    setEarlierMessagesError(null);
     setConversations([]);
     setProjects([]);
     setActiveProjectId(null);
@@ -1882,7 +1893,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         role: 'assistant',
         content: result.revisedPrompt || result.prompt,
         timestamp: Date.now(),
-        model: result.modelId as RouterModel,
+        model: isMock ? undefined : result.modelId as RouterModel,
         cost: {
           status: isMock ? 'unmetered' : (result.costStatus === 'settled' ? 'settled' : 'unmetered'),
           finalUsd: finalCost,
@@ -1893,7 +1904,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         },
       };
       setMessages((prev) => [...prev, newMsg]);
-      setActionNotice({ type: 'success', message: `Image generated via ${result.modelId}` });
+      setActionNotice({ type: 'success', message: isMock ? 'Image preview created.' : `Image generated via ${result.modelId}` });
     },
     []
   );

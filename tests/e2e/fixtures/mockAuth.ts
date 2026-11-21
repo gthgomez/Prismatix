@@ -26,6 +26,8 @@ export const MOCK_SESSION = {
 
 export interface MockAppOptions {
   hasProviderKey?: boolean;
+  authSession?: typeof MOCK_SESSION;
+  additionalAuthStorageKeys?: string[];
   conversations?: Array<{ id: string; title: string; last_activity_at: string; project_id?: string | null }>;
   messages?: Array<{
     id: string;
@@ -97,7 +99,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
   // Inject session into all common Supabase storage keys before page scripts run.
   // Include host-derived local keys so reload keeps the authorized shell without
   // requiring another interactive sign-in.
-  await page.addInitScript((sessionData) => {
+  await page.addInitScript(({ sessionData, additionalKeys }) => {
     const raw = JSON.stringify(sessionData);
     const seedKeys = [
       'sb-mock-auth-token',
@@ -106,6 +108,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
       'sb-127-auth-token',
       'sb-127.0.0.1-auth-token',
       'sb-localhost-auth-token',
+      ...additionalKeys,
     ];
     for (const key of seedKeys) {
       window.localStorage.setItem(key, raw);
@@ -116,7 +119,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
         window.localStorage.setItem(key, raw);
       }
     }
-  }, MOCK_SESSION);
+  }, { sessionData: options.authSession ?? MOCK_SESSION, additionalKeys: options.additionalAuthStorageKeys ?? [] });
 
   // Mock Supabase Auth API
   await page.route('**/auth/v1/user*', async (route) => {

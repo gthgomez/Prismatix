@@ -98,7 +98,7 @@ test('verified first-run connection sends once and reloads fixture-persisted out
     const events = [
       { type: 'meta', model: 'gemini-3.8-flash' },
       { type: 'content_block_delta', delta: { text: GENERATED_REPLY } },
-      { type: 'receipt', executionId: EXECUTION_ID, status: 'completed', settlement: { state: 'settled', committedUsd: 0, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0 }] },
+      { type: 'receipt', executionId: EXECUTION_ID, status: 'completed', transcript: { saved: true }, settlement: { state: 'settled', committedUsd: 0, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0 }] },
     ];
     const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n';
     signalRouterStarted();
@@ -196,6 +196,7 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await page.reload();
   await expect(page.getByRole('textbox', { name: /message prismatix/i })).toBeVisible({ timeout: 15000 });
   await expect(page.getByText(GENERATED_REPLY)).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('.draft-recovery-bar')).toHaveCount(0);
   await assertAccountControlFits();
   await capture(`transition-reload-${viewportName}`);
   expect(fixture.routerRequests).toHaveLength(1);

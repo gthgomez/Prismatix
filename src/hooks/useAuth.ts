@@ -1,5 +1,5 @@
 // src/hooks/useAuth.ts
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../config';
 import { clearLocalPreferences } from '../services/userPreferencesService';
@@ -13,6 +13,8 @@ interface AuthState {
 }
 
 interface UseAuthReturn extends AuthState {
+  sessionCheckError: string | null;
+  retrySessionCheck: () => void;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
@@ -34,11 +36,19 @@ export const useAuth = (): UseAuthReturn => {
     isLoading: true,
     isAuthenticated: false,
   });
+  const [sessionCheckError, setSessionCheckError] = useState<string | null>(null);
+  const [sessionCheckAttempt, setSessionCheckAttempt] = useState(0);
+  const sessionCheckCompleteRef = useRef(false);
 
   useEffect(() => {
+    let active = true;
+    sessionCheckCompleteRef.current = false;
     const initAuth = async () => {
+      setSessionCheckError(null);
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
+        if (!active) return;
+        sessionCheckCompleteRef.current = true;
 
         if (error) {
           const lowered = String(error.message || '').toLowerCase();
@@ -48,12 +58,17 @@ export const useAuth = (): UseAuthReturn => {
           } else {
             console.error('[useAuth] Session fetch error:', error);
           }
+          if (!active) return;
+          sessionCheckCompleteRef.current = true;
           setAuthState({
             session: null,
             user: null,
             isLoading: false,
             isAuthenticated: false,
           });
+          if (!lowered.includes('invalid refresh token') && !lowered.includes('refresh token not found')) {
+            setSessionCheckError('Prismatix could not verify your saved session. Check your connection and retry, or sign in again.');
+          }
           return;
         }
 
@@ -65,7 +80,11 @@ export const useAuth = (): UseAuthReturn => {
         });
       } catch (err) {
         console.error('[useAuth] Unexpected error:', err);
-        setAuthState(prev => ({ ...prev, isLoading: false }));
+        if (active) {
+          sessionCheckCompleteRef.current = true;
+          setSessionCheckError('Prismatix could not verify your saved session. Check your connection and retry, or sign in again.');
+          setAuthState(prev => ({ ...prev, isLoading: false }));
+        }
       }
     };
 
@@ -73,7 +92,10 @@ export const useAuth = (): UseAuthReturn => {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        if (!active) return;
+        if (event === 'INITIAL_SESSION' && !sessionCheckCompleteRef.current) return;
         console.log('[useAuth] Auth event:', event);
+        if (session?.user) setSessionCheckError(null);
         setAuthState({
           session,
           user: session?.user ?? null,
@@ -84,8 +106,14 @@ export const useAuth = (): UseAuthReturn => {
     );
 
     return () => {
+      active = false;
       subscription.unsubscribe();
     };
+  }, [sessionCheckAttempt]);
+
+  const retrySessionCheck = useCallback(() => {
+    setAuthState((prev) => ({ ...prev, isLoading: true }));
+    setSessionCheckAttempt((attempt) => attempt + 1);
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
@@ -197,6 +225,8 @@ export const useAuth = (): UseAuthReturn => {
 
   return {
     ...authState,
+    sessionCheckError,
+    retrySessionCheck,
     signIn,
     signUp,
     signOut,

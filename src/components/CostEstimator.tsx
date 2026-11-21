@@ -77,9 +77,6 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   const messageTotal = isStreaming
     ? clientMessageTotal
     : (finalCostUsd ?? clientMessageTotal);
-  const sessionTotalDisplay = isStreaming
-    ? totalCost + messageTotal
-    : totalCost;
 
   const serverFinalApplied =
     !isStreaming && finalCostUsd !== null && finalCostUsd !== undefined;
@@ -111,7 +108,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
       }}
     >
       <div className='cost-estimator-title'>
-        {isStreaming ? 'This message' : serverFinalApplied ? 'Settled total' : 'Estimated total'}
+        {isStreaming ? 'Live message estimate' : serverFinalApplied ? 'Settled total' : 'Estimated total'}
       </div>
       {breakdown.hasUnknownRate ? (
         <>
@@ -146,7 +143,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
             </div>
           )}
           <div className='cost-estimator-total'>
-            <span>Total</span>
+            <span>{isStreaming ? 'Live estimate' : serverFinalApplied ? 'Confirmed receipt' : 'Estimate'}</span>
             <span>${messageTotal.toFixed(4)}</span>
           </div>
         </div>
@@ -161,8 +158,8 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
       )}
 
       <div className='cost-estimator-session'>
-        <span>Session total</span>
-        <strong>${sessionTotalDisplay.toFixed(4)}</strong>
+        <span>Confirmed receipts in this session</span>
+        <strong>${totalCost.toFixed(4)}</strong>
       </div>
 
       <button

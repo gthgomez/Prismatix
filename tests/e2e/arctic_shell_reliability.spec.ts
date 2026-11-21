@@ -50,6 +50,52 @@ test('failed-send text survives reload in its tab without auto-dispatch', async 
   expect(routerRequests).toBe(1);
 });
 
+test('recovery actions wrap, stay reachable and keep 44px targets at 320px', async ({ page }, testInfo) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.route('**/functions/v1/router*', async (route) => {
+    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'provider_key_unavailable' }) });
+  });
+  await signInAsMockUser(page);
+  await page.setViewportSize({ width: 320, height: 568 });
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Keep this draft reachable');
+  await composer.press('Enter');
+  await expect(page.locator('.draft-recovery-bar')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('recovery-after-320.png') });
+
+  const assertRecoveryActionsFit = async (expectedCount: number) => {
+    const recovery = page.locator('.draft-recovery-bar');
+    const actions = recovery.locator('.draft-recovery-actions button');
+    await expect(actions).toHaveCount(expectedCount);
+    for (const action of await actions.all()) {
+      await expect(action).toBeVisible();
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(320);
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(568);
+      expect(box!.height, await action.getAttribute('class') || '').toBeGreaterThanOrEqual(44);
+      await action.focus();
+      await expect(action).toBeFocused();
+    }
+    const bounds = await recovery.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+    const composerLocator = page.getByRole('textbox', { name: 'Message Prismatix' });
+    await composerLocator.scrollIntoViewIfNeeded();
+    const composerBox = await composerLocator.boundingBox();
+    expect(composerBox).not.toBeNull();
+    expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(569);
+  };
+
+  await assertRecoveryActionsFit(4);
+  await page.reload();
+  await expect(page.locator('.draft-recovery-bar')).toContainText('Draft recovered');
+  await assertRecoveryActionsFit(3);
+  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
+});
+
 test('reload during a send preserves the prompt without automatically sending again', async ({ page }) => {
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   let routerRequests = 0;
