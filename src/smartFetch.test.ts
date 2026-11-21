@@ -75,6 +75,81 @@ describe('smartFetch debate support', () => {
     signOutMock.mockResolvedValue(undefined);
   });
 
+  it('leaves the served model unreported when the router model header is absent', async () => {
+    const sse = 'data: {"type":"content_block_delta","delta":{"text":"answer"}}\n\n';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(makeStream(sse), { status: 200 })));
+
+    const result = await askPrismatix('Use the selected model');
+
+    expect(result?.model).toBeUndefined();
+    expect(result?.stream).toBeDefined();
+    expect(await readStream(result!.stream)).toBe(sse);
+  });
+
+  it('preserves the router model when its response header is present', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(makeStream(''), {
+      status: 200,
+      headers: { 'X-Router-Model': 'gemini-3.8-flash' },
+    })));
+
+    const result = await askPrismatix('Use the selected model');
+
+    expect(result?.model).toBe('gemini-3.8-flash');
+  });
+
+  it('preserves but does not treat an unknown server model id as a catalog model', async () => {
+    const routeDecision = encodeURIComponent(JSON.stringify({
+      selection: 'auto',
+      modelTier: 'gemini-3.8-flash',
+      reason: 'planned route',
+    }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(makeStream(''), {
+      status: 200,
+      headers: {
+        'X-Router-Model': 'gemini-4.2-flash',
+        'X-Route-Decision': routeDecision,
+      },
+    })));
+
+    const result = await askPrismatix('Use the selected model');
+
+    expect(result?.model).toBeUndefined();
+    expect(result?.reportedModel).toBe('gemini-4.2-flash');
+  });
+
+  it('sends the shared Compare identity without changing the requested execution mode', async () => {
+    const compareId = '33333333-3333-4333-8333-333333333333';
+    const response = new Response(makeStream(''), { status: 200, headers: { 'X-Router-Model': 'gemini-3.8-flash' } });
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await askPrismatix('Compare these options', [], [], null, 'high', { comparisonGroupId: compareId });
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.comparisonGroupId).toBe(compareId);
+    expect(body.mode).toBeUndefined();
+  });
+
+  it('retains the server execution identity when Compare stream reading fails', async () => {
+    const executionId = '44444444-4444-4444-8444-444444444444';
+    const brokenStream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new Error('connection dropped')); },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(brokenStream, {
+      status: 200,
+      headers: { 'X-Prismatix-Execution-Id': executionId, 'X-Router-Model': 'gemini-3.8-flash' },
+    })));
+
+    const result = await askPrismatixSync('Compare these', [], [], null, 'high', {
+      comparisonGroupId: '33333333-3333-4333-8333-333333333333',
+    });
+
+    expect(result?.executionId).toBe(executionId);
+    expect(result?.terminationStatus).toBe('error');
+    expect(result?.isDoneReceived).toBe(false);
+  });
+
   it('sends mode=debate and debateProfile when enabled and parses X-Debate-* headers', async () => {
     const sse = 'data: {"type":"content_block_delta","delta":{"text":"hello"}}\n\n';
     const response = new Response(makeStream(sse), {
@@ -219,7 +294,7 @@ describe('smartFetch debate support', () => {
   });
 
   it('preserves terminal receipt and interruption status in sync responses', async () => {
-    const receipt = { executionId: 'exec-1', status: 'indeterminate', terminalOutcome: 'upstream_interrupted', transcript: { saved: true }, settlement: { state: 'pending' }, calls: [] };
+    const receipt = { executionId: 'exec-1', status: 'indeterminate', terminalOutcome: 'upstream_interrupted', transcript: { saved: true }, settlement: { state: 'pending', committedUsd: 0, pendingCalls: 1 }, calls: [] };
     const sse = [
       { type: 'content_block_delta', delta: { text: 'partial answer' } },
       { type: 'receipt', ...receipt },

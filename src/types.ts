@@ -151,6 +151,10 @@ export interface Message {
   content: string | unknown[]; // Supports multimodal content
   timestamp: number;
   model?: RouterModel;
+  /** Raw router model id unknown to this client; never use it for price lookup. */
+  reportedModel?: string;
+  /** Route selection rationale retained without asserting an unknown model tier. */
+  routeRationale?: string;
   provider?: RouterProvider;
   modelId?: string;
   modelOverride?: string;
@@ -184,10 +188,13 @@ export interface Message {
     snippet: string;
   }>;
   comparisonResults?: {
-    modelA: { model: RouterModel; content: string; cost?: number; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean };
-    modelB: { model: RouterModel; content: string; cost?: number; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean };
+    modelA: { model: string; content: string; cost?: number; costStatus?: 'settled' | 'pending' | 'estimated' | 'unknown'; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean; executionId?: string; assistantMessageId?: string };
+    modelB: { model: string; content: string; cost?: number; costStatus?: 'settled' | 'pending' | 'estimated' | 'unknown'; status?: 'completed' | 'interrupted' | 'stopped' | 'failed'; transcriptSaved?: boolean; executionId?: string; assistantMessageId?: string };
     preferred?: 'A' | 'B';
+    preferencePending?: boolean;
   };
+  compareGroupId?: string;
+  compareGroupChild?: 'A' | 'B';
   metadata?: Record<string, unknown>;
 }
 

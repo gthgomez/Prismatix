@@ -1,19 +1,31 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
-import { MODEL_ORDER, getCatalogEntry } from '../../src/modelCatalog';
+import { getCatalogEntry } from '../../src/modelCatalog';
 
 const successfulStream = (text: string, executionId: string) => ({
   status: 200,
-  headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': executionId },
+  headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model, X-Provider, X-Prismatix-Execution-Id', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': executionId },
   body: [
     { type: 'meta', model: 'gemini-3.8-flash', cost: { finalUsd: 0.0001 } },
     { type: 'content_block_delta', delta: { text } },
-    { type: 'receipt', executionId, status: 'completed', transcript: { saved: true }, settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
+    { type: 'receipt', executionId, status: 'completed', transcript: { saved: true }, settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0.0001 }] },
   ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
 });
 
-test('failed-send draft remains session-only and reload never auto-dispatches it', async ({ page }) => {
+async function selectHistory(page: Page, title: string) {
+  const sidebar = page.getByRole('complementary', { name: 'Conversations' });
+  const toggle = page.getByRole('button', { name: 'Toggle conversations sidebar' });
+  const mobileDrawer = await toggle.isVisible();
+  if (mobileDrawer && await toggle.getAttribute('aria-expanded') !== 'true') {
+    await toggle.click();
+  }
+  await expect(sidebar).toBeVisible();
+  await sidebar.getByText(title, { exact: true }).click();
+  if (mobileDrawer) await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+}
+
+test('failed-send text survives reload in its tab without auto-dispatch', async ({ page }) => {
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   let routerRequests = 0;
   await page.route('**/functions/v1/router*', async (route) => {
@@ -22,15 +34,79 @@ test('failed-send draft remains session-only and reload never auto-dispatches it
   });
   await signInAsMockUser(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
-  await composer.fill('Keep this only in memory');
+  await composer.fill('Recover this text after reload');
   await composer.press('Enter');
-  await expect(page.locator('.draft-recovery-bar')).toContainText('lost on refresh');
+  await expect(page.locator('.draft-recovery-bar')).toContainText('can survive a refresh');
   expect(routerRequests).toBe(1);
-  expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Keep this only in memory');
+  expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Recover this text after reload');
   await page.reload();
   await expect(page.getByRole('textbox', { name: 'Message Prismatix' })).toBeVisible();
-  await expect(page.locator('.draft-recovery-bar')).toBeHidden();
+  const recovery = page.locator('.draft-recovery-bar');
+  await expect(recovery).toContainText('Check your chat history before sending again');
+  await expect(recovery.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
+  await recovery.getByRole('button', { name: 'Restore draft' }).click();
+  await expect(composer).toHaveValue('Recover this text after reload');
+  await expect(recovery).toBeHidden();
   expect(routerRequests).toBe(1);
+});
+
+test('reload during a send preserves the prompt without automatically sending again', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let routerRequests = 0;
+  let releaseRouter!: () => void;
+  const routerGate = new Promise<void>((resolve) => { releaseRouter = resolve; });
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    if (routerRequests === 1) {
+      await routerGate;
+      await route.abort().catch(() => {});
+    } else {
+      await route.fulfill(successfulStream('Independent answer with a saved transcript', 'pending-draft-proof'));
+    }
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Hold my exact prompt during a reload');
+  await composer.press('Enter');
+  await expect.poll(() => routerRequests).toBe(1);
+  expect(await page.evaluate(() => Object.values(sessionStorage))).toContain('Hold my exact prompt during a reload');
+  try {
+    await page.reload();
+    const recovery = page.locator('.draft-recovery-bar');
+    await expect(recovery).toContainText('Check your chat history before sending again');
+    expect(routerRequests).toBe(1);
+    await composer.fill('Send a separate prompt');
+    await composer.press('Enter');
+    await expect(page.getByText('Independent answer with a saved transcript')).toBeVisible();
+    expect(routerRequests).toBe(2);
+    await page.reload();
+    await expect(recovery).toContainText('Check your chat history before sending again');
+    await recovery.getByRole('button', { name: 'Restore draft' }).click();
+    await expect(composer).toHaveValue('Hold my exact prompt during a reload');
+    expect(routerRequests).toBe(2);
+  } finally {
+    releaseRouter();
+  }
+});
+
+test('unsent text stays with the conversation across navigation and reload', async ({ page }) => {
+  const first = 'draft-history-first';
+  const second = 'draft-history-second';
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [
+    { id: first, title: 'Draft history first', last_activity_at: '2026-11-16T00:00:00Z', project_id: null },
+    { id: second, title: 'Draft history second', last_activity_at: '2026-11-15T00:00:00Z', project_id: null },
+  ], messages: [] });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await selectHistory(page, 'Draft history first');
+  await composer.fill('Draft for the first conversation');
+  await selectHistory(page, 'Draft history second');
+  await expect(composer).toHaveValue('');
+  await composer.fill('Draft for the second conversation');
+  await page.reload();
+  await expect(composer).toHaveValue('Draft for the second conversation');
+  await selectHistory(page, 'Draft history first');
+  await expect(composer).toHaveValue('Draft for the first conversation');
 });
 
 test('Compare preserves interrupted model outcome and warns when either transcript was not saved', async ({ page }) => {
@@ -44,7 +120,7 @@ test('Compare preserves interrupted model outcome and warns when either transcri
         { type: 'content_block_delta', delta: { text: 'Partial answer A' } },
         { type: 'receipt', executionId: 'compare-a', status: 'indeterminate', terminalOutcome: 'upstream_interrupted', transcript: { saved: false }, settlement: { state: 'pending', committedUsd: null, pendingCalls: 1 }, calls: [] },
       ];
-      await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' }, body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') });
+      await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': 'gemini-3.8-flash' }, body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') });
       return;
     }
     await route.fulfill(successfulStream('Complete answer B', `compare-${requests}`));
@@ -55,28 +131,25 @@ test('Compare preserves interrupted model outcome and warns when either transcri
   await composer.fill('Compare without hiding a partial result');
   await composer.press('Enter');
   await expect(page.getByText('Partial answer A')).toBeVisible();
-  await expect(page.getByRole('alert')).toContainText('could not be saved');
+  await expect(page.locator('.transcript-unsaved-notice')).toContainText('could not be saved');
   await expect(page.getByText('Interrupted · partial response')).toBeVisible();
   await expect(page.getByText('Complete answer B')).toBeVisible();
   expect(requests).toBe(2);
+  await page.reload();
+  await expect(page.getByText(/Review recovered response/)).toHaveCount(1);
+  await page.getByText(/Review recovered response/).click();
+  await expect(page.getByRole('textbox', { name: 'Recovered response text' })).toHaveValue('Partial answer A');
+  expect(requests).toBe(2);
 });
 
-test('Compare marks completed answers unsaved when its metadata write returns a database error', async ({ page }) => {
+test('Compare keeps its rollout-disabled result visible without writing assistant rows', async ({ page }) => {
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   let requests = 0;
-  let metadataWrites = 0;
-  const messageMethods: string[] = [];
+  const writes: string[] = [];
   page.on('request', (request) => {
-    if (request.url().includes('/rest/v1/messages')) messageMethods.push(`observed:${request.method()}`);
-  });
-  await page.route('**/rest/v1/messages*', async (route) => {
-    messageMethods.push(`route:${route.request().method()}`);
-    if (route.request().method() === 'PATCH') {
-      metadataWrites++;
-      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ code: '08006', message: 'synthetic database unavailable' }) });
-      return;
-    }
-    await route.fallback();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith('/messages') && request.method() !== 'GET') writes.push(request.method());
+    if (path.endsWith('/px08_persist_compare')) writes.push(request.method());
   });
   await page.route('**/functions/v1/router*', async (route) => {
     requests++;
@@ -85,12 +158,12 @@ test('Compare marks completed answers unsaved when its metadata write returns a 
   await signInAsMockUser(page);
   await page.getByRole('button', { name: 'Compare', exact: true }).click();
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
-  await composer.fill('Report a failed durable comparison metadata write');
+  await composer.fill('Compare without rewriting an assistant row');
   await composer.press('Enter');
   await expect(page.getByText('Completed model 1')).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('could not be saved');
   expect(requests).toBe(2);
-  expect({ metadataWrites, messageMethods }).toEqual({ metadataWrites: 1, messageMethods: expect.arrayContaining(['route:PATCH']) });
+  expect(writes).toEqual([]);
 });
 
 test('ordinary Chat visibly marks a router-reported unsaved answer without retrying it', async ({ page }) => {
@@ -100,9 +173,9 @@ test('ordinary Chat visibly marks a router-reported unsaved answer without retry
     requests++;
     const events = [
       { type: 'content_block_delta', delta: { text: 'Keep this generated answer visible' } },
-      { type: 'receipt', executionId: 'single-unsaved', status: 'completed', transcript: { saved: false }, settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
+      { type: 'receipt', executionId: 'single-unsaved', status: 'completed', transcript: { saved: false }, settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0.0001 }] },
     ];
-    await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash' }, body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n` });
+    await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': 'gemini-3.8-flash' }, body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n` });
   });
   await signInAsMockUser(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
@@ -111,7 +184,344 @@ test('ordinary Chat visibly marks a router-reported unsaved answer without retry
   await expect(page.getByText('Keep this generated answer visible')).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('could not be saved');
   await expect(page.getByRole('button', { name: 'Copy response' })).toBeVisible();
+  for (const theme of ['light', 'dark']) {
+    const ratio = await page.locator('.transcript-unsaved-notice').evaluate((notice) => {
+      const luminance = (color: string) => {
+        const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map((value) => {
+          const channel = value / 255;
+          return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+      };
+      const style = getComputedStyle(notice);
+      const foreground = luminance(style.color);
+      const background = luminance(style.backgroundColor);
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    });
+    expect(ratio, `${theme} unsaved response warning`).toBeGreaterThanOrEqual(4.5);
+    if (theme === 'light') {
+      await page.getByRole('button', { name: 'Account menu' }).click();
+      await page.getByRole('button', { name: 'Dark theme' }).click();
+    }
+  }
   expect(requests).toBe(1);
+});
+
+test('pending settlement never turns streamed cost metadata into a final charge', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.route('**/functions/v1/router*', async (route) => {
+    const events = [
+      { type: 'meta', cost: { finalUsd: 0.42 } },
+      { type: 'content_block_delta', delta: { text: 'The answer is still settling.' } },
+      { type: 'receipt', executionId: 'pending-cost', status: 'completed', transcript: { saved: true }, settlement: { state: 'pending', committedUsd: 0, pendingCalls: 1 }, calls: [] },
+    ];
+    await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': 'gemini-3.8-flash' }, body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n` });
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Show pending cost');
+  await composer.press('Enter');
+  await expect(page.getByText('The answer is still settling.')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Cost: .*pending/ })).toBeVisible();
+  await expect(page.locator('.cost-estimator-title')).toHaveText('Estimated total');
+});
+
+test('spend analytics separates recorded statuses on a narrow screen', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  const bucket = { settled: 1, pending: 0.5, estimatedLegacy: 0.2 };
+  await page.route('**/functions/v1/spend_stats*', (route) => route.fulfill({ json: {
+    today: 1.7, thisWeek: 1.7, thisMonth: 1.7, allTime: 1.7, lastMessageCost: 0.5, messageCount: 3,
+    qualified: { today: bucket, thisWeek: bucket, thisMonth: bucket, allTime: bucket },
+  } }));
+  await signInAsMockUser(page);
+  await expect(page.locator('.spend-pill-state')).toHaveText('Server');
+  await page.locator('.spend-pill').click();
+  const today = page.locator('.spend-card').first();
+  await expect(today).toContainText('Recorded as settled $1.0000');
+  await expect(today).toContainText('Pending $0.5000');
+  await expect(today).toContainText('Legacy estimate $0.2000');
+  const contrastRatios = async () => page.locator('.spend-popover').evaluate((popover) => {
+    const luminance = (color: string) => {
+      const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map((value) => {
+        const channel = value / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+    };
+    return ['.spend-qualification-note', '.spend-label', '.spend-value', '.spend-card-breakdown'].map((selector) => {
+      const element = popover.querySelector(selector)!;
+      let surface: Element = element;
+      while (getComputedStyle(surface).backgroundColor === 'rgba(0, 0, 0, 0)') surface = surface.parentElement!;
+      const foreground = luminance(getComputedStyle(element).color);
+      const background = luminance(getComputedStyle(surface).backgroundColor);
+      return { selector, ratio: (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05) };
+    });
+  });
+  for (const { selector, ratio } of await contrastRatios()) expect(ratio, `light ${selector}`).toBeGreaterThanOrEqual(4.5);
+  const bounds = await page.locator('.spend-popover').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: window.innerWidth, height: window.innerHeight, documentWidth: document.documentElement.scrollWidth };
+  });
+  expect(bounds.left).toBeGreaterThanOrEqual(0);
+  expect(bounds.right).toBeLessThanOrEqual(bounds.width);
+  expect(bounds.top).toBeGreaterThanOrEqual(0);
+  expect(bounds.bottom).toBeLessThanOrEqual(bounds.height);
+  expect(bounds.documentWidth).toBeLessThanOrEqual(bounds.width);
+  await page.screenshot({ path: testInfo.outputPath('spend-status-mobile.png'), animations: 'disabled' });
+  await page.getByRole('button', { name: 'Export Spend CSV' }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('button', { name: 'Export Spend CSV' })).toBeInViewport();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.spend-popover')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await page.getByRole('button', { name: 'Dark theme' }).click();
+  await page.locator('.spend-pill').click();
+  for (const { selector, ratio } of await contrastRatios()) expect(ratio, `dark ${selector}`).toBeGreaterThanOrEqual(4.5);
+});
+
+test('an interrupted response remains recoverable after reload without another request', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let requests = 0;
+  await page.route('**/functions/v1/router*', async (route) => {
+    requests++;
+    await route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': 'gemini-3.8-flash' },
+      body: `data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: 'Useful partial response' } })}\n\n`,
+    });
+  });
+  await signInAsMockUser(page);
+  await page.getByRole('textbox', { name: 'Message Prismatix' }).fill('Keep the interrupted answer');
+  await page.getByRole('textbox', { name: 'Message Prismatix' }).press('Enter');
+  await expect(page.getByText(/Useful partial response/)).toBeVisible();
+  await expect(page.getByText(/Connection closed prematurely/)).toBeVisible();
+  await page.reload();
+  await page.getByText(/Review recovered response/).click();
+  const recovered = page.getByRole('textbox', { name: 'Recovered response text' });
+  await expect(recovered).toHaveValue('Useful partial response');
+  await expect(page.getByText(/may also be in your chat history/)).toBeVisible();
+  const dismiss = page.getByRole('button', { name: 'Dismiss recovered response' });
+  await dismiss.scrollIntoViewIfNeeded();
+  const canDismiss = await dismiss.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    const main = button.closest('main')!.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return rect.top >= main.top && rect.bottom <= main.bottom && (hit === button || button.contains(hit));
+  });
+  expect(canDismiss).toBe(true);
+  await expect(page.getByRole('textbox', { name: 'Message Prismatix' })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('response-recovery-mobile.png'), animations: 'disabled' });
+  expect(await page.evaluate(() => Object.values(localStorage).join('\n'))).not.toContain('Useful partial response');
+  expect(requests).toBe(1);
+});
+
+for (const action of ['reload', 'stop'] as const) test(`${action} during a streamed response keeps received text without resending`, async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.addInitScript(() => {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+      if (!url.pathname.endsWith('/functions/v1/router')) return realFetch(input, init);
+      const previous = Number(sessionStorage.getItem('synthetic-router-calls') ?? '0');
+      sessionStorage.setItem('synthetic-router-calls', String(previous + 1));
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: 'Partial text while streaming' } })}\n\n`));
+          init?.signal?.addEventListener('abort', () => controller.close(), { once: true });
+        },
+      });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model, X-Prismatix-Execution-Id', 'X-Router-Model': 'gemini-3.8-flash', 'X-Prismatix-Execution-Id': 'stream-reload-fixture' } });
+    };
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Preserve the stream in progress');
+  await composer.press('Enter');
+  await expect(page.getByText('Partial text while streaming')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Stop generating' })).toBeVisible();
+  if (action === 'stop') {
+    await page.getByRole('button', { name: 'Stop generating' }).click();
+    await expect(page.locator('.transcript-unsaved-notice')).toBeVisible();
+  }
+  await page.reload();
+  await page.getByText(/Review recovered response/).click();
+  await expect(page.getByRole('textbox', { name: 'Recovered response text' })).toHaveValue('Partial text while streaming');
+  expect(await page.evaluate(() => sessionStorage.getItem('synthetic-router-calls'))).toBe('1');
+});
+
+test('reload during Compare preserves each received response without resending', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.addInitScript(() => {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+      if (!url.pathname.endsWith('/functions/v1/router')) return realFetch(input, init);
+      const previous = Number(sessionStorage.getItem('synthetic-compare-calls') ?? '0');
+      sessionStorage.setItem('synthetic-compare-calls', String(previous + 1));
+      const request = JSON.parse(String(init?.body)) as { modelOverride: string };
+      const content = `Partial ${request.modelOverride}`;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: content } })}\n\n`));
+          init?.signal?.addEventListener('abort', () => controller.close(), { once: true });
+        },
+      });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': request.modelOverride } });
+    };
+  });
+  await signInAsMockUser(page);
+  await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Keep both partial responses');
+  await composer.press('Enter');
+  await expect.poll(() => page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith('prismatix.response-recovery.')).length)).toBe(2);
+  await page.reload();
+  const summaries = page.getByText(/Review recovered response/);
+  await expect(summaries).toHaveCount(2);
+  await summaries.nth(0).click();
+  await summaries.nth(1).click();
+  const recovered = page.getByRole('textbox', { name: 'Recovered response text' });
+  await expect(recovered).toHaveCount(2);
+  expect(await Promise.all((await recovered.all()).map((item) => item.inputValue()))).toEqual(expect.arrayContaining(['Partial gemini-3.8-flash', 'Partial gpt-6-sol']));
+  expect(await page.evaluate(() => sessionStorage.getItem('synthetic-compare-calls'))).toBe('2');
+});
+
+test('retry rechecks the daily budget and keeps the failed draft when spending is blocked', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let routerRequests = 0;
+  let today = 0;
+  await page.route('**/functions/v1/spend_stats*', (route) => route.fulfill({ json: { today } }));
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    if (routerRequests === 1) await route.abort('failed');
+    else await route.fulfill(successfulStream('Retry completed', 'retry-budget'));
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Keep my failed draft while spending is blocked');
+  await composer.press('Enter');
+  const recovery = page.locator('.draft-recovery-bar');
+  await expect(recovery).toBeVisible();
+  const retry = recovery.getByRole('button', { name: 'Retry', exact: true });
+
+  today = 2;
+  await retry.click();
+  await expect(page.getByText(/Daily budget exceeded/)).toBeVisible();
+  await expect(recovery).toBeVisible();
+  expect(routerRequests).toBe(1);
+
+  today = 0;
+  await retry.click();
+  await expect(page.getByText('Retry completed')).toBeVisible();
+  expect(routerRequests).toBe(2);
+});
+
+test('regenerate claims a single paid turn while its budget check is pending', async ({ page }) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  let routerRequests = 0;
+  let holdSpend = false;
+  let releaseSpend!: () => void;
+  const spendGate = new Promise<void>((resolve) => { releaseSpend = resolve; });
+  await page.route('**/functions/v1/spend_stats*', async (route) => {
+    if (holdSpend) await spendGate;
+    await route.fulfill({ json: { today: 0 } });
+  });
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    await route.fulfill(successfulStream(`Answer ${routerRequests}`, `regenerate-${routerRequests}`));
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('A prompt to regenerate');
+  await composer.press('Enter');
+  await expect(page.getByText('Answer 1', { exact: true })).toBeVisible();
+  const regenerate = page.getByRole('button', { name: 'Regenerate response', exact: true });
+  holdSpend = true;
+  await regenerate.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
+  });
+  try {
+    await expect(page.locator('.send-preflight-status')).toBeVisible({ timeout: 1500 });
+  } finally {
+    holdSpend = false;
+    releaseSpend();
+  }
+  await expect(page.getByText('Answer 2', { exact: true })).toBeVisible();
+  expect(routerRequests).toBe(2);
+});
+
+test('opening a slow conversation cannot send the previous transcript as context', async ({ page }) => {
+  const first = 'history-context-first';
+  const second = 'history-context-second';
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [
+    { id: first, title: 'First history', last_activity_at: '2026-11-16T00:00:00Z', project_id: null },
+    { id: second, title: 'Second history', last_activity_at: '2026-11-15T00:00:00Z', project_id: null },
+  ], messages: [
+    { id: 'history-context-message', conversation_id: first, role: 'user', content: 'Old conversation context', created_at: '2026-11-16T00:00:00Z' },
+  ] });
+  let releaseHistory!: () => void;
+  const historyGate = new Promise<void>((resolve) => { releaseHistory = resolve; });
+  await page.route('**/rest/v1/messages?*', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('conversation_id') !== `eq.${second}`) return route.fallback();
+    await historyGate;
+    await route.fulfill({ json: [] });
+  });
+  const paidRequests: unknown[] = [];
+  await page.route('**/functions/v1/router*', async (route) => {
+    paidRequests.push(route.request().postDataJSON());
+    await route.fulfill(successfulStream('Reply in the second chat', 'history-context'));
+  });
+  await signInAsMockUser(page);
+  await selectHistory(page, 'First history');
+  await expect(page.getByText('Old conversation context', { exact: true })).toBeVisible();
+  await selectHistory(page, 'Second history');
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  try {
+    await expect(page.getByText('Old conversation context', { exact: true })).toHaveCount(0);
+    await composer.fill('Continue the second conversation');
+    await composer.press('Enter');
+    await expect(page.getByRole('status').filter({ hasText: 'Loading conversation' })).toBeVisible();
+    expect(paidRequests).toEqual([]);
+  } finally {
+    releaseHistory();
+  }
+  await expect(page.getByRole('status').filter({ hasText: 'Loading conversation' })).toHaveCount(0);
+  await composer.press('Enter');
+  await expect(page.getByText('Reply in the second chat')).toBeVisible();
+  expect(paidRequests).toHaveLength(1);
+  expect(JSON.stringify(paidRequests[0])).not.toContain('Old conversation context');
+});
+
+test('New Chat after visiting saved history gets a fresh router conversation identity', async ({ page }) => {
+  await setupAuthenticatedMock(page);
+  const sentIds: string[] = [];
+  await page.route('**/functions/v1/router*', async (route) => {
+    sentIds.push(route.request().postDataJSON().conversationId);
+    await route.fulfill(successfulStream(`New chat answer ${sentIds.length}`, `fresh-chat-${sentIds.length}`));
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('First new conversation');
+  await composer.press('Enter');
+  await expect(page.getByText('New chat answer 1', { exact: true })).toBeVisible();
+  await selectHistory(page, 'Architectural Discussion');
+  await expect(page.getByText(/Paxos and Raft both solve/)).toBeVisible();
+  const sidebarToggle = page.getByRole('button', { name: 'Toggle conversations sidebar' });
+  const newChat = page.getByRole('button', { name: '+ New Chat' });
+  if (await sidebarToggle.isVisible() && await sidebarToggle.getAttribute('aria-expanded') !== 'true') {
+    await sidebarToggle.click();
+  }
+  await newChat.click();
+  await composer.fill('Second new conversation');
+  await composer.press('Enter');
+  await expect(page.getByText('New chat answer 2', { exact: true })).toBeVisible();
+  expect(sentIds).toHaveLength(2);
+  expect(sentIds[0]).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(sentIds[1]).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(sentIds[1]).not.toBe(sentIds[0]);
 });
 
 test('Arctic shell persists through send and history; saved-chat layout has no horizontal overflow', async ({ page }) => {
@@ -519,10 +929,9 @@ for (const code of ['provider_key_required', 'provider_key_unavailable']) {
 }
 
 for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
-  test(`unrelated ${unrelatedStatus} provider does not block healthy Google manual or Auto routes`, async ({ page }) => {
-    const healthyGoogleModel = MODEL_ORDER.find((id) => getCatalogEntry(id).provider === 'google');
-    expect(healthyGoogleModel).toBeTruthy();
-    const healthyGoogleModelName = getCatalogEntry(healthyGoogleModel!).shortName;
+  test(`unrelated ${unrelatedStatus} provider does not block Auto or current-priced manual sends`, async ({ page }) => {
+    const currentPricedModel = 'gemini-3.8-flash';
+    const currentPricedModelName = getCatalogEntry(currentPricedModel).shortName;
     await page.setViewportSize({ width: 1440, height: 900 });
     await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
     await page.route('**/functions/v1/provider-settings*', async (route) => {
@@ -559,18 +968,73 @@ for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
 
     await page.getByRole('button', { name: 'Choose routing mode: automatic' }).click();
     await page.getByRole('tab', { name: 'Models' }).click();
-    await page.getByRole('region', { name: 'Historic model catalog' }).getByRole('button', { name: /Historic models/ }).click();
-    await page.locator('.model-option').filter({ hasText: healthyGoogleModelName }).click();
-    await expect(page.getByRole('button', { name: `Choose model: ${healthyGoogleModelName}` })).toBeVisible();
-    await composer.fill('Use a healthy Google model manually');
+    await page.getByRole('searchbox', { name: 'Search models' }).fill(currentPricedModelName);
+    await page.locator('.model-option').filter({ hasText: currentPricedModelName }).click();
+    await expect(page.getByRole('button', { name: `Choose model: ${currentPricedModelName}` })).toBeVisible();
+    await composer.fill('Use a current-priced model manually');
     await composer.press('Enter');
     await expect(page.getByText('Mock response 2')).toBeVisible();
 
     expect(routerRequests).toHaveLength(2);
     expect(routerRequests[0]?.modelOverride).toBeUndefined();
-    expect(routerRequests[1]?.modelOverride).toBe(healthyGoogleModel);
+    expect(routerRequests[1]?.modelOverride).toBe(currentPricedModel);
   });
 }
+
+test('stale legacy model is labeled and rejected with a safe next step without retry', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
+  await page.route('**/functions/v1/provider-settings*', async (route) => {
+    const body = route.request().method() === 'POST' ? route.request().postDataJSON() as Record<string, unknown> : {};
+    if (body.action === 'validate_key') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider: body.provider, status: 'enabled' }) });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        providers: [{ id: 'google', label: 'Google', enabled: true, hasKey: true, status: 'enabled' }],
+        defaultProvider: 'google',
+      }),
+    });
+  });
+  let routerRequests = 0;
+  await page.route('**/functions/v1/router*', async (route) => {
+    routerRequests++;
+    if (routerRequests === 1) {
+      await route.fulfill(successfulStream('Initial current-priced response', 'stale-pricing-setup'));
+      return;
+    }
+    await route.fulfill({
+      status: 409,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'unknown_model_pricing', message: 'Pricing for this model is not verified or current.' }),
+    });
+  });
+
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('Establish a chat before selecting a model');
+  await composer.press('Enter');
+  await expect(page.getByText('Initial current-priced response')).toBeVisible();
+  await page.getByRole('button', { name: 'Choose routing mode: automatic' }).click();
+  await page.getByRole('tab', { name: 'Models' }).click();
+  const staleModelId = 'gemini-2.5-flash';
+  const staleModelName = getCatalogEntry(staleModelId).shortName;
+  await page.getByRole('region', { name: 'Historic model catalog' }).getByRole('button', { name: /Historic models/ }).click();
+  const staleModelOption = page.locator('.model-option').filter({ hasText: staleModelName });
+  await expect(staleModelOption).toContainText('Pricing needs review');
+  await staleModelOption.click();
+  await expect(page.getByRole('button', { name: `Choose model: ${staleModelName}` })).toBeVisible();
+
+  await composer.fill('Use the stale model only once');
+  await composer.press('Enter');
+  await expect(page.getByRole('alert')).toContainText('Pricing for this model is not verified or current');
+  await expect(page.getByRole('alert')).toContainText('Choose a model with current pricing');
+  await expect(composer).toHaveValue('Use the stale model only once');
+  expect(routerRequests).toBe(2);
+});
 
 test('provider settings lookup failure blocks send, keeps draft, and retry restores router-authorized readiness', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -620,7 +1084,6 @@ test('unconfigured first run keeps setup above a disabled composer and makes no 
   });
   await signInAsMockUser(page);
   await expect(page.locator('.first-run-card')).toBeVisible();
-  const setupCard = page.locator('.first-run-card');
   const compactStatus = page.locator('.provider-setup-composer-status');
   await expect(compactStatus).toBeVisible();
   await expect(page.locator('.composer-tool-row')).toBeHidden();
@@ -631,25 +1094,23 @@ test('unconfigured first run keeps setup above a disabled composer and makes no 
   await composer.press('Enter');
   expect(sends).toBe(0);
   await expect(composer).toHaveValue(prompt);
-  const setupBox = await setupCard.boundingBox();
   const composerBox = await page.locator('.chat-input-container').boundingBox();
-  expect(setupBox).not.toBeNull();
   expect(composerBox).not.toBeNull();
-  expect(setupBox!.y + setupBox!.height).toBeLessThanOrEqual(composerBox!.y + 1);
   expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(600);
   const panelState = await page.evaluate(() => {
     const card = document.querySelector<HTMLElement>('.first-run-card')!;
     const composer = document.querySelector<HTMLElement>('.chat-input-container')!;
     const input = document.querySelector<HTMLElement>('.chat-input')!;
-    const statusButton = document.querySelector<HTMLElement>('.provider-setup-composer-status button')!;
+    const statusButton = document.querySelector<HTMLElement>('.provider-setup-composer-status')!;
     const cardRect = card.getBoundingClientRect();
+    const scrollportRect = card.closest('.chat-messages')!.getBoundingClientRect();
     const composerRect = composer.getBoundingClientRect();
     const inputRect = input.getBoundingClientRect();
     const statusRect = statusButton.getBoundingClientRect();
     return {
       setupClientHeight: card.clientHeight,
       setupScrollHeight: card.scrollHeight,
-      overlapsComposer: cardRect.bottom > composerRect.top + 1,
+      overlapsComposer: Math.min(cardRect.bottom, scrollportRect.bottom) > composerRect.top + 1,
       inputOverlapsStatusAction: inputRect.bottom > statusRect.top && inputRect.top < statusRect.bottom,
       statusActionHit: (() => {
         const hit = document.elementFromPoint(statusRect.left + statusRect.width / 2, statusRect.top + statusRect.height / 2);
@@ -662,14 +1123,21 @@ test('unconfigured first run keeps setup above a disabled composer and makes no 
   expect(panelState.statusActionHit).toBe(true);
   expect(panelState.setupClientHeight).toBeGreaterThanOrEqual(260);
   expect(panelState.setupScrollHeight).toBeGreaterThanOrEqual(panelState.setupClientHeight);
-  const settingsTrigger = page.getByRole('button', { name: /Configure Other Providers/i });
-  await setupCard.evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight; });
+  const settingsTrigger = page.getByRole('button', { name: /Use another provider/i });
   await settingsTrigger.click();
   const settingsDialog = page.getByRole('dialog', { name: 'Provider plug-ins' });
   await expect(settingsDialog).toBeVisible();
-  await settingsDialog.getByRole('button', { name: 'Close provider plug-ins' }).click();
+  await expect(settingsDialog).toHaveJSProperty('open', true);
+  expect(await settingsDialog.evaluate((el) => el.matches(':modal') && el.parentElement === document.body)).toBe(true);
+  expect(await page.evaluate(() => document.elementFromPoint(1, 1)?.tagName)).toBe('DIALOG');
+  await settingsDialog.getByRole('button', { name: 'Close provider plug-ins' }).focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Shift+Tab');
+  expect(await settingsDialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(settingsDialog).toHaveCount(0);
   await expect(settingsTrigger).toBeFocused();
-  const demoAction = page.getByRole('link', { name: /scripted public demo/i });
+  const demoAction = page.getByRole('link', { name: /public demo/i });
   await demoAction.scrollIntoViewIfNeeded();
   await expect(demoAction).toBeVisible();
   const demoHit = await demoAction.evaluate((el) => {
@@ -678,9 +1146,6 @@ test('unconfigured first run keeps setup above a disabled composer and makes no 
     return hit === el || el.contains(hit);
   });
   expect(demoHit).toBe(true);
-  await page.locator('.provider-setup-composer-status button').click();
-  await expect(settingsDialog).toBeVisible();
-  await settingsDialog.getByRole('button', { name: 'Close provider plug-ins' }).click();
   const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
   await mkdir(evidenceDir, { recursive: true });
   await page.screenshot({ path: `${evidenceDir}/first-run-setup-1024x600.png` });
@@ -784,8 +1249,10 @@ test('mobile keyboard-height viewport keeps Connect and composer within the visi
   });
   expect(bounds.width).toBeLessThanOrEqual(bounds.viewportWidth);
   expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight + 1);
-  expect(bounds.setupCanScroll).toBe(true);
-  await expect(page.getByRole('button', { name: 'Configure Other Providers (Anthropic, OpenAI, Google) →' })).toBeAttached();
+  expect(bounds.setupCanScroll).toBe(false);
+  const alternate = page.getByRole('button', { name: 'Use another provider' });
+  await alternate.scrollIntoViewIfNeeded();
+  await expect(alternate).toBeInViewport();
 });
 
 test('saved history exposes provider-check retry and keeps drafts blocked until readiness recovers', async ({ page }) => {
@@ -848,7 +1315,7 @@ test('first-run unverified provider blocks; a returning configured key is router
   });
   await signInAsMockUser(page);
   await page.locator('#first-run-openrouter-key').fill('sk-or-synthetic-unverified-0715');
-  await page.getByRole('button', { name: 'Connect & Start' }).click();
+  await page.getByRole('button', { name: 'Connect provider' }).click();
   const routeStatus = page.locator('.arctic-route-status');
   await expect(routeStatus).toContainText('Verification unavailable');
   await expect(routeStatus).toHaveClass(/setup/);
@@ -918,6 +1385,7 @@ test('attachment-only route rejection removes only its optimistic turn and retry
 });
 
 test('saved chat keeps Routing details reachable at wide desktop sizes', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   const conversationId = 'wide-routing-chat';
   await setupAuthenticatedMock(page, {
     hasProviderKey: true,

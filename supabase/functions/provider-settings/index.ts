@@ -92,7 +92,7 @@ export interface ProviderStatePayload {
 /**
  * Validates a provider API key using safe metadata checks without paid inference.
  * Rejects with invalid_revoked on 401/403, unavailable on 5xx or network errors,
- * and enabled on successful metadata retrieval.
+ * and enabled only on successful metadata retrieval.
  */
 export async function validateProviderKeyMetadata(
   provider: ProviderId,
@@ -155,7 +155,8 @@ export async function validateProviderKeyMetadata(
     }
 
     if (provider === 'google') {
-      const res = await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`, {
+      const res = await fetchFn('https://generativelanguage.googleapis.com/v1beta/models', {
+        headers: { 'x-goog-api-key': apiKey },
         signal: AbortSignal.timeout(6000),
       });
       if (res.ok) {
@@ -195,14 +196,20 @@ export async function validateProviderKeyMetadata(
       return { status: 'unknown', message: `Brave Search response: HTTP ${res.status}` };
     }
 
-    // Default for direct providers without a dedicated safe metadata endpoint
-    return { status: 'enabled', message: 'Key saved' };
+    // A provider without a dedicated metadata endpoint cannot be reported as
+    // verified merely because the key was saved.
+    return {
+      status: 'unknown',
+      message: 'A metadata verification check is not available in Prismatix for this provider.',
+    };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    if (errorMsg.includes('timeout') || errorMsg.includes('abort') || errorMsg.includes('network') || errorMsg.includes('fetch')) {
+    const errorName = err instanceof Error ? err.name.toLowerCase() : '';
+    const errorMsg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    if (errorName === 'timeouterror' || errorName === 'aborterror'
+      || /timeout|timed out|abort|network|fetch/.test(errorMsg)) {
       return { status: 'unavailable', message: 'Provider metadata check unreachable' };
     }
-    return { status: 'unknown', message: errorMsg };
+    return { status: 'unknown', message: 'Provider metadata check failed unexpectedly' };
   }
 }
 

@@ -6,8 +6,9 @@
 // Policy (matches existing repository semantics):
 //  - Every routable model must have a pricing registry entry that is not
 //    marked unknown.
-//  - Pricing entries older than STALE_AFTER_DAYS make this test fail with a
-//    readable inventory, forcing a pricing review before merge.
+//  - OpenCode auto-route prices older than STALE_AFTER_DAYS fail the test.
+//    Stale legacy direct-provider rates fail closed at runtime and appear in
+//    the non-auto inventory so they can be reviewed.
 //  - The frontend pricing registry is a display-only mirror of the backend
 //    authority; shared rates and PRICING_VERSION must never diverge.
 
@@ -17,7 +18,9 @@ import { CURATED_OPENCODE_REGISTRY } from '../../supabase/functions/router/model
 import {
   PRICING_REGISTRY,
   PRICING_VERSION as BACKEND_PRICING_VERSION,
+  getPricingForModel,
 } from '../../supabase/functions/router/pricing_registry.ts';
+import { isLegacyPriceStale } from '../../supabase/functions/_shared/model_tariff.ts';
 import {
   PRICING_REGISTRY as FRONTEND_PRICING_REGISTRY,
   PRICING_VERSION as FRONTEND_PRICING_VERSION,
@@ -26,10 +29,9 @@ import {
 const STALE_AFTER_DAYS = 60;
 
 // Curated OpenCode models are the models Auto can actually pick, so their
-// pricing must be current. Legacy direct-provider entries (asOfDate
-// 2026-04-13) are only reachable via manual selection or the explicit
-// no-OpenCode deployment posture; their staleness is surfaced loudly but
-// does not block CI until a verified human pricing review refreshes them.
+// pricing must be current. Legacy direct-provider entries are also blocked at
+// runtime when their audit date is too old; the inventory remains visible
+// until a verified pricing review refreshes them.
 const AUTO_ROUTABLE_SOURCES = new Set(['opencode-zen-official', 'opencode-zen-free-tier', 'opencode-zen-free']);
 
 function ageInDays(isoDate: string): number {
@@ -70,21 +72,31 @@ describe('pricing freshness audit', () => {
     ).toEqual([]);
   });
 
-  it('legacy direct-provider pricing staleness is visible (non-blocking inventory)', () => {
+  it('stale legacy direct-provider entries are blocked without changing unverified rates', () => {
+    const now = new Date('2026-11-21T12:00:00Z');
     const stale = Object.entries(PRICING_REGISTRY)
+      .filter(([, p]) => isLegacyPriceStale(p, now));
+
+    for (const [tier, entry] of stale) {
+      const guarded = getPricingForModel(tier, now);
+      expect(guarded.isUnknown, `${tier} stale source ${entry.sourceRef}`).toBe(true);
+      expect(guarded.isStale, `${tier} stale source ${entry.sourceRef}`).toBe(true);
+      expect(guarded.inputRatePer1M).toBe(0);
+      expect(guarded.outputRatePer1M).toBe(0);
+    }
+
+    // Keep the inventory visible without requiring prices to remain stale or
+    // to be marked current before anyone has verified them.
+    const otherNonAutoStale = Object.entries(PRICING_REGISTRY)
       .filter(([, p]) => !AUTO_ROUTABLE_SOURCES.has(p.sourceRef))
       .filter(([, p]) => ageInDays(p.asOfDate) > STALE_AFTER_DAYS)
       .map(([tier, p]) => `${tier}: asOfDate ${p.asOfDate} (${Math.floor(ageInDays(p.asOfDate))} days)`);
-
-    // Visible in CI output on every run; a human pricing review must refresh
-    // these entries (do NOT bump asOfDate without verifying provider rates).
-    if (stale.length > 0) {
+    if (otherNonAutoStale.length > 0) {
       console.warn(
-        `[pricing-freshness] WARNING: ${stale.length} legacy direct-provider pricing entries are ` +
-          `older than ${STALE_AFTER_DAYS} days (manual-selection exposure only):\n  ${stale.join('\n  ')}`,
+        `[pricing-freshness] WARNING: ${otherNonAutoStale.length} non-auto pricing entries are ` +
+          `older than ${STALE_AFTER_DAYS} days (do not bump dates without review):\n  ${otherNonAutoStale.join('\n  ')}`,
       );
     }
-    expect(Array.isArray(stale)).toBe(true);
   });
 
   it('backend is the pricing authority and version-stamped', () => {

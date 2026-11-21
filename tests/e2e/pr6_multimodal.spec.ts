@@ -100,7 +100,7 @@ test.describe('PR 6 Multimodal & Polished Product (E2E)', () => {
 
     // Verify theme color meta tag
     const themeColor = page.locator('meta[name="theme-color"]');
-    await expect(themeColor).toHaveAttribute('content', '#03070b');
+    await expect(themeColor).toHaveAttribute('content', '#f7faff');
   });
 
   test('F30: displays offline continuity status banner when disconnected', async ({ page }) => {

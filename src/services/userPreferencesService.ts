@@ -31,6 +31,25 @@ export function getScopedStorageKey(userId?: string | null): string {
   return userId ? `prismatix_synced_user_preferences_${userId}` : 'prismatix_synced_user_preferences_anon';
 }
 
+type WorkspaceSwitch = 'compare' | 'research';
+
+export function readWorkspaceSwitch(userId: string | undefined, mode: WorkspaceSwitch): boolean {
+  try {
+    return Boolean(userId && localStorage.getItem(`${getScopedStorageKey(userId)}.${mode}`) === 'true');
+  } catch {
+    return false;
+  }
+}
+
+export function writeWorkspaceSwitch(userId: string | undefined, mode: WorkspaceSwitch, enabled: boolean): void {
+  if (!userId) return;
+  try {
+    localStorage.setItem(`${getScopedStorageKey(userId)}.${mode}`, String(enabled));
+  } catch {
+    // The active workspace still remembers the choice in memory.
+  }
+}
+
 /**
  * Loads cached preferences from localStorage scoped by account ID.
  */
@@ -81,18 +100,17 @@ export function clearLocalPreferences(userId?: string | null): void {
  */
 export async function fetchServerPreferences(
   client: SupabaseClient,
+  expectedUserId?: string,
 ): Promise<UserPreferences | null> {
   try {
     if (typeof client?.auth?.getUser !== 'function') {
-      return getLocalPreferences(null);
+      return getLocalPreferences(expectedUserId);
     }
     const {
       data: { user },
     } = await client.auth.getUser();
 
-    if (!user) return null;
-
-    const local = getLocalPreferences(user.id);
+    if (!user || (expectedUserId && user.id !== expectedUserId)) return null;
 
     const { data, error } = await client
       .from('user_preferences')
@@ -100,6 +118,7 @@ export async function fetchServerPreferences(
       .eq('user_id', user.id)
       .maybeSingle();
 
+    const local = getLocalPreferences(user.id);
     if (error || !data) {
       return local;
     }
@@ -133,6 +152,7 @@ export async function fetchServerPreferences(
 export async function saveServerPreferences(
   client: SupabaseClient,
   updated: Partial<UserPreferences>,
+  expectedUserId?: string,
 ): Promise<{ success: boolean; preferences?: UserPreferences }> {
   try {
     if (typeof client?.auth?.getUser !== 'function') {
@@ -142,7 +162,7 @@ export async function saveServerPreferences(
       data: { user },
     } = await client.auth.getUser();
 
-    if (!user) return { success: false };
+    if (!user || (expectedUserId && user.id !== expectedUserId)) return { success: false };
 
     const current = getLocalPreferences(user.id);
     const merged: UserPreferences = {
@@ -175,9 +195,10 @@ export async function saveServerPreferences(
 /**
  * Initializes and synchronizes preferences on startup.
  */
-export async function syncPreferences(client: SupabaseClient): Promise<UserPreferences> {
-  const remote = await fetchServerPreferences(client);
+export async function syncPreferences(client: SupabaseClient, expectedUserId?: string): Promise<UserPreferences> {
+  const remote = await fetchServerPreferences(client, expectedUserId);
   if (remote) return remote;
+  if (expectedUserId) return getLocalPreferences(expectedUserId);
 
   if (typeof client?.auth?.getUser === 'function') {
     const { data: { user } } = await client.auth.getUser();

@@ -1,12 +1,17 @@
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import AxeBuilder from '@axe-core/playwright';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 const GENERATED_REPLY = 'Fixture generated reply: your synthetic request completed successfully.';
 const EXECUTION_ID = '00000000-0000-4000-8000-000000000701';
 
 test('verified first-run connection sends once and reloads fixture-persisted output', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1024, height: 600 });
+  test.setTimeout(60_000);
+  const mobile = testInfo.project.name === 'mobile';
+  const viewport = mobile ? { width: 393, height: 851 } : { width: 1024, height: 600 };
+  const viewportName = `${viewport.width}x${viewport.height}`;
+  await page.setViewportSize(viewport);
   await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [], costLogs: [] });
 
   // Independent, stateful fixture. The router call creates its own conversation
@@ -27,6 +32,9 @@ test('verified first-run connection sends once and reloads fixture-persisted out
     const body = route.request().method() === 'POST'
       ? route.request().postDataJSON() as Record<string, unknown>
       : {};
+    if (body.action === 'validate_key' && body.apiKey === 'sk-or-invalid-fixture') {
+      return route.fulfill({ json: { provider: 'openrouter', status: 'invalid_revoked' } });
+    }
     if (body.action === 'validate_key') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider: 'openrouter', status: 'enabled' }) });
     }
@@ -90,7 +98,7 @@ test('verified first-run connection sends once and reloads fixture-persisted out
     const events = [
       { type: 'meta', model: 'gemini-3.8-flash' },
       { type: 'content_block_delta', delta: { text: GENERATED_REPLY } },
-      { type: 'receipt', executionId: EXECUTION_ID, status: 'completed', settlement: { state: 'settled', committedUsd: 0, pendingCalls: 0 }, calls: [] },
+      { type: 'receipt', executionId: EXECUTION_ID, status: 'completed', settlement: { state: 'settled', committedUsd: 0, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0 }] },
     ];
     const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n';
     signalRouterStarted();
@@ -134,40 +142,51 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await page.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
   await signInAsMockUser(page);
   await expect(page.locator('.first-run-card')).toBeVisible();
-  await capture('transition-first-run-1024x600');
+  await capture(`transition-first-run-${viewportName}`);
 
   // Settings dialog restores focus to the first-run trigger when closed.
-  const settingsTrigger = page.getByRole('button', { name: /Configure Other Providers/i });
+  const settingsTrigger = page.getByRole('button', { name: /Use another provider/i });
   await settingsTrigger.focus();
   await settingsTrigger.click();
   const dialog = page.getByRole('dialog', { name: 'Provider plug-ins' });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toBeFocused();
+  await expect(dialog.getByRole('button', { name: 'Close provider plug-ins' })).toBeFocused();
   await dialog.getByRole('button', { name: 'Close provider plug-ins' }).click();
   await expect(settingsTrigger).toBeFocused();
+  const demo = page.getByRole('link', { name: 'Try the public demo' });
+  await demo.scrollIntoViewIfNeeded();
+  await expect(demo).toBeInViewport();
+  const keyInput = page.locator('#first-run-openrouter-key');
+  await keyInput.fill('sk-or-invalid-fixture');
+  await page.getByRole('button', { name: 'Connect provider' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Key rejected' })).toBeVisible();
+  await expect(keyInput).toHaveAttribute('aria-invalid', 'true');
+  expect(fixture.connected).toBe(false);
 
   await page.locator('#first-run-openrouter-key').fill('sk-or-synthetic-fixture-0701');
-  await page.getByRole('button', { name: 'Connect & Start' }).click();
+  await page.getByRole('button', { name: 'Connect provider' }).click();
   await expect(page.getByRole('status').filter({ hasText: /Key saved and verified/ })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: /message prismatix/i })).toBeFocused();
   await expect(page.locator('.first-run-card')).toHaveCount(0);
-  await capture('transition-configured-1024x600');
+  await capture(`transition-configured-${viewportName}`);
 
   const prompt = 'Return a short synthetic confirmation.';
   await page.getByRole('textbox', { name: /message prismatix/i }).fill(prompt);
   await page.getByRole('button', { name: 'Send message' }).click();
   await routerStarted;
-  await capture('transition-streaming-1024x600');
+  await capture(`transition-streaming-${viewportName}`);
   releaseRouterResponse();
   await expect(page.getByText(GENERATED_REPLY)).toBeVisible({ timeout: 15000 });
   await assertAccountControlFits();
-  await capture('transition-reply-1024x600');
+  await capture(`transition-reply-${viewportName}`);
   expect(fixture.routerRequests).toHaveLength(1);
   expect(fixture.routerRequests[0]?.query).toBe(prompt);
   expect(fixture.conversation).not.toBeNull();
   expect(fixture.messages.map((message) => message.content)).toContain(GENERATED_REPLY);
 
   // A later key removal must not leave the old ready-to-chat notice displayed.
-  await page.getByRole('button', { name: 'Provider plug-ins' }).click();
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await page.locator('.user-dropdown').getByRole('button', { name: 'Provider plug-ins' }).click();
   const settings = page.getByRole('dialog', { name: 'Provider plug-ins' });
   await settings.getByRole('button', { name: 'Remove' }).click();
   await expect(settings.getByText('Not configured')).toBeVisible();
@@ -178,11 +197,79 @@ test('verified first-run connection sends once and reloads fixture-persisted out
   await expect(page.getByRole('textbox', { name: /message prismatix/i })).toBeVisible({ timeout: 15000 });
   await expect(page.getByText(GENERATED_REPLY)).toBeVisible({ timeout: 15000 });
   await assertAccountControlFits();
-  await capture('transition-reload-1024x600');
+  await capture(`transition-reload-${viewportName}`);
   expect(fixture.routerRequests).toHaveLength(1);
   expect(fixture.messages[0]?.conversation_id).toBe(fixture.conversation?.id);
   expect(fixture.conversation?.id).toMatch(/^[0-9a-f-]{36}$/i);
 
   await page.context().tracing.stop({ path: tracePath });
   await testInfo.attach('connection-journey-trace', { path: tracePath, contentType: 'application/zip' });
+});
+
+test('history distinguishes loading, failure, and a successfully empty result', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [] });
+  let releaseList!: () => void;
+  const listHeld = new Promise<void>((resolve) => { releaseList = resolve; });
+  let allowSuccess = false;
+  await page.route('**/rest/v1/conversations*', async (route) => {
+    if (route.request().method() !== 'GET' || allowSuccess) return route.fallback();
+    await listHeld;
+    return route.fulfill({ status: 503, json: { message: 'Synthetic history outage' } });
+  });
+
+  await signInAsMockUser(page);
+  const history = page.locator('.conversation-sidebar');
+  try {
+    await expect(history.getByRole('status').filter({ hasText: 'Loading' })).toBeVisible();
+    await expect(history.getByText('No conversations yet')).toHaveCount(0);
+  } finally {
+    releaseList();
+  }
+  await expect(history.getByRole('alert')).toContainText('Could not load conversations');
+  await expect(history.getByText('No conversations yet')).toHaveCount(0);
+  allowSuccess = true;
+  await history.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(history.getByText('No conversations yet')).toBeVisible();
+});
+
+test('first run directs users to a saved but disabled provider instead of prompting for another key', async ({ page }, testInfo) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [] });
+  await page.route('**/functions/v1/provider-settings*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        providers: [{
+          id: 'openrouter',
+          label: 'OpenRouter',
+          enabled: false,
+          hasKey: true,
+          keyLast4: '1234',
+          offeredByDefault: true,
+          defaultProvider: true,
+          status: 'disabled',
+        }],
+        defaultProvider: 'openrouter',
+      }),
+    });
+  });
+
+  await signInAsMockUser(page);
+  const setup = page.locator('.first-run-card');
+  await expect(setup.getByRole('heading', { name: 'OpenRouter is saved but turned off' })).toBeVisible();
+  await expect(setup.locator('#first-run-openrouter-key')).toHaveCount(0);
+  const composerStatus = page.locator('.provider-setup-composer-status');
+  await expect(composerStatus).toContainText('Enable a provider in Provider Settings to send');
+  await expect(composerStatus.getByRole('button', { name: 'Provider Settings', exact: true })).toHaveCount(0);
+  const { violations } = await new AxeBuilder({ page }).include('.first-run-card').analyze();
+  expect(violations.filter(({ impact }) => impact === 'critical' || impact === 'serious')).toEqual([]);
+  const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
+  await mkdir(evidenceDir, { recursive: true });
+  const viewport = page.viewportSize();
+  await page.screenshot({ path: `${evidenceDir}/first-run-saved-disabled-${viewport?.width}x${viewport?.height}.png`, animations: 'disabled' });
+  await setup.getByRole('button', { name: 'Open Provider Settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Provider plug-ins' });
+  await expect(settings).toBeVisible();
+  await expect(settings.getByText('Off', { exact: true })).toBeVisible();
 });

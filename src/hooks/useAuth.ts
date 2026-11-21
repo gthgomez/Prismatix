@@ -112,8 +112,8 @@ export const useAuth = (): UseAuthReturn => {
 
   const signUp = useCallback(async (email: string, password: string) => {
     // PX01: signups are gated behind VITE_ALLOW_SIGNUP (default off). This is
-    // client-side defense in depth only; server-side signup must stay disabled
-    // until beta readiness.
+    // a client UI gate only; Supabase auth settings independently determine
+    // whether the server accepts signup requests.
     if (!CONFIG.ALLOW_SIGNUP) {
       return { error: new Error('Signups are currently disabled') };
     }

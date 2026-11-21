@@ -302,7 +302,7 @@ describe('processReconciliationBatch', () => {
       ],
       costLogs: {}, // missing cost_logs row!
       reservations: {
-        'exec-missing-proj': { committed_usd: 0.045 },
+        'exec-missing-proj': { state: 'committed', committed_usd: 0.045 },
       },
     });
 
@@ -317,6 +317,293 @@ describe('processReconciliationBatch', () => {
     expect(mock.costLogInserts[0].idempotency_key).toBe('exec-missing-proj');
     expect(mock.costLogInserts[0].total_cost).toBe(0.045);
     expect(mock.costLogInserts[0].cost_status).toBe('settled');
+  });
+
+  it.each([
+    ['held reservation with a pending call', {
+      reservation: { state: 'held', committed_usd: 0 },
+      total_calls: 1, pending_calls: 1, settled_calls: 0, settled_cost: 0,
+    }],
+    ['missing reservation and no calls', {
+      reservation: null,
+      total_calls: 0, pending_calls: 0, settled_calls: 0, settled_cost: 0,
+    }],
+    ['released reservation despite call rows', {
+      reservation: { state: 'released', committed_usd: 0 },
+      total_calls: 1, pending_calls: 0, settled_calls: 1, settled_cost: 0.045,
+    }],
+    ['committed reservation with invalid amount', {
+      reservation: { state: 'committed', committed_usd: null },
+      total_calls: 1, pending_calls: 0, settled_calls: 1, settled_cost: null,
+    }],
+    ['missing call counts', {
+      reservation: { state: 'committed', committed_usd: 0.045 },
+      total_calls: 1, settled_calls: 1, settled_cost: 0.045,
+    }],
+    ['negative settled-call sum for a legacy execution', {
+      reservation: null,
+      total_calls: 1, pending_calls: 0, settled_calls: 1, settled_cost: -0.045,
+    }],
+  ])('keeps cost_projection_failed unresolved for %s', async (_description, target) => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-cost-unsettled', kind: 'cost_projection_failed', execution_id: 'exec-unsettled', attempts: 0 }],
+      targets: {
+        'exec-unsettled': {
+          execution: { id: 'exec-unsettled', status: 'completed', subject_id: 'user-1', conversation_id: 'conv-1' },
+          ...target,
+        },
+      },
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      dryRun: false,
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(0);
+    expect(mock.updates[0].payload.status).toBe('pending');
+    expect(mock.costLogInserts).toHaveLength(0);
+    expect(mock.costLogUpdates).toHaveLength(0);
+  });
+
+  it('projects a valid committed zero cost as settled', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-zero', kind: 'cost_projection_failed', execution_id: 'exec-zero', attempts: 0 }],
+      targets: {
+        'exec-zero': {
+          execution: { id: 'exec-zero', status: 'completed', subject_id: 'user-1', conversation_id: 'conv-1' },
+          reservation: { state: 'committed', committed_usd: 0 },
+          total_calls: 1, pending_calls: 0, settled_calls: 1, settled_cost: 0,
+        },
+      },
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(1);
+    expect(mock.costLogInserts[0].total_cost).toBe(0);
+    expect(mock.costLogInserts[0].cost_status).toBe('settled');
+    expect(mock.updates[0].payload.status).toBe('done');
+  });
+
+  it('does not project a committed reservation with zero calls as settled', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-committed-no-calls', kind: 'cost_projection_failed', execution_id: 'exec-committed-no-calls', attempts: 0 }],
+      targets: {
+        'exec-committed-no-calls': {
+          execution: { id: 'exec-committed-no-calls', status: 'completed', subject_id: 'user-1', conversation_id: 'conv-1' },
+          reservation: { state: 'committed', committed_usd: 0 },
+          total_calls: 0, pending_calls: 0, settled_calls: 0, settled_cost: 0,
+        },
+      },
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(0);
+    expect(mock.updates[0].payload.status).toBe('pending');
+    expect(mock.costLogInserts).toHaveLength(0);
+  });
+
+  it('uses the settled call sum for a legacy execution without a reservation', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-legacy', kind: 'cost_projection_failed', execution_id: 'exec-legacy', attempts: 0 }],
+      targets: {
+        'exec-legacy': {
+          execution: { id: 'exec-legacy', status: 'completed', subject_id: 'user-1', conversation_id: 'conv-1' },
+          reservation: null,
+          total_calls: 2, pending_calls: 0, settled_calls: 2, settled_cost: '0.025',
+        },
+      },
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(1);
+    expect(mock.costLogInserts[0].total_cost).toBe(0.025);
+    expect(mock.costLogInserts[0].cost_status).toBe('settled');
+  });
+
+  it('projects a released no-call reservation as an authoritative zero', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-released-zero', kind: 'cost_projection_failed', execution_id: 'exec-released-zero', attempts: 0 }],
+      targets: {
+        'exec-released-zero': {
+          execution: { id: 'exec-released-zero', status: 'completed', subject_id: 'user-1', conversation_id: 'conv-1' },
+          reservation: { state: 'released', committed_usd: 0 },
+          total_calls: 0, pending_calls: 0, settled_calls: 0, settled_cost: 0,
+        },
+      },
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(1);
+    expect(mock.costLogInserts[0].total_cost).toBe(0);
+    expect(mock.costLogInserts[0].cost_status).toBe('settled');
+  });
+
+  it('does not fabricate zero for a budget_estimated result without a committed amount', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-est-missing-cost', kind: 'budget_estimated', execution_id: 'exec-est-missing-cost', attempts: 0 }],
+      targets: {
+        'exec-est-missing-cost': {
+          execution: { id: 'exec-est-missing-cost', status: 'completed' },
+          reservation: { id: 'res-1', state: 'pending_reconcile', committed_usd: null },
+          total_calls: 1, pending_calls: 0, settled_calls: 1, settled_cost: 0.05,
+        },
+      },
+      rpcHandler: async (fn) => fn === 'px05_commit_from_ledger'
+        ? { data: { state: 'committed' }, error: null }
+        : undefined,
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(0);
+    expect(mock.updates[0].payload.status).toBe('pending');
+    expect(mock.costLogUpdates).toHaveLength(0);
+    expect(mock.costLogInserts).toHaveLength(0);
+  });
+
+  it('does not fabricate zero for a released budget_estimated result without an amount', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-est-released-missing', kind: 'budget_estimated', execution_id: 'exec-est-released-missing', attempts: 0 }],
+      targets: {
+        'exec-est-released-missing': {
+          execution: { id: 'exec-est-released-missing', status: 'completed' },
+          reservation: { id: 'res-1', state: 'released', committed_usd: 0 },
+          total_calls: 0, pending_calls: 0, settled_calls: 0, settled_cost: 0,
+        },
+      },
+      rpcHandler: async (fn) => fn === 'px05_commit_from_ledger'
+        ? { data: { state: 'released' }, error: null }
+        : undefined,
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(0);
+    expect(mock.updates[0].payload.status).toBe('pending');
+    expect(mock.costLogUpdates).toHaveLength(0);
+    expect(mock.costLogInserts).toHaveLength(0);
+  });
+
+  it.each([
+    ['missing call counts', { total_calls: 1, settled_calls: 1 }],
+    ['negative pending-call count', { total_calls: 1, pending_calls: -1, settled_calls: 1 }],
+  ])('keeps budget_estimated unresolved for %s', async (_description, counts) => {
+    let commitCalled = false;
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-est-bad-counts', kind: 'budget_estimated', execution_id: 'exec-est-bad-counts', attempts: 0 }],
+      targets: {
+        'exec-est-bad-counts': {
+          execution: { id: 'exec-est-bad-counts', status: 'completed' },
+          reservation: { id: 'res-1', state: 'pending_reconcile', committed_usd: null },
+          ...counts,
+        },
+      },
+      rpcHandler: async (fn) => {
+        if (fn === 'px05_commit_from_ledger') commitCalled = true;
+        return undefined;
+      },
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(0);
+    expect(mock.updates[0].payload.status).toBe('pending');
+    expect(commitCalled).toBe(false);
+  });
+
+  it('does not use a negative committed amount from budget_estimated settlement', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-est-negative', kind: 'budget_estimated', execution_id: 'exec-est-negative', attempts: 0 }],
+      targets: {
+        'exec-est-negative': {
+          execution: { id: 'exec-est-negative', status: 'completed' },
+          reservation: { id: 'res-1', state: 'pending_reconcile', committed_usd: null },
+          total_calls: 1, pending_calls: 0, settled_calls: 1, settled_cost: 0.05,
+        },
+      },
+      rpcHandler: async (fn) => fn === 'px05_commit_from_ledger'
+        ? { data: { state: 'committed', committed_usd: -0.01 }, error: null }
+        : undefined,
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(0);
+    expect(mock.updates[0].payload.status).toBe('pending');
+    expect(mock.costLogUpdates).toHaveLength(0);
+    expect(mock.costLogInserts).toHaveLength(0);
+  });
+
+  it('does not settle budget_estimated while execution finalization is pending', async () => {
+    let commitCalled = false;
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-est-open', kind: 'budget_estimated', execution_id: 'exec-est-open', attempts: 0 }],
+      targets: {
+        'exec-est-open': {
+          execution: { id: 'exec-est-open', status: 'started' },
+          reservation: { id: 'res-1', state: 'committed', committed_usd: 0.05 },
+          total_calls: 1, pending_calls: 0, settled_calls: 1, settled_cost: 0.05,
+        },
+      },
+      rpcHandler: async (fn) => {
+        if (fn === 'px05_commit_from_ledger') commitCalled = true;
+        return undefined;
+      },
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(0);
+    expect(mock.updates[0].payload.status).toBe('pending');
+    expect(commitCalled).toBe(false);
+    expect(mock.costLogUpdates).toHaveLength(0);
+  });
+
+  it('does not accept a committed budget_estimated result when the ledger has zero calls', async () => {
+    const mock = makeMockSupabase({
+      pendingJobs: [{ id: 'job-est-no-calls', kind: 'budget_estimated', execution_id: 'exec-est-no-calls', attempts: 0 }],
+      targets: {
+        'exec-est-no-calls': {
+          execution: { id: 'exec-est-no-calls', status: 'completed' },
+          reservation: { id: 'res-1', state: 'committed', committed_usd: 0 },
+          total_calls: 0, pending_calls: 0, settled_calls: 0, settled_cost: 0,
+        },
+      },
+      rpcHandler: async (fn) => fn === 'px05_commit_from_ledger'
+        ? { data: { state: 'committed', committed_usd: 0 }, error: null }
+        : undefined,
+    });
+
+    const summary = await processReconciliationBatch(mock.client, {
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    expect(summary.processed).toBe(0);
+    expect(mock.updates[0].payload.status).toBe('pending');
+    expect(mock.costLogUpdates).toHaveLength(0);
   });
 
   it('increments attempts on unsettled execution and marks failed when max attempts reached', async () => {

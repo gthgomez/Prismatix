@@ -516,4 +516,17 @@ describe('F20: User Preference Synchronization', () => {
     expect(upsertedData.preferences.webSearchEnabled).toBe(true);
     expect(getLocalPreferences('u-123').routingProfile).toBe('capability');
   });
+
+  it('discards a delayed preference save after the authenticated account changes', async () => {
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    const mockClient: any = {
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'another-account' } } }) },
+      from: () => ({ upsert }),
+    };
+
+    const result = await saveServerPreferences(mockClient, { maxSpendCap: 0.05 }, 'originating-account');
+    expect(result.success).toBe(false);
+    expect(upsert).not.toHaveBeenCalled();
+    expect(getLocalPreferences('another-account').maxSpendCap).toBeNull();
+  });
 });

@@ -3,6 +3,7 @@
 import {
   MODEL_TARIFF,
   MODEL_TARIFF_VERSION,
+  isLegacyPriceStale,
   isPriceExpired,
 } from '../supabase/functions/_shared/model_tariff';
 
@@ -31,6 +32,7 @@ export interface ModelPricing {
   isEstimated: boolean;
   isUnknown?: boolean;
   isExpired?: boolean;
+  isStale?: boolean;
   effectiveFrom?: string;
   effectiveTo?: string;
   isEligibleForAutoRouting?: boolean;
@@ -63,7 +65,9 @@ export const PRICING_REGISTRY: Record<string, ModelPricing> =
  * routing is strictly forbidden and no live rate is ever returned.
  */
 export function getPricingForModel(model: string, now: Date = new Date()): ModelPricing {
-  const existing = PRICING_REGISTRY[model];
+  const existing = Object.prototype.hasOwnProperty.call(PRICING_REGISTRY, model)
+    ? PRICING_REGISTRY[model]
+    : undefined;
   if (existing) {
     if (isPriceExpired(existing, now)) {
       // Expired price: same fail-closed posture as an unknown model, plus an
@@ -76,6 +80,18 @@ export function getPricingForModel(model: string, now: Date = new Date()): Model
         isEstimated: true,
         isUnknown: true,
         isExpired: true,
+        isEligibleForAutoRouting: false,
+      };
+    }
+    if (isLegacyPriceStale(existing, now)) {
+      return {
+        inputRatePer1M: 0.0,
+        outputRatePer1M: 0.0,
+        asOfDate: 'stale',
+        sourceRef: 'stale-fail-closed',
+        isEstimated: true,
+        isUnknown: true,
+        isStale: true,
         isEligibleForAutoRouting: false,
       };
     }

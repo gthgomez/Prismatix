@@ -117,7 +117,7 @@ describe('listConversations', () => {
       auth: { persistSession: false, autoRefreshToken: false },
       global: { fetch: async (input) => {
         requestUrl = String(input);
-        return new Response(JSON.stringify([{ id: CONV, title: null, last_activity_at: '2026-10-13', messages: [] }]), { headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify([{ id: CONV, title: null, last_activity_at: '2026-10-13', archived: true, tags: ['work'], parent_conversation_id: MSG, forked_from_message_id: MSG, messages: [] }]), { headers: { 'Content-Type': 'application/json' } });
       } },
     });
     const rows = await listConversations(client, { limit: 20 });
@@ -128,7 +128,9 @@ describe('listConversations', () => {
     expect(params.get('limit')).toBe('20');
     expect(params.get('order')).toBe('last_activity_at.desc,id.desc');
     expect(params.get('select')).not.toContain('!inner');
-    expect(rows).toEqual([{ id: CONV, title: null, lastActivityAt: '2026-10-13', projectId: null }]);
+    expect(params.get('select')).toContain('archived,tags,parent_conversation_id,forked_from_message_id');
+    expect(params.get('select')).toContain('messages!messages_conversation_id_fkey(content)');
+    expect(rows).toEqual([{ id: CONV, title: null, lastActivityAt: '2026-10-13', projectId: null, archived: true, tags: ['work'], parentConversationId: MSG, forkedFromMessageId: MSG }]);
   });
   it('uses the first user message for legacy placeholder titles without replacing renamed chats', async () => {
     const fake = makeClient({ conversations: [{ data: [
@@ -185,6 +187,68 @@ describe('listConversations', () => {
 });
 
 describe('loadConversation', () => {
+  it('hydrates the saved Compare group on a partial page and keeps history available on RPC failure', async () => {
+    const childA = { executionId: CONV, assistantMessageId: MSG, model: 'future-model', status: 'completed', content: 'Answer A', cost: 0, costStatus: 'settled', transcriptSaved: true };
+    const childB = { executionId: MSG, assistantMessageId: null, model: 'second-model', status: 'failed', costStatus: 'unknown', transcriptSaved: false };
+    let fail = false;
+    const rpcBodies: unknown[] = [];
+    const client = createClient('https://compare-fixture.invalid', 'synthetic-public-key', {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path.endsWith('/px08_get_compare_groups')) {
+          rpcBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify(fail ? { message: 'backend unavailable' } : [{ id: 'group', conversationId: CONV, preferredSide: 'B', modelA: childA, modelB: childB }]), {
+            status: fail ? 503 : 200, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        const data = path.endsWith('/messages') ? [{ id: MSG, role: 'assistant', content: 'Answer A', execution_id: CONV }] : [];
+        return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+      } },
+    });
+
+    const [message] = await loadConversation(client, CONV, { compareGroups: true, limit: 1 });
+    expect(rpcBodies).toEqual([{ p_conversation_id: CONV, p_execution_ids: [CONV] }]);
+    expect(message).toMatchObject({ id: MSG, compareGroupId: 'group', compareGroupChild: 'A', comparisonResults: {
+      modelA: { model: 'future-model', cost: 0, costStatus: 'settled' },
+      modelB: { model: 'second-model', status: 'failed', costStatus: 'unknown' },
+      preferredSide: 'B',
+    } });
+    fail = true;
+    await expect(loadConversation(client, CONV, { compareGroups: true })).resolves.toMatchObject([{ id: MSG, content: 'Answer A' }]);
+    expect((await loadConversation(client, CONV))[0]?.compareGroupId).toBeUndefined();
+    expect(rpcBodies).toHaveLength(2);
+  });
+
+  it('anchors a no-assistant Compare group to one saved user prompt without changing its text', async () => {
+    const group = {
+      id: 'failed-group', conversationId: CONV, preferredSide: 'B',
+      modelA: { executionId: CONV, model: 'model-a', content: '', status: 'failed', transcriptSaved: false },
+      modelB: { executionId: MSG, model: 'model-b', content: '', status: 'stopped', transcriptSaved: false },
+    };
+    const client = createClient('https://compare-fixture.invalid', 'synthetic-public-key', {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input) => {
+        const path = new URL(String(input)).pathname;
+        const data = path.endsWith('/px08_get_compare_groups') ? [group] : [
+          { id: 'user-b', role: 'user', content: 'Original prompt', execution_id: MSG, created_at: '2026-01-01T00:00:01.000Z' },
+          { id: 'user-a', role: 'user', content: 'Original prompt', execution_id: CONV, created_at: '2026-01-01T00:00:00.000Z' },
+        ];
+        return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+      } },
+    });
+
+    const loaded = await loadConversation(client, CONV, { compareGroups: true });
+    expect(loaded).toHaveLength(2);
+    expect(loaded[0]).toMatchObject({
+      id: 'user-a', role: 'user', content: 'Original prompt',
+      compareGroupId: 'failed-group', compareGroupChild: 'A', compareGroupFallback: true,
+      comparisonResults: { modelA: { status: 'failed' }, modelB: { status: 'stopped' }, preferredSide: 'B' },
+    });
+    expect(loaded[1]).toMatchObject({ id: 'user-b', role: 'user', content: 'Original prompt' });
+    expect(loaded[1]?.compareGroupId).toBeUndefined();
+  });
+
   it('queries newest-first, reverses to chronological order, maps persisted attachments and adapts a legacy image_url', async () => {
     // Database returns the newest rows first (created_at descending)
     const fake = makeClient({
@@ -370,6 +434,64 @@ describe('loadConversation', () => {
     });
   });
 
+  it('keeps an unknown model id as model-only provenance without a cost log or provider', async () => {
+    const fake = makeClient({
+      messages: [{ data: [{
+        id: MSG,
+        role: 'assistant',
+        content: 'Answer from a newer model',
+        created_at: '2026-11-20T00:01:00Z',
+        attachments: [],
+        image_url: null,
+        model_used: 'gemini-4.2-flash',
+        token_count: 50,
+        execution_id: null,
+      }], error: null }],
+      cost_logs: [{ data: [], error: null }],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV);
+    expect(messages[0]?.provenance).toMatchObject({
+      reportedModel: 'gemini-4.2-flash',
+      modelId: 'gemini-4.2-flash',
+    });
+    expect(messages[0]?.provenance?.model).toBeUndefined();
+    expect(messages[0]?.provenance?.provider).toBeUndefined();
+  });
+
+  it('retains routing rationale for an unknown model without inventing a known model', async () => {
+    const executionId = '99999999-9999-4999-8999-999999999998';
+    const fake = makeClient({
+      messages: [{ data: [{
+        id: MSG,
+        role: 'assistant',
+        content: 'Answer with a retained rationale',
+        created_at: '2026-11-20T00:01:00Z',
+        attachments: [],
+        image_url: null,
+        model_used: 'gemini-4.2-flash',
+        token_count: 50,
+        execution_id: executionId,
+      }], error: null }],
+      cost_logs: [{ data: [{
+        idempotency_key: executionId,
+        total_cost: 0.023,
+        provider: 'openrouter',
+        model: 'gemini-4.2-flash',
+        route_rationale: 'code_detected',
+        cost_status: 'settled',
+      }], error: null }],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV);
+    expect(messages[0]?.provenance).toMatchObject({
+      reportedModel: 'gemini-4.2-flash',
+      modelId: 'gemini-4.2-flash',
+      routeRationale: 'code_detected',
+    });
+    expect(messages[0]?.provenance?.model).toBeUndefined();
+  });
+
   it('maps missing or unsupported cost_status to unknown', async () => {
     const EXEC_ID = '88888888-8888-4888-8888-888888888888';
     const fake = makeClient({
@@ -529,6 +651,18 @@ describe('deleteConversation', () => {
     const convCalls = fake.queries.conversations![0]!.calls;
     expect(convCalls).toContain('delete');
     expect(fake.removed).toEqual([{ bucket: 'chat-uploads', paths: ['u/sole.png'] }]);
+  });
+
+  it('keeps an object when the remaining reference check fails and reports incomplete cleanup', async () => {
+    const fake = makeClient({
+      messages: [
+        { data: [{ attachments: [imageRef('supabase://chat-uploads/u/a.png')], image_url: null }], error: null },
+        { data: null, error: { message: 'offline' } },
+      ],
+      conversations: [{ data: null, error: null }],
+    });
+    await expect(deleteConversation(fake.client as never, CONV)).resolves.toEqual({ cleanupIncomplete: true });
+    expect(fake.removed).toEqual([]);
   });
 
   it('throws and removes nothing when the conversation delete fails', async () => {

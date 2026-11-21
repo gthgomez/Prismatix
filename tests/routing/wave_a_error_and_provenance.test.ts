@@ -54,6 +54,13 @@ describe('Wave A — Error messaging and retry-after preservation', () => {
     expect(msg).toContain('blocked for cost safety');
   });
 
+  it('maps the router stale-pricing rejection code to a clear next action', () => {
+    const err = new RouterApiError(409, 'unknown_model_pricing', 'unknown_model_pricing');
+    const msg = describeStreamError(err);
+    expect(msg).toContain('Pricing for this model is not verified or current');
+    expect(msg).toContain('Choose a model with current pricing');
+  });
+
   it('guides user cleanly on duplicate requests (409)', () => {
     const err = new DuplicateRequestError('ex-dup-1');
     const msg = describeStreamError(err);

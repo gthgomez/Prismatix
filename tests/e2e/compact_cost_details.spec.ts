@@ -4,11 +4,11 @@ import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 const response = (id: string, reply = 'Synthetic compact-chat reply.') => ({
   status: 200,
-  headers: { 'Content-Type': 'text/event-stream', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': id },
+  headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model, X-Provider, X-Prismatix-Execution-Id', 'X-Router-Model': 'gemini-3.8-flash', 'X-Provider': 'mock', 'X-Prismatix-Execution-Id': id },
   body: [
     { type: 'meta', model: 'gemini-3.8-flash', cost: { finalUsd: 0.0001 } },
     { type: 'content_block_delta', delta: { text: reply } },
-    { type: 'receipt', executionId: id, status: 'completed', settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [] },
+    { type: 'receipt', executionId: id, status: 'completed', settlement: { state: 'settled', committedUsd: 0.0001, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0.0001 }] },
   ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
 });
 

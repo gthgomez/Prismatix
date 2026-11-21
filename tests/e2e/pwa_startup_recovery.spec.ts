@@ -218,7 +218,7 @@ test('a stuck v1 tab recovers on user reload without refreshing a healthy v1 tab
 
     // This is the user's explicit reload after v2 has arrived, not a cache reset.
     await page.reload();
-    await expect(page.getByText('Sign in', { exact: false })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'Sign in to Prismatix' })).toBeVisible({ timeout: 20_000 });
     expect(await healthyPage.evaluate(() => (window as Window & { __unsentDraftSentinel?: string }).__unsentDraftSentinel)).toBe('synthetic unsent draft');
     expect(healthyNavigationCount).toBe(healthyNavigationCountBeforeUpdate);
     await expect(page.locator('#root')).not.toContainText('Loading Prismatix...');

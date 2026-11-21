@@ -1,0 +1,107 @@
+import React, { act } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createRoot, type Root } from 'react-dom/client';
+import { CostEstimator } from './CostEstimator';
+
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+const legacyModel = 'gemini-2.5-flash';
+
+describe('CostEstimator pricing freshness', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-21T12:00:00Z'));
+  });
+
+  afterEach(() => {
+    if (root) act(() => root!.unmount());
+    root = null;
+    container?.remove();
+    vi.useRealTimers();
+  });
+
+  it('explains when an estimate is unavailable because the legacy price is stale', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model={legacyModel}
+      usage={{ promptTokens: 1000, completionTokens: 500 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0}
+      finalCostUsd={null}
+    />));
+
+    expect(container.textContent).toContain(`Pricing for ${legacyModel} is unverified or out of date`);
+    expect(container.textContent).toContain('A detailed estimate is unavailable');
+    expect(container.querySelector('.cost-estimator-rows')).toBeNull();
+  });
+
+  it('shows a settled receipt without inventing a zero breakdown for unknown pricing', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model={legacyModel}
+      usage={{ promptTokens: 1000, completionTokens: 500 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0.0123}
+      finalCostUsd={0.0123}
+    />));
+
+    expect(container.textContent).toContain('Settled total');
+    expect(container.querySelector('.cost-estimator-total')?.textContent).toContain('$0.0123');
+    expect(container.textContent).not.toContain('Client breakdown sum');
+    expect(container.querySelector('.cost-estimator-rows')).toBeNull();
+    const details = container.querySelector<HTMLButtonElement>('.cost-estimator-details-toggle')!;
+    if (details.getAttribute('aria-expanded') === 'false') act(() => details.click());
+    expect(container.textContent).not.toContain('High precision (client, USD)');
+    expect(container.textContent).toContain('Confirmed receipt (USD)');
+  });
+
+  it('does not invent a model or cost breakdown when the router omits the model', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model={null}
+      usage={{ promptTokens: 1000, completionTokens: 500 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0.0123}
+      finalCostUsd={0.0123}
+    />));
+
+    expect(container.textContent).toContain('The router did not report the model');
+    expect(container.querySelector('.cost-estimator-total')?.textContent).toContain('$0.0123');
+    expect(container.querySelector('.cost-estimator-rows')).toBeNull();
+    expect(container.textContent).not.toContain('Client breakdown sum');
+  });
+
+  it('distinguishes an unrecognized reported model from an omitted model', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model={null}
+      reportedModel='new-model-from-router'
+      usage={{ promptTokens: 1000, completionTokens: 500 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0}
+      finalCostUsd={null}
+    />));
+
+    expect(container.textContent).toContain('unrecognized model new-model-from-router');
+    expect(container.textContent).not.toContain('router did not report');
+    expect(container.querySelector('.cost-estimator-rows')).toBeNull();
+  });
+});

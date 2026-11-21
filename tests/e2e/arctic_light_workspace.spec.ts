@@ -1,6 +1,6 @@
 import { test, expect, type Locator } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
-import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
+import { MOCK_USER, setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 type RequestRecord = {
   query: string;
@@ -77,6 +77,7 @@ test('New Chat reference composition at 1672x941', async ({ page }, testInfo) =>
 
 test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1672, height: 941 });
+  await page.addInitScript(() => localStorage.setItem('prismatix_comparison_mode', 'true'));
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   let validationRequests = 0;
   await page.route('**/functions/v1/provider-settings*', async (route) => {
@@ -94,7 +95,7 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
     const events = [
       { type: 'meta', model: body.modelOverride || 'gemini-3.8-flash', cost: { finalUsd: 0.00032 } },
       { type: 'content_block_delta', delta: { text: `Mock reply ${execution}` } },
-      { type: 'receipt', executionId: `mock-arctic-${execution}`, status: 'completed', settlement: { state: 'settled', committedUsd: 0.00032, pendingCalls: 0 }, calls: [] },
+      { type: 'receipt', executionId: `mock-arctic-${execution}`, status: 'completed', settlement: { state: 'settled', committedUsd: 0.00032, pendingCalls: 0 }, calls: [{ stage: 'baseline', participant: 'openrouter', attemptNumber: 1, servedModel: body.modelOverride || 'gemini-3.8-flash', costStatus: 'settled', totalCost: 0.00032 }] },
     ];
     await route.fulfill({
       status: 200,
@@ -113,7 +114,9 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
   await signInAsMockUser(page);
   expect(validationRequests).toBe(0); // saved metadata is not validation; router authorizes sends
   const validationRequestsBeforeReload = validationRequests;
-  await page.evaluate(() => localStorage.setItem('prismatix_comparison_mode', 'true'));
+  const modeControls = page.getByRole('group', { name: 'Chat workflow' });
+  await expect(modeControls.getByRole('button', { name: 'Chat', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await modeControls.getByRole('button', { name: 'Compare', exact: true }).click();
   await page.reload();
   // Saved-key metadata after reload is unknown, so let the router authorize each send.
   await expect(page.locator('.arctic-route-status')).toContainText('Key saved · not checked this session');
@@ -127,7 +130,7 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
 
   const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
   await mkdir(evidenceDir, { recursive: true });
-  await page.screenshot({ path: `${evidenceDir}/legacy-compare-state-1672x941.png`, fullPage: true });
+  await page.screenshot({ path: `${evidenceDir}/restored-compare-state-1672x941.png`, fullPage: true });
 
   const workflow = page.getByRole('group', { name: 'Chat workflow' });
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
@@ -474,18 +477,27 @@ test('saved-chat Routing details closes when widening past the compact drawer br
 
 test('Arctic spend cap keeps $0.10 selected and persisted after controlled rerenders', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() => localStorage.setItem('prismatix_max_spend_cap', '0.01'));
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   await signInAsMockUser(page);
 
   const routingPanel = page.locator('.arctic-routing-panel');
   await openRoutingTools(routingPanel);
   const cap = routingPanel.locator('#arctic-spend-cap');
+  await expect(cap).toHaveValue('none');
   await cap.selectOption('0.10');
   await expect(cap).toHaveValue('0.10');
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('prismatix_max_spend_cap'))).toBe('0.1');
+  const savedCap = () => page.evaluate((userId) => {
+    const raw = localStorage.getItem(`prismatix_synced_user_preferences_${userId}`);
+    return raw ? JSON.parse(raw).maxSpendCap : null;
+  }, MOCK_USER.id);
+  await expect.poll(savedCap).toBe(0.1);
   await routingPanel.locator('#arctic-routing-profile').selectOption('economy');
   await expect(cap).toHaveValue('0.10');
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('prismatix_max_spend_cap'))).toBe('0.1');
+  await expect.poll(savedCap).toBe(0.1);
+  await page.reload();
+  await openRoutingTools(routingPanel);
+  await expect(cap).toHaveValue('0.10');
 });
 
 for (const viewport of [
@@ -525,3 +537,61 @@ for (const viewport of [
     }
   });
 }
+
+test('Arctic tokens persist from sign-in through saved chat, settings, and reload', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
+  await page.goto('/');
+  const auth = page.locator('.auth-card');
+  await expect(auth).toBeVisible();
+  await expect(auth.locator('img')).toHaveAttribute('src', '/prismatix-arctic-mark.svg');
+  const root = page.locator('html');
+  await expect(root).toHaveAttribute('data-theme', 'light');
+  const colorToken = (name: string) => root.evaluate((el, token) => getComputedStyle(el).getPropertyValue(token).trim(), name);
+  const lightSurface = await colorToken('--color-surface');
+  await expect(auth).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(auth.locator('.auth-divider')).toHaveCSS('color', 'rgb(86, 102, 125)');
+  await page.screenshot({ path: testInfo.outputPath('sign-in-light.png') });
+  await page.goto('/reset-password');
+  await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('recovery-light.png') });
+
+  await setupAuthenticatedMock(page);
+  await signInAsMockUser(page);
+  expect(await colorToken('--color-surface')).toBe(lightSurface);
+  const account = page.getByRole('button', { name: 'Account menu' });
+  await account.click();
+  const themeToggle = page.getByRole('button', { name: 'Dark theme' });
+  await themeToggle.press('Enter');
+  await expect(themeToggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(root).toHaveAttribute('data-theme', 'dark');
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#03070b');
+  const darkSurface = await colorToken('--color-surface');
+  expect(darkSurface).not.toBe(lightSurface);
+  await account.click();
+
+  const chat = page.locator('.conversation-item-button').first();
+  await chat.click();
+  await expect(chat).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('.messages-list .message')).toHaveText([
+    /Explain the difference between Paxos and Raft/,
+    /Paxos and Raft both solve distributed consensus/,
+  ]);
+  expect(await colorToken('--color-surface')).toBe(darkSurface);
+  await page.screenshot({ path: testInfo.outputPath('saved-chat-dark.png') });
+  await page.reload();
+  await expect(root).toHaveAttribute('data-theme', 'dark');
+  await account.click();
+  await page.locator('.user-dropdown').getByRole('button', { name: 'Provider plug-ins', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Provider plug-ins' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveCSS('background-color', 'rgb(20, 33, 43)');
+  await expect(dialog.locator('.provider-models-toggle').first()).toContainText(/visible.*in catalog/);
+  await page.screenshot({ path: testInfo.outputPath('providers-dark.png') });
+  await page.keyboard.press('Escape');
+  await expect(account).toBeFocused();
+
+  await page.emulateMedia({ forcedColors: 'active' });
+  await account.focus();
+  await expect(account).toBeFocused();
+});

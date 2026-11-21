@@ -1,13 +1,17 @@
-import type { RouterModel } from '../types';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../config';
 
 const STORAGE_KEY = 'prismatix_finance_v1';
 
+function financeKey(userId?: string): string {
+  return userId ? `${STORAGE_KEY}.${userId}` : STORAGE_KEY;
+}
+
 export interface FinanceEntry {
   date: string;
-  model: RouterModel;
+  /** Server model id, or an explicit label when the router did not report it. */
+  model: string;
   cost: number;
   pricingVersion?: string;
   provider?: string;
@@ -79,17 +83,21 @@ function computeTotals(history: FinanceEntry[]): { week: number; month: number }
   return { week: roundUsd(week), month: roundUsd(month) };
 }
 
-export function getFinanceStore(): FinanceStore {
-  return safeParse(localStorage.getItem(STORAGE_KEY));
+export function getFinanceStore(userId?: string): FinanceStore {
+  try {
+    return safeParse(localStorage.getItem(financeKey(userId)));
+  } catch {
+    return EMPTY_STORE;
+  }
 }
 
-export function getDailyTotal(date = currentDate()): number {
-  const store = getFinanceStore();
+export function getDailyTotal(date = currentDate(), userId?: string): number {
+  const store = getFinanceStore(userId);
   return roundUsd(store.history.filter((item) => item.date === date).reduce((sum, item) => sum + item.cost, 0));
 }
 
 export function recordCost(entry: {
-  model: RouterModel;
+  model: string;
   cost: number;
   pricingVersion?: string;
   date?: string;
@@ -99,8 +107,8 @@ export function recordCost(entry: {
   promptTokens?: number;
   completionTokens?: number;
   executionId?: string;
-}): FinanceStore {
-  const store = getFinanceStore();
+}, userId?: string): FinanceStore {
+  const store = getFinanceStore(userId);
 
   // Idempotency guard: prevent duplicate recording if executionId already exists
   if (entry.executionId && store.history.some((h) => h.executionId === entry.executionId)) {
@@ -128,7 +136,11 @@ export function recordCost(entry: {
     totals: computeTotals(nextHistory),
   };
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(nextStore));
+  try {
+    localStorage.setItem(financeKey(userId), JSON.stringify(nextStore));
+  } catch {
+    // The advisory cache must not change the outcome of a generated response.
+  }
   return nextStore;
 }
 
@@ -158,16 +170,15 @@ export function getSpendStats(date = currentDate()): SpendStats {
 }
 
 /**
- * Fetches today's spend total from the server (Supabase cost_logs via spend_stats edge function).
- * Falls back to the localStorage total if the server is unreachable.
- *
- * Use this for budget enforcement — localStorage can be cleared or bypassed across tabs/devices.
+ * Fetches today's server-reported spend. The local total is an advisory cache
+ * only; server admission and budget enforcement remain owned by the router.
  */
-export async function fetchServerDailyTotal(): Promise<number> {
+export async function fetchServerDailyTotal(userId?: string): Promise<number> {
+  const advisoryTotal = () => getDailyTotal(undefined, userId);
   try {
     const { data: { session }, error } = await supabase.auth.getSession();
-    if (error || !session?.access_token || !CONFIG.SUPABASE_URL) {
-      return getDailyTotal();
+    if (error || !session?.access_token || !CONFIG.SUPABASE_URL || (userId && session.user?.id !== userId)) {
+      return advisoryTotal();
     }
 
     const endpoint = `${String(CONFIG.SUPABASE_URL).replace(/\/$/, '')}/functions/v1/spend_stats`;
@@ -179,19 +190,21 @@ export async function fetchServerDailyTotal(): Promise<number> {
       },
     });
 
-    if (!response.ok) return getDailyTotal();
+    if (!response.ok) return advisoryTotal();
 
     const data = await response.json() as { today?: unknown };
-    const serverTotal = Number(data.today);
-    return Number.isFinite(serverTotal) ? roundUsd(serverTotal) : getDailyTotal();
+    return typeof data.today === 'number' && Number.isFinite(data.today) && data.today >= 0
+      ? roundUsd(data.today)
+      : advisoryTotal();
   } catch {
-    return getDailyTotal();
+    return advisoryTotal();
   }
 }
 
 /**
- * Queries the authoritative `cost_logs` ledger from Supabase under RLS policy `cost_logs_select_own`.
- * Bypasses client-side 500-item localStorage truncation to provide the complete account spend history.
+ * Queries the server `cost_logs` ledger under RLS policy `cost_logs_select_own`.
+ * Fail explicitly so callers cannot mistake the incomplete browser cache for
+ * the authoritative ledger.
  */
 export async function fetchAuthoritativeCostLogs(
   client: SupabaseClient,
@@ -212,13 +225,12 @@ export async function fetchAuthoritativeCostLogs(
 
     const { data, error } = await query;
     if (error || !Array.isArray(data)) {
-      console.warn('[financeTracker] Authoritative cost_logs fetch failed, using local store:', error?.message);
-      return getFinanceStore().history;
+      throw new Error(error?.message || 'Could not load server cost records.');
     }
 
     return data.map((row) => ({
       date: String(row.created_at || currentDate()),
-      model: row.model as RouterModel,
+      model: String(row.model || 'Unreported model'),
       cost: roundUsd(Number(row.total_cost || 0)),
       pricingVersion: row.pricing_version ? String(row.pricing_version) : undefined,
       provider: row.provider ? String(row.provider) : undefined,
@@ -229,8 +241,7 @@ export async function fetchAuthoritativeCostLogs(
       executionId: row.id ? String(row.id) : undefined,
     }));
   } catch (err) {
-    console.warn('[financeTracker] Exception fetching authoritative cost_logs:', err);
-    return getFinanceStore().history;
+    throw err instanceof Error ? err : new Error('Could not load server cost records.');
   }
 }
 

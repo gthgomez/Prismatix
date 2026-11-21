@@ -53,13 +53,10 @@ describe('model order / picker integrity', () => {
   });
 
   it('labels model prices with USD and per-million input/output units', () => {
-    const label = formatModelPriceLabel(MODEL_ORDER.find((id) => !labelIsFree(id)) ?? MODEL_ORDER[0]!);
+    expect(MODEL_ORDER).toContain('gpt-6-sol');
+    const label = formatModelPriceLabel('gpt-6-sol');
     expect(label).toContain('USD $');
     expect(label).toContain('per 1M input');
     expect(label).toContain('per 1M output tokens');
   });
 });
-
-function labelIsFree(id: string): boolean {
-  return formatModelPriceLabel(id).startsWith('Free');
-}

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import '../styles/FormattedMessage.css';
 
 export interface FormattedMessageProps {
   content: string;
@@ -13,16 +14,22 @@ interface CodeBlockProps {
 
 export const CodeBlock: React.FC<CodeBlockProps> = ({ language, code }) => {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const codeRef = React.useRef<HTMLElement>(null);
 
   const handleCopy = async () => {
+    setCopyFailed(false);
     try {
-      if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(code);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard write failed (e.g. non-secure context or permission denied)
+      setCopyFailed(true);
+      if (codeRef.current) {
+        codeRef.current.parentElement?.focus();
+        window.getSelection()?.selectAllChildren(codeRef.current);
+      }
     }
   };
 
@@ -42,8 +49,9 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ language, code }) => {
           {copied ? '✓ Copied' : 'Copy'}
         </button>
       </div>
+      {copyFailed && <p className='code-copy-status' role='status'>Clipboard access failed. Copy the selected code manually.</p>}
       <pre className='code-block-pre' tabIndex={0} aria-label={`${displayLang} code block`}>
-        <code className={`code-block-content language-${displayLang}`}>{code}</code>
+        <code ref={codeRef} className={`code-block-content language-${displayLang}`}>{code}</code>
       </pre>
     </div>
   );
@@ -297,12 +305,12 @@ function renderProse(text: string): React.ReactNode {
       }
 
       elements.push(
-        <div key={`table-wrapper-${i}`} className='formatted-table-wrapper'>
+        <div key={`table-wrapper-${i}`} className='formatted-table-wrapper' role='region' aria-label='Scrollable table' tabIndex={0}>
           <table className='formatted-table'>
             <thead>
               <tr>
                 {headerRow.map((header, hIdx) => (
-                  <th key={hIdx}>{parseInline(header)}</th>
+                  <th key={hIdx} scope='col'>{parseInline(header)}</th>
                 ))}
               </tr>
             </thead>
@@ -322,6 +330,33 @@ function renderProse(text: string): React.ReactNode {
     }
 
     // Headers
+    if (trimmed.startsWith('###### ')) {
+      flushAll();
+      elements.push(
+        <h6 key={`h6-${i}`} className='formatted-h6'>
+          {parseInline(trimmed.slice(7))}
+        </h6>,
+      );
+      continue;
+    }
+    if (trimmed.startsWith('##### ')) {
+      flushAll();
+      elements.push(
+        <h6 key={`h5-${i}`} className='formatted-h5'>
+          {parseInline(trimmed.slice(6))}
+        </h6>,
+      );
+      continue;
+    }
+    if (trimmed.startsWith('#### ')) {
+      flushAll();
+      elements.push(
+        <h5 key={`h4-${i}`} className='formatted-h4'>
+          {parseInline(trimmed.slice(5))}
+        </h5>,
+      );
+      continue;
+    }
     if (trimmed.startsWith('### ')) {
       flushAll();
       elements.push(

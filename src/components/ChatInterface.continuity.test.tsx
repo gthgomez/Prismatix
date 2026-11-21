@@ -95,7 +95,7 @@ describe('ChatInterface in-flight conversation load invalidation', () => {
 
     root = renderInto(container, <ChatInterface user={USER_A} onSignOut={onSignOut} />);
     await flush();
-    expect(loadConversation).toHaveBeenCalledWith(expect.anything(), CONV_A, { limit: 200 });
+    expect(loadConversation).toHaveBeenCalledWith(expect.anything(), CONV_A, { limit: 200, compareGroups: false });
 
     // New Chat before A's load resolves.
     act(() => container.querySelector<HTMLButtonElement>('.conversation-new-button')!.click());
@@ -116,7 +116,7 @@ describe('ChatInterface in-flight conversation load invalidation', () => {
 
     root = renderInto(container, <ChatInterface user={USER_A} onSignOut={onSignOut} />);
     await flush();
-    expect(loadConversation).toHaveBeenCalledWith(expect.anything(), CONV_A, { limit: 200 });
+    expect(loadConversation).toHaveBeenCalledWith(expect.anything(), CONV_A, { limit: 200, compareGroups: false });
 
     // Switch to account B (no stored selection) before A's load resolves.
     act(() => root!.render(<ChatInterface user={USER_B} onSignOut={onSignOut} />));

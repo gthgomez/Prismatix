@@ -282,4 +282,28 @@ describe('ChatMessageItem', () => {
 
     expect(container.querySelector('.thinking-process')).toBeNull();
   });
+
+  it('labels Compare cost provenance and unknown costs after reload', () => {
+    root = render(
+      <ChatMessageItem
+        message={{
+          role: 'assistant', content: 'Compare', timestamp: 1700000000000,
+          comparisonResults: {
+            modelA: { model: 'model-a', content: 'A answer', cost: 0.0123, costStatus: 'settled', status: 'completed' },
+            modelB: { model: 'model-b', content: 'B answer', costStatus: 'unknown', status: 'failed' },
+          },
+        }}
+        index={0}
+        isStreaming={false}
+        isWaitingFirstToken={false}
+        defaultModelColor='#4ECDC4'
+        isMetadataExpanded={false}
+        onToggleMetadata={vi.fn()}
+      />,
+    );
+
+    const comparison = container.querySelector('.comparison-results-container');
+    expect(comparison?.textContent).toContain('$0.0123 · settled');
+    expect(comparison?.textContent).toContain('Cost unknown');
+  });
 });

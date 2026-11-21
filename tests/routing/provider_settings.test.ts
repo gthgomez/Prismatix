@@ -15,6 +15,11 @@ type Loaded = {
     providers: Array<{ id: string; enabled: boolean; hasKey: boolean; defaultProvider: boolean }>;
     defaultProvider: string;
   };
+  validateProviderKeyMetadata: (
+    provider: string,
+    apiKey: string,
+    fetchFn?: typeof fetch,
+  ) => Promise<{ status: string; message?: string }>;
   handleProviderSettings: (
     req: Request,
     deps: { getEnv: (k: string) => string | undefined; createClient: () => unknown; fetchFn?: typeof fetch },
@@ -244,6 +249,110 @@ describe('provider-settings — enable / default / delete', () => {
 });
 
 describe('provider-settings — safe metadata key validation (F01)', () => {
+  it('does not claim NVIDIA keys are verified when no metadata check exists', async () => {
+    const mod = await loadModule(BASE_ENV);
+    const mockFetch = vi.fn();
+    const response = await mod.handleProviderSettings(
+      post({ action: 'validate_key', provider: 'nvidia', apiKey: 'nvapi-synthetic-key' }),
+      {
+        getEnv: (k) => BASE_ENV[k],
+        createClient: () => stubClient('user-1', []),
+        fetchFn: mockFetch as unknown as typeof fetch,
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      provider: 'nvidia',
+      status: 'unknown',
+      message: 'A metadata verification check is not available in Prismatix for this provider.',
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not expose unexpected draft or decrypted-key fetch exceptions', async () => {
+    const mod = await loadModule(BASE_ENV);
+    const secret = 'AIza-synthetic-google-secret';
+    const rawError = `request failed for https://generativelanguage.googleapis.com/v1beta/models?key=${secret}`;
+    const mockFetch = vi.fn(async () => { throw new Error(rawError); });
+    const draftResponse = await mod.handleProviderSettings(
+      post({ action: 'validate_key', provider: 'google', apiKey: secret }),
+      {
+        getEnv: (k) => BASE_ENV[k],
+        createClient: () => stubClient('user-1', []),
+        fetchFn: mockFetch as unknown as typeof fetch,
+      },
+    );
+    const draftBody = await draftResponse.text();
+    expect(draftResponse.status).toBe(200);
+    expect(draftBody).toContain('"status":"unknown"');
+    expect(draftBody).not.toContain(secret);
+    expect(draftBody).not.toContain(rawError);
+
+    const crypto = await import('../../supabase/functions/_shared/byok_crypto.ts');
+    const stored = await crypto.encryptKey(secret);
+    const savedResponse = await mod.handleProviderSettings(
+      post({ action: 'validate_key', provider: 'google' }),
+      {
+        getEnv: (k) => BASE_ENV[k],
+        createClient: () => ({
+          auth: { getUser: async () => ({ data: { user: { id: 'user-1' } }, error: null }) },
+          rpc: async (fn: string) => fn === 'get_user_provider_key_material'
+            ? { data: stored.ciphertext, error: null }
+            : { data: null, error: null },
+        }),
+        fetchFn: mockFetch as unknown as typeof fetch,
+      },
+    );
+    const savedBody = await savedResponse.text();
+    expect(savedResponse.status).toBe(200);
+    expect(savedBody).toContain('"status":"unknown"');
+    expect(savedBody).not.toContain(secret);
+    expect(savedBody).not.toContain(rawError);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps recognizable network failures unavailable without exposing their details', async () => {
+    const mod = await loadModule(BASE_ENV);
+    const secret = 'sk-synthetic-network-secret';
+    const rawError = `fetch failed for key ${secret}`;
+    const response = await mod.handleProviderSettings(
+      post({ action: 'validate_key', provider: 'openai', apiKey: secret }),
+      {
+        getEnv: (k) => BASE_ENV[k],
+        createClient: () => stubClient('user-1', []),
+        fetchFn: vi.fn(async () => { throw new TypeError(rawError); }) as unknown as typeof fetch,
+      },
+    );
+    const body = await response.text();
+    expect(body).toContain('"status":"unavailable"');
+    expect(body).toContain('Provider metadata check unreachable');
+    expect(body).not.toContain(secret);
+    expect(body).not.toContain(rawError);
+  });
+
+  it('reports a native metadata timeout as unavailable without exposing its message', async () => {
+    const mod = await loadModule(BASE_ENV);
+    const result = await mod.validateProviderKeyMetadata('openrouter', 'synthetic-key', vi.fn(async () => {
+      throw new DOMException('The operation timed out with private details', 'TimeoutError');
+    }) as unknown as typeof fetch);
+    expect(result).toEqual({ status: 'unavailable', message: 'Provider metadata check unreachable' });
+  });
+
+  it('sends Google validation credentials in the existing x-goog-api-key header, not URL', async () => {
+    const mod = await loadModule(BASE_ENV);
+    const secret = 'AIza-synthetic-google-secret';
+    const mockFetch = vi.fn(async () => new Response('{}', { status: 200 }));
+    const result = await mod.validateProviderKeyMetadata('google', secret, mockFetch as unknown as typeof fetch);
+
+    expect(result.status).toBe('enabled');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(url).not.toContain(secret);
+    expect(new Headers(init.headers).get('x-goog-api-key')).toBe(secret);
+  });
+
   it('validates a valid key via metadata endpoint without paid inference', async () => {
     const mod = await loadModule(BASE_ENV);
     const mockFetch = vi.fn(async () => new Response(JSON.stringify({ data: { label: 'my-key' } }), { status: 200 }));

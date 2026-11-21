@@ -72,7 +72,7 @@ test('normal mocked sign-in downloads chat only after authentication', async ({ 
 test('reset deep link remains on reset UI without loading chat code', async ({ page }, testInfo) => {
   const assets = await watchScriptResponses(page, testInfo.project.use.baseURL);
   await page.goto('/reset-password?type=recovery');
-  await expect(page.getByRole('heading', { name: 'Reset Password' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText(/invalid or expired/i);
   expect(assets.some((item) => /ChatInterface/i.test(item.url))).toBe(false);
 });

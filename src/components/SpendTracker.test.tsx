@@ -31,6 +31,27 @@ it('reports a failed sync truthfully and closes with Escape', async () => {
   container.remove();
 });
 
+it('does not report zero spend when a successful response omits cost data', async () => {
+  const { CONFIG } = await import('../config');
+  (CONFIG as { SUPABASE_URL: string }).SUPABASE_URL = 'https://test.supabase.co';
+  mockGetSession.mockResolvedValue({ data: { session: { access_token: 'test-token' } }, error: null });
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ today: null }) }));
+  vi.useFakeTimers();
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<SpendTracker refreshKey={0} />));
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(container.querySelector('.spend-pill-value')?.textContent).toBe('—');
+    expect(container.querySelector('.spend-pill-state')?.textContent).toBe('Unavailable');
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
 it('guards against out-of-order race conditions so stale responses do not overwrite fresher stats', async () => {
   const { CONFIG } = await import('../config');
   (CONFIG as { SUPABASE_URL: string }).SUPABASE_URL = 'https://test.supabase.co';
@@ -62,6 +83,12 @@ it('guards against out-of-order race conditions so stale responses do not overwr
         allTime: 100.0,
         lastMessageCost: 0.25,
         messageCount: 42,
+        qualified: {
+          today: { settled: 5, pending: 0.25, estimatedLegacy: 0.25 },
+          thisWeek: { settled: 14, pending: 0.5, estimatedLegacy: 0.5 },
+          thisMonth: { settled: 29, pending: 0.5, estimatedLegacy: 0.5 },
+          allTime: { settled: 99, pending: 0.5, estimatedLegacy: 0.5 },
+        },
       }),
     });
   }));
@@ -92,6 +119,11 @@ it('guards against out-of-order race conditions so stale responses do not overwr
     // Open popover to see stats
     act(() => container.querySelector<HTMLButtonElement>('.spend-pill')!.click());
     expect(container.textContent).toContain('$5.50');
+    expect(container.textContent).toContain('Server totals include pending and estimated costs');
+    expect(container.textContent).not.toContain('Server totals above are authoritative');
+    expect(container.textContent).toContain('Recorded as settled $5.0000');
+    expect(container.textContent).toContain('Pending $0.2500');
+    expect(container.textContent).toContain('Legacy estimate $0.2500');
 
     // Now resolve fetch 1 with stale data ($1.20)
     await act(async () => {

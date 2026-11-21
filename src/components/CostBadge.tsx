@@ -52,8 +52,12 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
       ? 'estimated'
       : 'unknown');
 
-  const value = status === 'settled' ? cost.finalUsd : cost.estimatedUsd;
-  if (value === undefined && status !== 'pending' && status !== 'unknown') return null;
+  const value = status === 'settled'
+    ? cost.finalUsd
+    : status === 'unmetered'
+      ? undefined
+      : cost.estimatedUsd;
+  if (value === undefined && status !== 'pending' && status !== 'unknown' && status !== 'unmetered') return null;
 
   const label =
     status === 'settled'
@@ -62,6 +66,8 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
       ? 'pending'
       : status === 'unknown'
       ? 'unknown'
+      : status === 'unmetered'
+      ? 'unmetered'
       : 'est';
   const displayCost = value !== undefined ? `$${value.toFixed(4)} ${label}` : label;
 
@@ -86,6 +92,8 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
       ? 'Pending Settlement'
       : status === 'unknown'
       ? 'Unknown Cost'
+      : status === 'unmetered'
+      ? 'Unmetered Execution'
       : 'Pre-flight Estimate';
 
   return (
@@ -121,7 +129,7 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
             </span>
           </div>
 
-          {analysis.baselineCostUsd > 0 && analysis.baselineCostUsd !== analysis.actualCostUsd && (
+          {status !== 'unknown' && status !== 'unmetered' && analysis.baselineCostUsd > 0 && analysis.baselineCostUsd !== analysis.actualCostUsd && (
             <div className='cost-savings-banner'>
               <span className='savings-tag'>Price Illustration</span>
               <div className='savings-metric'>
@@ -149,7 +157,7 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
             </div>
           </div>
 
-          <div className='popover-tariffs'>
+          {status !== 'unknown' && status !== 'unmetered' && <div className='popover-tariffs'>
             <div className='tariff-row'>
               <span>Model Tier:</span>
               <code>{analysis.model}</code>
@@ -164,7 +172,7 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
                 <span>{cost.pricingVersion}</span>
               </div>
             )}
-          </div>
+          </div>}
         </div>
       )}
     </span>

@@ -164,11 +164,10 @@ enable_refresh_token_rotation = true
 # Allows refresh tokens to be reused after expiry, up to the specified interval in seconds.
 # Requires enable_refresh_token_rotation = true.
 refresh_token_reuse_interval = 10
-# Allow/disallow new user signups to your project.
-# Owner decision 2026-10-11: signups enabled for beta. NOTE: config.toml is NOT
-# proof of production auth settings; production was flipped via the Management
-# API in the same change. Verify production signup/confirmation/CAPTCHA flags
-# explicitly (see docs/engineering/containment-runbook.md).
+# Local Supabase development policy: beta signups are enabled. This file and
+# the historical 2026-10-11 owner note do not establish current hosted policy.
+# Verify hosted signup, confirmation, and CAPTCHA settings before claiming
+# production parity. VITE_ALLOW_SIGNUP only gates the client UI.
 enable_signup = true
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = false
@@ -203,13 +202,13 @@ web3 = 30
 # secret = ""
 
 [auth.email]
-# Allow/disallow new user signups via email to your project.
-# Owner decision 2026-10-11: email signups enabled for beta.
+# Local Supabase development policy: email signup is enabled for beta.
 enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
-# If enabled, users need to confirm their email address before signing in.
+# Local development only: email confirmation is disabled. Hosted policy is
+# unverified until the current project settings are inspected.
 enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false

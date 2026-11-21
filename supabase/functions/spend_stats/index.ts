@@ -9,14 +9,15 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-client-info, apikey',
 };
+const QUALIFIED_SPEND_RPC_TIMEOUT_MS = 1_000;
 
-interface SpendStatsRow {
-  today: number | string | null;
-  this_week: number | string | null;
-  this_month: number | string | null;
-  all_time: number | string | null;
-  last_message_cost: number | string | null;
-  message_count: number | string | null;
+interface ParsedSpendStatsRow {
+  today: number;
+  thisWeek: number;
+  thisMonth: number;
+  allTime: number;
+  lastMessageCost: number;
+  messageCount: number;
 }
 
 function parseBearerToken(authHeader: string | null): string | null {
@@ -25,9 +26,60 @@ function parseBearerToken(authHeader: string | null): string | null {
   return token || null;
 }
 
-function toNumber(value: unknown): number {
+type QualifiedSpendWindow = {
+  settled: number;
+  pending: number;
+  estimatedLegacy: number;
+};
+
+type QualifiedSpendStats = {
+  today: QualifiedSpendWindow;
+  thisWeek: QualifiedSpendWindow;
+  thisMonth: QualifiedSpendWindow;
+  allTime: QualifiedSpendWindow;
+};
+
+function asNonNegativeAmount(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function parseSpendStatsRow(value: unknown): ParsedSpendStatsRow | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const row = raw as Record<string, unknown>;
+  const today = asNonNegativeAmount(row.today);
+  const thisWeek = asNonNegativeAmount(row.this_week);
+  const thisMonth = asNonNegativeAmount(row.this_month);
+  const allTime = asNonNegativeAmount(row.all_time);
+  const lastMessageCost = asNonNegativeAmount(row.last_message_cost);
+  const messageCount = asNonNegativeAmount(row.message_count);
+  if (
+    today === null || thisWeek === null || thisMonth === null || allTime === null
+    || lastMessageCost === null || messageCount === null
+    || !Number.isSafeInteger(messageCount)
+  ) return null;
+  return { today, thisWeek, thisMonth, allTime, lastMessageCost, messageCount };
+}
+
+function parseQualifiedSpendStats(value: unknown): QualifiedSpendStats | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const windows = ['today', 'thisWeek', 'thisMonth', 'allTime'] as const;
+  const result = {} as QualifiedSpendStats;
+  for (const window of windows) {
+    const rawWindow = input[window];
+    if (typeof rawWindow !== 'object' || rawWindow === null || Array.isArray(rawWindow)) return null;
+    const raw = rawWindow as Record<string, unknown>;
+    const settled = asNonNegativeAmount(raw.settled);
+    const pending = asNonNegativeAmount(raw.pending);
+    const estimatedLegacy = asNonNegativeAmount(raw.estimatedLegacy);
+    if (settled === null || pending === null || estimatedLegacy === null) return null;
+    result[window] = { settled, pending, estimatedLegacy };
+  }
+  return result;
 }
 
 // PX02: minimal exported testable seam. handleSpendStats contains the full
@@ -136,16 +188,46 @@ export async function handleSpendStats(
     });
   }
 
-  const row = ((Array.isArray(data) ? data[0] : data) || {}) as SpendStatsRow;
+  const row = parseSpendStatsRow(data);
+  if (!row) {
+    return new Response(JSON.stringify({ error: 'Failed to load spend stats' }), {
+      status: 500,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  // PX12 qualified totals are additive during rollout: older databases may
+  // not have the new RPC yet, in which case preserve the legacy response.
+  let qualified: QualifiedSpendStats | null = null;
+  let qualifiedTimeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const qualifiedResponse = await Promise.race([
+      supabase.rpc('get_spend_stats_qualified', { p_user_id: user.id }),
+      new Promise<never>((_resolve, reject) => {
+        qualifiedTimeout = setTimeout(
+          () => reject(new Error('qualified spend stats timed out')),
+          QUALIFIED_SPEND_RPC_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    if (!qualifiedResponse.error) {
+      qualified = parseQualifiedSpendStats(qualifiedResponse.data);
+    }
+  } catch {
+    // Keep the existing stats endpoint available while the additive RPC rolls out.
+  } finally {
+    if (qualifiedTimeout !== undefined) clearTimeout(qualifiedTimeout);
+  }
 
   return new Response(
     JSON.stringify({
-      today: toNumber(row.today),
-      thisWeek: toNumber(row.this_week),
-      thisMonth: toNumber(row.this_month),
-      allTime: toNumber(row.all_time),
-      lastMessageCost: toNumber(row.last_message_cost),
-      messageCount: toNumber(row.message_count),
+      today: row.today,
+      thisWeek: row.thisWeek,
+      thisMonth: row.thisMonth,
+      allTime: row.allTime,
+      lastMessageCost: row.lastMessageCost,
+      messageCount: row.messageCount,
+      ...(qualified ? { qualified } : {}),
     }),
     {
       status: 200,

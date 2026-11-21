@@ -14,10 +14,11 @@
 //  - Frontend and server tariff versions are identical.
 //  - Auto routing excludes non-approved (trainsOnData / free-tier) endpoints.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MODEL_TARIFF_VERSION,
   isPriceExpired,
+  isLegacyPriceStale,
   assertPricingCurrent,
   StalePriceError,
 } from '../../supabase/functions/_shared/model_tariff.ts';
@@ -26,8 +27,15 @@ import {
   getPricingForModel,
   calculateEstimatedCostUsd,
 } from '../../supabase/functions/router/pricing_registry.ts';
-import { PRICING_VERSION as FRONTEND_PRICING_VERSION } from '../../src/pricingRegistry';
 import {
+  PRICING_VERSION as FRONTEND_PRICING_VERSION,
+  getPricingForModel as getFrontendPricingForModel,
+} from '../../src/pricingRegistry';
+import { calculateCostBreakdown as calculateFrontendCostBreakdown } from '../../src/costEngine';
+import { getCatalogEntry, isKnownModel } from '../../src/modelCatalog';
+import type { RouterModel } from '../../src/types';
+import {
+  calculatePreFlightCost,
   calculateFinalCost,
   calculateCostBreakdown,
   evaluateAutoSendSafety,
@@ -36,10 +44,17 @@ import {
   ModalityMismatchError,
   assertRouteSupportsModalities,
   routeSupportsImages,
+  normalizeModelOverride,
 } from '../../supabase/functions/router/router_logic.ts';
+import { modelRateBasis, priceKnownFor } from '../../supabase/functions/router/provider_availability.ts';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 // gpt-5.6-luna: threshold 272000; base input $0.20/M, long-context input $0.40/M.
 const LONG_CONTEXT_THRESHOLD = 272000;
+const LEGACY_TEST_MODEL = 'gemini-2.5-flash';
 
 describe('long-context tier boundary (immediately below / at / above threshold)', () => {
   it('bills base rates strictly below and exactly at the threshold, long rates above', () => {
@@ -99,6 +114,11 @@ describe('cache hit / cache write / uncached bucket separation', () => {
 });
 
 describe('reasoning tokens are a subset of completion tokens (no double-charge)', () => {
+  beforeEach(() => {
+    // Exercise the historical tariff while it was within its review window.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-05-01T12:00:00Z'));
+  });
   it('charges reasoning at the reasoning rate and the remainder at the output rate', () => {
     // o3-mini: output $4.40/M, reasoning $4.40/M.
     const usage = { promptTokens: 0, completionTokens: 1000, reasoningTokens: 400 };
@@ -193,6 +213,73 @@ describe('effective-interval expiry fails closed', () => {
     expect(cost.costUsd).toBeNull();
     expect(cost.isUnknown).toBe(true);
     expect(cost.eligibleForAutoRoute).toBe(false);
+  });
+
+  it('treats prototype property names as unknown models without producing NaN costs', () => {
+    for (const model of ['constructor', 'toString', '__proto__']) {
+      expect(isKnownModel(model)).toBe(false);
+      expect(normalizeModelOverride(model)).toBeUndefined();
+      expect(getCatalogEntry(model).name).toBe('Unknown model');
+      expect(getPricingForModel(model).isUnknown).toBe(true);
+      expect(getFrontendPricingForModel(model).isUnknown).toBe(true);
+      expect(() => assertPricingCurrent(model)).toThrow(StalePriceError);
+      expect(calculateEstimatedCostUsd(model, 1000, 500).costUsd).toBeNull();
+      const usage = { promptTokens: 1000, completionTokens: 500 };
+      const backend = calculateCostBreakdown(model as RouterModel, usage);
+      const frontend = calculateFrontendCostBreakdown(model as RouterModel, usage);
+      expect(backend.hasUnknownRate).toBe(true);
+      expect(frontend.hasUnknownRate).toBe(true);
+      expect(Number.isNaN(backend.totalUsd)).toBe(false);
+      expect(Number.isNaN(frontend.totalCost)).toBe(false);
+    }
+  });
+});
+
+describe('legacy direct-provider pricing freshness', () => {
+  it('uses UTC calendar-day age and expires only after 60 days', () => {
+    const entry = { asOfDate: '2026-04-14', sourceRef: 'anthropic-pricing' };
+    expect(isLegacyPriceStale(entry, new Date('2026-06-13T23:59:59Z'))).toBe(false);
+    expect(isLegacyPriceStale(entry, new Date('2026-06-14T00:00:00Z'))).toBe(true);
+    expect(isLegacyPriceStale(
+      { asOfDate: '2026-06-15', sourceRef: 'anthropic-pricing' },
+      new Date('2026-06-14T23:59:59Z'),
+    )).toBe(true);
+  });
+
+  it('only applies the legacy cutoff to the four designated direct sources', () => {
+    const staleDate = '2026-04-13';
+    const now = new Date('2026-11-21T12:00:00Z');
+    for (const sourceRef of ['anthropic-pricing', 'google-pricing', 'openai-pricing', 'deepinfra-pricing']) {
+      expect(isLegacyPriceStale({ asOfDate: staleDate, sourceRef }, now)).toBe(true);
+    }
+    expect(isLegacyPriceStale({ asOfDate: staleDate, sourceRef: 'opencode-zen-official' }, now)).toBe(false);
+    expect(isLegacyPriceStale({ asOfDate: 'not-a-date', sourceRef: 'anthropic-pricing' }, now)).toBe(true);
+    expect(isLegacyPriceStale({ sourceRef: 'google-pricing' }, now)).toBe(true);
+    expect(isLegacyPriceStale({ asOfDate: 'not-a-date', sourceRef: 'opencode-zen-official' }, now)).toBe(false);
+  });
+
+  it('returns a distinct fail-closed stale sentinel and rejects it in preflight safety', () => {
+    const now = new Date('2026-11-21T12:00:00Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+    const pricing = getPricingForModel(LEGACY_TEST_MODEL, now);
+    expect(pricing.isUnknown).toBe(true);
+    expect(pricing.isStale).toBe(true);
+    expect(pricing.isExpired).not.toBe(true);
+    expect(pricing.inputRatePer1M).toBe(0);
+    expect(() => assertPricingCurrent(LEGACY_TEST_MODEL, now)).toThrowError(
+      expect.objectContaining({ reason: 'stale' }),
+    );
+
+    const preflight = calculatePreFlightCost(LEGACY_TEST_MODEL, 'hello', 0);
+    expect(preflight.hasUnknownRate).toBe(true);
+    expect(priceKnownFor(LEGACY_TEST_MODEL)).toBe(false);
+    expect(modelRateBasis(LEGACY_TEST_MODEL)).toBe(Number.POSITIVE_INFINITY);
+    expect(evaluateAutoSendSafety({
+      isAuto: false,
+      modelTier: LEGACY_TEST_MODEL,
+      hasUnknownRate: preflight.hasUnknownRate,
+    }).allowed).toBe(false);
   });
 });
 

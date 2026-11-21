@@ -123,7 +123,10 @@ function roundUsd(value: number): number {
  *     (a hold that was never released must never be reported as settled $0);
  *   * any call that is not `settled` → `pending` (unknown/unsettled cost is
  *     never reported as success or as $0-settled);
- *   * otherwise → `settled`.
+ *   * settled calls with a present reservation are settled only when that
+ *     reservation is `committed`; unresolved or released reservations remain
+ *     `pending`;
+ *   * settled calls with no reservation retain the legacy settled-call sum.
  * `committedUsd` prefers the reservation's committed amount and falls back to
  * the sum of settled call costs (e.g. for legacy rows with no reservation).
  */
@@ -141,6 +144,8 @@ export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
   if (calls.length === 0) {
     state = reservation?.state === 'released' ? 'released' : 'pending';
   } else if (pendingCalls > 0) {
+    state = 'pending';
+  } else if (reservation && reservation.state !== 'committed') {
     state = 'pending';
   } else {
     state = 'settled';

@@ -3,6 +3,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './backendConfig';
+import './styles/Theme.css';
 import './styles/mobile.css';
 import { registerServiceWorker } from './services/pwaService';
 
@@ -26,22 +28,30 @@ function isPublicResumeRoute(): boolean {
   return window.location.pathname === '/demo' || window.location.pathname === '/about';
 }
 
-const requiredEnvVars = ['VITE_SUPABASE_ANON_KEY'];
 const missingVars = isPublicResumeRoute()
   ? []
-  : requiredEnvVars.filter((varName) => !import.meta.env[varName]);
+  : [
+      ...(!SUPABASE_URL ? ['VITE_SUPABASE_URL (or VITE_ROUTER_ENDPOINT)'] : []),
+      ...(!SUPABASE_ANON_KEY ? ['VITE_SUPABASE_ANON_KEY'] : []),
+    ];
+
+const root = ReactDOM.createRoot(document.getElementById('root')!);
 
 if (missingVars.length > 0) {
-  console.error(
-    '❌ Missing required environment variables:',
-    missingVars.join(', ')
+  console.error('Missing required environment variables:', missingVars.join(', '));
+  root.render(
+    <main className="startup-recovery" role="alert">
+      <h1>Prismatix is not configured</h1>
+      <p>Sign-in and chat need a Supabase project URL and public anon key.</p>
+      <p>Missing configuration: {missingVars.join(', ')}</p>
+      <p>Set these in the deployment environment, then reload.</p>
+      <a href="/demo">Open the scripted demo</a>
+    </main>,
   );
-  console.error('Create a .env file based on .env.example');
+} else {
+  root.render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>,
+  );
 }
-
-// Mount React app
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);

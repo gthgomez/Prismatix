@@ -17,7 +17,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -32,7 +32,10 @@ jobs:
       - name: Run tests
         run: npm run test
 
-      - name: Build
+      - name: Build synthetic browser fixture
+        env:
+          VITE_SUPABASE_URL: https://prismatix-fixture.invalid
+          VITE_SUPABASE_ANON_KEY: synthetic-browser-anon-key
         run: npm run build
 
       - name: Set up Deno
@@ -56,7 +59,47 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright acceptance tests
-        run: npx playwright test --project=chromium
+        run: npx playwright test --project=chromium --output=test-results/desktop
 
-      - name: Run Pixel mobile authenticated journey
-        run: npx playwright test --project=mobile tests/e2e/auth_chat_journey.spec.ts
+      - name: Run Pixel mobile authentication, provider and recovery journeys
+        run: npx playwright test --project=mobile --output=test-results/mobile tests/e2e/auth_chat_journey.spec.ts tests/e2e/first_run_connection_journey.spec.ts tests/e2e/first_run_accessibility.spec.ts tests/e2e/chat_transcript_contrast.spec.ts tests/e2e/arctic_shell_reliability.spec.ts
+
+      - name: Verify the opt-in Compare fixture
+        env:
+          VITE_SUPABASE_URL: https://prismatix-fixture.invalid
+          VITE_SUPABASE_ANON_KEY: synthetic-browser-anon-key
+          VITE_PX08_COMPARE_DURABILITY: 'true'
+        run: |
+          npm run build
+          npx playwright test --project=chromium tests/e2e/compare_persistence.spec.ts --output=test-results/compare
+
+      - name: Upload synthetic browser evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-synthetic-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  runtime-compatibility:
+    name: Node ${{ matrix.node }} compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  compare-postgres:
+    name: Compare · PostgreSQL 17
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/integration/run-compare-postgres.sh

@@ -47,6 +47,8 @@ export interface NormalizedRouterRequest {
   debateProfile?: string;
   routingProfile?: 'balanced' | 'economy' | 'capability';
   spendCapUsd?: number;
+  /** PX08 shared identity for the two Compare executions. */
+  comparisonGroupId?: string;
 }
 
 export type GuardResult<T> =
@@ -88,6 +90,14 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
   const rawConversationId = input.conversationId;
   if (!isUuid(rawConversationId)) {
     return reject(400, 'Bad Request: conversationId must be a valid UUID');
+  }
+
+  let comparisonGroupId: string | undefined;
+  if (input.comparisonGroupId !== undefined) {
+    if (!isUuid(input.comparisonGroupId)) {
+      return reject(400, 'Bad Request: comparisonGroupId must be a valid UUID');
+    }
+    comparisonGroupId = input.comparisonGroupId;
   }
 
   const rawQuery = input.query;
@@ -193,6 +203,7 @@ export function normalizeRouterRequestBody(input: unknown): GuardResult<Normaliz
       debateProfile: debateProfileResult.value,
       routingProfile,
       spendCapUsd,
+      comparisonGroupId,
     },
   };
 }

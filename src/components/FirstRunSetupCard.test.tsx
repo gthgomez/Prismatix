@@ -10,6 +10,7 @@ function renderCard(validateKey: ProviderPlugins['validateKey']) {
   document.body.append(container);
   const root: Root = createRoot(container);
   const plugins = {
+    providers: [],
     validateKey,
     setKey: vi.fn().mockResolvedValue(true),
   } as unknown as ProviderPlugins;

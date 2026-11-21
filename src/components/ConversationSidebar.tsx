@@ -496,19 +496,19 @@ function ChatHistory({
                       setEditingTagsId(null);
                     }
                   }}
-                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem', borderRadius: '4px', border: '1px solid var(--color-border, #444)', background: '#222', color: '#fff' }}
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem', borderRadius: '4px', border: '1px solid var(--color-border, #444)', background: 'var(--color-surface)', color: 'var(--color-text)' }}
                 />
                 <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'flex-end' }}>
                   <button
                     type='button'
-                    style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', background: 'transparent', border: 'none', color: '#888', cursor: 'pointer' }}
+                    style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', background: 'transparent', border: 'none', color: 'var(--color-text-dim)', cursor: 'pointer' }}
                     onClick={() => setEditingTagsId(null)}
                   >
                     Cancel
                   </button>
                   <button
                     type='button'
-                    style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', background: '#4ecdc4', color: '#000', borderRadius: '3px', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                    style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', background: 'var(--color-primary)', color: 'var(--color-content-on-primary)', borderRadius: '3px', border: 'none', cursor: 'pointer', fontWeight: 600 }}
                     onClick={() => {
                       const parsed = tagInputText.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean);
                       onSetConversationTags?.(conversation.id, parsed);
@@ -652,104 +652,32 @@ function ChatHistory({
                 setQuery('');
               }
             }} />
-          {onOpenSearch && (
-            <button
-              type='button'
-              className='conversation-search-global-trigger'
-              onClick={onOpenSearch}
-              title='Full history search (Ctrl+K)'
-              aria-label='Search all past conversations and messages'
-            >
-              Full Search
-            </button>
-          )}
         </div>
-
-        {/* F18: Status Filters (Active / Archived / All) & Tag Filters */}
-        <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.35rem', marginBottom: '0.35rem' }}>
+        {onOpenSearch && (
           <button
             type='button'
-            style={{
-              flex: 1,
-              padding: '0.25rem 0.4rem',
-              fontSize: '0.72rem',
-              borderRadius: '4px',
-              border: 'none',
-              cursor: 'pointer',
-              background: statusFilter === 'active' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255,255,255,0.05)',
-              color: statusFilter === 'active' ? '#0f172a' : 'inherit',
-              fontWeight: statusFilter === 'active' ? 600 : 400,
-            }}
-            onClick={() => setStatusFilter('active')}
+            className='conversation-search-global-trigger'
+            onClick={onOpenSearch}
+            title='Full history search (Ctrl+K)'
           >
-            Active
+            Search all conversations
           </button>
-          <button
-            type='button'
-            style={{
-              flex: 1,
-              padding: '0.25rem 0.4rem',
-              fontSize: '0.72rem',
-              borderRadius: '4px',
-              border: 'none',
-              cursor: 'pointer',
-              background: statusFilter === 'archived' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255,255,255,0.05)',
-              color: statusFilter === 'archived' ? '#0f172a' : 'inherit',
-              fontWeight: statusFilter === 'archived' ? 600 : 400,
-            }}
-            onClick={() => setStatusFilter('archived')}
-          >
-            Archived
-          </button>
-          <button
-            type='button'
-            style={{
-              flex: 1,
-              padding: '0.25rem 0.4rem',
-              fontSize: '0.72rem',
-              borderRadius: '4px',
-              border: 'none',
-              cursor: 'pointer',
-              background: statusFilter === 'all' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255,255,255,0.05)',
-              color: statusFilter === 'all' ? '#0f172a' : 'inherit',
-              fontWeight: statusFilter === 'all' ? 600 : 400,
-            }}
-            onClick={() => setStatusFilter('all')}
-          >
-            All
-          </button>
+        )}
+        <div className='conversation-status-filter' role='group' aria-label='Conversation status'>
+          {(['active', 'archived', 'all'] as const).map((status) => (
+            <button key={status} type='button' aria-pressed={statusFilter === status} onClick={() => setStatusFilter(status)}>
+              {status === 'active' ? 'Active' : status === 'archived' ? 'Archived' : 'All'}
+            </button>
+          ))}
         </div>
 
         {allTags.length > 0 && (
-          <div style={{ display: 'flex', gap: '0.25rem', overflowX: 'auto', padding: '0.2rem 0', marginBottom: '0.35rem' }}>
-            <span
-              style={{
-                fontSize: '0.7rem',
-                padding: '0.15rem 0.4rem',
-                borderRadius: '3px',
-                cursor: 'pointer',
-                background: selectedTag === null ? 'rgba(78, 205, 196, 0.2)' : 'transparent',
-                color: selectedTag === null ? '#4ecdc4' : 'var(--color-text-dim, #9ca3af)',
-              }}
-              onClick={() => setSelectedTag(null)}
-            >
-              All tags
-            </span>
-            {allTags.map((t) => (
-              <span
-                key={t}
-                style={{
-                  fontSize: '0.7rem',
-                  padding: '0.15rem 0.4rem',
-                  borderRadius: '3px',
-                  cursor: 'pointer',
-                  background: selectedTag === t ? 'rgba(78, 205, 196, 0.2)' : 'rgba(255,255,255,0.05)',
-                  color: selectedTag === t ? '#4ecdc4' : 'var(--color-text-dim, #9ca3af)',
-                }}
-                onClick={() => setSelectedTag(selectedTag === t ? null : t)}
-              >
-                #{t}
-              </span>
+          <div className='conversation-tag-filter' role='group' aria-label='Conversation tags'>
+            <button type='button' aria-pressed={selectedTag === null} onClick={() => setSelectedTag(null)}>All tags</button>
+            {allTags.map((tag) => (
+              <button key={tag} type='button' aria-pressed={selectedTag === tag} onClick={() => setSelectedTag(tag)}>
+                #{tag}
+              </button>
             ))}
           </div>
         )}
@@ -768,7 +696,8 @@ function ChatHistory({
         {isLoading && <div className='conversation-sidebar-status' role='status'>Loading…</div>}
         {!isLoading && loadError && (
           <div className='conversation-sidebar-error' role='alert'>
-            <span>{conversations.length > 0 ? 'Could not refresh conversations. Your loaded history is still available.' : 'Could not load conversations.'}</span>
+            <span>{loadError === 'Could not load conversations.' && conversations.length > 0 ? 'Could not refresh conversations.' : loadError}</span>
+            {conversations.length > 0 && <span>Your loaded history is still available.</span>}
             {onRetry && <button type='button' onClick={onRetry}>Retry</button>}
           </div>
         )}

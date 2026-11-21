@@ -48,6 +48,7 @@ export interface ChatInputComposerProps {
   duplicateNotice: string | null;
   composerValidationView: ComposerSendValidationView | null;
   providerSetupBlocked?: boolean;
+  providerSetupNeedsEnable?: boolean;
   providerSetupVerifyAvailable?: boolean;
   onVerifyProviderKeys?: () => void;
   onOpenPromptLibrary?: () => void;
@@ -96,6 +97,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   duplicateNotice,
   composerValidationView,
   providerSetupBlocked = false,
+  providerSetupNeedsEnable = false,
   providerSetupVerifyAvailable = false,
   onVerifyProviderKeys,
   onOpenPromptLibrary,
@@ -111,8 +113,14 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
         {isSendPending && <div className='send-preflight-status' role='status'>Checking your daily budget before sending. Your draft is held in this tab.</div>}
         {providerSetupBlocked && (
           <div className='provider-setup-composer-status' role='status'>
-            <span>{providerSetupVerifyAvailable ? 'Sending is paused. Verify your saved provider key to continue; your draft stays here.' : 'Sending is paused. Your draft stays here until a provider is connected.'}</span>
-            {providerSetupVerifyAvailable && onVerifyProviderKeys ? (
+            <span>{providerSetupNeedsEnable
+              ? 'Sending is paused. Enable a provider in Provider Settings to send. Your draft stays here.'
+              : providerSetupVerifyAvailable
+                ? 'Sending is paused. Verify your saved provider key to continue; your draft stays here.'
+                : 'Sending is paused. Your draft stays here until a provider is connected.'}</span>
+            {providerSetupNeedsEnable ? (
+              <button type='button' onClick={onOpenProviderSettings}>Provider Settings</button>
+            ) : providerSetupVerifyAvailable && onVerifyProviderKeys ? (
               <button type='button' onClick={onVerifyProviderKeys}>Verify provider keys</button>
             ) : (
               <button type='button' onClick={onOpenProviderSettings}>Connect a provider</button>
