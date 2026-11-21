@@ -8,10 +8,14 @@ import { CONFIG } from '../config';
 import type { ProviderSettingsPayload } from '../types';
 import type { ProviderId } from '../providerRegistry';
 
-async function authedToken(): Promise<string> {
+async function authedToken(expectedUserId: string): Promise<string> {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw new Error(`provider_settings_auth_failed: ${error.message}`);
-  const token = data.session?.access_token;
+  const session = data.session;
+  if (!expectedUserId || session?.user.id !== expectedUserId) {
+    throw new Error('provider_settings_account_changed: signed-in account no longer matches this action');
+  }
+  const token = session?.access_token;
   if (!token) throw new Error('provider_settings_auth_failed: no session');
   return token;
 }
@@ -25,9 +29,10 @@ function endpoint(): string {
 
 async function request(
   method: 'GET' | 'POST',
+  expectedUserId: string,
   body?: Record<string, unknown>,
 ): Promise<ProviderSettingsPayload> {
-  const token = await authedToken();
+  const token = await authedToken(expectedUserId);
   const response = await fetch(endpoint(), {
     method,
     headers: {
@@ -53,27 +58,28 @@ async function request(
   return (await response.json()) as ProviderSettingsPayload;
 }
 
-export function fetchProviderSettings(): Promise<ProviderSettingsPayload> {
-  return request('GET');
+export function fetchProviderSettings(expectedUserId: string): Promise<ProviderSettingsPayload> {
+  return request('GET', expectedUserId);
 }
 
-export function setProviderKey(provider: ProviderId, apiKey: string): Promise<ProviderSettingsPayload> {
-  return request('POST', { action: 'set_key', provider, apiKey });
+export function setProviderKey(provider: ProviderId, apiKey: string, expectedUserId: string): Promise<ProviderSettingsPayload> {
+  return request('POST', expectedUserId, { action: 'set_key', provider, apiKey });
 }
 
 export function setProviderEnabled(
   provider: ProviderId,
   enabled: boolean,
+  expectedUserId: string,
 ): Promise<ProviderSettingsPayload> {
-  return request('POST', { action: 'set_enabled', provider, enabled });
+  return request('POST', expectedUserId, { action: 'set_enabled', provider, enabled });
 }
 
-export function deleteProviderKey(provider: ProviderId): Promise<ProviderSettingsPayload> {
-  return request('POST', { action: 'delete_key', provider });
+export function deleteProviderKey(provider: ProviderId, expectedUserId: string): Promise<ProviderSettingsPayload> {
+  return request('POST', expectedUserId, { action: 'delete_key', provider });
 }
 
-export function setDefaultProvider(provider: ProviderId): Promise<ProviderSettingsPayload> {
-  return request('POST', { action: 'set_default', provider });
+export function setDefaultProvider(provider: ProviderId, expectedUserId: string): Promise<ProviderSettingsPayload> {
+  return request('POST', expectedUserId, { action: 'set_default', provider });
 }
 
 export interface ProviderValidationResult {
@@ -82,13 +88,16 @@ export interface ProviderValidationResult {
   message?: string;
   /** Client-only marker: this response belongs to a previous signed-in account. */
   stale?: boolean;
+  /** Client-only scope captured by useProviderPlugins when validation starts. */
+  clientAccountGeneration?: number;
 }
 
 export async function validateProviderKey(
+  expectedUserId: string,
   provider: ProviderId,
   apiKey?: string,
 ): Promise<ProviderValidationResult> {
-  const token = await authedToken();
+  const token = await authedToken(expectedUserId);
   const response = await fetch(endpoint(), {
     method: 'POST',
     headers: {

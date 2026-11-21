@@ -15,7 +15,7 @@ vi.mock('../services/providerSettings', () => ({
   validateProviderKey: vi.fn(),
 }));
 
-import { fetchProviderSettings, validateProviderKey } from '../services/providerSettings';
+import { fetchProviderSettings, setProviderKey, validateProviderKey } from '../services/providerSettings';
 
 const configuredPayload: ProviderSettingsPayload = {
   providers: [{
@@ -121,6 +121,54 @@ describe('useProviderPlugins account-scoped verification', () => {
     await act(async () => { await result!.validateKey('openrouter'); });
     expect(result?.verificationStatus).toBe('verified');
     expect(result?.verifiedProviders?.has('openrouter')).toBe(true);
+  });
+
+  it('does not save a key using a validation result from a previous account', async () => {
+    vi.mocked(validateProviderKey).mockResolvedValue({ provider: 'openrouter', status: 'enabled' });
+    vi.mocked(setProviderKey).mockResolvedValue(configuredPayload);
+    root = createRoot(container);
+    await act(async () => root!.render(<Harness userId='account-a' />));
+
+    let validation!: Awaited<ReturnType<ProviderPlugins['validateKey']>>;
+    await act(async () => { validation = await result!.validateKey('openrouter', 'sk-account-a-key'); });
+    expect(validation.status).toBe('enabled');
+
+    await act(async () => root!.render(<Harness userId='account-b' />));
+    let saved = true;
+    await act(async () => { saved = await result!.setKey('openrouter', 'sk-account-a-key', validation); });
+
+    expect(saved).toBe(false);
+    expect(setProviderKey).not.toHaveBeenCalled();
+    expect(result?.isVerified).toBe(false);
+  });
+
+  it('does not accept unscoped validation evidence as verified when saving a key', async () => {
+    vi.mocked(setProviderKey).mockResolvedValue(configuredPayload);
+    root = createRoot(container);
+    await act(async () => root!.render(<Harness userId='account-a' />));
+
+    let saved = true;
+    await act(async () => {
+      saved = await result!.setKey('openrouter', 'sk-unscoped-key', { status: 'enabled' });
+    });
+
+    expect(saved).toBe(false);
+    expect(setProviderKey).not.toHaveBeenCalled();
+    expect(result?.isVerified).toBe(false);
+  });
+
+  it('still permits a save without validation while keeping it unverified', async () => {
+    vi.mocked(setProviderKey).mockResolvedValue(configuredPayload);
+    root = createRoot(container);
+    await act(async () => root!.render(<Harness userId='account-a' />));
+
+    let saved = false;
+    await act(async () => { saved = await result!.setKey('openrouter', 'sk-unchecked-key'); });
+
+    expect(saved).toBe(true);
+    expect(setProviderKey).toHaveBeenCalledWith('openrouter', 'sk-unchecked-key', 'account-a');
+    expect(result?.verificationStatus).toBe('unverified');
+    expect(result?.verifiedProviders?.has('openrouter')).toBe(false);
   });
 
 });
