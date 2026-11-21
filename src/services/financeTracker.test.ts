@@ -44,8 +44,8 @@ describe('getFinanceStore', () => {
 
 describe('recordCost', () => {
   it('keeps advisory spend isolated by account and excludes the legacy shared cache', () => {
-    recordCost({ model: 'haiku-4.5', cost: 1, conversationId: 'legacy-shared' });
-    recordCost({ model: 'haiku-4.5', cost: 0.25, conversationId: 'account-a' }, 'first-user');
+    recordCost({ model: 'gemini-3.8-flash', cost: 1, conversationId: 'legacy-shared' });
+    recordCost({ model: 'gemini-3.8-flash', cost: 0.25, conversationId: 'account-a' }, 'first-user');
     expect(getFinanceStore('first-user').history.map((entry) => entry.conversationId)).toEqual(['account-a']);
     expect(getDailyTotal(undefined, 'first-user')).toBe(0.25);
     expect(getFinanceStore('second-user').history).toEqual([]);
@@ -57,7 +57,7 @@ describe('recordCost', () => {
       throw new DOMException('Storage disabled', 'QuotaExceededError');
     });
     try {
-      expect(recordCost({ model: 'haiku-4.5', cost: 0.25 }, 'first-user').history).toHaveLength(1);
+      expect(recordCost({ model: 'gemini-3.8-flash', cost: 0.25 }, 'first-user').history).toHaveLength(1);
     } finally {
       write.mockRestore();
     }
