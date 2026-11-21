@@ -2940,7 +2940,7 @@
   font-family: var(--font-mono);
 }
 
-.message-text .code-block-pre {
+.code-block-wrapper .code-block-pre {
   margin: 0;
   max-width: 100%;
   overflow-x: auto;
@@ -3002,7 +3002,7 @@
   font: 0.8rem var(--font-sans);
 }
 
-.message-text .code-block-content {
+.code-block-wrapper .code-block-content {
   display: block;
   width: max-content;
   min-width: 100%;
@@ -5165,6 +5165,7 @@
 
 .comparison-action:focus-visible,
 .code-copy-btn:focus-visible,
+.code-block-pre:focus-visible,
 .formatted-table-wrapper:focus-visible,
 .scroll-to-bottom-btn:focus-visible {
   outline: 2px solid var(--color-focus);

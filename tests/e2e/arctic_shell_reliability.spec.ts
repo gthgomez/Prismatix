@@ -45,8 +45,12 @@ test('reload during a send preserves the prompt without automatically sending ag
   const routerGate = new Promise<void>((resolve) => { releaseRouter = resolve; });
   await page.route('**/functions/v1/router*', async (route) => {
     routerRequests++;
-    await routerGate;
-    await route.abort().catch(() => {});
+    if (routerRequests === 1) {
+      await routerGate;
+      await route.abort().catch(() => {});
+    } else {
+      await route.fulfill(successfulStream('Independent answer with a saved transcript', 'pending-draft-proof'));
+    }
   });
   await signInAsMockUser(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
@@ -58,9 +62,16 @@ test('reload during a send preserves the prompt without automatically sending ag
     await page.reload();
     const recovery = page.locator('.draft-recovery-bar');
     await expect(recovery).toContainText('Check your chat history before sending again');
+    expect(routerRequests).toBe(1);
+    await composer.fill('Send a separate prompt');
+    await composer.press('Enter');
+    await expect(page.getByText('Independent answer with a saved transcript')).toBeVisible();
+    expect(routerRequests).toBe(2);
+    await page.reload();
+    await expect(recovery).toContainText('Check your chat history before sending again');
     await recovery.getByRole('button', { name: 'Restore draft' }).click();
     await expect(composer).toHaveValue('Hold my exact prompt during a reload');
-    expect(routerRequests).toBe(1);
+    expect(routerRequests).toBe(2);
   } finally {
     releaseRouter();
   }
@@ -264,6 +275,34 @@ test('opening a slow conversation cannot send the previous transcript as context
   await expect(page.getByText('Reply in the second chat')).toBeVisible();
   expect(paidRequests).toHaveLength(1);
   expect(JSON.stringify(paidRequests[0])).not.toContain('Old conversation context');
+});
+
+test('New Chat after visiting saved history gets a fresh router conversation identity', async ({ page }) => {
+  await setupAuthenticatedMock(page);
+  const sentIds: string[] = [];
+  await page.route('**/functions/v1/router*', async (route) => {
+    sentIds.push(route.request().postDataJSON().conversationId);
+    await route.fulfill(successfulStream(`New chat answer ${sentIds.length}`, `fresh-chat-${sentIds.length}`));
+  });
+  await signInAsMockUser(page);
+  const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+  await composer.fill('First new conversation');
+  await composer.press('Enter');
+  await expect(page.getByText('New chat answer 1', { exact: true })).toBeVisible();
+  const sidebarToggle = page.getByRole('button', { name: 'Toggle conversations sidebar' });
+  if (await sidebarToggle.isVisible()) await sidebarToggle.click();
+  await page.getByRole('button', { name: /^Architectural Discussion/ }).click();
+  await expect(page.getByText(/Paxos and Raft both solve/)).toBeVisible();
+  const newChat = page.getByRole('button', { name: '+ New Chat' });
+  if (!(await newChat.isVisible()) && await sidebarToggle.isVisible()) await sidebarToggle.click();
+  await newChat.click();
+  await composer.fill('Second new conversation');
+  await composer.press('Enter');
+  await expect(page.getByText('New chat answer 2', { exact: true })).toBeVisible();
+  expect(sentIds).toHaveLength(2);
+  expect(sentIds[0]).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(sentIds[1]).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(sentIds[1]).not.toBe(sentIds[0]);
 });
 
 test('Arctic shell persists through send and history; saved-chat layout has no horizontal overflow', async ({ page }) => {

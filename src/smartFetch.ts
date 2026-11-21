@@ -199,8 +199,12 @@ function hostOf(value: string): string {
   }
 }
 
-async function signOutLocal(context: string): Promise<void> {
+async function signOutLocal(context: string, expectedUserId?: string): Promise<void> {
   try {
+    if (expectedUserId) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id !== expectedUserId) return;
+    }
     devWarn('[smartFetch] Local sign-out:', context);
     await supabase.auth.signOut({ scope: 'local' });
   } catch (err) {
@@ -294,7 +298,7 @@ async function getAccessToken(expectedUserId?: string): Promise<string> {
     devError('[smartFetch] Session error:', error);
     const lowered = String(error.message || '').toLowerCase();
     if (lowered.includes('invalid refresh token') || lowered.includes('refresh token not found')) {
-      await signOutLocal('invalid-refresh-token');
+      await signOutLocal('invalid-refresh-token', expectedUserId);
       throw new Error('Session expired. Please sign in again.');
     }
     throw new Error('Failed to get session: ' + error.message);
@@ -314,7 +318,7 @@ async function getAccessToken(expectedUserId?: string): Promise<string> {
 
   if (expectedHost && issuerHost && expectedHost !== issuerHost) {
     devError('[smartFetch] Token issuer mismatch:', { issuerHost, expectedHost });
-    await signOutLocal('token-issuer-mismatch');
+    await signOutLocal('token-issuer-mismatch', expectedUserId);
     throw new Error(
       `Session token is for ${issuerHost}, but app is configured for ${expectedHost}. ` +
       'Clear site data and sign in again.'
@@ -542,7 +546,7 @@ export async function askPrismatix(
           const retryText = await response.text();
           devError('[smartFetch] Router Error (after retry):', response.status, retryText);
           if (response.status === 401) {
-            await signOutLocal('router-401-after-retry');
+            await signOutLocal('router-401-after-retry', scope?.userId);
             throw new Error('Session expired. Please sign in again.');
           }
           throwRouterError(response.status, retryText, response.headers);

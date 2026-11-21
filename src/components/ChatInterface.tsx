@@ -159,6 +159,10 @@ import {
   setConversationTags,
 } from '../services/conversationService';
 import {
+  getLocalPreferences,
+  setLocalPreferences,
+  readWorkspaceSwitch,
+  writeWorkspaceSwitch,
   syncPreferences,
   saveServerPreferences,
   type UserPreferences,
@@ -528,29 +532,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [canInstallPwa, setCanInstallPwa] = useState(false);
-  const [researchMode, setResearchMode] = useState<boolean>(() => {
-    try {
-      return window.localStorage.getItem('prismatix_research_mode') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [researchMode, setResearchMode] = useState(() => readWorkspaceSwitch(user?.id, 'research'));
+  const setResearchEnabled = (enabled: boolean) => {
+    setResearchMode(enabled);
+    writeWorkspaceSwitch(user?.id, 'research', enabled);
+  };
 
   // PR 3: F11 Web Search, F12 Comparison, F13 Routing Profiles & Spend Caps
-  const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
-    try {
-      return window.localStorage.getItem('prismatix_web_search_enabled') === 'true';
-    } catch {
-      return false;
-    }
-  });
-  const [comparisonMode, setComparisonMode] = useState<boolean>(() => {
-    try {
-      return window.localStorage.getItem('prismatix_comparison_mode') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [webSearchEnabled, setWebSearchEnabled] = useState(() => getLocalPreferences(user?.id).webSearchEnabled);
+  const [comparisonMode, setComparisonMode] = useState(() => readWorkspaceSwitch(user?.id, 'compare'));
+  const setComparisonEnabled = useCallback((enabled: boolean) => {
+    setComparisonMode(enabled);
+    writeWorkspaceSwitch(user?.id, 'compare', enabled);
+  }, [user?.id]);
   const [comparisonModelA, setComparisonModelA] = useState<RouterModel>('gemini-3.8-flash');
   const [comparisonModelB, setComparisonModelB] = useState<RouterModel>('gpt-6-sol');
   const [routingPanelOpen, setRoutingPanelOpen] = useState(false);
@@ -577,15 +571,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     && !providerVerificationRequiresAction;
 
   const selectWorkspaceMode = useCallback((mode: 'chat' | 'compare' | 'debate') => {
-    const compare = mode === 'compare';
-    setComparisonMode(compare);
+    setComparisonEnabled(mode === 'compare');
     setDebateSelection((current) => mode === 'debate' ? (current === 'off' ? 'general' : current) : 'off');
-    try {
-      window.localStorage.setItem('prismatix_comparison_mode', String(compare));
-    } catch {
-      // Keep the in-memory mode usable when storage is unavailable.
-    }
-  }, []);
+  }, [setComparisonEnabled]);
 
   useEffect(() => {
     const closeCompactDrawerAtWideBreakpoint = () => {
@@ -612,21 +600,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       if (toggle?.isConnected) toggle.focus();
     };
   }, [routingPanelOpen]);
-  const [routingProfile, setRoutingProfile] = useState<RoutingProfile>(() => {
-    try {
-      return (window.localStorage.getItem('prismatix_routing_profile') as RoutingProfile) || 'balanced';
-    } catch {
-      return 'balanced';
-    }
-  });
-  const [maxSpendCap, setMaxSpendCap] = useState<number | null>(() => {
-    try {
-      const saved = window.localStorage.getItem('prismatix_max_spend_cap');
-      return saved ? Number(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [routingProfile, setRoutingProfile] = useState(() => getLocalPreferences(user?.id).routingProfile);
+  const [maxSpendCap, setMaxSpendCap] = useState(() => getLocalPreferences(user?.id).maxSpendCap);
 
   // Shared quality requirement: action notice banner (rename/delete)
   const [actionNotice, setActionNotice] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
@@ -731,6 +706,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setConversations([]);
     setProjects([]);
     setActiveProjectId(null);
+    const prefs = getLocalPreferences(user?.id);
+    setRoutingProfile(prefs.routingProfile);
+    setMaxSpendCap(prefs.maxSpendCap);
+    setWebSearchEnabled(prefs.webSearchEnabled);
+    setHydratedPreferencesOwner(undefined);
+    setComparisonMode(readWorkspaceSwitch(user?.id, 'compare'));
+    setResearchMode(readWorkspaceSwitch(user?.id, 'research'));
+    setDebateSelection('off');
+    setManualModelOverride(null);
     setHasMoreConversations(false);
     setIsLoadingMoreConversations(false);
     setLoadMoreConversationsError(null);
@@ -1709,6 +1693,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setIsLoadingEarlierMessages(false);
     setHasEarlierMessages(false);
     setEarlierMessagesError(null);
+    const newChatFiles = draftScope.current.conversationId === null ? draftAttachments : draftFiles.current.get(null);
+    if (!newChatFiles?.some((file) => file.kind === 'video')) newConversationIdRef.current = null;
     switchComposerDraft(null);
     selectedConversationIdRef.current = null;
     setSelectedConversationId(null);
@@ -1922,6 +1908,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   }>({});
   const [hydratedPreferencesOwner, setHydratedPreferencesOwner] = useState<string | undefined>();
 
+  const updateRoutingPreferences = (changes: Partial<Pick<UserPreferences, 'routingProfile' | 'webSearchEnabled' | 'maxSpendCap'>>) => {
+    if (changes.routingProfile !== undefined) {
+      userInteractedPrefsRef.current.routingProfile = true;
+      setRoutingProfile(changes.routingProfile);
+    }
+    if (changes.webSearchEnabled !== undefined) {
+      userInteractedPrefsRef.current.webSearchEnabled = true;
+      setWebSearchEnabled(changes.webSearchEnabled);
+    }
+    if (changes.maxSpendCap !== undefined) {
+      userInteractedPrefsRef.current.maxSpendCap = true;
+      setMaxSpendCap(changes.maxSpendCap);
+    }
+    if (user?.id) {
+      setLocalPreferences({ ...getLocalPreferences(user.id), ...changes, updatedAt: new Date().toISOString() }, user.id);
+    }
+  };
+
   useEffect(() => {
     userInteractedPrefsRef.current = {};
   }, [user?.id]);
@@ -2039,6 +2043,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     // conversation, or the deterministic New Chat id).
     const pendingDraftKey = requestUserId ? `prismatix.pending-turn.${requestUserId}` : undefined;
     const submittedText = activeDraftRef.current?.rawInput ?? queryText;
+    if (requestUserId && failedTurnDraft?.restoredFromStorage && failedTurnDraft.rawInput !== submittedText) {
+      writeTabDraft(`prismatix.failed-turn.${requestUserId}`, failedTurnDraft.rawInput);
+    }
     if (pendingDraftKey) writeTabDraft(pendingDraftKey, submittedText);
     activeStreamRef.current = null;
 
@@ -3527,8 +3534,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                   onDebateChange={(sel) => {
                     setDebateSelection(sel);
                     if (sel !== 'off') {
-                      setComparisonMode(false);
-                      try { window.localStorage.setItem('prismatix_comparison_mode', 'false'); } catch { /* optional persistence */ }
+                      setComparisonEnabled(false);
                     }
                     if (sendValidationError) setSendValidationError(null);
                   }}
@@ -4054,16 +4060,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           <button
             type='button'
             className={`web-search-toggle-btn ${webSearchEnabled ? 'active' : ''}`}
-            onClick={() => {
-              userInteractedPrefsRef.current.webSearchEnabled = true;
-              const next = !webSearchEnabled;
-              setWebSearchEnabled(next);
-              try {
-                window.localStorage.setItem('prismatix_web_search_enabled', String(next));
-              } catch {
-                // Ignore storage write failure
-              }
-            }}
+            onClick={() => updateRoutingPreferences({ webSearchEnabled: !webSearchEnabled })}
             title='Toggle web search augmentation (BYOK)'
             aria-pressed={webSearchEnabled}
           >
@@ -4074,16 +4071,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           <button
             type='button'
             className={`web-search-toggle-btn ${comparisonMode ? 'active' : ''}`}
-            onClick={() => {
-              const next = !comparisonMode;
-              setComparisonMode(next);
-              if (next) setDebateSelection('off');
-              try {
-                window.localStorage.setItem('prismatix_comparison_mode', String(next));
-              } catch {
-                // Ignore storage write failure
-              }
-            }}
+            onClick={() => selectWorkspaceMode(comparisonMode ? 'chat' : 'compare')}
             title='Toggle side-by-side model comparison'
             aria-pressed={comparisonMode}
           >
@@ -4094,15 +4082,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           <button
             type='button'
             className={`web-search-toggle-btn ${researchMode ? 'active' : ''}`}
-            onClick={() => {
-              const next = !researchMode;
-              setResearchMode(next);
-              try {
-                window.localStorage.setItem('prismatix_research_mode', String(next));
-              } catch {
-                // Ignore storage write failure
-              }
-            }}
+            onClick={() => setResearchEnabled(!researchMode)}
             title='Toggle multi-source research workflow mode'
             aria-pressed={researchMode}
           >
@@ -4148,16 +4128,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             id='routing-profile-select'
             aria-label='Select routing profile'
             value={routingProfile}
-            onChange={(e) => {
-              userInteractedPrefsRef.current.routingProfile = true;
-              const val = e.target.value as RoutingProfile;
-              setRoutingProfile(val);
-              try {
-                window.localStorage.setItem('prismatix_routing_profile', val);
-              } catch {
-                // Ignore storage write failure
-              }
-            }}
+            onChange={(event) => updateRoutingPreferences({ routingProfile: event.target.value as RoutingProfile })}
             className='routing-profile-select'
           >
             <option value='balanced'>Balanced</option>
@@ -4172,17 +4143,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             id='spend-cap-select'
             aria-label='Select per-turn spend cap'
             value={spendCapSelectValue(maxSpendCap)}
-            onChange={(e) => {
-              userInteractedPrefsRef.current.maxSpendCap = true;
-              const val = e.target.value === 'none' ? null : Number(e.target.value);
-              setMaxSpendCap(val);
-              try {
-                if (val === null) window.localStorage.removeItem('prismatix_max_spend_cap');
-                else window.localStorage.setItem('prismatix_max_spend_cap', String(val));
-              } catch {
-                // Ignore storage write failure
-              }
-            }}
+            onChange={(event) => updateRoutingPreferences({ maxSpendCap: event.target.value === 'none' ? null : Number(event.target.value) })}
             className='spend-cap-select'
           >
             <option value='none'>No Cap</option>
@@ -4480,12 +4441,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           <select
             id='arctic-routing-profile'
             value={routingProfile}
-            onChange={(event) => {
-              userInteractedPrefsRef.current.routingProfile = true;
-              const value = event.target.value as RoutingProfile;
-              setRoutingProfile(value);
-              try { window.localStorage.setItem('prismatix_routing_profile', value); } catch { /* optional persistence */ }
-            }}
+            onChange={(event) => updateRoutingPreferences({ routingProfile: event.target.value as RoutingProfile })}
           >
             <option value='balanced'>Balanced</option>
             <option value='economy'>Economy</option>
@@ -4496,15 +4452,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           <select
             id='arctic-spend-cap'
             value={spendCapSelectValue(maxSpendCap)}
-            onChange={(event) => {
-              userInteractedPrefsRef.current.maxSpendCap = true;
-              const value = event.target.value === 'none' ? null : Number(event.target.value);
-              setMaxSpendCap(value);
-              try {
-                if (value === null) window.localStorage.removeItem('prismatix_max_spend_cap');
-                else window.localStorage.setItem('prismatix_max_spend_cap', String(value));
-              } catch { /* optional persistence */ }
-            }}
+            onChange={(event) => updateRoutingPreferences({ maxSpendCap: event.target.value === 'none' ? null : Number(event.target.value) })}
           >
             <option value='none'>No cap</option>
             <option value='0.01'>$0.01</option>
@@ -4512,15 +4460,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             <option value='0.10'>$0.10</option>
             <option value='0.25'>$0.25</option>
           </select>
-          <label className='arctic-route-check'><input type='checkbox' checked={webSearchEnabled} onChange={(event) => {
-            userInteractedPrefsRef.current.webSearchEnabled = true;
-            setWebSearchEnabled(event.target.checked);
-            try { window.localStorage.setItem('prismatix_web_search_enabled', String(event.target.checked)); } catch { /* optional persistence */ }
-          }} /> Search web (BYOK)</label>
-          <label className='arctic-route-check'><input type='checkbox' checked={researchMode} onChange={(event) => {
-            setResearchMode(event.target.checked);
-            try { window.localStorage.setItem('prismatix_research_mode', String(event.target.checked)); } catch { /* optional persistence */ }
-          }} /> Multi-source research</label>
+          <label className='arctic-route-check'><input type='checkbox' checked={webSearchEnabled} onChange={(event) => updateRoutingPreferences({ webSearchEnabled: event.target.checked })} /> Search web (BYOK)</label>
+          <label className='arctic-route-check'><input type='checkbox' checked={researchMode} onChange={(event) => setResearchEnabled(event.target.checked)} /> Multi-source research</label>
           {contextStatus && <details className='arctic-context-details'>
             <summary>Conversation context</summary>
             <ContextStatus contextStatus={contextStatus} />
@@ -4537,8 +4478,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
               const selection = event.target.value as DebateSelection;
               setDebateSelection(selection);
               if (selection !== 'off') {
-                setComparisonMode(false);
-                try { window.localStorage.setItem('prismatix_comparison_mode', 'false'); } catch { /* optional persistence */ }
+                setComparisonEnabled(false);
               }
             }}
           >

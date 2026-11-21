@@ -29,6 +29,7 @@ The failing lazy-chunk recovery case passed its isolated rerun.
 | PXQ-06 / P1 | Sign in with a saved key on a disabled provider. First run asks for another key. | Route the user to the existing provider settings and keep one visible setup action. The browser regression checks the setup text, disabled provider dialog, keyboard/Axe behavior and paused composer. `7e9db41`, `4338a93` |
 | PXQ-07 / P2 | Inspect the public frontend response and local authorization tests. The deployed asset responses lack explicit MIME sniffing protection, and the prior isolated harness did not exercise the receipt and spend RPC boundaries. | Set `nosniff` and strict cross-origin referrers in the candidate and extend PostgreSQL tests to conversation, transcript, receipt and spend authorization. The isolated fixture uses two authenticated identities, anonymous access, and the receipt service role separately. `4338a93`, `7a787a5` |
 | PXQ-08 / P1 | Open Compare or a Markdown/code reply in Arctic Light. Legacy dark surfaces hid code and comparison content, and the code copy control gave no feedback when denied clipboard access. | Apply the shared Arctic text, surface and border tokens. Make mobile actions 44 CSS pixels high, make scrollable tables focusable, and select visible code when clipboard access fails. Added a two-theme 4.5:1 contrast and copy-recovery regression for desktop and Pixel 5. |
+| PXQ-09 / P0 | Open a separate account in the same browser. Shared legacy routing, research, and Compare settings could briefly affect the next account before saved preferences arrived. An earlier request's late auth failure could also sign the current account out. | Read and write account-scoped preferences at initialization and on change. Keep scoped server records and bypass legacy values whose owner cannot be established. Recheck the active subject before local sign-out. Browser and transport tests cover late 401s, routing cap reload, and the distinction between legacy and account-selected Compare. |
 
 ## Verification
 
@@ -41,6 +42,10 @@ The failing lazy-chunk recovery case passed its isolated rerun.
   controls reachable with no horizontal document overflow. At 400%, the
   sign-in submit control remained reachable. Keyboard checks verified Escape
   and focus return. Axe covered the setup and provider dialog.
+- An opt-in local signup build exercised the email confirmation message and
+  password reset request with synthetic Auth responses. A separate build with
+  backend configuration removed showed recovery for sign-in and reset and
+  opened the demo with zero Supabase requests.
 - Visual review caught synthetic history returning database messages in the
   wrong query order. The browser fixture now honors the descending data order
   and verifies that the UI presents the user prompt first.

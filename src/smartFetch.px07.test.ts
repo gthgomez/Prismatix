@@ -111,6 +111,24 @@ describe('PX07 smartFetch continuity', () => {
     expect(signOutMock).not.toHaveBeenCalled();
   });
 
+  it('does not sign out a newer account when an older retry returns 401', async () => {
+    const session = (id: string) => ({
+      data: { session: { access_token: createJwt('https://project.supabase.co/auth/v1'), user: { id } } },
+      error: null,
+    });
+    getSessionMock.mockResolvedValueOnce(session('first-account')).mockResolvedValueOnce(session('first-account'))
+      .mockResolvedValueOnce(session('second-account'));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('unauthorized', { status: 401 }))
+      .mockResolvedValueOnce(new Response('unauthorized again', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const scope = { userId: 'first-account', conversationId: getConversationId() };
+    await expect(askPrismatix('An earlier account request', [], [], undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, scope)).rejects.toThrow('Session expired');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(signOutMock).not.toHaveBeenCalled();
+  });
+
   it('sends the original query separately when text-file content is merged', async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal('fetch', fetchMock);

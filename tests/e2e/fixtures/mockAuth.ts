@@ -302,19 +302,21 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
   });
 
   // Mock User Preferences REST API (Wave 2)
+  let savedPreferences = {
+    user_id: MOCK_USER.id,
+    preferences: {
+      routingProfile: 'balanced',
+      theme: 'dark',
+      webSearchEnabled: false,
+    },
+    updated_at: '2026-11-15T00:00:00Z',
+  };
   await page.route('**/rest/v1/user_preferences*', async (route) => {
+    if (route.request().method() === 'POST') savedPreferences = route.request().postDataJSON();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        user_id: MOCK_USER.id,
-        preferences: {
-          routingProfile: 'balanced',
-          theme: 'dark',
-          webSearchEnabled: false,
-        },
-        updated_at: new Date().toISOString(),
-      }),
+      body: JSON.stringify(savedPreferences),
     });
   });
 
