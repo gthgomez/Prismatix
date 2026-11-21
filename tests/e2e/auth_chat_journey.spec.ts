@@ -153,13 +153,25 @@ test.describe('Authenticated chat journey (mock provider)', () => {
       additionalAuthStorageKeys: ['sb-synthetic-test-auth-token', 'sb-prismatix-fixture-auth-token'],
     });
     let retryAllowed = false;
+    let releaseStalledRequests!: () => void;
+    const stalledRequests = new Promise<void>((resolve) => { releaseStalledRequests = resolve; });
     let refreshAttempts = 0;
+    let successfulRetryResponses = 0;
     let sessionStorageKey = '';
     await page.route('**/auth/v1/token*', async (route) => {
       refreshAttempts++;
       sessionStorageKey = `sb-${new URL(route.request().url()).hostname.split('.')[0]}-auth-token`;
-      if (!retryAllowed) await new Promise<void>(() => {});
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_SESSION) });
+      if (!retryAllowed) {
+        await stalledRequests;
+        await route.abort().catch(() => {});
+        return;
+      }
+      try {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_SESSION) });
+        successfulRetryResponses++;
+      } catch {
+        // An aborted request cannot establish a session.
+      }
     });
 
     await page.goto('/');
@@ -173,9 +185,13 @@ test.describe('Authenticated chat journey (mock provider)', () => {
     const storedSession = await page.evaluate((key) => localStorage.getItem(key), sessionStorageKey);
     expect(storedSession).not.toBeNull();
     expect(storedSession).toContain('mock-playwright-refresh');
-    retryAllowed = true;
     await page.clock.resume();
+    const attemptsBeforeRetry = refreshAttempts;
     await page.getByRole('button', { name: 'Retry session check' }).click();
+    retryAllowed = true;
+    releaseStalledRequests();
+    await expect.poll(() => refreshAttempts).toBeGreaterThan(attemptsBeforeRetry);
+    await expect.poll(() => successfulRetryResponses).toBeGreaterThan(0);
     await expect(page.getByRole('textbox', { name: /message prismatix/i })).toBeVisible({ timeout: 15_000 });
   });
 
