@@ -22,6 +22,7 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<'success' | 'pending' | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const savedButDisabled = plugins.providers.find((provider) => provider.hasKey && !provider.enabled);
 
   const handleQuickConnect = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,6 +72,25 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
       setIsSubmitting(false);
     }
   };
+
+  if (savedButDisabled) {
+    return (
+      <section className='first-run-card first-run-card--compact' role='region' aria-label='AI Provider Setup Guide'>
+        <p className='first-run-welcome'>Provider setup</p>
+        <h2 className='first-run-title'>{savedButDisabled.label} is saved but turned off</h2>
+        <p className='first-run-desc'>
+          A key is already stored for {savedButDisabled.label}, but that provider is disabled.
+          Open Provider Settings to turn it on or choose another provider.
+        </p>
+        <div className='first-run-actions'>
+          <button type='button' className='first-run-submit' onClick={onOpenSettings}>
+            Open Provider Settings
+          </button>
+          <a href='/demo' className='first-run-demo-link'>Try the public demo</a>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className='first-run-card' aria-labelledby='first-run-heading'>

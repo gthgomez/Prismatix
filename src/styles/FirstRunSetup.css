@@ -11,6 +11,15 @@
   box-shadow: var(--shadow-elevated);
   text-align: left;
 }
+.first-run-card--compact {
+  padding: 1.1rem 1.25rem;
+}
+.first-run-card--compact .first-run-title {
+  font-size: 1.3rem;
+}
+.first-run-card--compact .first-run-desc {
+  margin-bottom: 0.9rem;
+}
 @media (max-height: 680px) {
   .first-run-card { margin: 0.2rem auto 0.65rem; padding: 1rem; }
   .first-run-form { margin-bottom: 0.65rem; }

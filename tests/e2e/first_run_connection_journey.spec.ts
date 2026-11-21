@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import AxeBuilder from '@axe-core/playwright';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 const GENERATED_REPLY = 'Fixture generated reply: your synthetic request completed successfully.';
@@ -230,4 +231,41 @@ test('history distinguishes loading, failure, and a successfully empty result', 
   allowSuccess = true;
   await history.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(history.getByText('No conversations yet')).toBeVisible();
+});
+
+test('first run directs users to a saved but disabled provider instead of prompting for another key', async ({ page }, testInfo) => {
+  await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [] });
+  await page.route('**/functions/v1/provider-settings*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        providers: [{
+          id: 'openrouter',
+          label: 'OpenRouter',
+          enabled: false,
+          hasKey: true,
+          keyLast4: '1234',
+          offeredByDefault: true,
+          defaultProvider: true,
+          status: 'disabled',
+        }],
+        defaultProvider: 'openrouter',
+      }),
+    });
+  });
+
+  await signInAsMockUser(page);
+  const setup = page.locator('.first-run-card');
+  await expect(setup.getByRole('heading', { name: 'OpenRouter is saved but turned off' })).toBeVisible();
+  await expect(setup.locator('#first-run-openrouter-key')).toHaveCount(0);
+  const { violations } = await new AxeBuilder({ page }).include('.first-run-card').analyze();
+  expect(violations.filter(({ impact }) => impact === 'critical' || impact === 'serious')).toEqual([]);
+  const evidenceDir = process.env.UI_BENCHMARK_EVIDENCE_DIR ?? testInfo.outputPath();
+  await mkdir(evidenceDir, { recursive: true });
+  await page.screenshot({ path: `${evidenceDir}/first-run-saved-disabled-1024x600.png`, animations: 'disabled' });
+  await setup.getByRole('button', { name: 'Open Provider Settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Provider plug-ins' });
+  await expect(settings).toBeVisible();
+  await expect(settings.getByText('Off', { exact: true })).toBeVisible();
 });
