@@ -153,6 +153,8 @@ export interface Message {
   model?: RouterModel;
   /** Raw router model id unknown to this client; never use it for price lookup. */
   reportedModel?: string;
+  /** Route selection rationale retained without asserting an unknown model tier. */
+  routeRationale?: string;
   provider?: RouterProvider;
   modelId?: string;
   modelOverride?: string;

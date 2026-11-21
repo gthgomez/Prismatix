@@ -228,6 +228,12 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                       <span className='item-value metadata-value-break'>{message.reportedModel}</span>
                     </div>
                   )}
+                  {message.routeRationale && (
+                    <div className='metadata-item'>
+                      <span className='item-label'>Router rationale</span>
+                      <span className='item-value'>{message.routeRationale}</span>
+                    </div>
+                  )}
                   {message.modelOverride && message.modelOverride !== 'auto' && (
                     <div className='metadata-item'>
                       <span className='item-label'>Override</span>

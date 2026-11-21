@@ -434,6 +434,64 @@ describe('loadConversation', () => {
     });
   });
 
+  it('keeps an unknown model id as model-only provenance without a cost log or provider', async () => {
+    const fake = makeClient({
+      messages: [{ data: [{
+        id: MSG,
+        role: 'assistant',
+        content: 'Answer from a newer model',
+        created_at: '2026-11-20T00:01:00Z',
+        attachments: [],
+        image_url: null,
+        model_used: 'gemini-4.2-flash',
+        token_count: 50,
+        execution_id: null,
+      }], error: null }],
+      cost_logs: [{ data: [], error: null }],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV);
+    expect(messages[0]?.provenance).toMatchObject({
+      reportedModel: 'gemini-4.2-flash',
+      modelId: 'gemini-4.2-flash',
+    });
+    expect(messages[0]?.provenance?.model).toBeUndefined();
+    expect(messages[0]?.provenance?.provider).toBeUndefined();
+  });
+
+  it('retains routing rationale for an unknown model without inventing a known model', async () => {
+    const executionId = '99999999-9999-4999-8999-999999999998';
+    const fake = makeClient({
+      messages: [{ data: [{
+        id: MSG,
+        role: 'assistant',
+        content: 'Answer with a retained rationale',
+        created_at: '2026-11-20T00:01:00Z',
+        attachments: [],
+        image_url: null,
+        model_used: 'gemini-4.2-flash',
+        token_count: 50,
+        execution_id: executionId,
+      }], error: null }],
+      cost_logs: [{ data: [{
+        idempotency_key: executionId,
+        total_cost: 0.023,
+        provider: 'openrouter',
+        model: 'gemini-4.2-flash',
+        route_rationale: 'code_detected',
+        cost_status: 'settled',
+      }], error: null }],
+    });
+
+    const messages = await loadConversation(fake.client as never, CONV);
+    expect(messages[0]?.provenance).toMatchObject({
+      reportedModel: 'gemini-4.2-flash',
+      modelId: 'gemini-4.2-flash',
+      routeRationale: 'code_detected',
+    });
+    expect(messages[0]?.provenance?.model).toBeUndefined();
+  });
+
   it('maps missing or unsupported cost_status to unknown', async () => {
     const EXEC_ID = '88888888-8888-4888-8888-888888888888';
     const fake = makeClient({

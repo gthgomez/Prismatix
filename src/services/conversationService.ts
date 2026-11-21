@@ -37,6 +37,8 @@ export interface LoadedMessageCost {
 
 export interface LoadedMessageProvenance {
   model?: RouterModel;
+  /** Raw model id outside this client catalog; not a price lookup key. */
+  reportedModel?: string;
   modelId?: string;
   provider?: RouterProvider;
   routeRole?: RouteRole;
@@ -122,6 +124,7 @@ const KNOWN_PROVIDERS: ReadonlySet<string> = new Set([
 export function parseModelUsed(modelUsed?: string | null): {
   provider?: RouterProvider;
   model?: RouterModel;
+  reportedModel?: string;
   modelId?: string;
 } {
   if (!modelUsed || typeof modelUsed !== 'string') return {};
@@ -147,6 +150,7 @@ export function parseModelUsed(modelUsed?: string | null): {
   return {
     provider,
     model,
+    ...(!model ? { reportedModel: modelStr || undefined } : {}),
     modelId: modelStr || undefined,
   };
 }
@@ -439,6 +443,7 @@ export async function loadConversation(
           ? (costLog.provider as RouterProvider)
           : undefined);
       const modelId = parsedModel.modelId || costLog?.model;
+      const reportedModel = parsedModel.reportedModel || (costLog?.model && !isKnownModel(costLog.model) ? costLog.model : undefined);
 
       const cost = costLog
         ? {
@@ -448,9 +453,10 @@ export async function loadConversation(
           }
         : undefined;
 
-      if (model || provider || cost || costLog?.routeRationale) {
+      if (model || reportedModel || modelId || provider || cost || costLog?.routeRationale) {
         provenance = {
           model,
+          reportedModel,
           modelId,
           provider,
           routeRationale: costLog?.routeRationale,

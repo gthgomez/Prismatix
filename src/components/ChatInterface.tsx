@@ -1197,8 +1197,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         timestamp: Date.parse(item.createdAt) || Date.now(),
         ...(attachments.length > 0 ? { attachments } : {}),
         ...(provenance?.model ? { model: provenance.model } : {}),
-        ...(provenance?.modelId ? { modelId: provenance.modelId } : {}),
+        ...(provenance?.reportedModel ? { reportedModel: provenance.reportedModel } : {}),
+        ...(provenance?.modelId && provenance.modelId !== provenance.reportedModel ? { modelId: provenance.modelId } : {}),
         ...(provenance?.provider ? { provider: provenance.provider } : {}),
+        ...(!provenance?.model && provenance?.routeRationale ? { routeRationale: provenance.routeRationale } : {}),
         ...(provenance?.routeRole ? { routeRole: provenance.routeRole } : {}),
         ...(provenance?.cost
           ? {
@@ -1216,11 +1218,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
               },
             }
           : {}),
-        ...(provenance?.routeRationale
+        ...(provenance?.routeRationale && provenance.model
           ? {
               routeInfo: {
                 selection: provenance.routeRationale === 'manual_override' ? 'override' : 'auto',
-                modelTier: provenance.model || currentModel,
+                modelTier: provenance.model,
                 gateway:
                   provenance.provider === 'opencode'
                     ? 'opencode'
@@ -2663,7 +2665,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           ? 'pending'
           : 'unknown';
 
-        if (authoritativeCost !== undefined && authoritativeCost > 0) {
+        if (authoritativeCost !== undefined) {
           recordCost({
             model: responseModelLabel,
             cost: authoritativeCost,
@@ -2740,7 +2742,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
       setFinalMessageCost(authoritativeFinalUsd ?? null);
 
-      if (authoritativeFinalUsd !== undefined && authoritativeFinalUsd > 0) {
+      if (authoritativeFinalUsd !== undefined) {
         recordCost({
           model: responseModelLabel,
           cost: authoritativeFinalUsd,
