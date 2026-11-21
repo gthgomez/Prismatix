@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import '../styles/FormattedMessage.css';
 
 export interface FormattedMessageProps {
   content: string;
