@@ -13,6 +13,7 @@ import {
 
 interface SpendTrackerProps {
   refreshKey: number;
+  userId?: string;
 }
 
 const EMPTY_STATS: SpendStats = {
@@ -24,7 +25,7 @@ const EMPTY_STATS: SpendStats = {
   messageCount: 0,
 };
 
-export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
+export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }) => {
   const [stats, setStats] = useState<SpendStats>(EMPTY_STATS);
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'breakdown'>('overview');
@@ -50,7 +51,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
       error: sessionError,
     } = await supabase.auth.getSession();
 
-    if (sessionError || !session?.access_token || !CONFIG.SUPABASE_URL) {
+    if (sessionError || !session?.access_token || !CONFIG.SUPABASE_URL || (userId && session.user?.id !== userId)) {
       return null;
     }
 
@@ -128,7 +129,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
       }
       refreshTimersRef.current = [];
     };
-  }, [refreshKey]);
+  }, [refreshKey, userId]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -309,7 +310,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey }) => {
               </div>
 
               {(() => {
-                const store = getFinanceStore();
+                const store = getFinanceStore(userId);
                 const grouped = filterAndGroupSpend(store.history, dateRange, groupBy);
                 if (grouped.length === 0) {
                   return (

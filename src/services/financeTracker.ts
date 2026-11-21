@@ -5,6 +5,10 @@ import { CONFIG } from '../config';
 
 const STORAGE_KEY = 'prismatix_finance_v1';
 
+function financeKey(userId?: string): string {
+  return userId ? `${STORAGE_KEY}.${userId}` : STORAGE_KEY;
+}
+
 export interface FinanceEntry {
   date: string;
   model: RouterModel;
@@ -79,12 +83,16 @@ function computeTotals(history: FinanceEntry[]): { week: number; month: number }
   return { week: roundUsd(week), month: roundUsd(month) };
 }
 
-export function getFinanceStore(): FinanceStore {
-  return safeParse(localStorage.getItem(STORAGE_KEY));
+export function getFinanceStore(userId?: string): FinanceStore {
+  try {
+    return safeParse(localStorage.getItem(financeKey(userId)));
+  } catch {
+    return EMPTY_STORE;
+  }
 }
 
-export function getDailyTotal(date = currentDate()): number {
-  const store = getFinanceStore();
+export function getDailyTotal(date = currentDate(), userId?: string): number {
+  const store = getFinanceStore(userId);
   return roundUsd(store.history.filter((item) => item.date === date).reduce((sum, item) => sum + item.cost, 0));
 }
 
@@ -99,8 +107,8 @@ export function recordCost(entry: {
   promptTokens?: number;
   completionTokens?: number;
   executionId?: string;
-}): FinanceStore {
-  const store = getFinanceStore();
+}, userId?: string): FinanceStore {
+  const store = getFinanceStore(userId);
 
   // Idempotency guard: prevent duplicate recording if executionId already exists
   if (entry.executionId && store.history.some((h) => h.executionId === entry.executionId)) {
@@ -128,7 +136,11 @@ export function recordCost(entry: {
     totals: computeTotals(nextHistory),
   };
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(nextStore));
+  try {
+    localStorage.setItem(financeKey(userId), JSON.stringify(nextStore));
+  } catch {
+    // The advisory cache must not change the outcome of a generated response.
+  }
   return nextStore;
 }
 
@@ -161,11 +173,12 @@ export function getSpendStats(date = currentDate()): SpendStats {
  * Fetches today's server-reported spend. The local total is an advisory cache
  * only; server admission and budget enforcement remain owned by the router.
  */
-export async function fetchServerDailyTotal(): Promise<number> {
+export async function fetchServerDailyTotal(userId?: string): Promise<number> {
+  const advisoryTotal = () => getDailyTotal(undefined, userId);
   try {
     const { data: { session }, error } = await supabase.auth.getSession();
-    if (error || !session?.access_token || !CONFIG.SUPABASE_URL) {
-      return getDailyTotal();
+    if (error || !session?.access_token || !CONFIG.SUPABASE_URL || (userId && session.user?.id !== userId)) {
+      return advisoryTotal();
     }
 
     const endpoint = `${String(CONFIG.SUPABASE_URL).replace(/\/$/, '')}/functions/v1/spend_stats`;
@@ -177,13 +190,14 @@ export async function fetchServerDailyTotal(): Promise<number> {
       },
     });
 
-    if (!response.ok) return getDailyTotal();
+    if (!response.ok) return advisoryTotal();
 
     const data = await response.json() as { today?: unknown };
-    const serverTotal = Number(data.today);
-    return Number.isFinite(serverTotal) ? roundUsd(serverTotal) : getDailyTotal();
+    return typeof data.today === 'number' && Number.isFinite(data.today) && data.today >= 0
+      ? roundUsd(data.today)
+      : advisoryTotal();
   } catch {
-    return getDailyTotal();
+    return advisoryTotal();
   }
 }
 

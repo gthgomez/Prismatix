@@ -73,9 +73,6 @@ import {
   askPrismatix,
   askPrismatixSync,
   DuplicateRequestError,
-  getConversationId,
-  resetConversation,
-  setConversationId,
 } from '../smartFetch';
 import { executeWebSearch, type SearchCitation } from '../services/webSearchService';
 import { submitRoutingFeedback } from '../services/routingFeedbackService';
@@ -164,6 +161,7 @@ import {
 import {
   syncPreferences,
   saveServerPreferences,
+  type UserPreferences,
 } from '../services/userPreferencesService';
 import { listProjects, formatProjectContextPrompt, type Project } from '../services/projectService';
 import {
@@ -465,6 +463,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
   const promoteComposerDraft = (conversationId: string) => {
     draftScope.current = { userId: user?.id, conversationId };
+    newConversationIdRef.current = null;
   };
   const hasPendingVideoUploads = draftAttachments.some(
     (file) => file.kind === 'video' && file.status !== 'ready',
@@ -655,6 +654,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const selectedConversationIdRef = useRef<string | null>(null);
+  const newConversationIdRef = useRef<string | null>(null);
+  const getActiveConversationId = () => selectedConversationIdRef.current
+    ?? (newConversationIdRef.current ??= crypto.randomUUID());
   // Monotonic token so a stale conversation load can never overwrite the
   // messages of a newer selection (rapid A→B switching).
   const conversationLoadSeqRef = useRef(0);
@@ -687,6 +689,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     accountGenerationRef.current += 1;
     conversationLoadSeqRef.current += 1;
     conversationsRefreshSeqRef.current += 1;
+    newConversationIdRef.current = null;
     sendLockRef.current = null;
     pendingActionRef.current = null;
     abortControllerRef.current?.abort();
@@ -724,6 +727,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     activeUserIdRef.current = user?.id;
     accountGenerationRef.current += 1;
     conversationsRefreshSeqRef.current += 1;
+    newConversationIdRef.current = null;
     setConversations([]);
     setProjects([]);
     setActiveProjectId(null);
@@ -909,21 +913,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     }
   };
 
-  const updateDraftAttachment = (
-    targetClientId: string,
-    updater: (file: FileUploadPayload) => FileUploadPayload,
-  ) => {
-    setDraftAttachments((prev) =>
-      prev.map((file) => (file.clientId === targetClientId ? updater(file) : file))
-    );
-  };
-
   const startVideoUpload = async (file: FileUploadPayload) => {
     if (!file.file || file.kind !== 'video' || !file.clientId) return;
-    const conversationId = getConversationId();
+    const conversationId = getActiveConversationId();
+    const draftConversationId = draftScope.current.conversationId;
+    const generation = accountGenerationRef.current;
+    const updateDraftAttachment = (updater: (current: FileUploadPayload) => FileUploadPayload) => {
+      if (generation !== accountGenerationRef.current) return;
+      const update = (files: FileUploadPayload[]) => files.map((current) => current.clientId === file.clientId ? updater(current) : current);
+      if (draftScope.current.conversationId === draftConversationId) setDraftAttachments(update);
+      else {
+        const saved = draftFiles.current.get(draftConversationId);
+        if (saved) draftFiles.current.set(draftConversationId, update(saved));
+      }
+    };
 
     try {
-      updateDraftAttachment(file.clientId, (current) => ({
+      updateDraftAttachment((current) => ({
         ...current,
         status: 'pending_upload',
         uploadProgress: 0,
@@ -934,7 +940,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         file.file,
         conversationId,
         (progressPercent) => {
-          updateDraftAttachment(file.clientId!, (current) => ({
+          updateDraftAttachment((current) => ({
             ...current,
             uploadProgress: progressPercent,
             status: progressPercent >= 100 ? 'uploaded' : 'pending_upload',
@@ -942,14 +948,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         },
       );
 
-      updateDraftAttachment(file.clientId, (current) => ({
+      updateDraftAttachment((current) => ({
         ...current,
         videoAssetId: uploaded.assetId,
         status: 'processing',
       }));
 
       const finalStatus = await waitForVideoReady(uploaded.assetId, (statusUpdate) => {
-        updateDraftAttachment(file.clientId!, (current) => ({
+        updateDraftAttachment((current) => ({
           ...current,
           videoAssetId: uploaded.assetId,
           status: statusUpdate.status,
@@ -960,7 +966,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       });
 
       if (finalStatus.status !== 'ready') {
-        updateDraftAttachment(file.clientId, (current) => ({
+        updateDraftAttachment((current) => ({
           ...current,
           status: finalStatus.status,
           errorCode: finalStatus.error?.code || 'video_processing_failed',
@@ -968,7 +974,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       }
     } catch (error) {
       console.error('[ChatInterface] Video upload failed:', error);
-      updateDraftAttachment(file.clientId, (current) => ({
+      updateDraftAttachment((current) => ({
         ...current,
         status: 'failed',
         errorCode: error instanceof Error ? error.message : 'video_upload_failed',
@@ -1325,7 +1331,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     }
   };
 
-  const openConversation = async (conversationId: string) => {
+  const openConversation = async (conversationId: string, reloadOwnedTurn = false) => {
+    if (sendLockRef.current && (!reloadOwnedTurn || conversationId !== selectedConversationIdRef.current)) return;
     const loadSeq = ++conversationLoadSeqRef.current;
     if (selectedConversationIdRef.current !== conversationId) {
       switchComposerDraft(conversationId);
@@ -1338,7 +1345,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setIsLoadingEarlierMessages(false);
     selectedConversationIdRef.current = conversationId;
     setSelectedConversationId(conversationId);
-    setConversationId(conversationId);
     setDuplicateNotice(null);
     setContextExcludedCount(0);
     setConversationLoadError(null);
@@ -1387,6 +1393,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       if (loadSeq === conversationLoadSeqRef.current) setConversationLoading(false);
     }
   };
+  const openConversationRef = useRef(openConversation);
+  openConversationRef.current = openConversation;
 
   const handleLoadEarlierMessages = async () => {
     if (isLoadingEarlierMessages || !hasEarlierMessages || messages.length === 0 || sendLockRef.current) return;
@@ -1514,7 +1522,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     let dailyTotalUsd: number;
     try {
       dailyTotalUsd = await Promise.race([
-        fetchServerDailyTotal(),
+        fetchServerDailyTotal(lock.userId),
         new Promise<never>((_, reject) => {
           timeoutId = window.setTimeout(() => reject(new Error('budget_check_timeout')), 8000);
         }),
@@ -1705,7 +1713,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     selectedConversationIdRef.current = null;
     setSelectedConversationId(null);
     writeSelectedConversation(user?.id ?? null, NEW_CHAT_SELECTION);
-    resetConversation();
     setMessages([]);
     setDuplicateNotice(null);
     setContextExcludedCount(0);
@@ -1772,10 +1779,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
   const handleBranch = useCallback(async (index: number) => {
     const currentConvId = selectedConversationIdRef.current;
+    if (sendLockRef.current) return;
     if (!currentConvId) {
       setActionNotice({ message: 'Save or select a conversation before branching.', type: 'error' });
       return;
     }
+    const generation = accountGenerationRef.current;
+    const ownsSelection = () => generation === accountGenerationRef.current
+      && selectedConversationIdRef.current === currentConvId && !sendLockRef.current;
     setActionNotice(null);
     try {
       let targetMessageId = messagesRef.current[index]?.id;
@@ -1787,18 +1798,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         setActionNotice({ message: 'Target message not found for branching.', type: 'error' });
         return;
       }
+      if (!ownsSelection()) return;
       const branchRes = await branchConversation(supabase, {
         sourceConversationId: currentConvId,
         fromMessageId: targetMessageId,
       });
+      if (generation !== accountGenerationRef.current) return;
       await refreshConversations();
-      await openConversation(branchRes.newConversationId);
+      if (!ownsSelection()) return;
+      writeSelectedConversation(activeUserIdRef.current, branchRes.newConversationId);
+      await openConversationRef.current(branchRes.newConversationId);
+      if (generation !== accountGenerationRef.current || selectedConversationIdRef.current !== branchRes.newConversationId) return;
       setActionNotice({ message: `Branched into "${branchRes.newTitle}"`, type: 'success' });
     } catch (err: any) {
+      if (!ownsSelection()) return;
       console.error('[ChatInterface] Failed to branch conversation:', err);
       setActionNotice({ message: `Failed to branch: ${err.message || 'unknown error'}`, type: 'error' });
     }
-  }, []);
+  }, [refreshConversations]);
 
   const handleInsertPromptTemplate = (promptText: string) => {
     setInput(promptText);
@@ -1901,16 +1918,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     routingProfile?: boolean;
     webSearchEnabled?: boolean;
     maxSpendCap?: boolean;
+    defaultProjectId?: boolean;
   }>({});
+  const [hydratedPreferencesOwner, setHydratedPreferencesOwner] = useState<string | undefined>();
 
   useEffect(() => {
     userInteractedPrefsRef.current = {};
   }, [user?.id]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) return;
+    const userId = user.id;
     const generation = accountGenerationRef.current;
-    void syncPreferences(supabase).then((prefs) => {
+    void syncPreferences(supabase, userId).then((prefs) => {
       if (generation !== accountGenerationRef.current) return;
       if (prefs.routingProfile && !userInteractedPrefsRef.current.routingProfile) {
         setRoutingProfile(prefs.routingProfile);
@@ -1921,26 +1941,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       if (prefs.maxSpendCap !== undefined && !userInteractedPrefsRef.current.maxSpendCap) {
         setMaxSpendCap(prefs.maxSpendCap);
       }
-      if (prefs.defaultProjectId && !activeProjectId) {
+      if (prefs.defaultProjectId && !selectedConversationIdRef.current && !userInteractedPrefsRef.current.defaultProjectId) {
         setActiveProjectId(prefs.defaultProjectId);
       }
+      setHydratedPreferencesOwner(userId);
     });
   }, [user?.id]);
 
-  const prefsTimeoutRef = useRef<any>(null);
   useEffect(() => {
-    if (!user) return;
-    clearTimeout(prefsTimeoutRef.current);
-    prefsTimeoutRef.current = setTimeout(() => {
-      void saveServerPreferences(supabase, {
-        routingProfile,
-        webSearchEnabled,
-        maxSpendCap,
-        defaultProjectId: activeProjectId,
-      });
+    if (!user?.id || hydratedPreferencesOwner !== user.id) return;
+    const userId = user.id;
+    const dirty = userInteractedPrefsRef.current;
+    const updates: Partial<UserPreferences> = {};
+    if (dirty.routingProfile) updates.routingProfile = routingProfile;
+    if (dirty.webSearchEnabled) updates.webSearchEnabled = webSearchEnabled;
+    if (dirty.maxSpendCap) updates.maxSpendCap = maxSpendCap;
+    if (dirty.defaultProjectId) updates.defaultProjectId = activeProjectId;
+    if (!Object.keys(updates).length) return;
+    const timer = window.setTimeout(() => {
+      void saveServerPreferences(supabase, updates, userId);
     }, 800);
-    return () => clearTimeout(prefsTimeoutRef.current);
-  }, [user?.id, routingProfile, webSearchEnabled, maxSpendCap, activeProjectId]);
+    return () => window.clearTimeout(timer);
+  }, [user?.id, hydratedPreferencesOwner, routingProfile, webSearchEnabled, maxSpendCap, activeProjectId]);
 
   // Refresh history whenever the authenticated account or server-side project filter changes.
   useEffect(() => {
@@ -1951,11 +1973,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   // Per-account selection: restore on sign-in/account change, isolated by user.
   useEffect(() => {
     const plan = planInitialConversation(readSelectedConversation(user?.id ?? null));
-    // Account-change isolation: a new account with no stored selection must not
-    // inherit the shared `prismatix_conversation_id` from the previous account.
-    if (plan.resetGlobalConversation) {
-      resetConversation();
-    }
     if (plan.conversationId) {
       void openConversation(plan.conversationId);
     } else {
@@ -2003,12 +2020,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   }) => {
     const requestAccountGeneration = accountGenerationRef.current;
     const requestUserId = user?.id;
+    const originalConversationId = selectedConversationIdRef.current;
+    const sendConversationId = getActiveConversationId();
+    const requestScope = { userId: requestUserId, conversationId: sendConversationId };
     const requestRoute: { mode: 'chat' | 'compare' | 'debate'; manualModel: RouterModel | null } = {
       mode: workspaceMode,
       manualModel: workspaceMode === 'chat' ? manualModelOverride : null,
     };
     const requestStillCurrent = () => requestAccountGeneration === accountGenerationRef.current
-      && activeUserIdRef.current === requestUserId;
+      && activeUserIdRef.current === requestUserId
+      && (selectedConversationIdRef.current === originalConversationId || selectedConversationIdRef.current === sendConversationId);
     if (!requestStillCurrent()) return;
     const estimatedModel = overrideModel || manualModelOverride || currentModel;
     const promptTokenEstimate = passedPromptTokenEstimate
@@ -2016,12 +2037,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
     // PX07: pin the active conversation for this logical send (the selected
     // conversation, or the deterministic New Chat id).
-    const sendConversationId = selectedConversationIdRef.current ?? getConversationId();
     const pendingDraftKey = requestUserId ? `prismatix.pending-turn.${requestUserId}` : undefined;
-    if (pendingDraftKey) writeTabDraft(pendingDraftKey, activeDraftRef.current?.rawInput ?? queryText);
-    if (selectedConversationIdRef.current) {
-      setConversationId(selectedConversationIdRef.current);
-    }
+    const submittedText = activeDraftRef.current?.rawInput ?? queryText;
+    if (pendingDraftKey) writeTabDraft(pendingDraftKey, submittedText);
     activeStreamRef.current = null;
 
     // PX07 bounded context (group 3): send only the sanctioned recent window,
@@ -2225,6 +2243,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             routingProfile,
             maxSpendCap ?? undefined,
             abortController.signal,
+            requestScope,
           ),
           askPrismatixSync(
             queryWithContext,
@@ -2236,60 +2255,56 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             routingProfile,
             maxSpendCap ?? undefined,
             abortController.signal,
+            requestScope,
           ),
         ]);
         if (!requestStillCurrent()) return;
 
-        const statusFor = (result: PromiseSettledResult<Awaited<ReturnType<typeof askPrismatixSync>>>): 'completed' | 'interrupted' | 'stopped' | 'failed' => {
-          if (result.status !== 'fulfilled' || !result.value) return 'failed';
-          if (result.value.terminationStatus === 'cancelled') return 'stopped';
-          if (result.value.terminationStatus === 'interrupted' || result.value.terminationStatus === 'error' || !result.value.isDoneReceived) return 'interrupted';
-          if (result.value.terminationStatus !== 'completed' || !result.value.receipt) return 'failed';
-          return 'completed';
+        type CompareResult = NonNullable<Message['comparisonResults']>;
+        const childResult = (
+          result: PromiseSettledResult<Awaited<ReturnType<typeof askPrismatixSync>>>,
+          requestedModel: RouterModel,
+        ): CompareResult['modelA'] => {
+          const value = result.status === 'fulfilled' ? result.value : null;
+          const receipt = value?.receipt;
+          const stopped = (!value && abortController.signal.aborted) || value?.terminationStatus === 'cancelled' || receipt?.status === 'cancelled';
+          const status = stopped ? 'stopped'
+            : !value || receipt?.status === 'failed' ? 'failed'
+            : value.terminationStatus !== 'completed' || !value.isDoneReceived || receipt?.status !== 'completed' ? 'interrupted'
+            : 'completed';
+          const actual = receipt?.settlement.state === 'settled' ? receipt.settlement.committedUsd : undefined;
+          const cost = actual ?? value?.costEstimateUsd;
+          const costStatus = actual !== null && actual !== undefined ? 'settled'
+            : receipt?.settlement.state === 'pending' ? 'pending'
+            : cost !== undefined ? 'estimated' : 'unknown';
+          const executionId = value?.executionId ?? receipt?.executionId
+            ?? (result.status === 'rejected' ? (result.reason as { executionId?: string } | undefined)?.executionId : undefined);
+          if (cost !== undefined) {
+            recordCost({
+              model: value?.model ?? requestedModel,
+              cost,
+              costStatus,
+              conversationId: sendConversationId,
+              executionId,
+            }, requestUserId);
+          }
+          return {
+            model: value?.model ?? requestedModel,
+            content: value?.content || (stopped ? 'Generation stopped before a response arrived.'
+              : result.status === 'rejected' ? describeStreamError(result.reason) : 'No response was received.'),
+            cost,
+            costStatus,
+            status,
+            transcriptSaved: receipt?.transcript?.saved === true,
+            executionId,
+          };
         };
-        const statusA = statusFor(resA);
-        const statusB = statusFor(resB);
-
-        const contentA =
-          resA.status === 'fulfilled' && resA.value?.content
-            ? resA.value.content
-            : `⚠️ ${resA.status === 'rejected' ? (resA.reason as Error)?.message || 'Failed' : 'Unable to generate response'}`;
-        const costA = resA.status === 'fulfilled' ? resA.value?.costEstimateUsd : undefined;
-
-        const contentB =
-          resB.status === 'fulfilled' && resB.value?.content
-            ? resB.value.content
-            : `⚠️ ${resB.status === 'rejected' ? (resB.reason as Error)?.message || 'Failed' : 'Unable to generate response'}`;
-        const costB = resB.status === 'fulfilled' ? resB.value?.costEstimateUsd : undefined;
-
-        if (resA.status === 'fulfilled' && resA.value?.costEstimateUsd) {
-          recordCost({
-            model: comparisonModelA,
-            cost: resA.value.costEstimateUsd,
-            conversationId: sendConversationId,
-            costStatus: 'estimated',
-          });
-        }
-        if (resB.status === 'fulfilled' && resB.value?.costEstimateUsd) {
-          recordCost({
-            model: comparisonModelB,
-            cost: resB.value.costEstimateUsd,
-            conversationId: sendConversationId,
-            costStatus: 'estimated',
-          });
-        }
-
-        const executionIdA = resA.status === 'fulfilled'
-          ? resA.value?.executionId ?? resA.value?.receipt?.executionId
-          : (resA.reason as { executionId?: string } | undefined)?.executionId;
-        const executionIdB = resB.status === 'fulfilled'
-          ? resB.value?.executionId ?? resB.value?.receipt?.executionId
-          : (resB.reason as { executionId?: string } | undefined)?.executionId;
-        let comparisonResultsData: NonNullable<Message['comparisonResults']> = {
-          modelA: { model: comparisonModelA, content: contentA, cost: costA, costStatus: costA === undefined ? 'unknown' as const : 'estimated' as const, status: statusA, transcriptSaved: resA.status === 'fulfilled' && resA.value?.receipt?.transcript?.saved === true, executionId: executionIdA },
-          modelB: { model: comparisonModelB, content: contentB, cost: costB, costStatus: costB === undefined ? 'unknown' as const : 'estimated' as const, status: statusB, transcriptSaved: resB.status === 'fulfilled' && resB.value?.receipt?.transcript?.saved === true, executionId: executionIdB },
-        };
-        const comparisonSummary = `Side-by-side comparison: **${comparisonModelA}** vs **${comparisonModelB}**`;
+        const modelA = childResult(resA, comparisonModelA);
+        const modelB = childResult(resB, comparisonModelB);
+        const { executionId: executionIdA, content: contentA } = modelA;
+        const { executionId: executionIdB, content: contentB } = modelB;
+        let comparisonResultsData: CompareResult = { modelA, modelB };
+        const comparisonSummary = `Side-by-side comparison: **${modelA.model}** vs **${modelB.model}**`;
         let persistedId: string | undefined;
         let comparisonSaved = false;
         if (PX08_COMPARE_DURABILITY_ENABLED && executionIdA && executionIdB) {
@@ -2339,7 +2354,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           promoteComposerDraft(sendConversationId);
           selectedConversationIdRef.current = sendConversationId;
           setSelectedConversationId(sendConversationId);
-          setConversationId(sendConversationId);
           writeSelectedConversation(user?.id ?? null, sendConversationId);
           if (activeProjectId) void assignConversationProject(supabase, sendConversationId, activeProjectId);
         }
@@ -2374,6 +2388,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         attachmentRefs,
         routingProfile,
         maxSpendCap ?? undefined,
+        requestScope,
       );
 
       if (!requestStillCurrent()) return;
@@ -2574,7 +2589,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             promptTokens,
             completionTokens,
             executionId: receipt?.executionId ?? executionId,
-          });
+          }, requestUserId);
           setSessionCostTotal((prev) => prev + authoritativeCost);
           setFinalMessageCost(authoritativeCost);
         } else {
@@ -2652,7 +2667,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           promptTokens,
           completionTokens,
           executionId: receipt?.executionId ?? executionId,
-        });
+        }, requestUserId);
         setSessionCostTotal((prev) => prev + authoritativeFinalUsd);
       }
       setSpendRefreshKey((prev) => prev + 1);
@@ -2709,7 +2724,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         });
       }
       scheduleCostEstimatorHide(3000);
-      if (receipt?.transcript?.saved === true && pendingDraftKey) writeTabDraft(pendingDraftKey, '');
+      if (receipt?.transcript?.saved === true) {
+        if (pendingDraftKey) writeTabDraft(pendingDraftKey, '');
+        if (failedTurnDraft?.rawInput === submittedText && (failedTurnDraft.conversationId === originalConversationId || failedTurnDraft.restoredFromStorage)) {
+          setFailedTurnDraft(null);
+        }
+      }
       activeDraftRef.current = null;
       // PX07: the list/title changed server-side; refresh in the background.
       void refreshConversations();
@@ -2725,7 +2745,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             : 'This request was already recorded.',
         );
         if (selectedConversationIdRef.current) {
-          await openConversation(selectedConversationIdRef.current);
+          await openConversation(selectedConversationIdRef.current, true);
           if (!requestStillCurrent()) return;
         }
         scheduleCostEstimatorHide(1500);
@@ -3437,7 +3457,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
               <div className='context-popover'><ContextStatus contextStatus={contextStatus} /></div>
             </details>
           )}
-            <SpendTracker key={user?.id} refreshKey={spendRefreshKey} />
+            <SpendTracker key={user?.id} userId={user?.id} refreshKey={spendRefreshKey} />
             <button
               type='button'
               className='header-button shortcuts-toggle-button'
@@ -3711,7 +3731,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           onDelete={(id) => void handleDeleteConversation(id)}
           projects={projects}
           activeProjectId={activeProjectId}
-          onSelectProject={(projId) => setActiveProjectId(projId)}
+          onSelectProject={(projId) => {
+            userInteractedPrefsRef.current.defaultProjectId = true;
+            setActiveProjectId(projId);
+          }}
           onOpenNewProject={() => {
             setEditingProject(null);
             setIsProjectModalOpen(true);
@@ -4289,6 +4312,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             return [saved, ...prev];
           });
           setActiveProjectId(saved.id);
+          userInteractedPrefsRef.current.defaultProjectId = true;
         }}
       />
 

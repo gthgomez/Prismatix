@@ -92,6 +92,25 @@ describe('PX07 smartFetch continuity', () => {
     expect(result?.clientRequestId).toBe(firstId);
   });
 
+  it('pins the selected conversation and does not retry a paid request under a new account', async () => {
+    const conversationId = '00000000-0000-4000-8000-000000000900';
+    expect(getConversationId()).not.toBe(conversationId);
+    const session = (id: string) => ({
+      data: { session: { access_token: createJwt('https://project.supabase.co/auth/v1'), user: { id } } },
+      error: null,
+    });
+    getSessionMock.mockResolvedValueOnce(session('first-account')).mockResolvedValueOnce(session('second-account'));
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response('unauthorized', { status: 401 })).mockResolvedValueOnce(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const scope = { userId: 'first-account', conversationId };
+    await expect(askPrismatix('Keep this in the original chat', [], [], undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, scope)).rejects.toThrow(/account changed/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body)).conversationId).toBe(conversationId);
+    expect(signOutMock).not.toHaveBeenCalled();
+  });
+
   it('sends the original query separately when text-file content is merged', async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal('fetch', fetchMock);

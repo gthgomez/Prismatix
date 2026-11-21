@@ -1,6 +1,6 @@
 -- Upgrade existing Compare groups in place, preserving server-authored transcripts.
 alter table public.compare_groups
-  add column preferred_side text check (preferred_side in ('A', 'B'));
+  add column if not exists preferred_side text check (preferred_side in ('A', 'B'));
 
 create or replace function public.px08_persist_compare(
   p_conversation_id uuid,

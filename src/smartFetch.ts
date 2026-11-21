@@ -287,7 +287,7 @@ function getEnvVar(key: string): string {
  * Gets the current user's access token from Supabase session
  * Includes automatic token refresh if expired or expiring soon
  */
-async function getAccessToken(): Promise<string> {
+async function getAccessToken(expectedUserId?: string): Promise<string> {
   const { data: { session }, error } = await supabase.auth.getSession();
   
   if (error) {
@@ -302,6 +302,9 @@ async function getAccessToken(): Promise<string> {
   
   if (!session?.access_token) {
     throw new Error('No active session. Please sign in.');
+  }
+  if (expectedUserId && session.user?.id !== expectedUserId) {
+    throw new Error('The signed-in account changed before the request could be sent.');
   }
 
   const expectedHost = hostOf(CONFIG.SUPABASE_URL);
@@ -332,6 +335,11 @@ async function getAccessToken(): Promise<string> {
  * @param modelOverride - Optional manual model selection (bypasses auto-routing)
  * @param imageStorageUrl - Optional private Supabase storage reference for persisted history
  */
+interface RouterRequestScope {
+  conversationId: string;
+  userId?: string;
+}
+
 export async function askPrismatix(
   query: string,
   history: Message[] = [],
@@ -344,14 +352,15 @@ export async function askPrismatix(
   attachmentRefs?: AttachmentRef[],
   routingProfile?: 'balanced' | 'economy' | 'capability',
   spendCapUsd?: number,
+  scope?: RouterRequestScope,
 ): Promise<(RouterResponseBase & { stream: ReadableStream<Uint8Array> }) | null> {
   try {
     const routerEndpoint = CONFIG.ROUTER_ENDPOINT || getEnvVar('VITE_ROUTER_ENDPOINT');
     if (!routerEndpoint) {
       throw new Error('Missing VITE_ROUTER_ENDPOINT. Check your Vercel env vars.');
     }
-    let accessToken = await getAccessToken();
-    const conversationId = getConversationId();
+    let accessToken = await getAccessToken(scope?.userId);
+    const conversationId = scope?.conversationId ?? getConversationId();
     // PX07: ONE stable id per logical send. It is reused on the 401 retry so a
     // retried request cannot create a second execution.
     const clientRequestId = generateUUID();
@@ -526,7 +535,7 @@ export async function askPrismatix(
       
       if (response.status === 401) {
         devWarn('[smartFetch] 401 from router, retrying once with latest session');
-        accessToken = await getAccessToken();
+        accessToken = await getAccessToken(scope?.userId);
         response = await doFetch(accessToken);
 
         if (!response.ok) {
@@ -663,6 +672,7 @@ export async function askPrismatixSync(
   routingProfile?: 'balanced' | 'economy' | 'capability',
   spendCapUsd?: number,
   signal?: AbortSignal,
+  scope?: RouterRequestScope,
 ): Promise<(RouterResponseBase & { content: string }) | null> {
   const result = await askPrismatix(
     query,
@@ -676,6 +686,7 @@ export async function askPrismatixSync(
     undefined,
     routingProfile,
     spendCapUsd,
+    scope,
   );
   if (!result) return null;
 

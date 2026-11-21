@@ -81,16 +81,17 @@ export function clearLocalPreferences(userId?: string | null): void {
  */
 export async function fetchServerPreferences(
   client: SupabaseClient,
+  expectedUserId?: string,
 ): Promise<UserPreferences | null> {
   try {
     if (typeof client?.auth?.getUser !== 'function') {
-      return getLocalPreferences(null);
+      return getLocalPreferences(expectedUserId);
     }
     const {
       data: { user },
     } = await client.auth.getUser();
 
-    if (!user) return null;
+    if (!user || (expectedUserId && user.id !== expectedUserId)) return null;
 
     const local = getLocalPreferences(user.id);
 
@@ -133,6 +134,7 @@ export async function fetchServerPreferences(
 export async function saveServerPreferences(
   client: SupabaseClient,
   updated: Partial<UserPreferences>,
+  expectedUserId?: string,
 ): Promise<{ success: boolean; preferences?: UserPreferences }> {
   try {
     if (typeof client?.auth?.getUser !== 'function') {
@@ -142,7 +144,7 @@ export async function saveServerPreferences(
       data: { user },
     } = await client.auth.getUser();
 
-    if (!user) return { success: false };
+    if (!user || (expectedUserId && user.id !== expectedUserId)) return { success: false };
 
     const current = getLocalPreferences(user.id);
     const merged: UserPreferences = {
@@ -175,9 +177,10 @@ export async function saveServerPreferences(
 /**
  * Initializes and synchronizes preferences on startup.
  */
-export async function syncPreferences(client: SupabaseClient): Promise<UserPreferences> {
-  const remote = await fetchServerPreferences(client);
+export async function syncPreferences(client: SupabaseClient, expectedUserId?: string): Promise<UserPreferences> {
+  const remote = await fetchServerPreferences(client, expectedUserId);
   if (remote) return remote;
+  if (expectedUserId) return getLocalPreferences(expectedUserId);
 
   if (typeof client?.auth?.getUser === 'function') {
     const { data: { user } } = await client.auth.getUser();
