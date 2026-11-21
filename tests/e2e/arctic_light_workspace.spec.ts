@@ -561,6 +561,10 @@ test('Arctic tokens persist from sign-in through saved chat, settings, and reloa
   const chat = page.locator('.conversation-item-button').first();
   await chat.click();
   await expect(chat).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('.messages-list .message')).toHaveText([
+    /Explain the difference between Paxos and Raft/,
+    /Paxos and Raft both solve distributed consensus/,
+  ]);
   expect(await colorToken('--color-surface')).toBe(darkSurface);
   await page.screenshot({ path: testInfo.outputPath('saved-chat-dark.png') });
   await page.reload();

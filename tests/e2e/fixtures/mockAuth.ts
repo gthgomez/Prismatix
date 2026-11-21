@@ -241,11 +241,15 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
     const filtered = convId
       ? messages.filter((m) => m.conversation_id === convId.replace(/^eq\./, ''))
       : messages;
+    const order = url.searchParams.get('order');
+    const rows = order?.startsWith('created_at.desc')
+      ? [...filtered].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
+      : filtered;
 
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(filtered),
+      body: JSON.stringify(rows),
     });
   });
 
