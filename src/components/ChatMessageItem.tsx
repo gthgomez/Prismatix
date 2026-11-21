@@ -555,80 +555,45 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
             {message.comparisonResults && (
               <div className='comparison-results-container'>
-                <div className={`comparison-column model-a ${message.comparisonResults.preferred === 'A' ? 'is-preferred' : ''}`}>
-                  <div className='comparison-header'>
-                    <span className='comparison-model-badge'>{message.comparisonResults.modelA.model}</span>
-                    {message.comparisonResults.modelA.status && message.comparisonResults.modelA.status !== 'completed' && <span role='status'>{message.comparisonResults.modelA.status === 'failed' ? 'Failed' : message.comparisonResults.modelA.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>}
-                    {message.comparisonResults.modelA.cost !== undefined && (
-                      <span className='comparison-cost' aria-label={`Model A cost ${message.comparisonResults.modelA.costStatus ?? 'unknown'}: ${message.comparisonResults.modelA.cost.toFixed(4)} dollars`}>
-                        {message.comparisonResults.modelA.costStatus === 'settled' ? '$' : '~$'}{message.comparisonResults.modelA.cost.toFixed(4)} · {message.comparisonResults.modelA.costStatus ?? 'unknown'}
-                      </span>
-                    )}
-                    {message.comparisonResults.modelA.cost === undefined && <span className='comparison-cost'>Cost unknown</span>}
-                  </div>
-                  <div className='comparison-content'>
-                    <FormattedMessage content={message.comparisonResults.modelA.content} />
-                  </div>
-                  <button type='button' onClick={() => void copyRecoveryText(message.comparisonResults!.modelA.content)}>Copy response</button>
-                  <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
-                    <button
-                      type='button'
-                      aria-pressed={message.comparisonResults.preferred === 'A'}
-                      disabled={isStreaming || message.comparisonResults.preferencePending || (message.comparisonResults.modelA.status !== undefined && message.comparisonResults.modelA.status !== 'completed')}
-                      onClick={() => onSelectComparisonPreference?.(index, 'A')}
-                      style={{
-                        padding: '0.25rem 0.6rem',
-                        fontSize: '0.75rem',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        border: '1px solid',
-                        borderColor: message.comparisonResults.preferred === 'A' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.15)',
-                        background: message.comparisonResults.preferred === 'A' ? 'rgba(78, 205, 196, 0.2)' : 'transparent',
-                        color: message.comparisonResults.preferred === 'A' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
-                        fontWeight: message.comparisonResults.preferred === 'A' ? 600 : 400,
-                      }}
-                    >
-                      {message.comparisonResults.preferred === 'A' ? '✓ Preferred model' : 'Prefer this model'}
-                    </button>
-                  </div>
-                </div>
-                <div className={`comparison-column model-b ${message.comparisonResults.preferred === 'B' ? 'is-preferred' : ''}`}>
-                  <div className='comparison-header'>
-                    <span className='comparison-model-badge'>{message.comparisonResults.modelB.model}</span>
-                    {message.comparisonResults.modelB.status && message.comparisonResults.modelB.status !== 'completed' && <span role='status'>{message.comparisonResults.modelB.status === 'failed' ? 'Failed' : message.comparisonResults.modelB.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>}
-                    {message.comparisonResults.modelB.cost !== undefined && (
-                      <span className='comparison-cost' aria-label={`Model B cost ${message.comparisonResults.modelB.costStatus ?? 'unknown'}: ${message.comparisonResults.modelB.cost.toFixed(4)} dollars`}>
-                        {message.comparisonResults.modelB.costStatus === 'settled' ? '$' : '~$'}{message.comparisonResults.modelB.cost.toFixed(4)} · {message.comparisonResults.modelB.costStatus ?? 'unknown'}
-                      </span>
-                    )}
-                    {message.comparisonResults.modelB.cost === undefined && <span className='comparison-cost'>Cost unknown</span>}
-                  </div>
-                  <div className='comparison-content'>
-                    <FormattedMessage content={message.comparisonResults.modelB.content} />
-                  </div>
-                  <button type='button' onClick={() => void copyRecoveryText(message.comparisonResults!.modelB.content)}>Copy response</button>
-                  <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
-                    <button
-                      type='button'
-                      aria-pressed={message.comparisonResults.preferred === 'B'}
-                      disabled={isStreaming || message.comparisonResults.preferencePending || (message.comparisonResults.modelB.status !== undefined && message.comparisonResults.modelB.status !== 'completed')}
-                      onClick={() => onSelectComparisonPreference?.(index, 'B')}
-                      style={{
-                        padding: '0.25rem 0.6rem',
-                        fontSize: '0.75rem',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        border: '1px solid',
-                        borderColor: message.comparisonResults.preferred === 'B' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.15)',
-                        background: message.comparisonResults.preferred === 'B' ? 'rgba(78, 205, 196, 0.2)' : 'transparent',
-                        color: message.comparisonResults.preferred === 'B' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
-                        fontWeight: message.comparisonResults.preferred === 'B' ? 600 : 400,
-                      }}
-                    >
-                      {message.comparisonResults.preferred === 'B' ? '✓ Preferred model' : 'Prefer this model'}
-                    </button>
-                  </div>
-                </div>
+                {(['A', 'B'] as const).map((side) => {
+                  const comparison = message.comparisonResults!;
+                  const result = side === 'A' ? comparison.modelA : comparison.modelB;
+                  const preferred = comparison.preferred === side;
+                  const canChoose = !isStreaming && !comparison.preferencePending
+                    && (!result.status || result.status === 'completed');
+                  return (
+                    <div key={side} className={`comparison-column model-${side.toLowerCase()} ${preferred ? 'is-preferred' : ''}`}>
+                      <div className='comparison-header'>
+                        <span className='comparison-model-badge'>{result.model}</span>
+                        {result.status && result.status !== 'completed' && (
+                          <span role='status'>{result.status === 'failed' ? 'Failed' : result.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>
+                        )}
+                        {result.cost === undefined ? <span className='comparison-cost'>Cost unknown</span> : (
+                          <span className='comparison-cost' aria-label={`Model ${side} cost ${result.costStatus ?? 'unknown'}: ${result.cost.toFixed(4)} dollars`}>
+                            {result.costStatus === 'settled' ? '$' : '~$'}{result.cost.toFixed(4)} · {result.costStatus ?? 'unknown'}
+                          </span>
+                        )}
+                      </div>
+                      <div className='comparison-content'>
+                        <FormattedMessage content={result.content} />
+                      </div>
+                      <div className='comparison-footer'>
+                        <button className='comparison-action' type='button' disabled={!result.content} onClick={() => void copyRecoveryText(result.content)}>
+                          Copy response
+                        </button>
+                        <button
+                          className='comparison-action'
+                          type='button'
+                          aria-pressed={preferred}
+                          disabled={!canChoose}
+                          onClick={() => onSelectComparisonPreference?.(index, side)}
+                        >
+                          {preferred ? '✓ Preferred model' : 'Prefer this model'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
