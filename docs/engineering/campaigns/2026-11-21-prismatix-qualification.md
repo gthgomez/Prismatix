@@ -74,12 +74,22 @@ The failing lazy-chunk recovery case passed its isolated rerun.
 
 ## Release sequence
 
-**Nonproduction migration stop:** `20261006120000_video_worker_cron_vault_secret.sql`
-contains the production Supabase URL in a scheduled command. Do not replay it
-against staging, or apply the earlier placeholder cron migration there, until
-the scheduler target has an environment-safe rollout plan and the staging
-project identity has been independently confirmed. The local test below uses
-an inert scheduler; it is not evidence that the hosted job is safe.
+**Scheduler deployment gate:** the two historical cron SQL files are inert in
+this candidate, and a later forward migration can disable pre-existing jobs before
+optionally configuring an identified staging target. Both actions require
+separate explicit operator intent where applicable. Their version IDs and
+already-applied history remain intact, but their source now differs from what
+was originally shipped. Git retains the original SQL. Do not replay old source
+files, and check any external checksum or statement-history tooling before a
+rollout. An existing installation may already have a dangerous job or queued
+request: follow the quarantine steps below before applying anything. The local
+cron and network stand-ins do not demonstrate managed Supabase behavior.
+
+**Do not apply this repair to production without separate authorization and a
+reviewed production-worker replacement.** An existing matching production job
+causes the migration to fail without quarantine intent; opting in would remove
+it, so a production rollout needs a separate design. No production schedule was
+changed in this task.
 
 1. Confirm the Prismatix Supabase target and inventory its migration, function,
    Auth, RLS and budget configuration. Exercise sign-up, recovery and two-account
@@ -213,7 +223,7 @@ approval or a blind security audit.
 | PXQ-33 / P0 | A settled model-call or reservation amount of `NaN`, a negative number, or another malformed value was projected as a confirmed zero or negative receipt. PostgreSQL `numeric(12,6)` accepts `NaN`. | Reject malformed values from settled receipt projection and retain a pending status. Handler and projection tests cover malformed values and genuine zero. This does not repair historical database rows. |
 | PXQ-34 / P0 | The final ledger and budget RPCs accept a settled call with `NaN` or negative cost and can commit that value to budget windows. They also turn an omitted or NULL settled amount into zero. A pre-existing negative window can understate spending on later admission. Reproduced through the actual RPCs in rolled-back local PostgreSQL transactions. | The forward-only PX13 migration rejects new invalid amounts, blocks settlement of legacy invalid calls and refuses writes to invalid reservation/window balances without rewriting rows; the router also rejects invalid settled inputs before the RPC. The SQL fixture checks retained holds, corrupt project/user windows, late settlement, explicit zero, missing values and role denial. Pre-existing invalid records require operator review. |
 | PXQ-35 / P0 | The live image function supplies fewer admission arguments than the candidate database requires, has no stable caller-supplied execution identity, treats an estimate as settled, and can reconcile an ambiguous provider failure to zero. The local preview also attached the estimate to an unmetered mock and its dialog lacked keyboard focus handling. | Keep live image dispatch closed in both candidate client and Edge handler until those safeguards are repaired and verified. Explain the limitation and retain a free local placeholder, labelled as such, with zero cost. The handler test proves rejection before key access, budget mutation or provider dispatch; browser checks cover focus trapping, Escape and focus return. This containment has not been deployed. |
-| PXQ-36 / P0 deployment blocker | The historical video-worker cron migration hardcodes the production project URL; an earlier migration contains a placeholder. Applying either unchanged to a hosted staging environment can schedule the wrong target. | The local migration exercise uses nonexecuting cron/network stand-ins. Do not apply these historical jobs to staging until an environment-specific safe rollout is designed and reviewed. |
+| PXQ-36 / P0 deployment blocker | The historical video-worker cron migration hardcoded the production project URL; an earlier migration unconditionally scheduled a placeholder. A later cleanup cannot undo a request that fired during replay. | The historical versions are now inert for fresh replay; the forward repair requires quarantine intent before removing all visible matching jobs in the current database by ID, and fails on inadequate visibility or failed removal. Isolated PostgreSQL fixtures record every schedule and execute local and synthetic staging commands against a deterministic no-network localhost recorder. Existing installations require prior quarantine; hosted behavior and target identity remain unverified. |
 | PXQ-37 / P1 deployment uncertainty | The repository's local SQL harness grants authenticated table privileges by default. It therefore cannot prove the actual hosted Data API grants or exposed schema settings. | Verify effective grants, RLS and PostgREST exposure on the identified nonproduction project; test separate authenticated owners and anonymous denial there. |
 | PXQ-38 / P0 test safety | The admission concurrency fixture recommended staging, re-applied an older migration, and deleted budget rows for the current day. The ledger and receipt fixtures also re-applied older RPC definitions, masking the integrated schema. | Require a fresh empty disposable `_test` database before any concurrency writes, remove broad deletions and historical migration replays, and use two asynchronous dblink batches. Re-run the fixtures against the final migrated schema. |
 | PXQ-39 / P0 | Switch directly from account A to B while B's saved selection points at A's conversation and B's history request is denied. The selected-id comparison could leave A's transcript displayed; an open A workspace dialog also remained mounted. | Clear the transcript, selection and pending history synchronously on account change, and key the workspace by account so all account-owned dialog and component state remounts. A direct rerender regression checks the denied load, and a synthetic two-account browser event checks the open-dialog case. |
@@ -258,16 +268,95 @@ image-dialog keyboard check also initially failed on the missing focus behavior
 and passed after the repair. These intermediate failures are not treated as
 passing evidence.
 
+### Video worker: safe replay, existing installations and rollback
+
+- Fresh replay applies the retained historical version IDs with inert SQL, then
+  `20261121234725_disable_unsafe_video_worker_cron.sql`. No cron, pg_net or
+  Vault extension is installed by this repair. Without an explicit enable
+  marker, no job is registered. Missing/duplicate configuration, an invalid
+  project reference or the known production reference also leaves it disabled.
+  The all-zero synthetic reference used in tests is never contacted: its
+  requested URL is recorded by an inert SQL function that routes every fixture
+  call to a localhost recorder with no network operations.
+- The `local-test-stub` sentinel requires both a test-session marker and a
+  distinctive marker in the stub function at registration and execution. These
+  markers are safeguards, not proof of isolation from a privileged database
+  owner; test infrastructure must also block network access. A normal pg_cron
+  backend does not inherit the test session marker, so the sentinel is a
+  manually exercised test hook, not a hosted worker configuration.
+- An existing installation may already have active or in-flight jobs and queued
+  pg_net requests. Independently confirm project identity and isolate egress;
+  inventory every relevant same-name job across databases, stop or quarantine
+  those jobs, and account for all in-flight/queued work. A migration cannot
+  recall a request already sent. The scripts examine matching jobs **only in
+  the current database** and deliberately leave jobs in other databases intact;
+  those require separate authorized handling. A same-name job owned by the
+  scheduler in another database is a pg_cron upsert collision: the forward
+  script fails atomically and does not overwrite it. That failure rolls back
+  any cleanup in its own transaction, so quarantine remains necessary.
+- A role must have cross-owner `cron.job` visibility, effective privilege to
+  acquire a `SHARE ROW EXCLUSIVE` lock on that table, and authority to
+  unschedule every matching job in the current database. Before either script modifies an
+  existing job, set `prismatix.video_worker_quarantined = 'on'` **in that
+  operator session** after completing quarantine. Without it the script fails
+  atomically; the flag expresses intent, not proof of project identity or
+  isolation. With inadequate visibility or failed removal it also fails, so a
+  failure does not establish that jobs are stopped. The two scripts use a
+  shared transaction advisory lock for cooperating invocations and a table
+  write lock that excludes external schedule writes until the transaction
+  finishes; it cannot prevent later re-enablement. Use `READ COMMITTED`
+  isolation: stronger isolation fails before either lock to avoid stale
+  snapshots. Both locks use nonblocking acquisition; if either is busy,
+  investigate and explicitly retry after the competing transaction ends.
+- For an existing installation, the controlled disable SQL may be run in the
+  verified nonproduction database under an authorized transaction with
+  `SET LOCAL prismatix.video_worker_quarantined = 'on'`, followed by
+  `supabase/operations/disable_video_worker_cron.sql`. Verify current-database
+  jobs and queues are absent and handle other databases separately before the
+  normal ordered migration process. This avoids falsely repairing migration
+  history; no such hosted action has been authorized or performed here.
+- Enabling a staging job is a separate authorized operation after independently
+  matching the staging database and Edge endpoint identities. With pg_cron,
+  pg_net and Vault available, configure exactly one Vault record named
+  `video_worker_staging_project_ref` with that 20-character reference and one
+  `video_worker_secret` matching the function. The secret must consist solely
+  of printable ASCII bytes `!` through `~` (no whitespace or control bytes).
+  Set `prismatix.video_worker_enable_staging = 'on'` in the operator session
+  and rerun the reviewed forward SQL. Replacing an existing job also requires
+  the separate quarantine marker. The enable marker gates registration only;
+  the later cron backend need not inherit it. These flags do not prove that
+  an arbitrary reference identifies the intended staging project or that the
+  secret matches the deployed worker.
+- The URL is constructed from the staging reference, excluding the known
+  production reference; the command never embeds the credential. Removing,
+  changing or duplicating the reference, or removing, duplicating or invalidating
+  the secret, suppresses calls at execution. Valid secret rotation works. To
+  roll back, quarantine and account for outstanding work, run the disable SQL
+  with explicit quarantine intent, and verify the scoped inventory. The script
+  is idempotent and preserves other-database jobs, Vault entries, migration
+  history and application data. Never restore the old production-targeted job
+  on staging. Re-enabling requires explicit independent authorization.
+
+The CI PostgreSQL harness is configured to run the same SQL fixtures as local
+`psql`, including nonblocking lock, isolation, retry and external-writer
+tests, in a network-disabled container. The fixtures emulate pg_cron, Vault and pg_net; they do not prove
+managed extension privileges, scheduling, queue draining, or hosted behavior.
+
 ### Minimum staging access and rollout gate
 
 1. Identify an existing **nonproduction Prismatix** project by project reference
    and grant read access to its migration history, database schema and effective
    grants/RLS, exposed Data API schemas, Auth policy, Edge function versions,
-   and scheduled jobs. Inspect secret names/configuration only; no secret values
-   are needed for this inventory. The connected project observed in this task
-   belongs to a different application and must not be used.
+   and scheduled jobs, with cross-owner `cron.job` visibility. Inspect secret
+   names/configuration only; no secret values are needed for this inventory.
+   The connected project observed in this task belongs to a different
+   application and must not be used.
 2. For actual acceptance, authorize disposable staging database changes and
    matching test-function deployment only after the cron target is made safe;
+   provide authority to quarantine egress, account for in-flight and queued
+   requests, acquire the required `cron.job` table lock, and unschedule matching
+   jobs across owners; permission to manage
+   the two staging Vault entries is needed only when enabling the worker. Also
    provide two disposable Auth identities, anonymous access and a controlled
    service-role test path. This permits owner/cross-owner/anonymous negative
    tests, receipt and spend RPC checks, and authenticated browser journeys.

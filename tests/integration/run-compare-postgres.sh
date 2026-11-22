@@ -77,3 +77,31 @@ sql < tests/integration/invalid_ledger_settlement.sql
 sql < "$migration_dir/20261121220000_px13_budget_settlement_cost_guards.sql"
 sql < "$fixture"
 sql < "$qualified_fixture"
+
+# Exercise the actual cron migration SQL in a separate fresh disposable DB.
+# cron and pg_net are test stand-ins, and the enclosing container has --network none.
+sql -c 'create database prismatix_video_worker_cron_ci_test'
+# Prove the shared failure branch exits nonzero before trusting the fixture.
+if sql -d prismatix_video_worker_cron_ci_test -f tests/integration/video_worker_assertion_failure.sql >/dev/null 2>&1; then
+  printf 'Cron assertion self-check unexpectedly succeeded\n' >&2
+  exit 1
+fi
+sql -d prismatix_video_worker_cron_ci_test -f tests/integration/video_worker_cron_no_extensions.sql
+sql -d prismatix_video_worker_cron_ci_test -f tests/integration/video_worker_cron_safety.sql
+# A new psql process models pg_cron's independent session.
+sql -d prismatix_video_worker_cron_ci_test -f tests/integration/video_worker_cron_fresh_session.sql
+sql -d prismatix_video_worker_cron_ci_test -f tests/integration/video_worker_cron_synthetic_staging.sql
+sql -d prismatix_video_worker_cron_ci_test -f tests/integration/video_worker_cron_synthetic_fresh_session.sql
+# Two independent sessions execute the actual migration and rollback files.
+sql -d prismatix_video_worker_cron_ci_test \
+  -v cron_migration_file=/repo/supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql \
+  -v cron_rollback_file=/repo/supabase/operations/disable_video_worker_cron.sql \
+  -f tests/integration/video_worker_cron_concurrency.sql
+sql -d prismatix_video_worker_cron_ci_test \
+  -v cron_migration_file=/repo/supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql \
+  -v cron_rollback_file=/repo/supabase/operations/disable_video_worker_cron.sql \
+  -f tests/integration/video_worker_cron_isolation.sql
+sql -d prismatix_video_worker_cron_ci_test \
+  -v cron_migration_file=/repo/supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql \
+  -v cron_rollback_file=/repo/supabase/operations/disable_video_worker_cron.sql \
+  -f tests/integration/video_worker_cron_table_lock.sql
