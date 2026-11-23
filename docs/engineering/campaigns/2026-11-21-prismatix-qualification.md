@@ -395,3 +395,83 @@ select 'budget_windows', count(*) from prismatix_internal.budget_windows
     or held_usd::text in ('NaN', 'Infinity', '-Infinity') or held_usd < 0
     or committed_usd::text in ('NaN', 'Infinity', '-Infinity') or committed_usd < 0;
 ```
+
+## Independent qualification pass · 2026-11-22
+
+An independent investigation re-derived the blockers from scratch rather than
+accepting the earlier report. Two conclusions changed.
+
+### Correction 1: the cron failure is a delivery-path defect, not a privilege defect
+
+Reproduced on a disposable PostgreSQL 17.12 fixture with a faithful `cron.job`
+reconstruction:
+
+- All migrations applied to an **empty** database pass, including the cron file
+  (it returns early when `cron.job` is absent).
+- With a production-shaped `video_worker_every_minute` row present, the run
+  **aborts** at `20261121234725_disable_unsafe_video_worker_cron.sql` with
+  `Video worker cleanup requires explicit quarantined-job intent`.
+- The same file succeeds when `prismatix.video_worker_quarantined='on'` is set in
+  the session, then removes the job, is idempotent, and installs no extension.
+
+So the migration is *correct but undeliverable*: `supabase db push` runs each file
+in its own transaction and cannot set a session GUC. On the partition where this
+matters — an existing installation — it wedges every later migration.
+
+Privilege measurement (same fixture, `SELECT`-only role): `LOCK ... SHARE ROW
+EXCLUSIVE` returns `42501`; `DELETE` returns `42501`; `cron.unschedule(jobid)`
+returns `true` **vacuously** because RLS hid the row. As owner, both succeed.
+This confirms the lock's privilege requirement as a mechanism, but the claim that
+the production `postgres` role actually lacks it remains **unverified** — and if
+true would imply the job could not have been removed by SQL at all.
+
+**Disposition.** The cron operation moved to
+`supabase/operations/quarantine_video_worker_cron.sql`; the migration was removed.
+Live-scheduler work is now an authorized operator action, not schema history.
+
+### Correction 2: the frontend env `define` block is not a defect
+
+`vite.config.ts` scopes `define` to `process.env.VITEST` and uses
+`synthetic-test.supabase.co`. It does not affect production builds. An earlier
+claim to the contrary was read from `main`, not the PR head.
+
+Measured precedence, which does still constrain tooling: `process.env` wins over
+`.env*` files. A guard must therefore read what Vite resolves, not `process.env`
+alone.
+
+### New gates
+
+- `scripts/assert-environment-isolation.mjs` — refuses to build a non-production
+  deployment against the production Supabase project. Wired into `npm run build`,
+  so a dashboard deploy cannot bypass it. Verified across five scenarios.
+- `tests/integration/run-fresh-replay.sh` — all migrations against an empty
+  database (33 applied, no scheduler installed).
+- `tests/integration/run-existing-install-replay.sh` — all migrations over a
+  database that already carries the scheduler row. This is the fixture that
+  **fails** on the removed migration and passes without it.
+- `supabase/operations/rollback_px13.sql` — the rollback that previously existed
+  only as prose. Verified: 6 constraints → 0, trigger and function removed.
+
+### Verification actually run
+
+| Check | Result |
+|---|---|
+| `npm run type-check` | pass |
+| `npm run test` | 1077 tests / 107 files pass |
+| `npm run lint` | 0 errors, 136 warnings (unchanged) |
+| `npm run build` | pass, with the isolation guard in the pipeline |
+| `deno check` on all 10 Edge entrypoints | pass |
+| All 34 → 33 migrations on a fresh DB | pass, no scheduler installed |
+| `db push` shape with the job present | failed before, passes after |
+| Operator quarantine | removes the job, idempotent, fail-closed without pg_cron |
+| PX13 rollback | removes guards |
+| Isolation guard, 5 scenarios | production-backed preview rejected in all variants |
+
+### Still unverified
+
+Hosted Supabase `cron.job` ownership and effective privileges (read-only query
+prepared, not yet run); hosted Auth/RLS/RPC behaviour; Edge deployment order;
+real provider streaming and settlement; physical-device and screen-reader
+behaviour. No hosted migration, schedule change, secret change, or merge was
+performed in this pass.
+

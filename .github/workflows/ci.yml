@@ -103,3 +103,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash tests/integration/run-compare-postgres.sh
+
+  migration-replay:
+    name: Migrations · fresh + existing install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Fresh install: every migration applies to an empty database.
+      - run: bash tests/integration/run-fresh-replay.sh
+      # Existing install: every migration also applies over a database that
+      # already has the scheduler rows a live project carries. This is the case
+      # that a session-GUC-gated cron migration broke.
+      - run: bash tests/integration/run-existing-install-replay.sh
+
+  environment-isolation:
+    name: Environment isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      # A preview must never build against the production Supabase project.
+      - name: Reject a production-backed preview
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: https://sqjfbqjogylkfwzsyprd.supabase.co
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+          VITE_ROUTER_ENDPOINT: https://sqjfbqjogylkfwzsyprd.supabase.co/functions/v1/router
+        run: |
+          if node scripts/assert-environment-isolation.mjs; then
+            echo "::error::isolation guard accepted a production-backed preview"
+            exit 1
+          fi
+          echo "guard correctly rejected a production-backed preview"
+      # A preview pointed at a nonproduction project must pass.
+      - name: Accept an isolated preview
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: https://abcdefghijklmnopqrst.supabase.co
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+          VITE_ROUTER_ENDPOINT: https://abcdefghijklmnopqrst.supabase.co/functions/v1/router
+        run: node scripts/assert-environment-isolation.mjs

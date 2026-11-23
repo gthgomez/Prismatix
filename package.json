@@ -10,13 +10,14 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && node scripts/assert-environment-isolation.mjs && vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
     "lint": "eslint . --ext ts,tsx",
     "test": "vitest run",
     "audit:models": "node scripts/audit-stale-models.mjs",
-    "check:parity": "node scripts/check-deployment-parity.mjs"
+    "check:parity": "node scripts/check-deployment-parity.mjs",
+    "check:isolation": "node scripts/assert-environment-isolation.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
