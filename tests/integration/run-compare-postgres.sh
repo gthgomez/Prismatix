@@ -94,14 +94,14 @@ sql -d prismatix_video_worker_cron_ci_test -f tests/integration/video_worker_cro
 sql -d prismatix_video_worker_cron_ci_test -f tests/integration/video_worker_cron_synthetic_fresh_session.sql
 # Two independent sessions execute the actual migration and rollback files.
 sql -d prismatix_video_worker_cron_ci_test \
-  -v cron_migration_file=/repo/supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql \
+  -v cron_migration_file=/repo/supabase/operations/quarantine_video_worker_cron.sql \
   -v cron_rollback_file=/repo/supabase/operations/disable_video_worker_cron.sql \
   -f tests/integration/video_worker_cron_concurrency.sql
 sql -d prismatix_video_worker_cron_ci_test \
-  -v cron_migration_file=/repo/supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql \
+  -v cron_migration_file=/repo/supabase/operations/quarantine_video_worker_cron.sql \
   -v cron_rollback_file=/repo/supabase/operations/disable_video_worker_cron.sql \
   -f tests/integration/video_worker_cron_isolation.sql
 sql -d prismatix_video_worker_cron_ci_test \
-  -v cron_migration_file=/repo/supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql \
+  -v cron_migration_file=/repo/supabase/operations/quarantine_video_worker_cron.sql \
   -v cron_rollback_file=/repo/supabase/operations/disable_video_worker_cron.sql \
   -f tests/integration/video_worker_cron_table_lock.sql

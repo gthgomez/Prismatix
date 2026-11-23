@@ -73,7 +73,7 @@ grant select on cron.job to authenticated;
 insert into cron.job(jobname, schedule, command, username) values
  ('video_worker_every_minute','* * * * *','legacy production endpoint','owner_a');
 \set ON_ERROR_STOP off
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 \set intent_missing_failed :ERROR
 \set ON_ERROR_STOP on
 \if :intent_missing_failed
@@ -83,7 +83,7 @@ insert into cron.job(jobname, schedule, command, username) values
 \endif
 set prismatix.video_worker_quarantined = 'invalid';
 \set ON_ERROR_STOP off
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 \set intent_invalid_failed :ERROR
 \set ON_ERROR_STOP on
 \if :intent_invalid_failed
@@ -98,7 +98,7 @@ do $$ begin
 end $$;
 set prismatix.video_worker_quarantined = 'on';
 set prismatix.video_worker_enable_staging = 'on';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 reset prismatix.video_worker_quarantined;
 reset prismatix.video_worker_enable_staging;
 do $$ begin
@@ -143,7 +143,7 @@ insert into cron.job(jobname, schedule, command, username, database)
 -- after seeing only its own rows.
 set role authenticated;
 \set ON_ERROR_STOP off
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 \set limited_failed :ERROR
 \set limited_state :SQLSTATE
 \set ON_ERROR_STOP on
@@ -165,7 +165,7 @@ grant usage on schema cron to service_role;
 grant select on cron.job to service_role;
 set role service_role;
 \set ON_ERROR_STOP off
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 \set lock_permission_failed :ERROR
 \set lock_permission_state :SQLSTATE
 \set ON_ERROR_STOP on
@@ -186,7 +186,7 @@ reset role;
 set prismatix.video_worker_quarantined = 'on';
 set cron_test.deny_other_owner = 'on';
 \set ON_ERROR_STOP off
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 \set removal_failed :ERROR
 \set ON_ERROR_STOP on
 reset cron_test.deny_other_owner;
@@ -200,8 +200,8 @@ do $$ begin
     raise exception 'failed cleanup did not roll back earlier removals';
   end if;
 end $$;
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 do $$ begin
   if exists (select 1 from cron.job where jobname='video_worker_every_minute' and database=current_database()) or
      not exists (select 1 from cron.job where jobname='unrelated_job') or
@@ -216,38 +216,38 @@ reset prismatix.video_worker_quarantined;
 -- remain disabled. The secret value is synthetic and is never put in cron SQL.
 set prismatix.video_worker_enable_staging = 'on';
 insert into vault.decrypted_secrets values ('video_worker_secret','local-test-secret');
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 insert into vault.decrypted_secrets values ('video_worker_staging_project_ref','');
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret=E' \t\n' where name='video_worker_staging_project_ref';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret='https://sqjfbqjogylkfwzsyprd.supabase.co/functions/v1/video-worker' where name='video_worker_staging_project_ref';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret='not/a/project' where name='video_worker_staging_project_ref';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret='sqjfbqjogylkfwzsyprd' where name='video_worker_staging_project_ref';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret='local-test-stub' where name='video_worker_staging_project_ref';
 set prismatix.video_worker_test_stub = 'on';
 insert into vault.decrypted_secrets values ('video_worker_staging_project_ref','local-test-stub');
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 delete from vault.decrypted_secrets where name='video_worker_staging_project_ref';
 insert into vault.decrypted_secrets values ('video_worker_staging_project_ref','local-test-stub');
 insert into vault.decrypted_secrets values ('video_worker_secret','another-test-secret');
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 delete from vault.decrypted_secrets where name='video_worker_secret';
 insert into vault.decrypted_secrets values ('video_worker_secret',E' \t\n');
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret=E'bad\rsecret' where name='video_worker_secret';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret=E'bad\nsecret' where name='video_worker_secret';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret=' leading' where name='video_worker_secret';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret='trailing ' where name='video_worker_secret';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret=E'bad\tsecret' where name='video_worker_secret';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 do $$ begin
   if exists (select 1 from cron.job where jobname='video_worker_every_minute' and database=current_database()) or
      exists (select 1 from cron.job_history) then
@@ -258,9 +258,9 @@ end $$;
 update vault.decrypted_secrets set decrypted_secret='local-test-secret' where name='video_worker_secret';
 -- Valid configuration must stay disabled unless enabling is explicitly opted in.
 reset prismatix.video_worker_enable_staging;
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 set prismatix.video_worker_enable_staging = 'invalid';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 do $$ begin
   if exists (select 1 from cron.job_history) then
     raise exception 'valid configuration scheduled a worker without enable intent';
@@ -270,7 +270,7 @@ set prismatix.video_worker_enable_staging = 'on';
 reset prismatix.video_worker_test_stub;
 -- A test database name alone is not an opt-in, nor does the marker make a real
 -- pg_net function inert. Both the session marker and inert fixture are required.
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 do $$ begin
   if exists (select 1 from cron.job_history) then
     raise exception 'test stub scheduled without explicit session marker';
@@ -285,16 +285,16 @@ begin
   insert into net.requests values ('http://127.0.0.1:54321/functions/v1/video-worker', url, headers, body);
   return 1;
 end $$;
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 do $$ begin
   if exists (select 1 from cron.job_history) then
     raise exception 'test stub scheduled without inert function marker';
   end if;
 end $$;
 \ir video_worker_inert_net_stub.sql
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 set prismatix.video_worker_quarantined = 'on';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 reset prismatix.video_worker_quarantined;
 do $$
 declare cmd text;
@@ -426,11 +426,11 @@ do $$ begin
 end $$;
 -- An operator may deliberately reconfigure by rerunning the forward repair;
 -- invalidating the configured ref on a later reapply must disable it again.
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 update vault.decrypted_secrets set decrypted_secret='sqjfbqjogylkfwzsyprd'
   where name='video_worker_staging_project_ref';
 set prismatix.video_worker_quarantined = 'on';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 reset prismatix.video_worker_quarantined;
 do $$ begin
   if exists (select 1 from cron.job where jobname='video_worker_every_minute' and database=current_database()) or
@@ -445,7 +445,7 @@ end $$;
 -- fixture checks it cannot fire without its own explicit session marker.
 update vault.decrypted_secrets set decrypted_secret='local-test-stub'
   where name='video_worker_staging_project_ref';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 do $$ begin
   if (select count(*) from cron.job where jobname='video_worker_every_minute' and database=current_database()) <> 1 then
     raise exception 'fresh-session fixture could not obtain its local command';

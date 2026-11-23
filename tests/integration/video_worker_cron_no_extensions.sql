@@ -11,7 +11,7 @@ do $$ begin
 end $$;
 \ir ../../supabase/migrations/20260216103000_schedule_video_worker_cron.sql
 \ir ../../supabase/migrations/20261006120000_video_worker_cron_vault_secret.sql
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 \ir ../../supabase/operations/disable_video_worker_cron.sql
 do $$ begin
   if to_regnamespace('cron') is not null or to_regnamespace('net') is not null or

@@ -1,103 +1,155 @@
--- Quarantine (disable) the unsafe video-worker cron job.
+-- Repair existing installations after the two historical migration versions.
+-- No application data or Vault records are modified. Unless the two explicit
+-- staging Vault entries are valid and enabling is explicit, no replacement is
+-- registered. Existing matching jobs require explicit quarantine intent before
+-- any change, including on production. Production rollout needs a separately
+-- approved replacement schedule.
 --
--- OPERATOR PROCEDURE -- NOT A MIGRATION. Never place this in supabase/migrations/.
---
--- Why this is not a migration: migrations must replay cleanly on an empty
--- database and run unattended through `supabase db push`. This operation
--- mutates a live scheduler and must be a deliberate, authorized act with an
--- operator present. An earlier revision shipped it as a migration gated on a
--- session GUC (`prismatix.video_worker_quarantined`), which `db push` can never
--- set -- so it failed on every existing installation and wedged all later
--- migrations behind it. Reproduced 2026-11-22.
---
--- PRECONDITIONS (verify all before running):
---   1. You have independently confirmed which Supabase project you are
---      connected to. This script cannot prove project identity.
---   2. You have announced/approved the resulting video-processing interruption.
---   3. You have recorded pg_net queue depth and the current invocation count so
---      you can recognize work still in flight. Deleting a cron row stops FUTURE
---      ticks; it cannot recall a request already handed to pg_net.
---
--- PRIVILEGES: this script needs DELETE on cron.job (or table ownership). It also
--- takes SHARE ROW EXCLUSIVE, which needs MAINTAIN/UPDATE/DELETE/TRUNCATE or
--- ownership. A role holding SELECT only fails with 42501 -- measured on
--- PostgreSQL 17. If you lack these privileges, use Dashboard -> Integrations ->
--- Cron to delete the job instead. Do NOT grant yourself extra privileges.
---
--- SAFETY: this script deliberately does NOT use a session-GUC intent flag. Intent
--- is expressed by choosing to run it. It refuses to report success unless the
--- postcondition actually holds.
+-- An existing installation must first quarantine the old job, including any
+-- already-running invocation and queued pg_net request; removing a cron row
+-- cannot recall work already in flight. This migration may be rerun by a
+-- privileged operator after configuration changes. Do not rerun the old files.
 
-do $quarantine$
+do $migration$
 declare
-  remaining bigint;
-  removed   bigint := 0;
-  victim    record;
+  old_job record;
+  staging_ref text;
+  ref_count bigint;
+  secret_count bigint;
+  valid_secret_count bigint;
+  worker_url text;
+  worker_command text;
 begin
-  -- Fail fast if pg_cron is not installed. Nothing to do, nothing to claim.
+  if current_setting('transaction_isolation') <> 'read committed' then
+    raise exception 'Video worker operations require READ COMMITTED isolation';
+  end if;
+  -- Fail promptly if another cooperating repair is running. The table lock
+  -- below also excludes external cron.job writes until this transaction ends.
+  if not pg_try_advisory_xact_lock(804129183, 20261121) then
+    raise exception 'Video worker advisory lock is busy; investigate and retry';
+  end if;
+
+  -- A fresh replay needs no cron extension or network worker at all. Do not
+  -- create either merely because a migration was run.
   if to_regclass('cron.job') is null then
-    raise notice 'quarantine: pg_cron is not installed; no video-worker job can exist.';
+    raise notice 'Video worker disabled: pg_cron is not installed.';
     return;
   end if;
 
-  -- RLS hides rows the caller may not see. Under a restricted role this would
-  -- make the removal loop a no-op and let us falsely report success. Refuse.
+  -- A role restricted by cron.job RLS could see zero rows even while another
+  -- owner still has an unsafe job. Abort instead of falsely claiming cleanup.
   if row_security_active('cron.job'::regclass) then
-    raise exception
-      'quarantine: cron.job RLS is active for this role, so jobs owned by others are hidden. '
-      'Run as a role with full visibility (owner or BYPASSRLS), or use Dashboard -> Cron.'
-      using errcode = '42501';
+    raise exception 'Video worker cleanup requires full cron.job visibility';
   end if;
 
-  -- Exclude concurrent scheduler writes for the life of this transaction.
-  -- If the privilege is missing this raises 42501 rather than guessing.
+  -- Prevent concurrent cron.job writes through the end of this transaction.
+  -- Insufficient table-lock privilege fails the operation instead of guessing.
   begin
     lock table cron.job in share row exclusive mode nowait;
-  exception
-    when lock_not_available then
-      raise exception 'quarantine: cron.job is busy; retry once the competing write finishes.';
+  exception when lock_not_available then
+    raise exception 'Video worker cron.job write lock is busy; investigate and retry';
   end;
 
-  -- Remove every matching job in THIS database by id. A migration cannot see
-  -- other databases; neither can this. Handle those separately.
-  for victim in
-    select jobid, username
-      from cron.job
-     where jobname = 'video_worker_every_minute'
-       and database = current_database()
-  loop
-    if cron.unschedule(victim.jobid) is distinct from true then
-      raise exception 'quarantine: could not unschedule job % (owner %)',
-        victim.jobid, victim.username;
+  -- Job names need not be globally unique across owners in pg_cron. Remove
+  -- every matching job in the current database by ID; failed removals fail
+  -- the migration rather than leaving a false success.
+  if exists (select 1 from cron.job where jobname = 'video_worker_every_minute'
+             and database = current_database())
+     and current_setting('prismatix.video_worker_quarantined', true) is distinct from 'on' then
+    raise exception 'Video worker cleanup requires explicit quarantined-job intent';
+  end if;
+  for old_job in select jobid from cron.job where jobname = 'video_worker_every_minute'
+                 and database = current_database() loop
+    if cron.unschedule(old_job.jobid) is distinct from true then
+      raise exception 'Could not disable video worker cron job %', old_job.jobid;
     end if;
-    removed := removed + 1;
-    raise notice 'quarantine: unscheduled job % owned by %', victim.jobid, victim.username;
   end loop;
-
-  -- Postcondition. Do not trust the loop's own accounting.
-  select count(*) into remaining
-    from cron.job
-   where jobname = 'video_worker_every_minute'
-     and database = current_database();
-
-  if remaining <> 0 then
-    raise exception 'quarantine: % matching job(s) still present; cleanup incomplete', remaining;
+  if exists (select 1 from cron.job where jobname = 'video_worker_every_minute'
+             and database = current_database()) then
+    raise exception 'Could not disable all video worker cron jobs';
   end if;
 
-  raise notice 'quarantine: complete; removed % job(s); 0 remain in database %',
-    removed, current_database();
-end
-$quarantine$;
+  -- Registering a schedule is a separate operator decision. This is intent,
+  -- not proof that the database/target is nonproduction.
+  if current_setting('prismatix.video_worker_enable_staging', true) is distinct from 'on' then
+    raise notice 'Video worker disabled: staging schedule not explicitly enabled.';
+    return;
+  end if;
 
--- VERIFY AFTER RUNNING, in a fresh session (do not rely on the notice above):
---
---   select count(*) from cron.job where jobname = 'video_worker_every_minute';
---     -- expect 0
---
---   select count(*) from cron.job_run_details
---    where jobid not in (select jobid from cron.job)
---      and status in ('starting','connecting','sending','running')
---      and start_time > now() - interval '5 minutes';
---     -- confirm no runs begin after the recorded cut-off timestamp
---
--- Then watch one full minute boundary and confirm no further invocations.
+  if to_regclass('vault.decrypted_secrets') is null
+     or to_regprocedure('net.http_post(text,jsonb,jsonb,jsonb,integer)') is null then
+    raise notice 'Video worker disabled: Vault or pg_net is unavailable.';
+    return;
+  end if;
+
+  select count(*), min(decrypted_secret)
+    into ref_count, staging_ref
+    from vault.decrypted_secrets where name = 'video_worker_staging_project_ref';
+  select count(*), count(*) filter (where decrypted_secret is not null and decrypted_secret collate "C" ~ '^[!-~]+$')
+    into secret_count, valid_secret_count
+    from vault.decrypted_secrets where name = 'video_worker_secret';
+
+  if ref_count <> 1 or secret_count <> 1 or valid_secret_count <> 1 then
+    raise notice 'Video worker disabled: incomplete or ambiguous staging configuration.';
+    return;
+  end if;
+
+  if staging_ref = 'local-test-stub'
+     and current_database() ~ '^prismatix_video_worker_cron_[a-z0-9]+_test$'
+     and current_setting('prismatix.video_worker_test_stub', true) = 'on'
+     and exists (
+       select 1 from pg_catalog.pg_proc
+       where oid = to_regprocedure('net.http_post(text,jsonb,jsonb,jsonb,integer)')
+         and strpos(prosrc, 'prismatix_inert_net_http_post_test_only') > 0
+     ) then
+    -- This sentinel is only for a disposable local test database. Its network
+    -- function must itself be the deterministic no-network test stub.
+    worker_url := 'http://127.0.0.1:54321/functions/v1/video-worker';
+  elsif staging_ref ~ '^[a-z0-9]{20}$' and staging_ref <> 'sqjfbqjogylkfwzsyprd' then
+    worker_url := 'https://' || staging_ref || '.supabase.co/functions/v1/video-worker';
+  else
+    raise notice 'Video worker disabled: invalid or production project reference.';
+    return;
+  end if;
+
+  -- Only the target and its expected reference are embedded. The credential
+  -- is read from Vault at fire time. A removed, duplicated, or invalid secret
+  -- suppresses requests; valid rotations work. A changed/ambiguous reference
+  -- also suppresses requests until the job is explicitly reconfigured.
+  worker_command := format($command$
+    select net.http_post(
+      url := %L,
+      body := '{}'::jsonb,
+      params := '{}'::jsonb,
+      headers := jsonb_build_object('Content-Type', 'application/json', 'x-worker-secret', secret.value),
+      timeout_milliseconds := 2000
+    )
+    from (
+      select min(decrypted_secret) as value from vault.decrypted_secrets
+      where name = 'video_worker_secret'
+      having count(*) = 1 and min(decrypted_secret) is not null and min(decrypted_secret) collate "C" ~ '^[!-~]+$'
+    ) secret,
+    (
+      select min(decrypted_secret) as value from vault.decrypted_secrets
+      where name = 'video_worker_staging_project_ref'
+      having count(*) = 1 and min(decrypted_secret) = %L
+    ) target
+    where %L <> 'local-test-stub' or (
+      current_database() ~ '^prismatix_video_worker_cron_[a-z0-9]+_test$'
+      and current_setting('prismatix.video_worker_test_stub', true) = 'on'
+      and exists (
+        select 1 from pg_catalog.pg_proc
+        where oid = to_regprocedure('net.http_post(text,jsonb,jsonb,jsonb,integer)')
+          and strpos(prosrc, 'prismatix_inert_net_http_post_test_only') > 0
+      )
+    );
+  $command$, worker_url, staging_ref, staging_ref);
+  -- pg_cron upserts named jobs per owner across databases. Refuse to overwrite
+  -- this owner's matching job elsewhere; an exception rolls back cleanup too.
+  if exists (select 1 from cron.job where jobname = 'video_worker_every_minute'
+             and username = current_user and database is distinct from current_database()) then
+    raise exception 'Video worker job name collides with this owner in another database';
+  end if;
+  perform cron.schedule('video_worker_every_minute', '* * * * *', worker_command);
+end
+$migration$;

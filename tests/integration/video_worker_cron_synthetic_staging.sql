@@ -11,7 +11,7 @@ update vault.decrypted_secrets set decrypted_secret='00000000000000000000'
 update vault.decrypted_secrets set decrypted_secret='synthetic-local-secret'
   where name='video_worker_secret';
 -- Valid configuration alone cannot silently enable an existing feature.
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 do $$ begin
   if exists (select 1 from cron.job where jobname='video_worker_every_minute' and database=current_database()) then
     raise exception 'synthetic staging was enabled without intent';
@@ -25,7 +25,7 @@ insert into cron.job(jobname, schedule, command, username, database) values
   ('video_worker_every_minute','* * * * *','current database legacy','owner_a',current_database());
 set prismatix.video_worker_quarantined = 'on';
 \set ON_ERROR_STOP off
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 \set collision_failed :ERROR
 \set ON_ERROR_STOP on
 \if :collision_failed
@@ -43,7 +43,7 @@ do $$ begin
 end $$;
 delete from cron.job where jobname='video_worker_every_minute'
   and username=current_user and database='another_database';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 reset prismatix.video_worker_quarantined;
 do $$ declare cmd text; begin
   select command into strict cmd from cron.job where jobname='video_worker_every_minute' and database=current_database();
@@ -83,7 +83,7 @@ end $$;
 -- marker, reapplying removes the job and leaves it off.
 reset prismatix.video_worker_enable_staging;
 set prismatix.video_worker_quarantined = 'on';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 reset prismatix.video_worker_quarantined;
 do $$ begin
   if exists (select 1 from cron.job where jobname='video_worker_every_minute' and database=current_database()) then
@@ -91,7 +91,7 @@ do $$ begin
   end if;
 end $$;
 set prismatix.video_worker_enable_staging = 'on';
-\ir ../../supabase/migrations/20261121234725_disable_unsafe_video_worker_cron.sql
+\ir ../../supabase/operations/quarantine_video_worker_cron.sql
 reset prismatix.video_worker_enable_staging;
 do $$ declare cmd text; begin
   select command into strict cmd from cron.job where jobname='video_worker_every_minute' and database=current_database();
