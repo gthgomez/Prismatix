@@ -11,9 +11,16 @@ docs-only or test-only follow-up. Base `main` is
 
 The previous exact-head CI on `25c5ff7e`
 ([run 45389922561](https://github.com/gthgomez/Prismatix/actions/runs/45389922561))
-passed all seven jobs. The closure repairs below change the candidate, so that
-run is preserved as history; the current exact-head run is the one linked in
-the PR description.
+passed all seven jobs. The closure repairs changed the candidate, so that run is
+preserved as history; the current exact-head run is the one linked in the PR
+description. On the tested closure merge tree, all seven jobs pass, including
+the real-backend job with the settled/unavailable probe, the 10/min rate-limit
+probe and five unmocked browser journeys. The code candidate
+`394cd95a00975ef04bc268bf9938d48cb519847c` passed
+[run 45437765047](https://github.com/gthgomez/Prismatix/actions/runs/45437765047);
+its tested merge is `eae442e233b61186915c24ea236de30c8e50d127` with tree
+`073410fa4f0ad2565fcb06656cfa28bf08b28b6e`. This record-only update is
+re-qualified by the exact-head run linked in the PR.
 
 **No merge, production migration, secret change, worker change, or production
 deployment was performed.** The Vercel preview remains **failing by design**
@@ -94,7 +101,7 @@ used for read-only inventory only.
 | Main upgrade atomicity fixtures | **PASS**: failed and interrupted migrations left no DDL/history; forward repair applied |
 | Environment-contract negatives | **14/14** |
 | Router acceptance gate | **ACCEPTED**; 10/10 negative controls rejected; pending/estimated, settled/confirmed-zero and settled/unavailable accepted |
-| Rate limit (database authority 10/min) | **PARTIALLY VERIFIED**: probe implemented; exact-head real-backend run is pending |
+| Rate limit (database authority 10/min) | **VERIFIED in real-backend CI**: 10 admitted, 11th `429` + `Retry-After`, no dispatch, window recovery |
 | Account isolation against real RLS | **14/14** |
 | Real-backend browser journeys (clean DB) | **5/5**: persistence+reload, mid-stream stop with no duplicate call or replay, cross-account history isolation, readiness race, mobile turn |
 | UI screenshots | Refreshed for this candidate at 360/390/768/1440 in light/dark (10 curated in `evidence/2026-11-24/screens`) |
@@ -111,14 +118,14 @@ is why repeated local runs cascade after a first failure.
 |---|---|---|
 | No settled/estimated misrepresentation | VERIFIED (local) | Authoritative receipt components, explicit unavailable state, labelled client estimates |
 | Money precision | VERIFIED | Sub-micro rejection, 6dp/boundary/scientific coverage |
-| Automated real-backend qualification | PARTIALLY VERIFIED | Closure job includes settled/unavailable and production rate-limit probes; exact-head run is linked in the PR |
+| Automated real-backend qualification | VERIFIED | Exact-head CI: smoke (10/10 mutations rejected), settled/unavailable, 14 isolation checks, five browser journeys |
 | Unsafe environments rejected | VERIFIED | 14 contract negatives + hardened Vercel guard negatives in CI |
 | Historical replay cannot contact production | VERIFIED (local) | `network=none`, live TCP/DNS negatives, no HTTP response |
 | Migration failure atomicity/history | VERIFIED (local) | Failed and interrupted fixtures left no DDL/history; forward repair applied |
 | Smoke fails on wrong business outcomes | VERIFIED | 10/10 mutations rejected |
 | Composer readiness repaired | VERIFIED | Real-backend regression |
 | Genuine main→candidate upgrade | VERIFIED (local) | 29 main + 5 candidate migrations, history/guards/totals preserved |
-| Production-equivalent rate limiting | PARTIALLY VERIFIED | 500/min override removed; probe implemented; real-backend run pending |
+| Production-equivalent rate limiting | VERIFIED | Database authority 10/min: 10 admitted, 11th 429 + `Retry-After`, no dispatch, no message, window recovery |
 | Flake diagnosed | VERIFIED | Host oversubscription; worker cap |
 | Cost formatting | VERIFIED | Unit + rendered views |
 | Release record exact | VERIFIED | This section + PR body |
