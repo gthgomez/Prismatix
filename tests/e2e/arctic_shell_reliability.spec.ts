@@ -754,13 +754,19 @@ for (const viewport of [
       if (!panel || !composerContainer) return { panelVisible: false, composerOverlap: true, detailsVisible: false, overlaps: [] as string[], blocked: [] as string[] };
       const panelBox = panel.getBoundingClientRect();
       const composerBox = composerContainer.getBoundingClientRect();
-      const messageViewport = panel.closest('.chat-messages')?.getBoundingClientRect();
-      const visiblePanelBox = messageViewport ? {
-        left: Math.max(0, panelBox.left, messageViewport.left),
-        right: Math.min(window.innerWidth, panelBox.right, messageViewport.right),
-        top: Math.max(0, panelBox.top, messageViewport.top),
-        bottom: Math.min(window.innerHeight, panelBox.bottom, messageViewport.bottom),
-      } : null;
+      // The cost panel is `position: fixed` (an overlay anchored above the
+      // composer), so it is not clipped by the message scroll container.
+      // Intersecting with `.chat-messages` produced false negatives exactly
+      // when the container's computed rect was shorter than the overlay,
+      // contradicting the visibility and elementFromPoint checks above. The
+      // meaningful bounds are the viewport (is it on screen?) plus the separate
+      // composer-overlap assertion (does it cover the controls?).
+      const visiblePanelBox = {
+        left: Math.max(0, panelBox.left),
+        right: Math.min(window.innerWidth, panelBox.right),
+        top: Math.max(0, panelBox.top),
+        bottom: Math.min(window.innerHeight, panelBox.bottom),
+      };
       const composerViewportFit = composerBox.top >= 0 && composerBox.bottom <= window.innerHeight;
       const detailsButton = panel.querySelector<HTMLElement>('.cost-estimator-details-toggle');
       const detailsBox = detailsButton?.getBoundingClientRect();
