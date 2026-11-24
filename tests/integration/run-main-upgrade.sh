@@ -2,8 +2,8 @@
 # Genuine existing-installation upgrade: build a database from the ACTUAL
 # current main-branch migration set on a Supabase Postgres image (so pg_cron,
 # pg_net and vault exist as they do on a real installation), seed
-# representative historical data — including financial rows the candidate's
-# NOT VALID guards must tolerate — then apply the candidate's new migrations
+# representative historical data - including financial rows the candidate's
+# NOT VALID guards must tolerate - then apply the candidate's new migrations
 # one file per transaction, exactly as `db push` does, recording the same
 # history versions.
 #
@@ -12,6 +12,14 @@
 # connection"). The fresh-install gate uses the real runner (`db reset`); this
 # gate reproduces the runner's per-file transaction semantics against a real
 # main baseline. The limitation is recorded in the qualification record.
+#
+# SAFETY: the container runs with `--network none`. The historical main
+# migration `20261006120000_video_worker_cron_vault_secret.sql` schedules a
+# pg_cron job that posts to the production video-worker endpoint, and pg_net
+# may execute it while the baseline is replayed. Replaying that file on a
+# networked container is a production side effect, regardless of whether the
+# vault secret resolves. `--network none` plus a live egress negative control
+# below makes external contact impossible rather than merely unlikely.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -19,7 +27,6 @@ cd "$ROOT"
 
 BASE_REF="${BASE_REF:-origin/main}"
 BASE_SHA="$(git rev-parse "$BASE_REF")"
-PORT="${UPGRADE_DB_PORT:-55432}"
 IMAGE="${UPGRADE_DB_IMAGE:-public.ecr.aws/supabase/postgres:17.6.1.158}"
 DB="prismatix-main-upgrade-$$"
 TMP="$(mktemp -d)"
@@ -32,7 +39,8 @@ trap cleanup EXIT
 
 printf 'main-upgrade: baseline %s (%s)\n' "$BASE_REF" "$BASE_SHA"
 
-docker run --detach --name "$DB" -p "127.0.0.1:${PORT}:5432" \
+# No published port and no network namespace: psql is reached via `docker exec`.
+docker run --detach --network none --name "$DB" \
   -e POSTGRES_PASSWORD=postgres "$IMAGE" >/dev/null
 for _ in $(seq 1 60); do
   if docker exec "$DB" pg_isready -U supabase_admin -h localhost >/dev/null 2>&1; then break; fi
@@ -40,6 +48,27 @@ for _ in $(seq 1 60); do
 done
 
 sql() { docker exec -i "$DB" psql -U supabase_admin -d postgres -X -v ON_ERROR_STOP=1 "$@"; }
+
+fail() { printf 'main-upgrade: %s\n' "$*" >&2; exit 1; }
+
+# --- Enforced network isolation ---------------------------------------------
+# Assert the container contract instead of trusting the command line above.
+netmode="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$DB")"
+[[ "$netmode" == 'none' ]] || fail "container network mode is '$netmode', expected 'none'"
+
+# Live negative control: an outbound TCP connect must fail. `/dev/tcp` is a
+# bash built-in, so this needs no tool installed in the image. If this ever
+# succeeds, the replay could reach production and the run must stop before any
+# migration is applied.
+if docker exec "$DB" timeout 5 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' >/dev/null 2>&1; then
+  fail 'egress negative control connected to 1.1.1.1:443; refusing to replay production-targeted migrations'
+fi
+# Resolve the production hostname the historical migration embeds. It must not
+# resolve; a cached resolver or a configured proxy would be a safety defect.
+if docker exec "$DB" getent hosts sqjfbqjogylkfwzsyprd.supabase.co >/dev/null 2>&1; then
+  fail 'egress negative control resolved the production hostname; refusing to replay'
+fi
+printf 'main-upgrade: network isolation verified (network=none, TCP egress denied, production DNS unresolved)\n'
 
 # Supabase-managed surfaces. The image already provides auth.users and the
 # roles; the storage tables are normally created by the Storage service, so the
@@ -76,17 +105,34 @@ git ls-tree --name-only "$BASE_SHA" supabase/migrations/ \
 # remaining filenames.
 mapfile -t main_files < "$TMP/main-files.txt"
 
+# Apply one migration inside a single transaction and record its history in
+# that same transaction. psql's ON_ERROR_STOP aborts the session on the first
+# error; the open transaction is then rolled back by the server, and the
+# history insert disappears with it. This is the property the previous
+# implementation claimed but did not enforce: `psql < file` runs in autocommit
+# mode, so a migration that failed halfway left earlier statements applied and
+# its history row could still be recorded by a separate command.
+apply_migration_file() {
+  local version="$1" name="$2" file="$3"
+  {
+    printf 'begin;\n'
+    cat "$file"
+    printf '\n;\n'
+    printf "insert into supabase_migrations.schema_migrations(version, name) values ('%s', '%s') on conflict (version) do nothing;\n" \
+      "$version" "$name"
+    printf 'commit;\n'
+  } | sql -q
+}
+
 baseline=0
 for name in "${main_files[@]}"; do
   [[ -z "$name" ]] && continue
   git show "${BASE_SHA}:supabase/migrations/${name}" > "$TMP/current.sql"
-  if ! sql -q < "$TMP/current.sql"; then
+  version="${name%%_*}"
+  if ! apply_migration_file "$version" "$name" "$TMP/current.sql"; then
     printf 'main-upgrade: FAILED applying baseline %s\n' "$name" >&2
     exit 1
   fi
-  version="${name%%_*}"
-  sql -q -c "insert into supabase_migrations.schema_migrations(version, name)
-    values ('$version', '$name') on conflict (version) do nothing"
   baseline=$((baseline + 1))
 done
 
@@ -131,13 +177,11 @@ candidate=0
 for file in $(find supabase/migrations -maxdepth 1 -name '*.sql' | sort); do
   name="$(basename "$file")"
   if grep -qx "$name" "$TMP/main-files.txt"; then continue; fi
-  if ! sql -q < "$file"; then
+  version="${name%%_*}"
+  if ! apply_migration_file "$version" "$name" "$file"; then
     printf 'main-upgrade: FAILED applying candidate %s\n' "$name" >&2
     exit 1
   fi
-  version="${name%%_*}"
-  sql -q -c "insert into supabase_migrations.schema_migrations(version, name)
-    values ('$version', '$name') on conflict (version) do nothing"
   candidate=$((candidate + 1))
 done
 
@@ -184,5 +228,56 @@ if [[ "$spend" != '0.000225' ]]; then
   exit 1
 fi
 
+# --- Atomicity and recovery fixtures ----------------------------------------
+# Prove the apply function's transaction contract on the same container, with
+# deliberately failing migrations. These are qualification fixtures, not
+# product migrations.
+
+printf '%s\n' \
+  'create table public.upgrade_atomicity_probe (id integer primary key);' \
+  'insert into public.upgrade_atomicity_probe values (1);' \
+  'select 1 / 0;' > "$TMP/failing.sql"
+
+if apply_migration_file '20990101000000' '20990101000000_failing_fixture.sql' "$TMP/failing.sql"; then
+  fail 'a deliberately failing migration was reported as applied'
+fi
+probe_table="$(sql -tA -c "select coalesce(to_regclass('public.upgrade_atomicity_probe')::text, '')")"
+[[ -z "$probe_table" ]] || fail "failed migration left its table behind: $probe_table"
+probe_history="$(sql -tA -c "select count(*) from supabase_migrations.schema_migrations where version = '20990101000000'")"
+[[ "$probe_history" == '0' ]] || fail 'failed migration was falsely recorded in migration history'
+
+# Interrupted connection: terminating the backend mid-transaction must roll
+# back the DDL and leave no history row, then the database must accept the
+# repaired migration on the next connection.
+printf '%s\n' \
+  'create table public.upgrade_interrupt_probe (id integer primary key);' \
+  'select pg_terminate_backend(pg_backend_pid());' > "$TMP/interrupted.sql"
+
+if apply_migration_file '20990102000000' '20990102000000_interrupted_fixture.sql' "$TMP/interrupted.sql"; then
+  fail 'a migration that lost its connection was reported as applied'
+fi
+interrupt_table="$(sql -tA -c "select coalesce(to_regclass('public.upgrade_interrupt_probe')::text, '')")"
+[[ -z "$interrupt_table" ]] || fail "interrupted migration left its table behind: $interrupt_table"
+interrupt_history="$(sql -tA -c "select count(*) from supabase_migrations.schema_migrations where version = '20990102000000'")"
+[[ "$interrupt_history" == '0' ]] || fail 'interrupted migration was falsely recorded in migration history'
+
+printf '%s\n' \
+  'create table public.upgrade_atomicity_probe (id integer primary key);' \
+  'insert into public.upgrade_atomicity_probe values (1);' > "$TMP/repaired.sql"
+apply_migration_file '20990101000000' '20990101000000_failing_fixture.sql' "$TMP/repaired.sql" \
+  || fail 'forward repair after a failed migration did not apply'
+repaired_rows="$(sql -tA -c "select count(*) from public.upgrade_atomicity_probe")"
+[[ "$repaired_rows" == '1' ]] || fail 'forward repair did not preserve its committed data'
+
+# The replayed historical scheduler must not have completed a production call.
+# pg_net preserves failed/queued requests; a row pointing at production is only
+# acceptable here because network=none made delivery impossible, but the
+# strongest safety statement is that no HTTP response was ever recorded.
+if [[ "$(sql -tA -c "select count(*) from pg_namespace where nspname = 'net'")" == '1' ]]; then
+  responses="$(sql -tA -c "select count(*) from net._http_response" 2>/dev/null || echo 0)"
+  [[ "${responses:-0}" == '0' ]] || fail "network isolation violated: net recorded ${responses} HTTP response(s)"
+fi
+
+printf 'main-upgrade: atomicity fixtures PASS (failed and interrupted migrations left no DDL and no history; forward repair applied)\n'
 printf 'main-upgrade: PASS (%d baseline migrations from main, %d candidate migrations, history and guards verified)\n' \
   "$baseline" "$candidate"

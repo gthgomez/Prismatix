@@ -128,17 +128,29 @@ export const TERMINAL_EXECUTION_STATUSES: ReadonlySet<ExecutionReceiptStatus> = 
 
 /** numeric(12,6) may arrive as a string from PostgREST. Reject invalid money. */
 const MICRO_USD = 1_000_000;
+/** numeric(12,6): six integer digits and six fractional digits. */
+const MAX_USD = 999_999.999999;
+
+/**
+ * Floating-point representation noise for an amount already expressed in
+ * micro-USD. This is not a financial tolerance: it is far below one micro-USD
+ * at every supported magnitude and only absorbs double-precision error. The
+ * previous 0.25-micro tolerance accepted $0.0000001 and rounded it to zero.
+ */
+function microUsdNoiseTolerance(micros: number): number {
+  return Math.max(1e-9, Math.abs(micros) * Number.EPSILON * 8);
+}
 
 function parseUsd(value: number | string | null | undefined): number | undefined {
   if (typeof value !== 'number' && typeof value !== 'string') return undefined;
   if (typeof value === 'string' && value.trim() === '') return undefined;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > MAX_USD) return undefined;
   // The column cannot store sub-micro amounts. A value with finer precision is
   // malformed (or from another unit); treating it as valid would let rounding
   // silently change money.
   const micros = parsed * MICRO_USD;
-  if (Math.abs(micros - Math.round(micros)) > 0.25) return undefined;
+  if (Math.abs(micros - Math.round(micros)) > microUsdNoiseTolerance(micros)) return undefined;
   return parsed;
 }
 

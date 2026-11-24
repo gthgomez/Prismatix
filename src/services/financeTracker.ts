@@ -110,6 +110,7 @@ export function recordCost(entry: {
   provider?: string;
   conversationId?: string;
   costStatus?: 'settled' | 'estimated' | 'pending' | 'unknown';
+  breakdownSource?: 'confirmed' | 'estimated' | 'unavailable';
   promptTokens?: number;
   completionTokens?: number;
   executionId?: string;
@@ -131,8 +132,11 @@ export function recordCost(entry: {
       provider: entry.provider,
       conversationId: entry.conversationId,
       costStatus: entry.costStatus,
-      promptTokens: entry.promptTokens,
-      completionTokens: entry.completionTokens,
+      breakdownSource: entry.breakdownSource,
+      // An unavailable breakdown carries no token facts. Omitting them keeps
+      // consumers from summing a zero placeholder as real usage.
+      promptTokens: entry.breakdownSource === 'unavailable' ? undefined : entry.promptTokens,
+      completionTokens: entry.breakdownSource === 'unavailable' ? undefined : entry.completionTokens,
       executionId: entry.executionId,
     },
   ];

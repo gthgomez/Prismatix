@@ -36,6 +36,10 @@ const USERS = [
   { email: 'qual-c@example.test', password: 'qual-pass-c-1234' },
   { email: 'qual-d@example.test', password: 'qual-pass-d-1234' },
   { email: 'qual-e@example.test', password: 'qual-pass-e-1234' },
+  // Dedicated identity for the production-equivalent rate-limit probe: it
+  // deliberately exhausts the per-minute window, so it must not share an
+  // identity with any other suite.
+  { email: 'qual-f@example.test', password: 'qual-pass-f-1234' },
 ];
 
 if (!SERVICE_ROLE_KEY) {

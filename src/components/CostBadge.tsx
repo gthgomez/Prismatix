@@ -72,14 +72,29 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
       : 'est';
   const displayCost = value !== undefined ? `${formatUsd(value)} ${label}` : label;
 
+  // A settled total does not imply the component usage is settled. Legacy
+  // messages carry no provenance: if they carry client token counts, label
+  // them as estimates; if they carry none, say unavailable. Never "confirmed".
+  const hasTokenSnapshot = cost.promptTokens !== undefined || cost.completionTokens !== undefined;
+  const breakdownSource = cost.breakdownSource
+    ?? (hasTokenSnapshot ? 'estimated' : status === 'settled' ? 'unavailable' : 'estimated');
+  const tokensAvailable = breakdownSource !== 'unavailable';
+  const resolvedPromptTokens = promptTokens ?? cost.promptTokens;
+  const resolvedCompletionTokens = completionTokens ?? cost.completionTokens;
+
   const analysis = computeCostSavings({
     model,
     costUsd: value ?? 0,
-    promptTokens: promptTokens ?? cost.promptTokens,
-    completionTokens: completionTokens ?? cost.completionTokens,
+    promptTokens: tokensAvailable ? resolvedPromptTokens : undefined,
+    completionTokens: tokensAvailable ? resolvedCompletionTokens : undefined,
     durationMs: durationMs ?? cost.durationMs,
     content,
   });
+
+  const tokenLabel = (count: number | undefined): string => {
+    if (!tokensAvailable || count === undefined) return 'unavailable';
+    return `${count.toLocaleString()} tok${breakdownSource === 'estimated' ? ' est.' : ''}`;
+  };
 
   const togglePopover = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
@@ -142,11 +157,11 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
           <div className='popover-metrics-grid'>
             <div className='metric-box'>
               <span className='metric-label'>Prompt</span>
-              <span className='metric-val'>{analysis.promptTokens.toLocaleString()} tok</span>
+              <span className='metric-val'>{tokenLabel(resolvedPromptTokens)}</span>
             </div>
             <div className='metric-box'>
               <span className='metric-label'>Output</span>
-              <span className='metric-val'>{analysis.completionTokens.toLocaleString()} tok</span>
+              <span className='metric-val'>{tokenLabel(resolvedCompletionTokens)}</span>
             </div>
             <div className='metric-box'>
               <span className='metric-label'>Speed</span>
@@ -166,6 +181,10 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
             <div className='tariff-row'>
               <span>Tariff (In / Out):</span>
               <span>${analysis.modelPricing.inputRatePer1M.toFixed(2)} / ${analysis.modelPricing.outputRatePer1M.toFixed(2)} per 1M</span>
+            </div>
+            <div className='tariff-row'>
+              <span>Breakdown:</span>
+              <span>{breakdownSource}</span>
             </div>
             {cost.pricingVersion && (
               <div className='tariff-row pricing-ver'>

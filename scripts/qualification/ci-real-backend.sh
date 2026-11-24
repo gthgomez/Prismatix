@@ -89,15 +89,13 @@ fi
 log "Edge runtime reaches the stub at http://${GATEWAY}:8899"
 
 # Non-secret fixture key/ciphertext shared with seed-local.mjs.
-# The rate limit is raised ONLY for this disposable qualification runtime: the
-# acceptance gate, isolation checks and browser journeys all drive one identity
-# inside a minute, which legitimately exceeds the production default of 20/min.
-# Production keeps the default; no product control is weakened here.
+# Deliberately NO rate-limit override: qualification must exercise the same
+# 20 requests/user/minute default users receive. Suites use separate disposable
+# identities; the dedicated rate-limit probe verifies the control itself.
 cat > supabase/functions/.env <<EOF
 OPENROUTER_BASE_URL=http://${GATEWAY}:8899/v1
 BYOK_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 ALLOWED_ORIGIN=http://127.0.0.1:${PLAYWRIGHT_PORT}
-USER_RATE_LIMIT_MAX_REQUESTS=500
 ENABLE_ANTHROPIC=false
 ENABLE_OPENAI=false
 ENABLE_GOOGLE=false
@@ -127,6 +125,9 @@ node scripts/qualification/seed-local.mjs > /tmp/seed.log
 
 log "API acceptance gate (assertions, not diagnostics)"
 node scripts/qualification/smoke-router.mjs
+
+log "production-equivalent rate limit"
+node scripts/qualification/rate-limit-check.mjs
 
 log "account isolation"
 node scripts/qualification/isolation-check.mjs

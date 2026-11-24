@@ -3,6 +3,11 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
+import {
+  classifyBreakdownSource,
+  deriveSettledBreakdown,
+  type SettledBreakdown,
+} from '../../supabase/functions/_shared/execution_receipt';
 import { useContextManager } from '../hooks/useContextManager';
 import {
   isCatalogSkewed,
@@ -401,6 +406,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const [compactCostReveal, setCompactCostReveal] = useState<{ viewportHeight: number; request: number } | null>(null);
   const compactCostRevealRequestRef = useRef(0);
   const [finalMessageCost, setFinalMessageCost] = useState<number | null>(null);
+  const [finalMessageBreakdown, setFinalMessageBreakdown] = useState<SettledBreakdown | null>(null);
+  const [finalBreakdownSource, setFinalBreakdownSource] = useState<
+    'confirmed' | 'estimated' | 'unavailable' | null
+  >(null);
   const [routerPricingVersion, setRouterPricingVersion] = useState<string | undefined>(undefined);
   const [debateSelection, setDebateSelection] = useState<DebateSelection>('off');
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
@@ -794,6 +803,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setCostModel(null);
     setReportedCostModel(undefined);
     setFinalMessageCost(null);
+    setFinalMessageBreakdown(null);
+    setFinalBreakdownSource(null);
     setRouterPricingVersion(undefined);
     setSessionCostTotal(0);
     setLastRecall(null);
@@ -1079,6 +1090,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       setShowCostEstimator(false);
       setCurrentUsage(null);
       setFinalMessageCost(null);
+      setFinalMessageBreakdown(null);
+      setFinalBreakdownSource(null);
       costEstimatorHideTimeoutRef.current = null;
     }, delayMs);
   };
@@ -2110,6 +2123,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     clearCostEstimatorHideTimer();
     setShowCostEstimator(true);
     setFinalMessageCost(null);
+    setFinalMessageBreakdown(null);
+    setFinalBreakdownSource(null);
     setRouterPricingVersion(undefined);
     setCostModel(estimatedModel);
     setReportedCostModel(undefined);
@@ -2655,6 +2670,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         estimateTokenCount(queryText) +
         attachmentsToProcess.filter((file) => file.isImage).length * 1600;
       const completionTokens = estimateTokenCount(assistantContent);
+      // The terminal receipt is the only authority for settled component
+      // costs. Client token estimates remain estimates and are never promoted
+      // to confirmed usage; an absent authoritative breakdown is `unavailable`
+      // rather than a zero-cost breakdown.
+      const settledBreakdown = receipt ? deriveSettledBreakdown(receipt) : null;
+      const breakdownSource = classifyBreakdownSource(settledBreakdown, receipt?.settlement?.state);
+      const messagePromptTokens = breakdownSource === 'unavailable'
+        ? undefined
+        : settledBreakdown?.promptTokens ?? promptTokens;
+      const messageCompletionTokens = breakdownSource === 'unavailable'
+        ? undefined
+        : settledBreakdown?.completionTokens ?? completionTokens;
       const computedCost = model
         ? calculateFinalCost(model, { promptTokens, completionTokens })
         : undefined;
@@ -2702,14 +2729,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             provider,
             conversationId: sendConversationId,
             costStatus,
-            promptTokens,
-            completionTokens,
+            breakdownSource,
+            promptTokens: messagePromptTokens,
+            completionTokens: messageCompletionTokens,
             executionId: receipt?.executionId ?? executionId,
           }, requestUserId);
           setSessionCostTotal((prev) => prev + authoritativeCost);
           setFinalMessageCost(authoritativeCost);
+          setFinalMessageBreakdown(settledBreakdown);
+          setFinalBreakdownSource(breakdownSource);
         } else {
           setFinalMessageCost(null);
+          setFinalMessageBreakdown(null);
+          setFinalBreakdownSource(breakdownSource);
         }
 
         if (streamUpdateApplies(requestAccountGeneration)) {
@@ -2728,9 +2760,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                   finalUsd: authoritativeCost,
                   status: costStatus,
                   pricingVersion: costPricingVersion || computedCost?.pricingVersion,
-                  promptTokens,
-                  completionTokens,
+                  promptTokens: messagePromptTokens,
+                  completionTokens: messageCompletionTokens,
                   durationMs: Date.now() - streamStartMs,
+                  breakdownSource,
+                  ...(settledBreakdown
+                    ? { breakdown: {
+                      inputUsd: settledBreakdown.inputCostUsd,
+                      outputUsd: settledBreakdown.outputCostUsd,
+                      thinkingUsd: settledBreakdown.reasoningCostUsd,
+                    } }
+                    : {}),
                 },
                 thinkingLog: [...thinkingLog],
                 thinkingDurationMs: Date.now() - streamStartMs,
@@ -2770,6 +2810,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         : responseEstimateUsd !== undefined ? 'estimated' : 'unknown';
 
       setFinalMessageCost(authoritativeFinalUsd ?? null);
+      setFinalMessageBreakdown(settledBreakdown);
+      setFinalBreakdownSource(breakdownSource);
 
       if (authoritativeFinalUsd !== undefined) {
         recordCost({
@@ -2779,8 +2821,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           provider,
           conversationId: sendConversationId,
           costStatus,
-          promptTokens,
-          completionTokens,
+          breakdownSource,
+          promptTokens: messagePromptTokens,
+          completionTokens: messageCompletionTokens,
           executionId: receipt?.executionId ?? executionId,
         }, requestUserId);
         setSessionCostTotal((prev) => prev + authoritativeFinalUsd);
@@ -2820,9 +2863,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                 finalUsd: authoritativeFinalUsd,
                 status: costStatus,
                 pricingVersion: costPricingVersion || computedCost?.pricingVersion,
-                promptTokens,
-                completionTokens,
+                promptTokens: messagePromptTokens,
+                completionTokens: messageCompletionTokens,
                 durationMs: Date.now() - streamStartMs,
+                breakdownSource,
+                ...(settledBreakdown
+                  ? { breakdown: {
+                    inputUsd: settledBreakdown.inputCostUsd,
+                    outputUsd: settledBreakdown.outputCostUsd,
+                    thinkingUsd: settledBreakdown.reasoningCostUsd,
+                  } }
+                  : {}),
               },
               thinkingLog: [...thinkingLog],
               thinkingDurationMs: Date.now() - streamStartMs,
@@ -3360,6 +3411,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       setReportedCostModel(undefined);
       setShowCostEstimator(false);
       setFinalMessageCost(null);
+      setFinalMessageBreakdown(null);
+      setFinalBreakdownSource(null);
       setRouterPricingVersion(undefined);
       clearCostEstimatorHideTimer();
       resetAutoScroll();
@@ -4117,6 +4170,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                 isStreaming={isStreaming}
                 totalCost={sessionCostTotal}
                 finalCostUsd={finalMessageCost}
+                settledBreakdown={finalMessageBreakdown}
+                breakdownSource={finalBreakdownSource}
                 routerPricingVersion={routerPricingVersion}
                 onInteractionStart={clearCostEstimatorHideTimer}
                 onInteractionEnd={() => scheduleCostEstimatorHide(3000)}

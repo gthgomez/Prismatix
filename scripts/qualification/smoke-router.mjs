@@ -21,6 +21,7 @@ try {
 
 const SUPABASE_URL = target.supabaseUrl;
 const ANON_KEY = target.anonKey;
+const SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const STUB_URL = target.stubUrl;
 const EMAIL = process.env.QUAL_EMAIL ?? 'qual-e@example.test';
 const PASSWORD = process.env.QUAL_PASSWORD ?? 'qual-pass-e-1234';
@@ -161,6 +162,23 @@ async function readCostLogs(token, conversationId) {
     { headers: { apikey: ANON_KEY, authorization: `Bearer ${token}` } },
   );
   return { status: response.status, body: await json(response) };
+}
+
+async function serviceRpc(name, body) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, {
+    method: 'POST',
+    headers: {
+      apikey: ANON_KEY,
+      authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = await json(response);
+  if (!response.ok) {
+    throw new Error(`${name} failed: ${response.status} ${JSON.stringify(payload)}`);
+  }
+  return payload;
 }
 
 async function readMessages(token, conversationId) {
@@ -394,6 +412,110 @@ async function runBreakdownProbes(token, userId) {
   console.log('smoke: breakdown provenance ACCEPTED (pending/estimated and settled/confirmed zero both honest)');
 }
 
+/**
+ * R1 settled/unavailable probe.
+ *
+ * The previous gate covered confirmed, pending/estimated and confirmed-zero.
+ * The missing state is a genuinely SETTLED execution whose per-call component
+ * columns do not reconcile with the settled total. This is the historical
+ * corruption shape: a consumer that trusts the components (or treats zero
+ * placeholders as real) would report $0.0000 input/output for a $0.000075
+ * charge. The ledger/receipt contract must keep the total and expose enough
+ * evidence for the client to classify the breakdown as unavailable.
+ *
+ * Uses service-role RPCs only to create the corrupted fixture; the receipt is
+ * then read through the same authenticated user-facing action as production.
+ */
+async function runSettledUnavailableProbe(token, userId) {
+  if (!SERVICE_ROLE_KEY) {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY is required for the settled/unavailable probe');
+  }
+  const conversationId = await createConversation(token, userId);
+  const created = await serviceRpc('px03_create_execution', {
+    p_subject_id: userId,
+    p_conversation_id: conversationId,
+    p_client_request_key: `qual-unavailable-${randomUUID()}`,
+    p_payload_hash: 'qual-unavailable-components',
+  });
+  const executionId = created?.execution?.id;
+  if (!executionId) throw new Error(`probe execution was not created: ${JSON.stringify(created)}`);
+
+  const admission = await serviceRpc('px05_admit_execution', {
+    p_subject_id: userId,
+    p_execution_id: executionId,
+    p_estimate_usd: 0.1,
+    p_max_usd: 0.1,
+    p_lease_seconds: 60,
+    p_request_limit: 5000,
+    p_user_daily_usd: 5,
+    p_project_daily_usd: 5,
+    p_active_limit: 10,
+  });
+  if (admission?.admitted !== true) {
+    throw new Error(`probe admission failed: ${JSON.stringify(admission)}`);
+  }
+
+  await serviceRpc('px03_record_model_call', {
+    p_execution_id: executionId,
+    p_stage: 'primary',
+    p_participant: 'fixture',
+    p_attempt_number: 1,
+    p_input_tokens: 40,
+    p_output_tokens: 12,
+    p_thinking_tokens: 0,
+    // The settled total is real; the component columns are the corrupt part.
+    p_input_cost: 0,
+    p_output_cost: 0,
+    p_thinking_cost: 0,
+    p_total_cost: 0.000075,
+    p_cost_status: 'settled',
+  });
+  const commit = await serviceRpc('px05_commit_from_ledger', { p_execution_id: executionId });
+  if (commit?.state !== 'committed' || micros(commit?.committed_usd) !== 75) {
+    throw new Error(`probe settlement did not commit 75 micros: ${JSON.stringify(commit)}`);
+  }
+  await serviceRpc('px03_finalize_execution', {
+    p_execution_id: executionId,
+    p_status: 'completed',
+    p_terminal_outcome: 'ok',
+    p_served_model: 'gemini-3.8-flash',
+  });
+
+  const receiptResponse = await fetchReceipt(token, executionId);
+  const receipt = receiptResponse.body?.receipt ?? receiptResponse.body;
+  const call = receipt?.calls?.[0];
+  const componentMicros = call?.costs
+    ? micros(call.costs.inputUsd) + micros(call.costs.outputUsd) + micros(call.costs.thinkingUsd)
+    : null;
+
+  const failures = [];
+  const check = (condition, label, detail) => {
+    if (!condition) failures.push({ label, detail });
+  };
+  check(receiptResponse.status === 200, 'settled/unavailable: receipt action returns 200', receiptResponse.status);
+  check(receipt?.settlement?.state === 'settled', 'settled/unavailable: settlement is settled', receipt?.settlement);
+  check(micros(receipt?.settlement?.committedUsd) === 75, 'settled/unavailable: settled total is 75 micros', receipt?.settlement);
+  check(call?.costStatus === 'settled', 'settled/unavailable: call is settled', call);
+  check(micros(call?.totalCost) === 75, 'settled/unavailable: call total is 75 micros', call);
+  check(componentMicros !== null, 'settled/unavailable: component columns are present', call?.costs);
+  check(
+    componentMicros !== 75,
+    'settled/unavailable: zero placeholders do NOT reconcile with the settled total',
+    { componentMicros, totalMicros: micros(call?.totalCost) },
+  );
+  if (failures.length > 0) {
+    console.error('\nsmoke: SETTLED/UNAVAILABLE CHECK FAILED');
+    for (const failure of failures) {
+      console.error(`  ? ${failure.label}`);
+      console.error(`    ${JSON.stringify(failure.detail)}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+  console.log('smoke: settled/unavailable ACCEPTED (total preserved, zero component placeholders cannot be confirmed)');
+  return { executionId, conversationId };
+}
+
 async function main() {
   const session = await signIn();
   const token = session.access_token;
@@ -477,6 +599,7 @@ async function main() {
   console.log('smoke: ACCEPTED — fixture content, usage, tariff, settlement, persistence and call count all reconcile');
 
   await runBreakdownProbes(token, userId);
+  await runSettledUnavailableProbe(token, userId);
 }
 
 main().catch((error) => {

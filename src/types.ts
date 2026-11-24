@@ -142,6 +142,18 @@ export interface MessageCost {
   promptTokens?: number;
   completionTokens?: number;
   durationMs?: number;
+  /**
+   * Provenance of the component costs/tokens. A settled total with
+   * `unavailable` means the breakdown was not recorded; the token fields must
+   * not be presented as confirmed usage. Absent on legacy live messages.
+   */
+  breakdownSource?: 'confirmed' | 'estimated' | 'unavailable';
+  /** Authoritative ledger components, present only when `confirmed`. */
+  breakdown?: {
+    inputUsd: number;
+    outputUsd: number;
+    thinkingUsd: number;
+  };
 }
 
 export interface Message {

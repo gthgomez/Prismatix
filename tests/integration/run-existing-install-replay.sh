@@ -29,6 +29,17 @@ done
 
 sql() { docker exec -i "$db" psql -U postgres -X -v ON_ERROR_STOP=1 "$@"; }
 
+# `db push` runs each migration file inside one transaction. Reproduce that
+# here; plain `psql < file` is autocommit and would leave partial DDL behind
+# when a migration aborts on an existing installation.
+apply_file() {
+  {
+    printf 'begin;\n'
+    cat "$1"
+    printf '\n;\ncommit;\n'
+  } | sql -q
+}
+
 sql -q <<'SQL'
 create role anon;
 create role authenticated;
@@ -52,7 +63,7 @@ SQL
 
 # Apply the historical migrations that built today's production scheduler first,
 # so the run is a genuine upgrade rather than a fresh install.
-sql -q < "$migration_dir/20260210000000_init_conversations_messages.sql"
+apply_file "$migration_dir/20260210000000_init_conversations_messages.sql"
 
 # Reconstruct the managed pg_cron surface an existing installation has, and seed
 # the unsafe job owned by the database owner.
@@ -97,7 +108,7 @@ SQL
 applied=0
 for file in $(find "$migration_dir" -maxdepth 1 -name '*.sql' | sort); do
   name="$(basename "$file")"
-  if ! sql -q < "$file"; then
+  if ! apply_file "$file"; then
     printf '\nexisting-replay: FAILED applying %s\n' "$name" >&2
     printf 'existing-replay: this migration cannot run unattended through db push on an\n' >&2
     printf 'existing installation. Move live-scheduler operations to supabase/operations/.\n' >&2

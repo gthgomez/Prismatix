@@ -146,6 +146,112 @@ describe('CostEstimator pricing freshness', () => {
     expect(container.textContent).not.toContain('Client breakdown sum');
   });
 
+  it('renders authoritative ledger components instead of recalculating a settled total', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model='gemini-3.8-flash'
+      usage={{ promptTokens: 1000, completionTokens: 1000 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0.000075}
+      finalCostUsd={0.000075}
+      breakdownSource='confirmed'
+      settledBreakdown={{
+        promptTokens: 40,
+        completionTokens: 12,
+        reasoningTokens: 0,
+        inputCostUsd: 0.00003,
+        outputCostUsd: 0.000045,
+        reasoningCostUsd: 0,
+        totalUsd: 0.000075,
+      }}
+    />));
+
+    expect(container.querySelector('.cost-estimator-title')?.textContent).toBe('Settled total');
+    expect(container.querySelector('.cost-estimator-total')?.textContent).toContain('$0.000075');
+    const rows = Array.from(container.querySelectorAll('.cost-estimator-row')).map((row) => row.textContent);
+    expect(rows).toEqual(['Input$0.000030', 'Output$0.000045']);
+    expect(container.textContent).not.toContain('Settlement is pending');
+
+    const details = container.querySelector<HTMLButtonElement>('.cost-estimator-details-toggle')!;
+    if (details.getAttribute('aria-expanded') === 'false') act(() => details.click());
+    expect(container.textContent).toContain('Breakdown sourceconfirmed');
+    expect(container.textContent).toContain('Tokens (confirmed ledger)');
+    expect(container.textContent).toContain('High precision (confirmed ledger, USD)');
+    expect(container.textContent).not.toContain('High precision (client estimate, USD)');
+  });
+
+  it('shows a settled total with unavailable components without inventing zeros', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model='gemini-3.8-flash'
+      usage={{ promptTokens: 1000, completionTokens: 1000 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0.000075}
+      finalCostUsd={0.000075}
+      breakdownSource='unavailable'
+      settledBreakdown={null}
+    />));
+
+    expect(container.querySelector('.cost-estimator-title')?.textContent).toBe('Settled total');
+    expect(container.querySelector('.cost-estimator-total')?.textContent).toContain('$0.000075');
+    expect(container.querySelector('.cost-estimator-rows')).toBeNull();
+    expect(container.textContent).toContain('component costs and usage are unavailable');
+    expect(container.textContent).not.toContain('Input$0.0000');
+
+    const details = container.querySelector<HTMLButtonElement>('.cost-estimator-details-toggle')!;
+    if (details.getAttribute('aria-expanded') === 'false') act(() => details.click());
+    expect(container.textContent).toContain('Token usage is unavailable');
+  });
+
+  it('labels a pending settlement as an estimate, not a confirmed charge', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model='gemini-3.8-flash'
+      usage={{ promptTokens: 1000, completionTokens: 1000 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0}
+      finalCostUsd={null}
+      breakdownSource='estimated'
+    />));
+
+    expect(container.querySelector('.cost-estimator-title')?.textContent).toBe('Estimated total');
+    expect(container.textContent).toContain('Settlement is pending');
+    expect(container.textContent).toContain('Line items are client estimates');
+    expect(container.querySelector('.cost-estimator-rows')).not.toBeNull();
+  });
+
+  it('treats a confirmed label without a breakdown as unavailable', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model='gemini-3.8-flash'
+      usage={{ promptTokens: 1000, completionTokens: 1000 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0.000075}
+      finalCostUsd={0.000075}
+      breakdownSource='confirmed'
+      settledBreakdown={null}
+    />));
+
+    expect(container.textContent).toContain('component costs and usage are unavailable');
+    expect(container.querySelector('.cost-estimator-rows')).toBeNull();
+  });
+
   it('distinguishes an unrecognized reported model from an omitted model', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
