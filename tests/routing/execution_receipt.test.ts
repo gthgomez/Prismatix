@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   TERMINAL_EXECUTION_STATUSES,
+  deriveSettledBreakdown,
   projectReceipt,
   type RawReceiptCall,
   type RawReceiptExecution,
@@ -110,6 +111,99 @@ describe('projectReceipt', () => {
       ],
     });
   });
+
+describe('authoritative settled breakdown (PXQ-41)', () => {
+  it('projects provider-reported usage and component costs onto each call', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ input_tokens: '40', output_tokens: 12, thinking_tokens: 0, input_cost: '0.000030', output_cost: '0.000045', thinking_cost: 0 })],
+      reservation: reservation({ committed_usd: 0.000075 }),
+    });
+
+    expect(receipt.calls[0]!.usage).toEqual({ promptTokens: 40, completionTokens: 12, reasoningTokens: 0 });
+    expect(receipt.calls[0]!.costs).toEqual({ inputUsd: 0.00003, outputUsd: 0.000045, thinkingUsd: 0 });
+  });
+
+  it('omits usage when any token field is invalid instead of fabricating zero', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ input_tokens: 40, output_tokens: null, thinking_tokens: 0 })],
+      reservation: reservation(),
+    });
+
+    expect(receipt.calls[0]!.usage).toBeUndefined();
+  });
+
+  it('returns components that reconcile with the settled total', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ input_tokens: 40, output_tokens: 12, thinking_tokens: 0, input_cost: 0.00003, output_cost: 0.000045, thinking_cost: 0 })],
+      reservation: reservation({ committed_usd: 0.000075 }),
+    });
+
+    expect(deriveSettledBreakdown(receipt)).toEqual({
+      promptTokens: 40,
+      completionTokens: 12,
+      reasoningTokens: 0,
+      inputCostUsd: 0.00003,
+      outputCostUsd: 0.000045,
+      reasoningCostUsd: 0,
+      totalUsd: 0.000075,
+    });
+  });
+
+  it('sums every settled call for a multi-stage execution', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [
+        call({ input_tokens: 10, output_tokens: 5, thinking_tokens: 0, input_cost: 0.00001, output_cost: 0.000005, thinking_cost: 0, total_cost: 0.000015 }),
+        call({ participant: 'openai', input_tokens: 20, output_tokens: 7, thinking_tokens: 0, input_cost: 0.00002, output_cost: 0.000007, thinking_cost: 0, total_cost: 0.000027 }),
+      ],
+      reservation: reservation({ committed_usd: 0.000042 }),
+    });
+
+    expect(deriveSettledBreakdown(receipt)).toMatchObject({
+      promptTokens: 30,
+      completionTokens: 12,
+      inputCostUsd: 0.00003,
+      outputCostUsd: 0.000012,
+      totalUsd: 0.000042,
+    });
+  });
+
+  it('refuses a breakdown whose components disagree with the settled total', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      // The regression this guards: a settled total from provider usage paired
+      // with an estimated component breakdown that does not sum to it.
+      calls: [call({ input_tokens: 127, output_tokens: 10, thinking_tokens: 0, input_cost: 0.000095, output_cost: 0.000038, thinking_cost: 0, total_cost: 0.000075 })],
+      reservation: reservation({ committed_usd: 0.000075 }),
+    });
+
+    expect(deriveSettledBreakdown(receipt)).toBeNull();
+  });
+
+  it('refuses a breakdown when the execution is not settled', () => {
+    const receipt = projectReceipt({
+      execution: execution({ status: 'started' }),
+      calls: [call({ cost_status: 'pending' }), call({ participant: 'openai', cost_status: 'pending' })],
+      reservation: reservation({ state: 'held', committed_usd: 0.25 }),
+    });
+
+    expect(receipt.settlement.state).toBe('pending');
+    expect(deriveSettledBreakdown(receipt)).toBeNull();
+  });
+
+  it('refuses a settled execution whose calls lack usage data', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ total_cost: 0.25 })],
+      reservation: reservation({ committed_usd: 0.25 }),
+    });
+
+    expect(deriveSettledBreakdown(receipt)).toBeNull();
+  });
+});
 
   it('reports pending when any call is not settled (never $0-as-settled)', () => {
     const receipt = projectReceipt({

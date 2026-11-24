@@ -475,3 +475,133 @@ real provider streaming and settlement; physical-device and screen-reader
 behaviour. No hosted migration, schedule change, secret change, or merge was
 performed in this pass.
 
+## Independent qualification pass · 2026-11-24
+
+This pass re-derived the candidate state and replaced the largest evidence gap
+(synthetic-only browser coverage) with a real local Supabase stack. Candidate:
+`6d36e7b42c3081559c4bb9a64a5a8d2127322576`, 60 ahead / 0 behind
+`6a5c4cb0ad364490a1a0d959dcc60f68f63d7314`.
+
+### Starting-state corrections
+
+- **The Vercel check is red, not green.** Run `45116588971` is green for the
+  six GitHub jobs, but the Vercel deployment for the same head fails:
+  `VERCEL_ENV=preview` resolves `VITE_SUPABASE_URL` to
+  `sqjfbqjogylkfwzsyprd.supabase.co` and
+  `scripts/assert-environment-isolation.mjs` refuses the build. That is the
+  guard working as designed; it also means **no reviewable preview exists** and
+  every branch deployment fails until a nonproduction backend is configured.
+- **The Supabase project is reachable now.** `supabase projects list` shows the
+  linked project `sqjfbqjogylkfwzsyprd` (“Prismatix Router”), contradicting the
+  earlier “cannot access” note. It is the production project identified by the
+  frontend, so it was used for **read-only inventory only**. No preview branches
+  exist (`branches list` empty), no nonproduction hosted project exists, and no
+  billable infrastructure was provisioned.
+- `main` is not branch-protected (`GET …/branches/main/protection` → 404), so
+  GitHub does not itself require the failing Vercel check.
+
+### Environment actually exercised
+
+Docker Desktop 29.8.1 + Supabase CLI **2.98.2** (2.114.0 fails on this host with
+`failed to copy secret file into container: Access is denied`). The stack ran
+real Postgres 17, GoTrue, PostgREST/RLS, Storage and the Edge runtime.
+
+- All **33 migrations** were applied by the CLI's own runner against an empty
+  database (`supabase start` / `db reset`), including both historical cron
+  files, the PX08 pair, qualified spend, and PX13. No scheduler was installed.
+- Docker binds mounts and `host.docker.internal` work; a deterministic stub
+  provider (`scripts/qualification/stub-provider.mjs`) received every provider
+  call through the router's supported `OPENROUTER_BASE_URL` seam. No live
+  provider request was made.
+- Two disposable Auth identities and one enabled BYOK row each were created via
+  the service-role RPC. The signup trigger created bounded grants.
+- Reproducible setup: [`docs/engineering/local-qualification.md`](../local-qualification.md).
+
+### Findings repaired in this pass
+
+| ID | Reproduction / cause | Repair and evidence |
+| --- | --- | --- |
+| PXQ-41 / P1 | Complete a real turn and read `cost_logs`. The settled total came from the ledger, but token counts and input/output/thinking components were the pre-flight estimate. Observed: 127 input / 10 output, components `0.000095 + 0.000038`, total `0.000075` (a 40-input/12-output settled amount). A user reconciling the breakdown could not. | `px03_get_execution_receipt` already returns full `model_calls` rows; the projection discarded usage. The receipt now exposes per-call `usage`/`costs`, `deriveSettledBreakdown` sums only complete settled calls and refuses any component sum that does not reconcile (tolerance `1e-6 × (calls+1)`), and the router writes the cost log from that authority. Verified end-to-end on the real stack: `40` / `12` tokens, `0.00003 + 0.000045 = 0.000075`, matching the committed reservation. Regressions in `tests/routing/execution_receipt.test.ts`. |
+| PXQ-42 / P2 | Open the settled cost popover after a real turn. The confirmed receipt was `$0.0001` while Input/Output rendered `$0.0000` and the reconciliation note said the client sum was `$0.0000` — implying free components. | When a positive settled receipt has no usable client breakdown, the component rows are replaced by “A client token breakdown is unavailable for this turn.” and the confirmed receipt; `formatUsd` keeps nonzero micro-costs visible (`$0.000030`, not `$0.0000`). Verified by screenshot, `CostEstimator.test.tsx`. |
+| PXQ-43 / P2 (recorded, not repaired) | After sign-in the composer renders before the provider plug-in lookup resolves. Pressing Enter in that window sets a sticky “Provider setup is still being checked” validation error and drops the send; the user must submit again. | Reproduced by the real browser journey. The journey now waits for the enabled send control (the user-visible readiness signal). A behaviour change to queue instead of reject was not made without a product decision; recorded as backlog. |
+
+### Verification actually run
+
+| Check | Result |
+|---|---|
+| `npm run type-check` | pass |
+| `npm run test` (`NODE_ENV=test`) | 1086 tests / 107 files pass |
+| `npm run lint` | 0 errors, 136 warnings (unchanged) |
+| `npm run build` (production, isolation guard) | pass |
+| `deno check` router + provider-settings | pass |
+| Fresh migration replay via `supabase start` | 33 migrations, no scheduler |
+| `quarantine_video_worker_cron.sql` / `disable_video_worker_cron.sql` on a database without `pg_cron` | safe no-op / notice; no extension or job created |
+| Real API smoke (`qual:smoke`) | 200 stream, terminal receipt `settled`, `committedUsd 0.000075`, cost log settled with matching components, user+assistant rows persisted |
+| Cross-account isolation (`qual:isolation`) | 14/14 pass — B cannot read/insert/update/delete A rows, cannot route into A’s conversation, cannot execute key-material/grant/spend RPCs; anonymous denied; service-role control sees exactly one row |
+| Real browser journeys (`tests/e2e-real/`, no route mocks) | 4/4 — sign-in → stream → reload persistence; mid-stream Stop keeps text, exactly one provider call, no call after cancel and none after reload; second account sees no first-account history; 390×844 turn with no horizontal overflow |
+| Synthetic desktop Chromium | 131 passed, 2 opt-in Compare skipped |
+| Synthetic mobile subset (CI list) | 49 passed |
+| Screenshots | 9 curated frames, light+dark at 360/390/768/1440; no document overflow at any width |
+
+Notes on tests that could pass while the product is broken: the synthetic
+browser suite intercepts every backend call, so it cannot prove RLS, Auth,
+receipts or persistence. The real journeys above are the counterweight; they
+still do not cover hosted behavior.
+
+One unexplained flake was observed once: `arctic_light_workspace.spec.ts:78`
+timed out waiting for “New Chat” during the first full parallel desktop run.
+It passed 3/3 isolated, 6/6 at six workers, and in two subsequent full runs. No
+root cause was established; it remains recorded rather than explained away.
+
+### Release gates
+
+| Area | State |
+|---|---|
+| Repository reconciliation | VERIFIED (head, base, ancestry re-checked) |
+| Build | VERIFIED |
+| Unit / lint / types / Deno | VERIFIED |
+| Fresh migrations | VERIFIED (real runner) |
+| Existing-install migration upgrade | PARTIALLY VERIFIED (CI job + repository harness; not re-run locally because the Windows host lacks a POSIX runner) |
+| Scheduler operations | PARTIALLY VERIFIED (fail-closed path verified locally; managed `pg_cron` privileges remain unverified) |
+| Authentication (real) | VERIFIED (sign-in, session restore across reload, sign-out) |
+| Account isolation (real) | VERIFIED (14 checks) |
+| Chat / streaming / persistence (real) | VERIFIED |
+| Stop / cancel (real) | VERIFIED |
+| Recovery within tab scope | VERIFIED (recovery panel after interrupted stream) |
+| Spending / settlement arithmetic | VERIFIED (ledger and cost log agree) |
+| Budget admission concurrency | PARTIALLY VERIFIED (CI SQL fixtures; not re-run locally) |
+| UI desktop/mobile | PARTIALLY VERIFIED (emulated viewports + screenshots; no physical device) |
+| Accessibility | PARTIALLY VERIFIED (existing Axe/keyboard suites; no assistive technology) |
+| Restricted features | Compare disabled by default; image generation disabled; video worker disabled — unchanged, justified |
+| Hosted preview | BLOCKED (no nonproduction Supabase project) |
+| Production deployment | BLOCKED (requires explicit authorization) |
+
+### Remaining blockers and required authorization
+
+1. **A nonproduction hosted Supabase project** (or a Supabase preview branch)
+   with its own Auth/RLS/Edge deployment. Only then can the isolation guard
+   accept a Vercel preview and hosted behavior be qualified. Provisioning is an
+   account/billing decision and was not taken unilaterally.
+2. **Production merge/deployment authorization.** A merge to `main` deploys the
+   frontend; production scheduler and migration actions were not performed.
+3. The 15 legacy direct-provider rates remain blocked by the pricing-freshness
+   rule pending an authoritative rate review.
+4. Physical-device keyboards, screen readers, and native mobile zoom remain
+   unverified.
+
+### Deployment sequence (when authorized)
+
+1. Apply migrations first (PX08 pair, qualified spend, PX13), using the normal
+   runner; inspect the PX13 `NOT VALID` constraints and the invalid-money
+   preflight in this document before enabling paid workflows.
+2. Deploy `provider-settings`, then `router` and `spend_stats`, before the
+   frontend, so validation semantics and the qualified-spend RPC contract exist
+   together.
+3. Deploy the frontend with `VITE_PX08_COMPARE_DURABILITY` off and the video
+   worker disabled. Enable Compare only after a hosted canary covers success,
+   stop and failure with real receipts.
+4. Recovery: frontend rollback is independent; Edge functions can be redeployed
+   at the prior version; PX13 has a reviewed forward-repair rollback; scheduler
+   recovery is the quarantine/disable operations script, not a migration replay.
+
+

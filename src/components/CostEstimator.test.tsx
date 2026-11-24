@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { CostEstimator } from './CostEstimator';
+import { CostEstimator, formatUsd } from './CostEstimator';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 const legacyModel = 'gemini-2.5-flash';
@@ -84,6 +84,35 @@ describe('CostEstimator pricing freshness', () => {
     if (details.getAttribute('aria-expanded') === 'false') act(() => details.click());
     expect(container.textContent).not.toContain('High precision (client, USD)');
     expect(container.textContent).toContain('Confirmed receipt (USD)');
+  });
+
+  it('keeps nonzero micro-costs visibly nonzero', () => {
+    expect(formatUsd(0.00003)).toBe('$0.000030');
+    expect(formatUsd(0.000045)).toBe('$0.000045');
+    expect(formatUsd(0.000075)).toBe('$0.000075');
+    expect(formatUsd(0.0123)).toBe('$0.0123');
+    expect(formatUsd(0)).toBe('$0.0000');
+    expect(formatUsd(Number.NaN)).toBe('$0.0000');
+  });
+
+  it('does not present a zero client breakdown beside a positive settled receipt', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model='gemini-3.8-flash'
+      usage={{ promptTokens: 0, completionTokens: 0 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0.0001}
+      finalCostUsd={0.0001}
+    />));
+
+    expect(container.textContent).toContain('A client token breakdown is unavailable for this turn');
+    expect(container.querySelector('.cost-estimator-rows')).toBeNull();
+    expect(container.querySelector('.cost-estimator-total')?.textContent).toContain('$0.0001');
+    expect(container.textContent).not.toContain('Client breakdown sum');
   });
 
   it('does not invent a model or cost breakdown when the router omits the model', () => {

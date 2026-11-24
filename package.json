@@ -17,7 +17,12 @@
     "test": "vitest run",
     "audit:models": "node scripts/audit-stale-models.mjs",
     "check:parity": "node scripts/check-deployment-parity.mjs",
-    "check:isolation": "node scripts/assert-environment-isolation.mjs"
+    "check:isolation": "node scripts/assert-environment-isolation.mjs",
+    "qual:seed": "node scripts/qualification/seed-local.mjs",
+    "qual:smoke": "node scripts/qualification/smoke-router.mjs",
+    "qual:isolation": "node scripts/qualification/isolation-check.mjs",
+    "qual:e2e": "node scripts/qualification/run-real-e2e.mjs",
+    "qual:screens": "node scripts/qualification/capture-screens.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

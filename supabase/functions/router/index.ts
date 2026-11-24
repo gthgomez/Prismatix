@@ -100,6 +100,7 @@ import {
   type ExecutionStoreClient,
 } from './execution_store.ts';
 import type { TerminalReceipt } from '../_shared/execution_receipt.ts';
+import { deriveSettledBreakdown } from '../_shared/execution_receipt.ts';
 import {
   attachmentRefIsOwned,
   type AttachmentRef,
@@ -3575,17 +3576,33 @@ Deno.serve(async (req: Request) => {
             ? fallbackEstimateUsd
             : costBreakdown.totalUsd;
 
+          // PXQ-41: a settled row must not mix a settled total with an
+          // estimated token/cost breakdown. When the ledger exposes complete
+          // per-call usage, project the log from the same rows the settlement
+          // was committed from so tokens, components and total agree.
+          const settledBreakdown = interimReceipt
+            ? deriveSettledBreakdown(interimReceipt)
+            : null;
+          const loggedTokens = settledBreakdown ?? {
+            promptTokens: costBreakdown.promptTokens,
+            completionTokens: costBreakdown.completionTokens,
+            reasoningTokens: costBreakdown.reasoningTokens,
+            inputCostUsd: costBreakdown.inputCostUsd,
+            outputCostUsd: costBreakdown.outputCostUsd,
+            reasoningCostUsd: costBreakdown.reasoningCostUsd,
+          };
+
           const costLogRecord = {
             user_id: userId,
             conversation_id: conversationId,
             model: responseDecision.modelTier,
             provider: responseDecision.provider,
-            input_tokens: costBreakdown.promptTokens,
-            output_tokens: costBreakdown.completionTokens,
-            thinking_tokens: costBreakdown.reasoningTokens,
-            input_cost: costBreakdown.inputCostUsd,
-            output_cost: costBreakdown.outputCostUsd,
-            thinking_cost: costBreakdown.reasoningCostUsd,
+            input_tokens: loggedTokens.promptTokens,
+            output_tokens: loggedTokens.completionTokens,
+            thinking_tokens: loggedTokens.reasoningTokens,
+            input_cost: loggedTokens.inputCostUsd,
+            output_cost: loggedTokens.outputCostUsd,
+            thinking_cost: loggedTokens.reasoningCostUsd,
             total_cost: authoritativeTotalCost,
             pricing_version: costBreakdown.pricingVersion,
             complexity_score: responseDecision.complexityScore,

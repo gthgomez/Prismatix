@@ -18,6 +18,18 @@ export type ReceiptCostStatus = 'settled' | 'pending' | 'estimated_legacy';
 
 export type SettlementState = 'settled' | 'pending' | 'released';
 
+export interface ReceiptCallUsage {
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+}
+
+export interface ReceiptCallCosts {
+  inputUsd: number;
+  outputUsd: number;
+  thinkingUsd: number;
+}
+
 export interface ReceiptCall {
   stage: string | null;
   participant: string | null;
@@ -25,6 +37,14 @@ export interface ReceiptCall {
   servedModel: string | null;
   costStatus: ReceiptCostStatus;
   totalCost: number;
+  /**
+   * Provider-reported usage for this call, present only when the ledger row
+   * carries a complete, valid set. Callers must treat an absent value as
+   * "unknown", never as zero.
+   */
+  usage?: ReceiptCallUsage;
+  /** Ledger-projected component costs for this call, when complete and valid. */
+  costs?: ReceiptCallCosts;
 }
 
 export interface ReceiptSettlement {
@@ -73,6 +93,12 @@ export interface RawReceiptCall {
   served_model: string | null;
   cost_status: ReceiptCostStatus;
   total_cost?: number | string | null;
+  input_tokens?: number | string | null;
+  output_tokens?: number | string | null;
+  thinking_tokens?: number | string | null;
+  input_cost?: number | string | null;
+  output_cost?: number | string | null;
+  thinking_cost?: number | string | null;
 }
 
 // Mirrors prismatix_internal.budget_reservations (subset). `null` when no
@@ -109,6 +135,19 @@ function parseUsd(value: number | string | null | undefined): number | undefined
     if (value.trim() === '') return undefined;
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/** Token counts must be non-negative integers; anything else is unknown. */
+function parseTokenCount(value: number | string | null | undefined): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && value >= 0 ? value : undefined;
+  }
+  if (typeof value === 'string') {
+    if (value.trim() === '') return undefined;
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
   }
   return undefined;
 }
@@ -185,14 +224,91 @@ export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
     createdAt: execution.created_at,
     finalizedAt,
     settlement: { state, committedUsd, pendingCalls },
-    calls: projectedCalls.map(({ call, costStatus, totalCost }) => ({
-      stage: call.stage,
-      participant: call.participant,
-      attemptNumber: call.attempt_number,
-      servedModel: call.served_model,
-      costStatus,
-      totalCost: roundUsd(totalCost),
-    })),
+    calls: projectedCalls.map(({ call, costStatus, totalCost }) => {
+      const promptTokens = parseTokenCount(call.input_tokens);
+      const completionTokens = parseTokenCount(call.output_tokens);
+      const reasoningTokens = parseTokenCount(call.thinking_tokens);
+      const inputUsd = parseUsd(call.input_cost);
+      const outputUsd = parseUsd(call.output_cost);
+      const thinkingUsd = parseUsd(call.thinking_cost);
+      const usage = promptTokens !== undefined && completionTokens !== undefined && reasoningTokens !== undefined
+        ? { promptTokens, completionTokens, reasoningTokens }
+        : undefined;
+      const costs = inputUsd !== undefined && outputUsd !== undefined && thinkingUsd !== undefined
+        ? { inputUsd, outputUsd, thinkingUsd }
+        : undefined;
+      return {
+        stage: call.stage,
+        participant: call.participant,
+        attemptNumber: call.attempt_number,
+        servedModel: call.served_model,
+        costStatus,
+        totalCost: roundUsd(totalCost),
+        ...(usage ? { usage } : {}),
+        ...(costs ? { costs } : {}),
+      };
+    }),
     ...(payload.transcript ? { transcript: payload.transcript } : {}),
+  };
+}
+
+/**
+ * Authoritative per-execution usage/cost breakdown for a SETTLED receipt.
+ *
+ * The cost log must never present a component breakdown that disagrees with
+ * its own settled total (or with provider-reported usage). This sums the
+ * ledger's per-call rows — the same authority the reservation was committed
+ * from — and returns `null` unless every settled call reports complete usage
+ * and component costs AND the components reconcile with the settled amount.
+ * Callers must treat `null` as "breakdown unavailable", never as zero.
+ */
+export interface SettledBreakdown {
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  inputCostUsd: number;
+  outputCostUsd: number;
+  reasoningCostUsd: number;
+  totalUsd: number;
+}
+
+export function deriveSettledBreakdown(receipt: TerminalReceipt): SettledBreakdown | null {
+  if (receipt.settlement.state !== 'settled' || receipt.calls.length === 0) {
+    return null;
+  }
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let reasoningTokens = 0;
+  let inputCostUsd = 0;
+  let outputCostUsd = 0;
+  let reasoningCostUsd = 0;
+  for (const call of receipt.calls) {
+    if (call.costStatus !== 'settled' || !call.usage || !call.costs) {
+      return null;
+    }
+    promptTokens += call.usage.promptTokens;
+    completionTokens += call.usage.completionTokens;
+    reasoningTokens += call.usage.reasoningTokens;
+    inputCostUsd += call.costs.inputUsd;
+    outputCostUsd += call.costs.outputUsd;
+    reasoningCostUsd += call.costs.thinkingUsd;
+  }
+  const totalUsd = receipt.settlement.committedUsd;
+  const componentSum = inputCostUsd + outputCostUsd + reasoningCostUsd;
+  // Each stored component is numeric(12,6); summing N rows can drift by at
+  // most N*0.5e-6 from the settled amount. Anything larger is a real
+  // disagreement, not rounding, and must not be presented as a breakdown.
+  const tolerance = 1e-6 * (receipt.calls.length + 1);
+  if (Math.abs(componentSum - totalUsd) > tolerance) {
+    return null;
+  }
+  return {
+    promptTokens,
+    completionTokens,
+    reasoningTokens,
+    inputCostUsd: roundUsd(inputCostUsd),
+    outputCostUsd: roundUsd(outputCostUsd),
+    reasoningCostUsd: roundUsd(reasoningCostUsd),
+    totalUsd: roundUsd(totalUsd),
   };
 }

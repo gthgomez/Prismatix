@@ -6,6 +6,17 @@ import type { RouterModel } from '../types';
 const LS_DETAILS = 'prismatix.costEstimator.detailsExpanded';
 const TOTAL_COMPARE_EPS = 1e-5;
 
+/**
+ * Micro-costs are normal here ($0.00003 input). Four decimals would render
+ * them as $0.0000 and imply the component was free, so use enough precision to
+ * keep a nonzero amount visibly nonzero.
+ */
+export function formatUsd(value: number): string {
+  if (!Number.isFinite(value)) return '$0.0000';
+  if (value > 0 && value < 0.0001) return `$${value.toFixed(6)}`;
+  return `$${value.toFixed(4)}`;
+}
+
 function readDetailsExpanded(): boolean {
   try {
     return localStorage.getItem(LS_DETAILS) === '1';
@@ -80,9 +91,15 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
 
   const serverFinalApplied =
     !isStreaming && finalCostUsd !== null && finalCostUsd !== undefined;
+  // A zero client-side breakdown next to a positive settled receipt means the
+  // client never had usable token data for this turn. Presenting $0.0000
+  // Input/Output rows implies the call was free; treat the breakdown as
+  // unavailable and show only the confirmed receipt.
+  const clientBreakdownUnavailable = breakdown.hasUnknownRate
+    || (serverFinalApplied && (finalCostUsd as number) > 0 && clientMessageTotal <= 0);
   const clientVsServerDiffers =
     serverFinalApplied &&
-    !breakdown.hasUnknownRate &&
+    !clientBreakdownUnavailable &&
     Math.abs((finalCostUsd as number) - clientMessageTotal) > TOTAL_COMPARE_EPS;
 
   const routerVersionTrimmed = routerPricingVersion?.trim() || null;
@@ -110,19 +127,22 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
       <div className='cost-estimator-title'>
         {isStreaming ? 'Live message estimate' : serverFinalApplied ? 'Settled total' : 'Estimated total'}
       </div>
-      {breakdown.hasUnknownRate ? (
+      {clientBreakdownUnavailable ? (
         <>
           <p className='cost-estimator-unknown-pricing' role='alert'>
-            {model
-              ? `Pricing for ${model} is unverified or out of date.`
-              : reportedModel
-                ? `Pricing for the unrecognized model ${reportedModel} is unavailable in this client.`
-                : 'The router did not report the model.'} A detailed estimate is unavailable.
+            {breakdown.hasUnknownRate
+              ? model
+                ? `Pricing for ${model} is unverified or out of date.`
+                : reportedModel
+                  ? `Pricing for the unrecognized model ${reportedModel} is unavailable in this client.`
+                  : 'The router did not report the model.'
+              : 'A client token breakdown is unavailable for this turn.'}{' '}
+            A detailed estimate is unavailable.
           </p>
           {serverFinalApplied && (
             <div className='cost-estimator-total'>
               <span>Confirmed receipt</span>
-              <span>${(finalCostUsd as number).toFixed(4)}</span>
+              <span>{formatUsd(finalCostUsd as number)}</span>
             </div>
           )}
         </>
@@ -130,36 +150,35 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
         <div className='cost-estimator-rows'>
           <div className='cost-estimator-row'>
             <span>Input</span>
-            <span>${breakdown.inputCost.toFixed(4)}</span>
+            <span>{formatUsd(breakdown.inputCost)}</span>
           </div>
           <div className='cost-estimator-row'>
             <span>Output</span>
-            <span>${breakdown.outputCost.toFixed(4)}</span>
+            <span>{formatUsd(breakdown.outputCost)}</span>
           </div>
           {breakdown.thinkingCost > 0 && (
             <div className='cost-estimator-row'>
               <span>Thinking</span>
-              <span>${breakdown.thinkingCost.toFixed(4)}</span>
+              <span>{formatUsd(breakdown.thinkingCost)}</span>
             </div>
           )}
           <div className='cost-estimator-total'>
             <span>{isStreaming ? 'Live estimate' : serverFinalApplied ? 'Confirmed receipt' : 'Estimate'}</span>
-            <span>${messageTotal.toFixed(4)}</span>
+            <span>{formatUsd(messageTotal)}</span>
           </div>
         </div>
       )}
 
       {clientVsServerDiffers && (
         <p className='cost-estimator-reconcile-note' role='status'>
-          Shown total uses the confirmed receipt (
-          ${(finalCostUsd as number).toFixed(4)}). Client breakdown sum is $
-          {clientMessageTotal.toFixed(4)} — see details.
+          Shown total uses the confirmed receipt ({formatUsd(finalCostUsd as number)}). Client
+          breakdown sum is {formatUsd(clientMessageTotal)} — see details.
         </p>
       )}
 
       <div className='cost-estimator-session'>
         <span>Confirmed receipts in this session</span>
-        <strong>${totalCost.toFixed(4)}</strong>
+        <strong>{formatUsd(totalCost)}</strong>
       </div>
 
       <button
