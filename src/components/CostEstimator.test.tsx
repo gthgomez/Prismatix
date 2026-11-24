@@ -191,7 +191,7 @@ describe('CostEstimator pricing freshness', () => {
 
     act(() => root!.render(<CostEstimator
       model='gemini-3.8-flash'
-      usage={{ promptTokens: 1000, completionTokens: 1000 }}
+      usage={null}
       isVisible
       isStreaming={false}
       totalCost={0.000075}
@@ -209,6 +209,33 @@ describe('CostEstimator pricing freshness', () => {
     const details = container.querySelector<HTMLButtonElement>('.cost-estimator-details-toggle')!;
     if (details.getAttribute('aria-expanded') === 'false') act(() => details.click());
     expect(container.textContent).toContain('Token usage is unavailable');
+  });
+
+  it('labels client components as estimates beside a confirmed total', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => root!.render(<CostEstimator
+      model='gemini-3.8-flash'
+      usage={{ promptTokens: 1000, completionTokens: 1000 }}
+      isVisible
+      isStreaming={false}
+      totalCost={0.0001}
+      finalCostUsd={0.0001}
+      breakdownSource='unavailable'
+      settledBreakdown={null}
+    />));
+
+    expect(container.querySelector('.cost-estimator-title')?.textContent).toBe('Settled total');
+    expect(container.querySelector('.cost-estimator-total')?.textContent).toContain('Confirmed receipt');
+    const rows = Array.from(container.querySelectorAll('.cost-estimator-row')).map((row) => row.textContent);
+    expect(rows.every((row) => row?.includes('(est.)'))).toBe(true);
+    expect(container.textContent).toContain('Component rows are client estimates');
+    const details = container.querySelector<HTMLButtonElement>('.cost-estimator-details-toggle')!;
+    if (details.getAttribute('aria-expanded') === 'false') act(() => details.click());
+    expect(container.textContent).toContain('Breakdown sourceestimated (client)');
+    expect(container.textContent).toContain('High precision (client estimate, USD)');
   });
 
   it('labels a pending settlement as an estimate, not a confirmed charge', () => {
@@ -239,7 +266,7 @@ describe('CostEstimator pricing freshness', () => {
 
     act(() => root!.render(<CostEstimator
       model='gemini-3.8-flash'
-      usage={{ promptTokens: 1000, completionTokens: 1000 }}
+      usage={null}
       isVisible
       isStreaming={false}
       totalCost={0.000075}

@@ -6,17 +6,46 @@
 [#73](https://github.com/gthgomez/Prismatix/pull/73) on
 `campaign/overnight-2026-11-19`. The **exact SHA and exact-head CI run are
 kept current in the PR description**, so this record cannot go stale on a
-docs-only or test-only follow-up. The last full local evidence run was produced
-from code SHA `25c5ff7e`; base `main` is
+docs-only or test-only follow-up. Base `main` is
 `6a5c4cb0ad364490a1a0d959dcc60f68f63d7314`.
 
-**Exact-head CI on `25c5ff7e`: [run 45389922561](https://github.com/gthgomez/Prismatix/actions/runs/45389922561) —
-all seven jobs pass**, including `Real backend · Supabase + Edge + browser` and
-`Migrations · fresh + existing install` with the main-baseline upgrade gate.
+The previous exact-head CI on `25c5ff7e`
+([run 45389922561](https://github.com/gthgomez/Prismatix/actions/runs/45389922561))
+passed all seven jobs. The closure repairs below change the candidate, so that
+run is preserved as history; the current exact-head run is the one linked in
+the PR description.
 
 **No merge, production migration, secret change, worker change, or production
 deployment was performed.** The Vercel preview remains **failing by design**
-(see Staging blocker).
+(see Staging blocker). Hosted staging is blocked by the account's free-project
+limit, not by missing engineering work.
+
+### Release-closure repairs after `9ea1210` (2026-11-24)
+
+Independent review of the previously green candidate found four concrete
+defects. All four were reproduced against the code, repaired, and covered by a
+regression or negative control.
+
+| ID | Reproduced defect | Repair | Evidence |
+|---|---|---|---|
+| RC1 | `tests/integration/run-main-upgrade.sh` started a Supabase Postgres container on the default bridge network, then replayed `origin/main`'s `20261006120000_video_worker_cron_vault_secret.sql`, which schedules a recurring `pg_net.http_post` to the **production** video-worker URL. Nothing enforced that the replay could not deliver it. | The upgrade container now runs `--network none` with no published port. The script asserts `HostConfig.NetworkMode=none`, performs a live TCP-connect negative control to `1.1.1.1:443`, resolves the production hostname (must fail), and asserts `net._http_response` stayed empty. | Local `main-upgrade` run: `network isolation verified (network=none, TCP egress denied, production DNS unresolved)`; 29 baseline + 5 candidate migrations pass. |
+| RC2 | The same harness claimed `db push` atomicity but ran `psql < file` in autocommit and recorded each history row in a separate command. A migration failing halfway left partial DDL and could still record success. Fresh/existing replay scripts made the same claim. | Each migration and its `schema_migrations` row now share one explicit transaction in all three replay scripts. Two negative controls run through the same apply function: a division-by-zero migration and a connection-terminated migration must leave no table and no history row; a repaired forward migration must then apply. | `atomicity fixtures PASS (failed and interrupted migrations left no DDL and no history; forward repair applied)`. |
+| RC3 | `parseUsd` accepted deviations up to 0.25 micro-USD, so `0.0000001` passed validation and rounded to zero. | Precision is validated with a representation-noise tolerance (`max(1e-9, abs(micros) * EPSILON * 8)`) that is far below one micro-USD at every supported magnitude, plus the real `numeric(12,6)` ceiling. Tests cover 6dp, 1 micro, sub-micro, half-micro, negative, non-numeric, scientific notation and out-of-column values. | `tests/routing/execution_receipt.test.ts`; 1101 unit tests pass. |
+| RC4 | `CostEstimator` still recalculated components from client usage and used a `1e-5` reconciliation-warning threshold, so a settled `$0.0001` receipt could display `$0.0000` components without a trustworthy provenance signal. `recordCost` also dropped the `breakdownSource` it was given. | The terminal receipt is now projected to `deriveSettledBreakdown`. A settled total renders confirmed ledger components when they reconcile; otherwise it either shows client rows explicitly labelled `(est.)` with "the total is the confirmed receipt", or states that components/usage are unavailable. The threshold was removed. `MessageCost`, `CostBadge`, finance history and CSV carry the provenance; unavailable token fields are omitted, never zero. | CostEstimator/CostBadge/execution-receipt tests; real-backend `settled/unavailable` ledger probe in `qual:smoke`. |
+
+Two further review items were addressed at the qualification layer:
+
+- **Production-equivalent rate limiting.** `scripts/qualification/ci-real-backend.sh`
+  no longer sets `USER_RATE_LIMIT_MAX_REQUESTS=500`. A new dedicated identity
+  (`qual-f`) drives `scripts/qualification/rate-limit-check.mjs`: 20 admitted
+  zero-cost turns, 21st `429 rate_limited` with `Retry-After`, zero provider
+  calls and zero messages for the rejection, then admission resumes after the
+  window.
+- **Settled/unavailable financial state.** `qual:smoke` now creates a real
+  service-role ledger fixture with a settled `$0.000075` total and zero
+  component placeholders, reads it through the authenticated receipt action,
+  and asserts the components do **not** reconcile: the client must classify
+  the breakdown unavailable rather than confirm a free call.
 
 ### Environment actually exercised
 
@@ -50,14 +79,18 @@ used for read-only inventory only.
 |---|---|
 | TypeScript (`tsc --noEmit`) | pass |
 | ESLint | 0 errors / 136 warnings (baseline unchanged) |
-| Vitest | **1092 passed**, 107 files |
+| Vitest | **1101 passed**, 107 files |
 | Deno check (`router/index.ts`) | pass |
 | Production build (real + synthetic envs) | pass |
 | Synthetic desktop Chromium | **131 passed / 2 skipped** (Compare is opt-in) |
 | Synthetic mobile (CI subset) | **49 passed** |
 | Fresh migration replay through the CLI | **34 applied** (`db reset`) |
+| Fresh/existing replay transaction wrappers | **PASS** (each migration in one transaction) |
+| Main upgrade network isolation | **PASS**: `network=none`, TCP egress denied, production DNS unresolved, no `net._http_response` |
+| Main upgrade atomicity fixtures | **PASS**: failed and interrupted migrations left no DDL/history; forward repair applied |
 | Environment-contract negatives | **14/14** |
-| Router acceptance gate | **ACCEPTED**; 10/10 negative controls rejected; pending/estimated and settled/confirmed-zero accepted |
+| Router acceptance gate | **ACCEPTED**; 10/10 negative controls rejected; pending/estimated, settled/confirmed-zero and settled/unavailable accepted |
+| Rate limit (production default 20/min) | **PARTIALLY VERIFIED**: probe implemented; first real-backend run is on the closure candidate |
 | Account isolation against real RLS | **14/14** |
 | Real-backend browser journeys (clean DB) | **5/5**: persistence+reload, mid-stream stop with no duplicate call or replay, cross-account history isolation, readiness race, mobile turn |
 | UI screenshots | Refreshed for this candidate at 360/390/768/1440 in light/dark (10 curated in `evidence/2026-11-24/screens`) |
@@ -72,36 +105,90 @@ is why repeated local runs cascade after a first failure.
 
 | Criterion | Status | Note |
 |---|---|---|
-| No settled/estimated misrepresentation | VERIFIED (local) | R1 contract + unit and real-backend evidence |
-| Automated real-backend qualification | VERIFIED (local) / PARTIALLY VERIFIED (CI) | Job implemented; first CI execution is on this head |
+| No settled/estimated misrepresentation | VERIFIED (local) | Authoritative receipt components, explicit unavailable state, labelled client estimates |
+| Money precision | VERIFIED | Sub-micro rejection, 6dp/boundary/scientific coverage |
+| Automated real-backend qualification | PARTIALLY VERIFIED | Closure job includes settled/unavailable and production rate-limit probes; exact-head run is linked in the PR |
 | Unsafe environments rejected | VERIFIED | 14 contract negatives + hardened Vercel guard negatives in CI |
+| Historical replay cannot contact production | VERIFIED (local) | `network=none`, live TCP/DNS negatives, no HTTP response |
+| Migration failure atomicity/history | VERIFIED (local) | Failed and interrupted fixtures left no DDL/history; forward repair applied |
 | Smoke fails on wrong business outcomes | VERIFIED | 10/10 mutations rejected |
 | Composer readiness repaired | VERIFIED | Real-backend regression |
-| Genuine main→candidate upgrade | VERIFIED (local) | 29 main + 5 candidate migrations, history/guards/totals preserved; CI re-runs it |
+| Genuine main→candidate upgrade | VERIFIED (local) | 29 main + 5 candidate migrations, history/guards/totals preserved |
+| Production-equivalent rate limiting | PARTIALLY VERIFIED | 500/min override removed; probe implemented; real-backend run pending |
 | Flake diagnosed | VERIFIED | Host oversubscription; worker cap |
 | Cost formatting | VERIFIED | Unit + rendered views |
 | Release record exact | VERIFIED | This section + PR body |
-| Hosted staging / preview | BLOCKED | No nonproduction project; provisioning requires authorization |
+| Hosted staging / preview | BLOCKED | Free-project quota exhausted (2/2) |
 | Hosted qualification | BLOCKED | Depends on staging |
+| Release enforcement | BLOCKED | `main` has no branch protection and no rulesets; changing it requires owner authorization |
 | Production merge/deployment | BLOCKED | Requires explicit production authorization |
 
 ### Staging blocker (Track B)
 
-Current inventory: three Supabase projects (production Prismatix + two unrelated
-projects), zero preview branches for `sqjfbqjogylkfwzsyprd`, and Vercel Preview
-still resolves to the production project, which the isolation guard correctly
-refuses. No nonproduction project was provisioned and no billing/account change
-was made.
+Independent inventory on 2026-11-24 (Supabase Management API, owner
+`gthgomez`):
 
-**Exact remaining action:** authorize one of
-(a) a dedicated nonproduction Supabase project (or a paid preview branch) with
-its own Auth users, Edge secrets and provider allowlist, or
-(b) an existing authorized isolated project identity.
-Then set Preview-scoped `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` and
-`VITE_ROUTER_ENDPOINT`, plus Edge secrets pointing at a deterministic provider,
-and re-run `qual:env` / `qual:smoke` / `qual:isolation` / `qual:e2e` against it
-with `QUALIFICATION_ALLOWED_PROJECT_REFS` and `QUALIFICATION_ENVIRONMENT`.
-Until then there is no reviewable preview and no hosted qualification.
+| Organization | Plan | Projects | Branching |
+|---|---|---|---|
+| `Router` (`yqmazhfttowabybvbrwt`) | free | `Prismatix Router` (`sqjfbqjogylkfwzsyprd`, ACTIVE_HEALTHY), `AuditGuard` (`dlrxjlqwcxljczkwdyyh`, INACTIVE) | `branching_limit=0`, no access |
+| `Ward` (`kpbxpnrshmgioqbkfkli`) | free | `Global Privacy Control` (`xkyrsxuaventcnpoafxs`, unrelated product) | not used |
+
+The production project is the only Prismatix project; there are no preview
+branches. Vercel Preview inherits Production-scoped `VITE_SUPABASE_URL` and
+`VITE_ROUTER_ENDPOINT`, and the isolation guard correctly refuses to build it
+(log: `resolved host=sqjfbqjogylkfwzsyprd.supabase.co`).
+
+An explicit create attempt for a dedicated free staging project was made and
+rejected by the account quota:
+
+> The following organization members have reached their maximum limits for the
+> number of active free projects ... gthgomez (2 project limit). To continue,
+> these users will need to either delete, pause or upgrade one or more of these
+> projects.
+
+`AuditGuard` is already paused, so pausing cannot free the slot. No project was
+deleted, no unrelated project was repurposed, and no billing change was made.
+
+**Exact owner decision required (one of):**
+
+1. **Delete the paused `AuditGuard` project** (free; irreversible for that
+   project's data) to free the second slot, then create `Prismatix Staging` in
+   the `Router` org (free, us-east-1). Recommended only if that project is
+   genuinely disposable.
+2. **Authorize the paid upgrade** of the `Router` org to Pro (list price
+   `$25/month`; a second project or a persistent preview branch may add cost -
+   confirm the checkout total) and create the staging project/branch.
+3. **Provide an existing authorized nonproduction project identity** with its
+   own Auth users and Edge secrets.
+
+After that single decision, the remaining work is mechanical and already
+specified: apply the 34 migrations with the real runner, deploy the Edge
+functions, set a deterministic provider base URL (no live fallback), set
+Preview-scoped `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
+`VITE_ROUTER_ENDPOINT`, then run `qual:env`, `qual:smoke`, `qual:rate`,
+`qual:isolation` and `qual:e2e` with
+`QUALIFICATION_ALLOWED_PROJECT_REFS=<staging-ref>` and
+`QUALIFICATION_ENVIRONMENT=staging`. Until then there is no reviewable preview
+and no hosted qualification; the local stack remains the only environment that
+has actually been exercised.
+
+### Release enforcement
+
+`main` currently has **no branch protection and no repository rulesets**
+(`GET /repos/gthgomez/Prismatix/branches/main/protection` → 404, `rulesets` →
+`[]`), so a failing critical job does not technically prevent a merge. The
+mission does not authorize changing repository protection, so this remains an
+owner action. The exact minimal ruleset to require on `main` is:
+
+- required checks: `Type Check / Lint / Test`, `Migrations · fresh + existing
+  install`, `Real backend · Supabase + Edge + browser`, `Environment isolation`,
+  `Node 20 compatibility`, `Node 22 compatibility`, `Compare · PostgreSQL 17`;
+- require branches to be up to date before merging;
+- block force pushes and deletions.
+
+Until that is configured, release discipline is enforced by the PR record: the
+exact head/merge-tree CI run and every failing check must be quoted, and a
+release must not be merged on a red or missing critical check.
 
 ### Restricted capabilities
 

@@ -98,9 +98,17 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   const messageTotal = serverFinalApplied
     ? (finalCostUsd as number)
     : clientMessageTotal;
-  const showClientRows = !authoritativeBreakdown && !settledBreakdownUnavailable && !clientBreakdownUnavailable;
-  const tokensUnavailable = settledBreakdownUnavailable
-    || (!isStreaming && breakdownSource === 'unavailable');
+  // A usable client snapshot can still explain the shape of a settled charge
+  // when the authoritative components are missing. Show it only as an
+  // explicitly labelled estimate; a zero/incomplete snapshot cannot explain a
+  // positive settled total and must stay unavailable.
+  const clientBreakdownUsable = !clientBreakdownUnavailable
+    && !!usage
+    && clientMessageTotal > 0;
+  const showEstimatedRows = !authoritativeBreakdown
+    && !clientBreakdownUnavailable
+    && (isStreaming || !serverFinalApplied || clientBreakdownUsable);
+  const tokensUnavailable = !authoritativeBreakdown && !showEstimatedRows;
 
   const routerVersionTrimmed = routerPricingVersion?.trim() || null;
   const clientVersionTrimmed = breakdown.pricingVersion?.trim() || PRICING_VERSION;
@@ -110,9 +118,9 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
 
   const provenanceLabel = authoritativeBreakdown
     ? 'confirmed'
-    : settledBreakdownUnavailable
-      ? 'unavailable'
-      : 'estimated';
+    : showEstimatedRows
+      ? 'estimated (client)'
+      : 'unavailable';
 
   return (
     <div
@@ -153,7 +161,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
             </div>
           )}
         </>
-      ) : settledBreakdownUnavailable ? (
+      ) : settledBreakdownUnavailable && !showEstimatedRows ? (
         <>
           <p className='cost-estimator-unknown-pricing' role='status'>
             A client token breakdown is unavailable for this turn. The confirmed total is
@@ -167,16 +175,16 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
       ) : (
         <div className='cost-estimator-rows'>
           <div className='cost-estimator-row'>
-            <span>Input</span>
+            <span>Input{authoritativeBreakdown ? '' : ' (est.)'}</span>
             <span>{formatUsd(authoritativeBreakdown?.inputCostUsd ?? breakdown.inputCost)}</span>
           </div>
           <div className='cost-estimator-row'>
-            <span>Output</span>
+            <span>Output{authoritativeBreakdown ? '' : ' (est.)'}</span>
             <span>{formatUsd(authoritativeBreakdown?.outputCostUsd ?? breakdown.outputCost)}</span>
           </div>
           {((authoritativeBreakdown?.reasoningCostUsd ?? breakdown.thinkingCost) > 0) && (
             <div className='cost-estimator-row'>
-              <span>Thinking</span>
+              <span>Thinking{authoritativeBreakdown ? '' : ' (est.)'}</span>
               <span>{formatUsd(authoritativeBreakdown?.reasoningCostUsd ?? breakdown.thinkingCost)}</span>
             </div>
           )}
@@ -190,6 +198,11 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
       {!isStreaming && breakdownSource === 'estimated' && (
         <p className='cost-estimator-reconcile-note' role='status'>
           Settlement is pending. Line items are client estimates, not confirmed charges.
+        </p>
+      )}
+      {serverFinalApplied && showEstimatedRows && (
+        <p className='cost-estimator-reconcile-note' role='status'>
+          Component rows are client estimates; the total is the confirmed receipt.
         </p>
       )}
 
@@ -308,7 +321,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
                 </div>
               </div>
             </div>
-          ) : showClientRows ? (
+          ) : showEstimatedRows ? (
             <div className='cost-estimator-detail-block'>
               <div className='cost-estimator-detail-label'>High precision (client estimate, USD)</div>
               <div className='cost-estimator-micro-rows'>

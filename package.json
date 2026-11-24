@@ -21,6 +21,7 @@
     "qual:env": "node scripts/qualification/env-contract.selftest.mjs",
     "qual:seed": "node scripts/qualification/seed-local.mjs",
     "qual:smoke": "node scripts/qualification/smoke-router.mjs",
+    "qual:rate": "node scripts/qualification/rate-limit-check.mjs",
     "qual:isolation": "node scripts/qualification/isolation-check.mjs",
     "qual:e2e": "node scripts/qualification/run-real-e2e.mjs",
     "qual:screens": "node scripts/qualification/capture-screens.mjs",

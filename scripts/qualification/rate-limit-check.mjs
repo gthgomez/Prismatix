@@ -94,7 +94,10 @@ async function runTurn(token, conversationId) {
       'content-type': 'application/json',
       'x-client-request-id': randomUUID(),
     },
-    body: JSON.stringify({ conversationId, query: QUERY, platform: 'web', history: [] }),
+    // Mobile bypasses the separately admitted memory-extraction execution, so
+    // one HTTP turn consumes exactly one admission slot. That makes the probe
+    // measure the per-minute limit rather than background auxiliary work.
+    body: JSON.stringify({ conversationId, query: QUERY, platform: 'mobile', history: [] }),
   });
   const body = await json(response);
   return {
