@@ -102,8 +102,13 @@ create table if not exists supabase_migrations.schema_migrations (
 git ls-tree --name-only "$BASE_SHA" supabase/migrations/ \
   | sed 's#^.*/##' | sort > "$TMP/main-files.txt"
 
+# Read the list up front: `docker exec -i psql` consumes stdin, so iterating
+# with `while read ... done < file` would let the first psql invocation eat the
+# remaining filenames.
+mapfile -t main_files < "$TMP/main-files.txt"
+
 baseline=0
-while IFS= read -r name; do
+for name in "${main_files[@]}"; do
   [[ -z "$name" ]] && continue
   git show "${BASE_SHA}:supabase/migrations/${name}" > "$TMP/current.sql"
   if ! sql -q < "$TMP/current.sql"; then
@@ -114,7 +119,7 @@ while IFS= read -r name; do
   sql -q -c "insert into supabase_migrations.schema_migrations(version, name)
     values ('$version', '$name') on conflict (version) do nothing"
   baseline=$((baseline + 1))
-done < "$TMP/main-files.txt"
+done
 
 # --- Representative historical data -----------------------------------------
 sql -q <<'SQL'
