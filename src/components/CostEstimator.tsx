@@ -2,20 +2,10 @@ import React, { useEffect, useMemo, useState, type Ref } from 'react';
 import { calculateCostBreakdown, type UsageEstimate } from '../costEngine';
 import { PRICING_VERSION } from '../pricingRegistry';
 import type { RouterModel } from '../types';
+import { formatUsd } from '../utils/costFormat';
 
 const LS_DETAILS = 'prismatix.costEstimator.detailsExpanded';
 const TOTAL_COMPARE_EPS = 1e-5;
-
-/**
- * Micro-costs are normal here ($0.00003 input). Four decimals would render
- * them as $0.0000 and imply the component was free, so use enough precision to
- * keep a nonzero amount visibly nonzero.
- */
-export function formatUsd(value: number): string {
-  if (!Number.isFinite(value)) return '$0.0000';
-  if (value > 0 && value < 0.0001) return `$${value.toFixed(6)}`;
-  return `$${value.toFixed(4)}`;
-}
 
 function readDetailsExpanded(): boolean {
   try {

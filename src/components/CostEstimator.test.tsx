@@ -1,7 +1,8 @@
 import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { CostEstimator, formatUsd } from './CostEstimator';
+import { CostEstimator } from './CostEstimator';
+import { formatUsd } from '../utils/costFormat';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 const legacyModel = 'gemini-2.5-flash';
