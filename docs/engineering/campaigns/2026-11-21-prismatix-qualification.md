@@ -596,7 +596,10 @@ root cause was established; it remains recorded rather than explained away.
    preflight in this document before enabling paid workflows.
 2. Deploy `provider-settings`, then `router` and `spend_stats`, before the
    frontend, so validation semantics and the qualified-spend RPC contract exist
-   together.
+   together. Set `PRISMATIX_PROTOCOL_VERSION`, `PRISMATIX_SCHEMA_VERSION`,
+   `PRISMATIX_CATALOG_VERSION`, `PRISMATIX_TARIFF_VERSION` and `RELEASE_SHA` on
+   the router; without them every client shows the “catalog may be outdated”
+   diagnostic because the release identity falls back to `unspecified`.
 3. Deploy the frontend with `VITE_PX08_COMPARE_DURABILITY` off and the video
    worker disabled. Enable Compare only after a hosted canary covers success,
    stop and failure with real receipts.
