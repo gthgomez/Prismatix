@@ -365,3 +365,15 @@
     gap: 0.35rem;
   }
 }
+
+/* High-contrast mode drops box-shadow, so the custom ring must fall back to
+   the system Highlight outline. The component rules set outline: none, which
+   otherwise wins over the zero-specificity global focus rule. */
+@media (forced-colors: active) {
+  .demo-tab:focus-visible,
+  .demo-control-btn:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+}

@@ -167,12 +167,25 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
   const [isCompleted, setIsCompleted] = useState(!autoplay);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const primaryControlRef = useRef<HTMLButtonElement | null>(null);
+  const skipControlRef = useRef<HTMLButtonElement | null>(null);
+  const restoreFocusAfterSkipRef = useRef(false);
 
   const clearTimer = () => {
     if (timerRef.current !== null) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+  };
+
+  const finishPlayback = (finalText: string) => {
+    // Capture focus before the commit disables Skip. The effect below performs
+    // the handoff after the state change, so Replay has its final name.
+    restoreFocusAfterSkipRef.current = document.activeElement === skipControlRef.current;
+    clearTimer();
+    setDisplayedText(finalText);
+    setIsPlaying(false);
+    setIsCompleted(true);
   };
 
   const startStreaming = (textToStream: string) => {
@@ -192,10 +205,7 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
       }
       charIndex += chunkSize;
       if (charIndex >= textToStream.length) {
-        setDisplayedText(textToStream);
-        setIsPlaying(false);
-        setIsCompleted(true);
-        clearTimer();
+        finishPlayback(textToStream);
       } else {
         setDisplayedText(textToStream.slice(0, charIndex));
       }
@@ -232,10 +242,8 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
   };
 
   const handleSkip = () => {
-    clearTimer();
-    setDisplayedText(scenario.assistantStreamText);
-    setIsPlaying(false);
-    setIsCompleted(true);
+    if (isCompleted) return;
+    finishPlayback(scenario.assistantStreamText);
   };
 
   const handlePauseResume = () => {
@@ -258,10 +266,7 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
           }
           charIndex += chunkSize;
           if (charIndex >= full.length) {
-            setDisplayedText(full);
-            setIsPlaying(false);
-            setIsCompleted(true);
-            clearTimer();
+            finishPlayback(full);
           } else {
             setDisplayedText(full.slice(0, charIndex));
           }
@@ -276,6 +281,12 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
     setIsPlaying(false);
     setIsCompleted(false);
   };
+
+  useEffect(() => {
+    if (!isCompleted || !restoreFocusAfterSkipRef.current) return;
+    restoreFocusAfterSkipRef.current = false;
+    primaryControlRef.current?.focus();
+  }, [isCompleted]);
 
   useEffect(() => {
     if (autoplay) {
@@ -414,6 +425,7 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
         {/* Playback Controls */}
         <div className="demo-controls" aria-label="Demo playback controls">
           <button
+            ref={primaryControlRef}
             type="button"
             className="demo-control-btn primary"
             onClick={handlePauseResume}
@@ -422,11 +434,12 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
             {isPlaying ? '⏸ Pause' : isCompleted ? '🔄 Replay' : '▶ Play'}
           </button>
           <button
+            ref={skipControlRef}
             type="button"
             className="demo-control-btn"
             onClick={handleSkip}
             disabled={isCompleted}
-            aria-label="Skip animation and display full response"
+            aria-label="Show full response"
           >
             ⏩ Show Full Response
           </button>
