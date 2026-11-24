@@ -313,7 +313,7 @@ export function InteractivePublicDemo({ autoplay = false }: InteractivePublicDem
           <span className="demo-badge-synthetic">Prerecorded Interactive Preview · Synthetic Data</span>
           <h2 className="demo-title">Experience Adaptive Routing Interactive Preview</h2>
           <p className="demo-subtitle">
-            See how Prismatix evaluates prompt complexity, selects the optimal model, and provides transparent cost receipts without incurring real API charges.
+            Explore prerecorded examples of routing decisions, streamed replies, and synthetic costs. This demo makes no provider calls.
           </p>
         </div>
 

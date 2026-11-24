@@ -49,7 +49,14 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   onOpenArtifact,
 }) => {
   if (import.meta.env.MODE === 'test') chatMessageItemRenderLog.push(index);
-  const modelPillMeta = message.model ? assistantModelPillDisplay(message) : null;
+  const modelPillMeta = message.model
+    ? assistantModelPillDisplay(message)
+    : message.reportedModel
+    ? {
+        label: `Unrecognized model: ${message.reportedModel}`,
+        title: 'The router reported this model id, but it is not in the current catalog. No catalog price is applied.',
+      }
+    : null;
   const isStreamingAssistant = isStreaming && message.role === 'assistant';
   const textContent = extractTextContent(message.content);
 
@@ -183,7 +190,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               </button>
             </div>
           )}
-          {message.model && (
+          {(message.model || message.reportedModel) && (
             <div className='message-metadata-container'>
               <button
                 type='button'
@@ -213,6 +220,18 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                     <div className='metadata-item'>
                       <span className='item-label'>API ID</span>
                       <span className='item-value metadata-value-break'>{message.modelId}</span>
+                    </div>
+                  )}
+                  {message.reportedModel && (
+                    <div className='metadata-item'>
+                      <span className='item-label'>Server model ID</span>
+                      <span className='item-value metadata-value-break'>{message.reportedModel}</span>
+                    </div>
+                  )}
+                  {message.routeRationale && (
+                    <div className='metadata-item'>
+                      <span className='item-label'>Router rationale</span>
+                      <span className='item-value'>{message.routeRationale}</span>
                     </div>
                   )}
                   {message.modelOverride && message.modelOverride !== 'auto' && (
@@ -441,9 +460,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
             {(() => {
               const imageGen = message.metadata?.imageGeneration as
-                | { imageUrl?: string; prompt?: string; modelId?: string; costUsd?: number }
+                | { imageUrl?: string; prompt?: string; modelId?: string; costUsd?: number; isMock?: boolean }
                 | undefined;
               if (!imageGen?.imageUrl) return null;
+              const isPreview = imageGen.isMock === true
+                || (imageGen.isMock == null && imageGen.imageUrl.startsWith('data:image/svg+xml'));
               return (
                 <div
                   className='generated-image-card'
@@ -457,7 +478,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 >
                   <img
                     src={imageGen.imageUrl}
-                    alt={imageGen.prompt || 'Generated image'}
+                    alt={isPreview ? `Preview placeholder for: ${imageGen.prompt || 'your prompt'}` : imageGen.prompt || 'Generated image'}
                     style={{
                       maxWidth: '100%',
                       maxHeight: '400px',
@@ -478,11 +499,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                     }}
                   >
                     <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
-                      🎨 {imageGen.modelId} • ${imageGen.costUsd?.toFixed(4) ?? '0.0000'}
+                      {isPreview ? 'Preview placeholder • Free' : `🎨 ${imageGen.modelId} • $${imageGen.costUsd?.toFixed(4) ?? '0.0000'}`}
                     </span>
                     <a
                       href={imageGen.imageUrl}
-                      download='prismatix-generated-image.png'
+                      download={isPreview ? 'prismatix-preview.svg' : 'prismatix-generated-image.png'}
                       target='_blank'
                       rel='noopener noreferrer'
                       style={{ fontSize: '0.75rem', color: '#4ECDC4', textDecoration: 'none', fontWeight: 500 }}
@@ -555,78 +576,51 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
             {message.comparisonResults && (
               <div className='comparison-results-container'>
-                <div className={`comparison-column model-a ${message.comparisonResults.preferred === 'A' ? 'is-preferred' : ''}`}>
-                  <div className='comparison-header'>
-                    <span className='comparison-model-badge'>{message.comparisonResults.modelA.model}</span>
-                    {message.comparisonResults.modelA.status && message.comparisonResults.modelA.status !== 'completed' && <span role='status'>{message.comparisonResults.modelA.status === 'failed' ? 'Failed' : message.comparisonResults.modelA.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>}
-                    {message.comparisonResults.modelA.cost !== undefined && (
-                      <span className='comparison-cost'>${message.comparisonResults.modelA.cost.toFixed(4)}</span>
-                    )}
-                  </div>
-                  <div className='comparison-content'>
-                    <FormattedMessage content={message.comparisonResults.modelA.content} />
-                  </div>
-                  <button type='button' onClick={() => void copyRecoveryText(message.comparisonResults!.modelA.content)}>Copy response</button>
-                  <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
-                    <button
-                      type='button'
-                      disabled={message.comparisonResults.modelA.status !== undefined && message.comparisonResults.modelA.status !== 'completed'}
-                      onClick={() => onSelectComparisonPreference?.(index, 'A')}
-                      style={{
-                        padding: '0.25rem 0.6rem',
-                        fontSize: '0.75rem',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        border: '1px solid',
-                        borderColor: message.comparisonResults.preferred === 'A' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.15)',
-                        background: message.comparisonResults.preferred === 'A' ? 'rgba(78, 205, 196, 0.2)' : 'transparent',
-                        color: message.comparisonResults.preferred === 'A' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
-                        fontWeight: message.comparisonResults.preferred === 'A' ? 600 : 400,
-                      }}
-                    >
-                      {message.comparisonResults.preferred === 'A' ? '✓ Preferred model' : 'Prefer this model'}
-                    </button>
-                  </div>
-                </div>
-                <div className={`comparison-column model-b ${message.comparisonResults.preferred === 'B' ? 'is-preferred' : ''}`}>
-                  <div className='comparison-header'>
-                    <span className='comparison-model-badge'>{message.comparisonResults.modelB.model}</span>
-                    {message.comparisonResults.modelB.status && message.comparisonResults.modelB.status !== 'completed' && <span role='status'>{message.comparisonResults.modelB.status === 'failed' ? 'Failed' : message.comparisonResults.modelB.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>}
-                    {message.comparisonResults.modelB.cost !== undefined && (
-                      <span className='comparison-cost'>${message.comparisonResults.modelB.cost.toFixed(4)}</span>
-                    )}
-                  </div>
-                  <div className='comparison-content'>
-                    <FormattedMessage content={message.comparisonResults.modelB.content} />
-                  </div>
-                  <button type='button' onClick={() => void copyRecoveryText(message.comparisonResults!.modelB.content)}>Copy response</button>
-                  <div className='comparison-footer' style={{ marginTop: '0.5rem', paddingTop: '0.4rem', borderTop: '1px solid var(--color-border, rgba(255, 255, 255, 0.08))' }}>
-                    <button
-                      type='button'
-                      disabled={message.comparisonResults.modelB.status !== undefined && message.comparisonResults.modelB.status !== 'completed'}
-                      onClick={() => onSelectComparisonPreference?.(index, 'B')}
-                      style={{
-                        padding: '0.25rem 0.6rem',
-                        fontSize: '0.75rem',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        border: '1px solid',
-                        borderColor: message.comparisonResults.preferred === 'B' ? 'var(--color-primary, #4ecdc4)' : 'rgba(255, 255, 255, 0.15)',
-                        background: message.comparisonResults.preferred === 'B' ? 'rgba(78, 205, 196, 0.2)' : 'transparent',
-                        color: message.comparisonResults.preferred === 'B' ? 'var(--color-primary, #4ecdc4)' : 'var(--color-text-dim, #9ca3af)',
-                        fontWeight: message.comparisonResults.preferred === 'B' ? 600 : 400,
-                      }}
-                    >
-                      {message.comparisonResults.preferred === 'B' ? '✓ Preferred model' : 'Prefer this model'}
-                    </button>
-                  </div>
-                </div>
+                {(['A', 'B'] as const).map((side) => {
+                  const comparison = message.comparisonResults!;
+                  const result = side === 'A' ? comparison.modelA : comparison.modelB;
+                  const preferred = comparison.preferred === side;
+                  const canChoose = !isStreaming && !comparison.preferencePending
+                    && (!result.status || result.status === 'completed');
+                  return (
+                    <div key={side} className={`comparison-column model-${side.toLowerCase()} ${preferred ? 'is-preferred' : ''}`}>
+                      <div className='comparison-header'>
+                        <span className='comparison-model-badge'>{result.model}</span>
+                        {result.status && result.status !== 'completed' && (
+                          <span role='status'>{result.status === 'failed' ? 'Failed' : result.status === 'stopped' ? 'Stopped · partial response' : 'Interrupted · partial response'}</span>
+                        )}
+                        {result.cost === undefined ? <span className='comparison-cost'>Cost unknown</span> : (
+                          <span className='comparison-cost' aria-label={`Model ${side} cost ${result.costStatus ?? 'unknown'}: ${result.cost.toFixed(4)} dollars`}>
+                            {result.costStatus === 'settled' ? '$' : '~$'}{result.cost.toFixed(4)} · {result.costStatus ?? 'unknown'}
+                          </span>
+                        )}
+                      </div>
+                      <div className='comparison-content'>
+                        <FormattedMessage content={result.content} />
+                      </div>
+                      <div className='comparison-footer'>
+                        <button className='comparison-action' type='button' disabled={!result.content} onClick={() => void copyRecoveryText(result.content)}>
+                          Copy response
+                        </button>
+                        <button
+                          className='comparison-action'
+                          type='button'
+                          aria-pressed={preferred}
+                          disabled={!canChoose}
+                          onClick={() => onSelectComparisonPreference?.(index, side)}
+                        >
+                          {preferred ? '✓ Preferred model' : 'Prefer this model'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
             {message.transcriptSaved === false && (
               <div className='transcript-unsaved-notice' role='alert'>
-                This response was generated but could not be saved to chat history. Copy or select the response below before leaving; sending again may create a new paid request.
+                This response could not be saved, or its save could not be confirmed. Copy or select it before leaving; sending again may create a new paid request.
               </div>
             )}
             {copyFallback !== null && (

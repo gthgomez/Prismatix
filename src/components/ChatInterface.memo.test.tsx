@@ -151,6 +151,7 @@ describe('ChatInterface message memo', () => {
 
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     chatMessageItemRenderLog.length = 0;
     Element.prototype.scrollIntoView = () => {};
     host = document.createElement('div');

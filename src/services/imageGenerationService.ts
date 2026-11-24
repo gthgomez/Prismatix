@@ -4,6 +4,12 @@
 
 import { supabase } from '../lib/supabase';
 
+// The live path currently lacks verified idempotency, admission and settlement.
+// Do not enable it until those server-side safeguards and prices are qualified.
+export const LIVE_IMAGE_GENERATION_ENABLED: boolean = false;
+export const LIVE_IMAGE_GENERATION_UNAVAILABLE =
+  'Live image generation is temporarily unavailable while spending safeguards are verified. Use the free preview instead.';
+
 export interface ImageModelInfo {
   id: string;
   name: string;
@@ -94,7 +100,7 @@ export async function executeImageGeneration(
   params: ImageGenerationParams,
   client: any = supabase,
 ): Promise<ImageGenerationResult> {
-  const { prompt, modelId, size = '1024x1024', apiKey, mockMode = false, conversationId } = params;
+  const { prompt, modelId, size = '1024x1024', mockMode = false, conversationId } = params;
 
   if (!prompt.trim()) {
     return {
@@ -121,10 +127,8 @@ export async function executeImageGeneration(
     };
   }
 
-  const estimatedCost = modelInfo.costPerImageUsd;
-
   // Mock mode for testing / preview without external billing
-  if (mockMode || (process.env.NODE_ENV === 'test' && !client?.functions?.invoke) || apiKey === 'mock-key-for-test') {
+  if (mockMode) {
     const svgData = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
       <defs>
         <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -147,10 +151,24 @@ export async function executeImageGeneration(
       modelId,
       prompt,
       size,
-      costUsd: estimatedCost,
+      costUsd: 0,
       costStatus: 'unmetered',
       isMock: true,
-      revisedPrompt: `A photorealistic depiction of: ${prompt}`,
+      revisedPrompt: `[Preview placeholder] ${prompt}`,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  if (!LIVE_IMAGE_GENERATION_ENABLED) {
+    return {
+      success: false,
+      modelId,
+      prompt,
+      size,
+      costUsd: 0,
+      costStatus: 'failed',
+      isMock: false,
+      error: LIVE_IMAGE_GENERATION_UNAVAILABLE,
       timestamp: new Date().toISOString(),
     };
   }
@@ -210,21 +228,6 @@ export async function executeImageGeneration(
         timestamp: new Date().toISOString(),
       };
     }
-  }
-
-  // Fallback for isolated offline test harnesses without edge function
-  if (process.env.NODE_ENV === 'test') {
-    return {
-      success: true,
-      imageUrl: 'data:image/svg+xml;utf8,<svg></svg>',
-      modelId,
-      prompt,
-      size,
-      costUsd: estimatedCost,
-      costStatus: 'unmetered',
-      isMock: true,
-      timestamp: new Date().toISOString(),
-    };
   }
 
   return {

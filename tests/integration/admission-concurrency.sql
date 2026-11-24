@@ -1,8 +1,7 @@
 -- tests/integration/admission-concurrency.sql
 -- PX05 atomic budget admission / lease / quota assertions.
 --
--- Self-contained psql assertion script. It re-applies the REAL PX05 migration
--- (idempotent) and then asserts the money/concurrency invariants the router and
+-- Self-contained psql assertion script. It asserts the money/concurrency invariants the router and
 -- video paths depend on:
 --   * schema, RLS and service-role-only RPC grants are present;
 --   * per-user budget exhaustion denies with ZERO reservation and no held money;
@@ -18,26 +17,44 @@
 --     the shared project window (requires the `dblink` extension; skipped with a
 --     loud notice when unavailable).
 --
--- Prerequisite: a Supabase database with ALL migrations applied (auth schema,
--- prismatix_internal from PX01/PX03). The PX05 tables intentionally have NO FK
--- to auth.users, so the budget assertions need no auth fixture rows.
+-- Prerequisite: a newly created, isolated database whose name ends in `_test`,
+-- with migrations applied through PX05 and the Supabase auth schema/roles.
+-- This fixture writes committed rows through dblink and uses the single shared
+-- project budget window. Never run it against production, staging, or a shared
+-- Supabase database. It refuses to run unless the database name ends in `_test`
+-- and all budget tables are empty.
 --
 -- Run from the REPO ROOT:
---   Local:
---     supabase start && supabase db reset
---     psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
---          -v ON_ERROR_STOP=1 -f tests/integration/admission-concurrency.sql
---   Staging (already-migrated schema):
---     psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -f tests/integration/admission-concurrency.sql
+-- Run only against that disposable `_test` database after applying the repo
+-- migrations. This fixture is deliberately not a staging verification script.
 --
--- NOTE: this script was authored but NOT executed in the PX05 work environment
--- (no psql/Postgres server available). It is a real assertion script, not a
--- comment: every check raises on failure.
+-- Verified locally against an isolated PostgreSQL 17 UTF8 database. The
+-- optional concurrency section requires the dblink extension and the server's
+-- own Unix socket/port to be available to libpq.
 
 \set ON_ERROR_STOP on
 
--- Apply the REAL migration under test (idempotent DDL; committed).
-\i supabase/migrations/20261006020000_px05_budgets_leases.sql
+-- This guard must run before any DDL or fixture writes. The later concurrency
+-- section commits rows from independent dblink sessions and cannot roll them
+-- back with the outer psql transaction.
+do $$
+begin
+  if current_database() !~ '(^|_)test$' then
+    raise exception 'PX05 fixture requires a disposable database ending in _test (database=%)', current_database();
+  end if;
+  if to_regclass('prismatix_internal.budget_reservations') is null
+     or to_regclass('prismatix_internal.execution_leases') is null
+     or to_regclass('prismatix_internal.budget_windows') is null
+     or to_regclass('prismatix_internal.admission_requests') is null then
+    raise exception 'PX05 fixture requires migrations through PX05 before it runs';
+  end if;
+  if exists (select 1 from prismatix_internal.budget_reservations)
+     or exists (select 1 from prismatix_internal.execution_leases)
+     or exists (select 1 from prismatix_internal.budget_windows)
+     or exists (select 1 from prismatix_internal.admission_requests) then
+    raise exception 'PX05 fixture requires empty budget tables; create a fresh disposable _test database';
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- 1) Schema / RLS / grants (self-contained, rolled back).
@@ -207,6 +224,16 @@ declare
   e1 uuid := 'b0000000-0000-4000-8000-000000000001';
   e2 uuid := 'b0000000-0000-4000-8000-000000000002';
   e3 uuid := 'b0000000-0000-4000-8000-000000000003';
+  e4 uuid := 'b0000000-0000-4000-8000-000000000004';
+  e5 uuid := 'b0000000-0000-4000-8000-000000000005';
+  e6 uuid := 'b0000000-0000-4000-8000-000000000006';
+  e7 uuid := 'b0000000-0000-4000-8000-000000000007';
+  e8 uuid := 'b0000000-0000-4000-8000-000000000008';
+  e9 uuid := 'b0000000-0000-4000-8000-000000000009';
+  e10 uuid := 'b0000000-0000-4000-8000-000000000010';
+  e11 uuid := 'b0000000-0000-4000-8000-000000000011';
+  e12 uuid := 'b0000000-0000-4000-8000-000000000012';
+  e13 uuid := 'b0000000-0000-4000-8000-000000000013';
   v jsonb;
   held numeric;
   committed numeric;
@@ -214,7 +241,9 @@ declare
 begin
   -- 2a) Per-user budget exhaustion: first admit holds; second denies with ZERO
   --     reservation (no new hold, no reservation row for the denied execution).
-  v := public.px05_admit_execution(u1, e1, 0.05, 0.10, 900, 100, 0.10, 100, 1);
+  -- Allow two active runs here so the second attempt reaches the budget check
+  -- instead of being denied earlier by the active-lease limit.
+  v := public.px05_admit_execution(u1, e1, 0.05, 0.10, 900, 100, 0.10, 100, 2);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: first admit was not admitted (%)', v;
   end if;
@@ -224,7 +253,7 @@ begin
     raise exception 'PX05 FAIL: user window held_usd = % (expected 0.10)', held;
   end if;
 
-  v := public.px05_admit_execution(u1, e2, 0.05, 0.10, 900, 100, 0.10, 100, 1);
+  v := public.px05_admit_execution(u1, e2, 0.05, 0.10, 900, 100, 0.10, 100, 2);
   if (v->>'admitted')::boolean is not false or v->>'reason' <> 'budget_exhausted' then
     raise exception 'PX05 FAIL: budget exhaustion was not denied (%)', v;
   end if;
@@ -292,29 +321,29 @@ begin
   end if;
 
   -- 2e) Per-minute request rate. request_limit = 2.
-  v := public.px05_admit_execution(u2, e1, 0.01, 0.01, 900, 2, 100, 100, 1);
+  v := public.px05_admit_execution(u2, e4, 0.01, 0.01, 900, 2, 100, 100, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: rate test first admit denied (%)', v;
   end if;
   -- Expire the active lease so the active-limit check does not shadow the rate.
   update prismatix_internal.execution_leases set expires_at = now() - interval '1 minute'
    where subject_id = u2 and released_at is null;
-  v := public.px05_admit_execution(u2, e2, 0.01, 0.01, 900, 2, 100, 100, 1);
+  v := public.px05_admit_execution(u2, e5, 0.01, 0.01, 900, 2, 100, 100, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: rate test second admit denied (%)', v;
   end if;
-  v := public.px05_admit_execution(u2, e3, 0.01, 0.01, 900, 2, 100, 100, 1);
+  v := public.px05_admit_execution(u2, e6, 0.01, 0.01, 900, 2, 100, 100, 1);
   if (v->>'admitted')::boolean is not false or v->>'reason' <> 'rate_limited' then
     raise exception 'PX05 FAIL: per-minute rate limit not enforced (%)', v;
   end if;
 
   -- 2f) Active-run limit: a second concurrent execution for the same subject is
   --     denied while the first lease is live.
-  v := public.px05_admit_execution(u3, e1, 0.01, 0.01, 900, 100, 100, 100, 1);
+  v := public.px05_admit_execution(u3, e7, 0.01, 0.01, 900, 100, 100, 100, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: active test first admit denied (%)', v;
   end if;
-  v := public.px05_admit_execution(u3, e2, 0.01, 0.01, 900, 100, 100, 100, 1);
+  v := public.px05_admit_execution(u3, e8, 0.01, 0.01, 900, 100, 100, 100, 1);
   if (v->>'admitted')::boolean is not false or v->>'reason' <> 'active_limit' then
     raise exception 'PX05 FAIL: active-run limit not enforced (%)', v;
   end if;
@@ -326,17 +355,17 @@ begin
    where scope = 'user' and subject_id = u3 and window_start = date_trunc('day', now());
   update prismatix_internal.execution_leases set expires_at = now() - interval '1 minute'
    where subject_id = u3 and released_at is null;
-  v := public.px05_admit_execution(u3, e3, 0.01, 0.01, 900, 100, 0.01, 100, 1);
+  v := public.px05_admit_execution(u3, e9, 0.01, 0.01, 900, 100, 0.01, 100, 1);
   if (v->>'admitted')::boolean is not false or v->>'reason' <> 'budget_exhausted' then
     raise exception 'PX05 FAIL: lease expiry forgave held money (%)', v;
   end if;
-  select * into res from prismatix_internal.budget_reservations where execution_id = e1;
+  select * into res from prismatix_internal.budget_reservations where execution_id = e7;
   if res.subject_id <> u3 or res.state not in ('held','pending_reconcile') then
     raise exception 'PX05 FAIL: expired-lease reservation was forgiven (state=%)', res.state;
   end if;
   if not exists (
     select 1 from prismatix_internal.execution_leases
-    where subject_id = u3 and execution_id = e1 and released_at is not null
+    where subject_id = u3 and execution_id = e7 and released_at is not null
   ) then
     raise exception 'PX05 FAIL: stale lease was not marked released';
   end if;
@@ -349,15 +378,21 @@ begin
   -- 2h) The project window is SHARED. Project daily = 0.10; two subjects of 0.05
   --     consume it; a brand-new subject is denied even though its own window is
   --     fresh (a new account cannot obtain a fresh project budget).
-  v := public.px05_admit_execution(u4, e1, 0.05, 0.05, 900, 100, 100, 0.10, 1);
+  -- Reset the shared project counters from earlier independent cases so this
+  --     assertion isolates cross-account sharing rather than their prior spend.
+  update prismatix_internal.budget_windows
+     set held_usd = 0, committed_usd = 0, limit_usd = 0.10
+   where scope = 'project' and subject_id = c_project
+     and window_start = date_trunc('day', now());
+  v := public.px05_admit_execution(u4, e10, 0.05, 0.05, 900, 100, 100, 0.10, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: project test u4 denied (%)', v;
   end if;
-  v := public.px05_admit_execution(u5, e1, 0.05, 0.05, 900, 100, 100, 0.10, 1);
+  v := public.px05_admit_execution(u5, e11, 0.05, 0.05, 900, 100, 100, 0.10, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: project test u5 denied (%)', v;
   end if;
-  v := public.px05_admit_execution(u6, e1, 0.05, 0.05, 900, 100, 100, 0.10, 1);
+  v := public.px05_admit_execution(u6, e12, 0.05, 0.05, 900, 100, 100, 0.10, 1);
   if (v->>'admitted')::boolean is not false or v->>'reason' <> 'budget_exhausted' then
     raise exception 'PX05 FAIL: new account obtained a fresh project budget (%)', v;
   end if;
@@ -368,11 +403,11 @@ begin
   end if;
 
   -- 2i) Confirmed-zero work can be released (hold returned).
-  v := public.px05_admit_execution(u7, e1, 0.20, 0.20, 900, 100, 100, 100, 1);
+  v := public.px05_admit_execution(u7, e13, 0.20, 0.20, 900, 100, 100, 100, 1);
   if (v->>'admitted')::boolean is not true then
     raise exception 'PX05 FAIL: release test admit denied (%)', v;
   end if;
-  v := public.px05_release_reservation(e1, 'no_provider_call');
+  v := public.px05_release_reservation(e13, 'no_provider_call');
   if v->>'state' <> 'released' then
     raise exception 'PX05 FAIL: release did not release (%)', v;
   end if;
@@ -570,54 +605,54 @@ begin
     return;
   end if;
 
-  -- Clean any prior run for this window (test DB only).
-  delete from prismatix_internal.budget_reservations
-   where created_at >= date_trunc('day', now());
-  delete from prismatix_internal.execution_leases
-   where acquired_at >= date_trunc('day', now());
-  delete from prismatix_internal.budget_windows
-   where window_start = date_trunc('day', now());
-  delete from prismatix_internal.admission_requests
-   where window_start >= date_trunc('minute', now()) - interval '1 minute';
+  -- Require a truly fresh database instead of deleting shared budget rows.
+  if exists (select 1 from prismatix_internal.budget_reservations)
+     or exists (select 1 from prismatix_internal.execution_leases)
+     or exists (select 1 from prismatix_internal.budget_windows)
+     or exists (select 1 from prismatix_internal.admission_requests) then
+    raise exception 'PX05 concurrency fixture requires empty budget tables; create a fresh disposable _test database';
+  end if;
 
-  v_conn := 'dbname=' || current_database();
+  v_conn := format(
+    'host=%L port=%s dbname=%L user=%L',
+    trim(split_part(current_setting('unix_socket_directories'), ',', 1)),
+    current_setting('port'), current_database(), current_user
+  );
   perform dblink_connect('px05_s1', v_conn);
   perform dblink_connect('px05_s2', v_conn);
 
-  -- 25 async admits per session; each subject is distinct so the per-user lease
-  -- limit never masks the shared project budget.
-  for i in 1..25 loop
-    perform dblink_send_query('px05_s1', format(
-      $q$select public.px05_admit_execution(
-            %L::uuid, gen_random_uuid(), %L, %L, 900, 1000, 100, %L, 1)$q$,
-      ('c0000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid,
-      per_exec, per_exec, limit_usd
-    ));
-  end loop;
-  for i in 26..50 loop
-    perform dblink_send_query('px05_s2', format(
-      $q$select public.px05_admit_execution(
-            %L::uuid, gen_random_uuid(), %L, %L, 900, 1000, 100, %L, 1)$q$,
-      ('c0000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid,
-      per_exec, per_exec, limit_usd
-    ));
-  end loop;
+  -- One async query per connection; dblink cannot queue another query on a
+  -- connection while its previous result is pending. Each query admits 25
+  -- distinct subjects, and both sessions contend on the shared project row.
+  if dblink_send_query('px05_s1', format(
+    $q$select public.px05_admit_execution(
+          ('c0000000-0000-4000-8000-' || lpad(gs.i::text, 12, '0'))::uuid,
+          gen_random_uuid(), %L, %L, 900, 1000, 100, %L, 1)
+       from generate_series(1, 25) as gs(i)$q$,
+    per_exec, per_exec, limit_usd
+  )) <> 1 then
+    raise exception 'PX05 FAIL: could not dispatch async batch 1';
+  end if;
+  if dblink_send_query('px05_s2', format(
+    $q$select public.px05_admit_execution(
+          ('c0000000-0000-4000-8000-' || lpad((gs.i + 25)::text, 12, '0'))::uuid,
+          gen_random_uuid(), %L, %L, 900, 1000, 100, %L, 1)
+       from generate_series(1, 25) as gs(i)$q$,
+    per_exec, per_exec, limit_usd
+  )) <> 1 then
+    raise exception 'PX05 FAIL: could not dispatch async batch 2';
+  end if;
 
-  -- Drain session 1.
-  for i in 1..25 loop
-    for rec in select * from dblink_get_result('px05_s1') as t(r jsonb) loop
-      v_result := rec.r;
-      if (v_result->>'admitted')::boolean then v_admitted := v_admitted + 1;
-      else v_denied := v_denied + 1; end if;
-    end loop;
+  -- Drain both independent 25-row query results.
+  for rec in select * from dblink_get_result('px05_s1') as t(r jsonb) loop
+    v_result := rec.r;
+    if (v_result->>'admitted')::boolean then v_admitted := v_admitted + 1;
+    else v_denied := v_denied + 1; end if;
   end loop;
-  -- Drain session 2.
-  for i in 1..25 loop
-    for rec in select * from dblink_get_result('px05_s2') as t(r jsonb) loop
-      v_result := rec.r;
-      if (v_result->>'admitted')::boolean then v_admitted := v_admitted + 1;
-      else v_denied := v_denied + 1; end if;
-    end loop;
+  for rec in select * from dblink_get_result('px05_s2') as t(r jsonb) loop
+    v_result := rec.r;
+    if (v_result->>'admitted')::boolean then v_admitted := v_admitted + 1;
+    else v_denied := v_denied + 1; end if;
   end loop;
 
   perform dblink_disconnect('px05_s1');
@@ -658,15 +693,8 @@ begin
     raise exception 'PX05 FAIL: a fresh session reset the shared project budget (%)', v_result;
   end if;
 
-  -- Cleanup committed fixtures.
-  delete from prismatix_internal.budget_reservations
-   where created_at >= date_trunc('day', now());
-  delete from prismatix_internal.execution_leases
-   where acquired_at >= date_trunc('day', now());
-  delete from prismatix_internal.budget_windows
-   where window_start = date_trunc('day', now());
-  delete from prismatix_internal.admission_requests
-   where window_start >= date_trunc('minute', now()) - interval '1 minute';
+  -- The resulting budget rows are intentionally retained in this disposable
+  -- database; the fixture never cleans up unrelated project-level state.
 end $$;
 
 \echo 'tests/integration/admission-concurrency.sql: PASS (all PX05 admission assertions held)'

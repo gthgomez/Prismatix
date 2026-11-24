@@ -1,9 +1,11 @@
 // src/components/ImageGenerationModal.tsx
 // BYOK image generation modal with transparent cost disclosure and explicit opt-in.
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   SUPPORTED_IMAGE_MODELS,
+  LIVE_IMAGE_GENERATION_ENABLED,
+  LIVE_IMAGE_GENERATION_UNAVAILABLE,
   estimateImageCost,
   executeImageGeneration,
   type ImageGenerationResult,
@@ -38,7 +40,44 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
   const [selectedSize, setSelectedSize] = useState('1024x1024');
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [useMockMode, setUseMockMode] = useState(false);
+  const [useMockMode, setUseMockMode] = useState(!LIVE_IMAGE_GENERATION_ENABLED);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onCloseRef.current();
+      } else if (event.key === 'Tab' && modalRef.current) {
+        const focusable = Array.from(modalRef.current.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ));
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (!first || !last) return;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      previousFocus?.focus();
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -106,6 +145,7 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
       }}
     >
       <div
+        ref={modalRef}
         className='modal-card image-generation-modal'
         style={{
           background: 'var(--color-bg-primary, #18181b)',
@@ -113,6 +153,8 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
           borderRadius: 'var(--radius-lg, 12px)',
           width: '100%',
           maxWidth: '540px',
+          maxHeight: 'calc(100dvh - 2rem)',
+          overflowY: 'auto',
           padding: '1.5rem',
           boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
           display: 'flex',
@@ -122,17 +164,24 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h2 id='image-gen-title' style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600, color: 'var(--color-text-primary, #fafafa)' }}>
-            🎨 Generate Image (BYOK)
+            🎨 Generate Image {LIVE_IMAGE_GENERATION_ENABLED ? '(BYOK)' : '(Preview)'}
           </h2>
           <button
+            ref={closeButtonRef}
             type='button'
             onClick={onClose}
             aria-label='Close modal'
-            style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '1.25rem' }}
+            style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '1.25rem', minWidth: '44px', minHeight: '44px' }}
           >
             ✕
           </button>
         </div>
+
+        {!LIVE_IMAGE_GENERATION_ENABLED && (
+          <p role='status' style={{ margin: 0, color: 'var(--color-text-primary)' }}>
+            {LIVE_IMAGE_GENERATION_UNAVAILABLE}
+          </p>
+        )}
 
         <div>
           <label htmlFor='img-prompt-input' style={{ display: 'block', fontSize: '0.85rem', color: '#9ca3af', marginBottom: '0.35rem' }}>
@@ -158,7 +207,7 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
           />
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+        {LIVE_IMAGE_GENERATION_ENABLED && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div>
             <label htmlFor='img-model-select' style={{ display: 'block', fontSize: '0.85rem', color: '#9ca3af', marginBottom: '0.35rem' }}>
               Model
@@ -178,7 +227,7 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
             >
               {SUPPORTED_IMAGE_MODELS.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name} (${m.costPerImageUsd.toFixed(3)}/img)
+                  {m.name}{LIVE_IMAGE_GENERATION_ENABLED ? ` ($${m.costPerImageUsd.toFixed(3)}/img)` : ''}
                 </option>
               ))}
             </select>
@@ -208,7 +257,7 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
               ))}
             </select>
           </div>
-        </div>
+        </div>}
 
         {/* Provider Readiness / Missing Key Notice */}
         {!isKeyConfigured && !useMockMode && (
@@ -287,7 +336,7 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
               ? 'Generates local SVG placeholder without calling paid provider APIs or settling charges.'
               : `Charged to your ${currentModel?.provider.toUpperCase()} BYOK key. No deployment markups or hidden fees.`}
           </div>
-          {useMockMode && (
+          {useMockMode && LIVE_IMAGE_GENERATION_ENABLED && (
             <button
               type='button'
               onClick={() => setUseMockMode(false)}
@@ -330,6 +379,7 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
             disabled={isGenerating}
             style={{
               padding: '0.5rem 1rem',
+              minHeight: '44px',
               borderRadius: 'var(--radius-md, 8px)',
               border: '1px solid #3f3f46',
               background: 'transparent',
@@ -346,6 +396,7 @@ export const ImageGenerationModal: React.FC<ImageGenerationModalProps> = ({
             disabled={isGenerating || !prompt.trim() || (!isKeyConfigured && !useMockMode)}
             style={{
               padding: '0.5rem 1.25rem',
+              minHeight: '44px',
               borderRadius: 'var(--radius-md, 8px)',
               border: 'none',
               background: useMockMode ? '#3b82f6' : '#4ECDC4',

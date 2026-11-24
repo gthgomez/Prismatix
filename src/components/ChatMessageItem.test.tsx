@@ -40,6 +40,39 @@ describe('ChatMessageItem', () => {
     provider: 'google',
   };
 
+  it('labels a local image placeholder as a free preview, not a model result', () => {
+    const message: Message = {
+      role: 'assistant', content: 'Preview placeholder', timestamp: 1700000000000,
+      metadata: { imageGeneration: {
+        imageUrl: 'data:image/svg+xml;utf8,%3Csvg%3E%3C%2Fsvg%3E',
+        prompt: 'A mountain', modelId: 'flux-1-schnell', costUsd: 0, isMock: true,
+      } },
+    };
+    root = render(<ChatMessageItem message={message} index={0} isStreaming={false}
+      isWaitingFirstToken={false} defaultModelColor='#4ECDC4'
+      isMetadataExpanded={false} onToggleMetadata={vi.fn()} />);
+    const card = container.querySelector('.generated-image-card');
+    expect(card?.textContent).toContain('Preview placeholder');
+    expect(card?.textContent).not.toContain('flux-1-schnell');
+    expect(card?.querySelector('img')?.getAttribute('alt')).toBe('Preview placeholder for: A mountain');
+    expect(card?.querySelector('a')?.getAttribute('download')).toBe('prismatix-preview.svg');
+  });
+
+  it('does not infer a preview from SVG when the result explicitly says it is live', () => {
+    const message: Message = {
+      role: 'assistant', content: 'Image', timestamp: 1700000000000,
+      metadata: { imageGeneration: {
+        imageUrl: 'data:image/svg+xml;utf8,%3Csvg%3E%3C%2Fsvg%3E',
+        prompt: 'A mountain', modelId: 'example-model', costUsd: 0.04, isMock: false,
+      } },
+    };
+    root = render(<ChatMessageItem message={message} index={0} isStreaming={false}
+      isWaitingFirstToken={false} defaultModelColor='#4ECDC4'
+      isMetadataExpanded={false} onToggleMetadata={vi.fn()} />);
+    expect(container.querySelector('.generated-image-card')?.textContent).toContain('example-model');
+    expect(container.querySelector('.generated-image-card')?.textContent).not.toContain('Preview placeholder');
+  });
+
   it('renders assistant message with model pill and invokes onToggleMetadata with index', () => {
     const onToggleMetadata = vi.fn();
     root = render(
@@ -281,5 +314,29 @@ describe('ChatMessageItem', () => {
     );
 
     expect(container.querySelector('.thinking-process')).toBeNull();
+  });
+
+  it('labels Compare cost provenance and unknown costs after reload', () => {
+    root = render(
+      <ChatMessageItem
+        message={{
+          role: 'assistant', content: 'Compare', timestamp: 1700000000000,
+          comparisonResults: {
+            modelA: { model: 'model-a', content: 'A answer', cost: 0.0123, costStatus: 'settled', status: 'completed' },
+            modelB: { model: 'model-b', content: 'B answer', costStatus: 'unknown', status: 'failed' },
+          },
+        }}
+        index={0}
+        isStreaming={false}
+        isWaitingFirstToken={false}
+        defaultModelColor='#4ECDC4'
+        isMetadataExpanded={false}
+        onToggleMetadata={vi.fn()}
+      />,
+    );
+
+    const comparison = container.querySelector('.comparison-results-container');
+    expect(comparison?.textContent).toContain('$0.0123 · settled');
+    expect(comparison?.textContent).toContain('Cost unknown');
   });
 });

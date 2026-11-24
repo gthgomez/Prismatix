@@ -5,8 +5,13 @@ import { test, expect } from '@playwright/test';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 test.describe('PR 6 Multimodal & Polished Product (E2E)', () => {
-  test('F28: opens BYOK image generation modal, configures prompt and model, and generates preview', async ({ page }) => {
+  test('F28: explains live image unavailability and generates a free preview', async ({ page }, testInfo) => {
+    if (testInfo.project.name === 'mobile') await page.setViewportSize({ width: 320, height: 568 });
     await setupAuthenticatedMock(page, { hasProviderKey: true });
+    let imageRequests = 0;
+    page.on('request', (request) => {
+      if (request.url().includes('/functions/v1/image-generation')) imageRequests++;
+    });
     await signInAsMockUser(page);
 
     // Locate Image Generation button in composer
@@ -18,10 +23,25 @@ test.describe('PR 6 Multimodal & Polished Product (E2E)', () => {
     const modal = page.locator('.image-generation-modal');
     await expect(modal).toBeVisible();
     await expect(modal.getByRole('heading', { name: /generate image/i })).toBeVisible();
+    const close = modal.getByRole('button', { name: 'Close modal' });
+    const cancel = modal.getByRole('button', { name: 'Cancel' });
+    await expect(close).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(close).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(modal).not.toBeVisible();
+    await expect(imgGenBtn).toBeFocused();
+    await imgGenBtn.click();
+    await expect(modal).toBeVisible();
 
-    // Verify cost disclosure notice
-    await expect(modal).toContainText(/Estimated cost:/i);
-    await expect(modal).toContainText(/BYOK key/i);
+    // The live path is unavailable until its paid-action safeguards are ready.
+    await expect(modal).toContainText(/live image generation is temporarily unavailable/i);
+    await expect(modal).toContainText(/mock preview \(unmetered\)/i);
+    await expect(modal.getByRole('button', { name: /switch back to live/i })).toHaveCount(0);
+    await expect(modal.getByLabel(/model/i)).toHaveCount(0);
+    await expect(modal.getByLabel(/dimensions/i)).toHaveCount(0);
 
     // Enter prompt
     const promptInput = modal.getByLabel(/prompt/i);
@@ -30,6 +50,16 @@ test.describe('PR 6 Multimodal & Polished Product (E2E)', () => {
     // Click Generate Image button
     const confirmBtn = modal.locator('.generate-image-confirm-btn');
     await expect(confirmBtn).toBeEnabled();
+    for (const button of [close, cancel, confirmBtn]) {
+      await button.scrollIntoViewIfNeeded();
+      const box = await button.boundingBox();
+      expect(box?.height).toBeGreaterThanOrEqual(44);
+      expect(box?.width).toBeGreaterThanOrEqual(44);
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+    }
     await confirmBtn.click();
 
     // Modal closes and generated image card is rendered in the conversation
@@ -37,7 +67,9 @@ test.describe('PR 6 Multimodal & Polished Product (E2E)', () => {
     const imageCard = page.locator('.generated-image-card');
     await expect(imageCard).toBeVisible();
     await expect(imageCard.locator('img')).toBeVisible();
-    await expect(imageCard).toContainText(/flux-1-schnell/i);
+    await expect(imageCard).toContainText(/preview placeholder/i);
+    await expect(imageCard).not.toContainText(/flux-1-schnell/i);
+    expect(imageRequests).toBe(0);
   });
 
   test('F26: toggles voice dictation recording state from composer', async ({ page }) => {
@@ -100,7 +132,7 @@ test.describe('PR 6 Multimodal & Polished Product (E2E)', () => {
 
     // Verify theme color meta tag
     const themeColor = page.locator('meta[name="theme-color"]');
-    await expect(themeColor).toHaveAttribute('content', '#03070b');
+    await expect(themeColor).toHaveAttribute('content', '#f7faff');
   });
 
   test('F30: displays offline continuity status banner when disconnected', async ({ page }) => {

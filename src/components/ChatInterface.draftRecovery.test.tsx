@@ -108,6 +108,24 @@ describe('ChatInterface Draft Recovery (F02)', () => {
     }
   });
 
+  it('offers tab-stored text only to its account without dispatching a request', async () => {
+    sessionStorage.setItem(`prismatix.failed-turn.${TEST_USER.id}`, 'Reloaded draft text');
+    const otherUser = { ...TEST_USER, id: 'different-account' };
+    root = renderInto(container, <ChatInterface user={otherUser} onSignOut={async () => {}} />);
+    await flush();
+    expect(container.textContent).not.toContain('Restore draft');
+
+    act(() => root?.render(<ChatInterface user={TEST_USER} onSignOut={async () => {}} />));
+    await flush();
+    const recovery = container.querySelector('.draft-recovery-bar');
+    expect(recovery?.textContent).toContain('Restore draft');
+    expect(recovery?.querySelector('.draft-recovery-retry-btn')).toBeNull();
+    act(() => recovery?.querySelector<HTMLButtonElement>('.draft-recovery-restore-btn')?.click());
+    expect(container.querySelector<HTMLTextAreaElement>('textarea.chat-input')?.value).toBe('Reloaded draft text');
+    expect(sessionStorage.getItem(`prismatix.failed-turn.${TEST_USER.id}`)).toBeNull();
+    expect(mockFetch.mock.calls.some(([url]) => String(url).endsWith('/functions/v1/router'))).toBe(false);
+  });
+
   it('displays draft recovery alert banner when a send fails', async () => {
     mockFetch.mockRejectedValueOnce(new Error('Failed to connect to router'));
 

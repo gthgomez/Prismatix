@@ -26,15 +26,16 @@ export interface ProviderPlugins {
   enabledProviders: ReadonlySet<ProviderId>;
   isConfigured: boolean;
   isVerified: boolean;
+  verifiedProviders?: ReadonlySet<ProviderId>;
   verificationStatus: 'unverified' | 'verified' | 'unavailable' | 'invalid';
   verificationLoading: boolean;
-  verifyEnabledProviders: () => Promise<boolean>;
+  verifyEnabledProviders: (provider?: ProviderId) => Promise<boolean>;
   invalidateVerification: () => void;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
   setEnabled: (provider: ProviderId, enabled: boolean) => Promise<boolean>;
-  setKey: (provider: ProviderId, apiKey: string, validation?: { status: ProviderKeyStatus; message?: string; stale?: boolean }) => Promise<boolean>;
+  setKey: (provider: ProviderId, apiKey: string, validation?: { status: ProviderKeyStatus; message?: string; stale?: boolean; clientAccountGeneration?: number }) => Promise<boolean>;
   removeKey: (provider: ProviderId) => Promise<boolean>;
   setDefault: (provider: ProviderId) => Promise<boolean>;
   validateKey: (provider: ProviderId, apiKey?: string) => Promise<ProviderValidationResult>;
@@ -67,6 +68,14 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   }, []);
 
   const refresh = useCallback(async () => {
+    if (!userId) {
+      seqRef.current += 1;
+      setPayload(null);
+      setStatuses({});
+      setError(null);
+      setLoading(false);
+      return;
+    }
     const seq = ++seqRef.current;
     const accountGeneration = accountGenerationRef.current;
     validationSequenceRef.current = {};
@@ -74,7 +83,7 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     setVerificationLoading(false);
     setLoading(true);
     try {
-      const next = await fetchProviderSettings();
+      const next = await fetchProviderSettings(userId);
       if (seq !== seqRef.current || accountGeneration !== accountGenerationRef.current || !mountedRef.current) return;
       setStatuses({});
       applyPayload(next);
@@ -84,7 +93,7 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     } finally {
       if (seq === seqRef.current && accountGeneration === accountGenerationRef.current && mountedRef.current) setLoading(false);
     }
-  }, [applyPayload]);
+  }, [applyPayload, userId]);
 
   // Reload when the account changes; clear state so the previous account's key
   // metadata is never shown for the next one.
@@ -181,15 +190,21 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
         stale: true,
       });
       try {
-        const result = await validateProviderKey(provider, apiKey);
+        if (!userId) return staleResult();
+        const response = await validateProviderKey(userId, provider, apiKey);
+        // Older Edge versions used this saved-only result for providers with no
+        // metadata check. It is not evidence that a credential was verified.
+        const result: ProviderValidationResult = response.status === 'enabled' && response.message === 'Key saved'
+          ? { ...response, status: 'unknown' }
+          : response;
         if (!isCurrentRequest()) return staleResult();
-        if (mountedRef.current) {
+        if (!apiKey && mountedRef.current) {
           setStatuses((prev) => ({
             ...prev,
             [provider]: { status: result.status, message: result.message },
           }));
         }
-        return result;
+        return { ...result, clientAccountGeneration: accountGeneration };
       } catch (err) {
         if (!isCurrentRequest()) return staleResult();
         const fallback: ProviderValidationResult = {
@@ -197,22 +212,23 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
           status: 'unavailable',
           message: err instanceof Error ? err.message : 'Validation failed',
         };
-        if (mountedRef.current) {
+        if (!apiKey && mountedRef.current) {
           setStatuses((prev) => ({
             ...prev,
             [provider]: { status: 'unavailable', message: fallback.message },
           }));
         }
-        return fallback;
+        return { ...fallback, clientAccountGeneration: accountGeneration };
       }
     },
-    [],
+    [userId],
   );
 
-  const verifyEnabledProviders = useCallback(async (): Promise<boolean> => {
+  const verifyEnabledProviders = useCallback(async (provider?: ProviderId): Promise<boolean> => {
     const accountGeneration = accountGenerationRef.current;
     const verificationRequest = ++verificationRequestRef.current;
-    const targets = providers.filter((provider) => provider.hasKey && provider.enabled);
+    const targets = providers.filter((candidate) => candidate.hasKey && candidate.enabled
+      && (!provider || candidate.id === provider));
     if (targets.length === 0) return false;
     setVerificationLoading(true);
     try {
@@ -243,11 +259,13 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   const setKeyHandler = useCallback(async (
     provider: ProviderId,
     apiKey: string,
-    validation?: { status: ProviderKeyStatus; message?: string; stale?: boolean },
+    validation?: { status: ProviderKeyStatus; message?: string; stale?: boolean; clientAccountGeneration?: number },
   ): Promise<boolean> => {
-    if (validation?.stale) return false;
+    if (validation && (validation.stale
+      || validation.clientAccountGeneration !== accountGenerationRef.current)) return false;
     const accountGeneration = accountGenerationRef.current;
-    const saved = await mutate(() => setProviderKey(provider, apiKey));
+    if (!userId) return false;
+    const saved = await mutate(() => setProviderKey(provider, apiKey, userId));
     if (!saved || accountGeneration !== accountGenerationRef.current) return false;
     validationSequenceRef.current[provider] = (validationSequenceRef.current[provider] ?? 0) + 1;
     setStatuses((prev) => ({
@@ -255,21 +273,23 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
       [provider]: validation ? { status: validation.status, message: validation.message } : { status: 'unknown' },
     }));
     return true;
-  }, [mutate]);
+  }, [mutate, userId]);
 
   const setEnabledHandler = useCallback(async (provider: ProviderId, enabled: boolean): Promise<boolean> => {
+    if (!userId) return false;
     const accountGeneration = accountGenerationRef.current;
-    const saved = await mutate(() => setProviderEnabled(provider, enabled));
+    const saved = await mutate(() => setProviderEnabled(provider, enabled, userId));
     if (saved && accountGeneration === accountGenerationRef.current) clearProviderVerification(provider);
     return saved;
-  }, [clearProviderVerification, mutate]);
+  }, [clearProviderVerification, mutate, userId]);
 
   const removeKeyHandler = useCallback(async (provider: ProviderId): Promise<boolean> => {
+    if (!userId) return false;
     const accountGeneration = accountGenerationRef.current;
-    const removed = await mutate(() => deleteProviderKey(provider));
+    const removed = await mutate(() => deleteProviderKey(provider, userId));
     if (removed && accountGeneration === accountGenerationRef.current) clearProviderVerification(provider);
     return removed;
-  }, [clearProviderVerification, mutate]);
+  }, [clearProviderVerification, mutate, userId]);
 
   return {
     providers,
@@ -277,6 +297,9 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     enabledProviders,
     isConfigured,
     isVerified,
+    verifiedProviders: new Set(enabledKeyProviders
+      .filter((provider) => statuses[provider.id]?.status === 'enabled')
+      .map((provider) => provider.id)),
     verificationStatus,
     verificationLoading,
     verifyEnabledProviders,
@@ -287,7 +310,7 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     setEnabled: setEnabledHandler,
     setKey: setKeyHandler,
     removeKey: removeKeyHandler,
-    setDefault: (provider) => mutate(() => setDefaultProvider(provider)),
+    setDefault: (provider) => userId ? mutate(() => setDefaultProvider(provider, userId)) : Promise.resolve(false),
     validateKey: validateKeyHandler,
   };
 }

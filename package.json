@@ -5,18 +5,27 @@
   "description": "Intelligent multi-provider AI model router with streaming, cost tracking, and debate mode",
   "type": "module",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0",
+    "node": "^20.19.0 || ^22.12.0 || ^24.0.0",
     "npm": ">=10"
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && node scripts/assert-environment-isolation.mjs && vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
     "lint": "eslint . --ext ts,tsx",
     "test": "vitest run",
     "audit:models": "node scripts/audit-stale-models.mjs",
-    "check:parity": "node scripts/check-deployment-parity.mjs"
+    "check:parity": "node scripts/check-deployment-parity.mjs",
+    "check:isolation": "node scripts/assert-environment-isolation.mjs",
+    "qual:env": "node scripts/qualification/env-contract.selftest.mjs",
+    "qual:seed": "node scripts/qualification/seed-local.mjs",
+    "qual:smoke": "node scripts/qualification/smoke-router.mjs",
+    "qual:rate": "node scripts/qualification/rate-limit-check.mjs",
+    "qual:isolation": "node scripts/qualification/isolation-check.mjs",
+    "qual:e2e": "node scripts/qualification/run-real-e2e.mjs",
+    "qual:screens": "node scripts/qualification/capture-screens.mjs",
+    "qual:ci": "bash scripts/qualification/ci-real-backend.sh"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
@@ -24,6 +33,7 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@playwright/test": "^1.65.0",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
@@ -36,7 +46,7 @@
     "jsdom": "^26.1.0",
     "typescript": "^5.2.2",
     "vite": "^7.3.1",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.12"
   },
   "license": "MIT",
   "keywords": [

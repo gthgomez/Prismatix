@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="description" content="Prismatix - Adaptive multi-model AI orchestration" />
-    <meta name="theme-color" content="#03070b" />
+    <meta name="theme-color" content="#f7faff" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Prismatix</title>
@@ -25,8 +25,8 @@
         margin: 0;
         padding: 0;
         min-height: 100%;
-        background: #03070b;
-        color: #e8eef2;
+        background: var(--color-bg, #f7faff);
+        color: var(--color-text, #101828);
       }
 
       #root {
@@ -41,14 +41,14 @@
         transform: translate(-50%, -50%);
         text-align: center;
         font-family: monospace;
-        color: #4ECDC4;
+        color: var(--color-primary, #06758a);
       }
 
       .loading-spinner {
         width: 40px;
         height: 40px;
-        border: 3px solid rgba(78, 205, 196, 0.2);
-        border-top-color: #4ECDC4;
+        border: 3px solid var(--color-border, #d9e5f3);
+        border-top-color: var(--color-primary, #06758a);
         border-radius: 50%;
         animation: spin 1s linear infinite;
         margin: 0 auto 1rem;
@@ -67,22 +67,22 @@
         gap: 12px;
         padding: 24px;
         box-sizing: border-box;
-        background: #03070b;
-        color: #e8eef2;
+        background: var(--color-bg, #f7faff);
+        color: var(--color-text, #101828);
         font: 16px/1.5 system-ui, sans-serif;
         text-align: center;
       }
 
       .startup-recovery h1 { margin: 0; font-size: 1.25rem; }
-      .startup-recovery p { max-width: 30rem; margin: 0; color: #c5d0d8; }
+      .startup-recovery p { max-width: 30rem; margin: 0; color: var(--color-text-dim, #3f5274); }
       .startup-recovery button {
         justify-self: center;
         min-height: 44px;
         padding: 0 18px;
-        border: 1px solid #67d6d0;
+        border: 1px solid var(--color-primary, #06758a);
         border-radius: 10px;
-        background: #0d292d;
-        color: #fff;
+        background: var(--color-primary, #06758a);
+        color: var(--color-content-on-primary, #fff);
         font: inherit;
         font-weight: 600;
         cursor: pointer;
@@ -95,14 +95,14 @@
         margin-top: 20px;
       }
 
-      .loading-recovery p { margin: 0; color: #c5d0d8; }
+      .loading-recovery p { margin: 0; color: var(--color-text-dim, #3f5274); }
       .loading-recovery button {
         min-height: 44px;
         padding: 0 18px;
-        border: 1px solid #67d6d0;
+        border: 1px solid var(--color-primary, #06758a);
         border-radius: 10px;
-        background: #0d292d;
-        color: #fff;
+        background: var(--color-primary, #06758a);
+        color: var(--color-content-on-primary, #fff);
         font: inherit;
         font-weight: 600;
         cursor: pointer;

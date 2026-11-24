@@ -26,6 +26,8 @@ export const MOCK_SESSION = {
 
 export interface MockAppOptions {
   hasProviderKey?: boolean;
+  authSession?: typeof MOCK_SESSION;
+  additionalAuthStorageKeys?: string[];
   conversations?: Array<{ id: string; title: string; last_activity_at: string; project_id?: string | null }>;
   messages?: Array<{
     id: string;
@@ -97,7 +99,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
   // Inject session into all common Supabase storage keys before page scripts run.
   // Include host-derived local keys so reload keeps the authorized shell without
   // requiring another interactive sign-in.
-  await page.addInitScript((sessionData) => {
+  await page.addInitScript(({ sessionData, additionalKeys }) => {
     const raw = JSON.stringify(sessionData);
     const seedKeys = [
       'sb-mock-auth-token',
@@ -106,6 +108,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
       'sb-127-auth-token',
       'sb-127.0.0.1-auth-token',
       'sb-localhost-auth-token',
+      ...additionalKeys,
     ];
     for (const key of seedKeys) {
       window.localStorage.setItem(key, raw);
@@ -116,7 +119,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
         window.localStorage.setItem(key, raw);
       }
     }
-  }, MOCK_SESSION);
+  }, { sessionData: options.authSession ?? MOCK_SESSION, additionalKeys: options.additionalAuthStorageKeys ?? [] });
 
   // Mock Supabase Auth API
   await page.route('**/auth/v1/user*', async (route) => {
@@ -241,11 +244,15 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
     const filtered = convId
       ? messages.filter((m) => m.conversation_id === convId.replace(/^eq\./, ''))
       : messages;
+    const order = url.searchParams.get('order');
+    const rows = order?.startsWith('created_at.desc')
+      ? [...filtered].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
+      : filtered;
 
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(filtered),
+      body: JSON.stringify(rows),
     });
   });
 
@@ -272,7 +279,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ today: 0 }),
+      body: JSON.stringify({ today: 0, thisWeek: 0, thisMonth: 0, allTime: 0, lastMessageCost: 0, messageCount: 0 }),
     });
   });
 
@@ -298,19 +305,21 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
   });
 
   // Mock User Preferences REST API (Wave 2)
+  let savedPreferences = {
+    user_id: MOCK_USER.id,
+    preferences: {
+      routingProfile: 'balanced',
+      theme: 'dark',
+      webSearchEnabled: false,
+    },
+    updated_at: '2026-11-15T00:00:00Z',
+  };
   await page.route('**/rest/v1/user_preferences*', async (route) => {
+    if (route.request().method() === 'POST') savedPreferences = route.request().postDataJSON();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        user_id: MOCK_USER.id,
-        preferences: {
-          routingProfile: 'balanced',
-          theme: 'dark',
-          webSearchEnabled: false,
-        },
-        updated_at: new Date().toISOString(),
-      }),
+      body: JSON.stringify(savedPreferences),
     });
   });
 

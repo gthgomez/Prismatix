@@ -28,7 +28,7 @@
 // their Deno-style `npm:` specifiers are resolved by the `deno-npm-stubs`
 // plugin in vite.config.ts — the same handler-invocation seam pattern used by
 // tests/security/entitlements.test.ts.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PROTOCOL_VERSION,
   releaseHeaders,
@@ -408,7 +408,16 @@ function flushAsync(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 150));
 }
 
+function freezeLegacyPricingFixtures(): void {
+  // These handler contracts exercise legacy direct-provider routes rather
+  // than date freshness. Keep only those suites at their deliberate historic
+  // fixture date; the freshness regression advances time explicitly.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-05-01T12:00:00Z'));
+}
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -761,6 +770,7 @@ describe('capabilities size guards & body-error precedence (PX02 fix round 1)', 
 // ---------------------------------------------------------------------------
 
 describe('strict unknown manual model rejection (F17)', () => {
+  beforeEach(freezeLegacyPricingFixtures);
   it('rejects an unknown manual model ID with 400 unknown_model and ZERO provider calls', async () => {
     const calls = installFetchRecorder(supabaseRoutes());
     const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
@@ -794,6 +804,40 @@ describe('strict unknown manual model rejection (F17)', () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'unknown_model', code: 'unknown_model' });
     expect(providerCalls(calls)).toEqual([]);
+  });
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    'rejects inherited property model override %s before any provider call',
+    async (modelOverride) => {
+      const calls = installFetchRecorder(supabaseRoutes());
+      const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+      const res = await handler(routerRequest(chatBody({ platform: 'web', modelOverride }), 'px02-user-token'));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'unknown_model', code: 'unknown_model' });
+      expect(providerCalls(calls)).toEqual([]);
+    },
+  );
+
+  it('fails closed on stale legacy direct-provider pricing before any provider call', async () => {
+    vi.setSystemTime(new Date('2026-11-21T12:00:00Z'));
+    const happy = supabaseRoutes();
+    const calls = installFetchRecorder((call) => {
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+        return jsonResponse({ default_provider: 'google', providers: [{ provider: 'google', enabled: true, has_key: true }] });
+      }
+      return happy(call);
+    });
+    const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
+
+    const res = await handler(routerRequest(
+      chatBody({ platform: 'web', modelOverride: 'gemini-2.5-flash' }),
+      'px02-user-token',
+    ));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: 'unknown_model_pricing' });
+    expect(providerCalls(calls)).toEqual([]);
+    expect(calls.some((call) => call.url.includes('/rest/v1/rpc/px05_admit_execution'))).toBe(false);
   });
 
   it('rejects a paid router path without a user key even when a fake server key exists', async () => {
@@ -953,6 +997,7 @@ describe('strict unknown manual model rejection (F17)', () => {
 // ---------------------------------------------------------------------------
 
 describe('mobile memory isolation (real handler)', () => {
+  beforeEach(freezeLegacyPricingFixtures);
   it('web recall dispatches bounded OpenRouter memory tools through the real handler', async () => {
     const { CURATED_OPENCODE_REGISTRY } = await import('../../supabase/functions/router/models_hub.ts');
     const { isHistoricModel } = await import('../../supabase/functions/_shared/model_lifecycle.ts');
@@ -1044,6 +1089,7 @@ describe('mobile memory isolation (real handler)', () => {
 // ---------------------------------------------------------------------------
 
 describe('PX03 execution ledger fail-closed (real handler)', () => {
+  beforeEach(freezeLegacyPricingFixtures);
   it('returns 503 accounting_unavailable with ZERO provider calls when execution create fails', async () => {
     const happy = supabaseRoutes();
     const calls = installFetchRecorder((call) => {
@@ -1084,6 +1130,7 @@ describe('PX03 execution ledger fail-closed (real handler)', () => {
 // ---------------------------------------------------------------------------
 
 describe('PX05 admission gate (real handler)', () => {
+  beforeEach(freezeLegacyPricingFixtures);
   function denyRoutes(reason: string, retryAfterSeconds = 0): (call: FetchCall) => Response | null {
     const happy = supabaseRoutes();
     return (call: FetchCall): Response | null => {
@@ -1267,7 +1314,7 @@ function spendStatsStubClient(
         data: {
           today: '1.5',
           this_week: 2,
-          this_month: null,
+          this_month: 0,
           all_time: '10.25',
           last_message_cost: '0.01',
           message_count: '7',
@@ -1359,6 +1406,168 @@ describe('spend_stats manual auth seam (verify_jwt independent)', () => {
       lastMessageCost: 0.01,
       messageCount: 7,
     });
+    expect(rpcCalls).toEqual([
+      { fn: 'get_spend_stats', params: { p_user_id: SUBJECT_A } },
+      { fn: 'get_spend_stats_qualified', params: { p_user_id: SUBJECT_A } },
+    ]);
+  });
+
+  it('returns qualified spend buckets from the validated user RPC', async () => {
+    const rpcCalls: Array<{ fn: string; params?: Record<string, unknown> }> = [];
+    const { mod } = await loadModuleNamespace<SpendStatsModule>(
+      SPEND_STATS_ENTRY,
+      SPEND_STATS_ENV,
+    );
+    const qualified = {
+      today: { settled: 0.1, pending: 0.2, estimatedLegacy: 0.3 },
+      thisWeek: { settled: 0.4, pending: 0.5, estimatedLegacy: 0.6 },
+      thisMonth: { settled: 0.7, pending: 0.8, estimatedLegacy: 0.9 },
+      allTime: { settled: 1, pending: 1.1, estimatedLegacy: 1.2 },
+    };
+
+    const res = await mod.handleSpendStats(spendStatsRequest('Bearer px02-valid-token'), {
+      createClient: () => ({
+        ...spendStatsStubClient(rpcCalls),
+        rpc: async (fn: string, params?: Record<string, unknown>) => {
+          rpcCalls.push({ fn, params });
+          return fn === 'get_spend_stats_qualified'
+            ? { data: qualified, error: null }
+            : {
+              data: {
+                today: '1.5', this_week: 2, this_month: 0,
+                all_time: '10.25', last_message_cost: '0.01', message_count: '7',
+              },
+              error: null,
+            };
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      today: 1.5,
+      qualified,
+    });
+    expect(rpcCalls).toEqual([
+      { fn: 'get_spend_stats', params: { p_user_id: SUBJECT_A } },
+      { fn: 'get_spend_stats_qualified', params: { p_user_id: SUBJECT_A } },
+    ]);
+  });
+
+  it.each(['absent', 'malformed'] as const)('falls back to legacy spend fields when the qualified RPC is %s', async (failure) => {
+    const rpcCalls: Array<{ fn: string; params?: Record<string, unknown> }> = [];
+    const { mod } = await loadModuleNamespace<SpendStatsModule>(
+      SPEND_STATS_ENTRY,
+      SPEND_STATS_ENV,
+    );
+
+    const res = await mod.handleSpendStats(spendStatsRequest('Bearer px02-valid-token'), {
+      createClient: () => ({
+        ...spendStatsStubClient(rpcCalls),
+        rpc: async (fn: string, params?: Record<string, unknown>) => {
+          rpcCalls.push({ fn, params });
+          if (fn === 'get_spend_stats_qualified') {
+            return failure === 'absent'
+              ? { data: null, error: { code: 'PGRST202', message: 'function not found' } }
+              : { data: { today: { settled: '' } }, error: null };
+          }
+          return {
+            data: {
+              today: '1.5', this_week: 2, this_month: 0,
+              all_time: '10.25', last_message_cost: '0.01', message_count: '7',
+            },
+            error: null,
+          };
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      today: 1.5,
+      thisWeek: 2,
+      thisMonth: 0,
+      allTime: 10.25,
+      lastMessageCost: 0.01,
+      messageCount: 7,
+    });
+    expect(rpcCalls).toEqual([
+      { fn: 'get_spend_stats', params: { p_user_id: SUBJECT_A } },
+      { fn: 'get_spend_stats_qualified', params: { p_user_id: SUBJECT_A } },
+    ]);
+  });
+
+  it('returns legacy spend fields when the optional qualified RPC times out', async () => {
+    const rpcCalls: Array<{ fn: string; params?: Record<string, unknown> }> = [];
+    const { mod } = await loadModuleNamespace<SpendStatsModule>(
+      SPEND_STATS_ENTRY,
+      SPEND_STATS_ENV,
+    );
+    vi.useFakeTimers();
+    try {
+      const responsePromise = mod.handleSpendStats(spendStatsRequest('Bearer px02-valid-token'), {
+        createClient: () => ({
+          ...spendStatsStubClient(rpcCalls),
+          rpc: (fn: string, params?: Record<string, unknown>) => {
+            rpcCalls.push({ fn, params });
+            if (fn === 'get_spend_stats_qualified') return new Promise(() => {});
+            return Promise.resolve({
+              data: {
+                today: 1.5, this_week: 2, this_month: 0,
+                all_time: 10.25, last_message_cost: 0.01, message_count: 7,
+              },
+              error: null,
+            });
+          },
+        }),
+      });
+
+      await vi.runAllTimersAsync();
+      const res = await responsePromise;
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        today: 1.5,
+        thisWeek: 2,
+        thisMonth: 0,
+        allTime: 10.25,
+        lastMessageCost: 0.01,
+        messageCount: 7,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['missing a required aggregate', {
+      today: 0, this_week: 0, all_time: 0, last_message_cost: 0, message_count: 0,
+    }],
+    ['with a fractional message count', {
+      today: 0, this_week: 0, this_month: 0, all_time: 0, last_message_cost: 0, message_count: 1.5,
+    }],
+    ['with a blank aggregate', {
+      today: '', this_week: 0, this_month: 0, all_time: 0, last_message_cost: 0, message_count: 0,
+    }],
+  ])('fails unavailable for a legacy stats row %s', async (_description, malformedRow) => {
+    const rpcCalls: Array<{ fn: string; params?: Record<string, unknown> }> = [];
+    const { mod } = await loadModuleNamespace<SpendStatsModule>(
+      SPEND_STATS_ENTRY,
+      SPEND_STATS_ENV,
+    );
+
+    const res = await mod.handleSpendStats(spendStatsRequest('Bearer px02-valid-token'), {
+      createClient: () => ({
+        ...spendStatsStubClient(rpcCalls),
+        rpc: async (fn: string, params?: Record<string, unknown>) => {
+          rpcCalls.push({ fn, params });
+          return { data: malformedRow, error: null };
+        },
+      }),
+    });
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'Failed to load spend stats' });
     expect(rpcCalls).toEqual([{ fn: 'get_spend_stats', params: { p_user_id: SUBJECT_A } }]);
   });
 

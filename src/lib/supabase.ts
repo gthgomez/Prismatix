@@ -1,6 +1,7 @@
 // src/lib/supabase.ts
 import { createClient } from '@supabase/supabase-js';
 import { CONFIG } from '../config';
+import { createAuthTimeoutFetch } from './authFetch';
 
 /**
  * Singleton Supabase Client
@@ -17,6 +18,9 @@ export const supabase = createClient(
   CONFIG.SUPABASE_URL, 
   CONFIG.SUPABASE_ANON_KEY,
   {
+    global: {
+      fetch: createAuthTimeoutFetch(),
+    },
     auth: {
       persistSession: true,
       autoRefreshToken: true,

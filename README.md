@@ -5,9 +5,9 @@
 [![Node.js](https://img.shields.io/badge/node-%5E20.19%20%7C%7C%20%3E%3D22.12-brightgreen)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
 
-**A personal AI chat client with a cost-aware multi-provider router. Auto picks a model, shows why, and will not spend what it cannot price.**
+**A personal AI workspace for chatting with multiple models using your own provider keys.**
 
-Prismatix routes each chat request through an OpenCode model-hub gateway by default, choosing between curated models by routing role — and explains every choice in the UI. Direct Anthropic/OpenAI/Google/NVIDIA/DeepInfra connections remain as an explicit legacy posture, not the default path.
+OpenRouter is the default provider offered during setup. Connect your own key in Provider Settings, then choose a model or let Auto select an eligible priced route. Provider availability depends on the keys you enable, the catalog, and server configuration.
 
 ## See it in action
 
@@ -38,14 +38,12 @@ Captured from [`c516e3683d0d`](https://github.com/gthgomez/Prismatix/tree/c516e3
 
 ## What it does
 
-- **Auto routing, explained** — Each request is classified into a calibrated routing role (`economy` ≤ 45, `fast` 46–65, `balanced` 66–80, `strong` ≥ 81, `max` reasoning ≥ 90 or ctx > 120k, `vision_fast`, `vision_strong`, `code_review`) by a heuristic complexity scorer. Each role maps to a curated, priced OpenCode model (`gpt-6-luna`, `deepseek-v4-1-flash`, `claude-sonnet-5-5`, `gpt-6-sol`, `gemini-3.8-flash`) with deterministic in-role fallbacks. After every Auto-routed answer, the message's info popover shows the chosen role, model, gateway, the reason, whether a fallback was used, and the estimated cost basis
-- **Fail-closed cost safety** — Auto never sends when a model's price is unknown. If discovery finds no priced, available model for the resolved role, the request fails with a readable error instead of silently re-routing to a more expensive provider. Provider-unavailable fallbacks may only re-route to a *cheaper* priced model
-- **OpenCode model hub** — Curated model registry (GPT-6 Sol/Luna, Claude Sonnet 5.5, Gemini 3.8 Flash, DeepSeek V4.1 Flash, Grok 4.6) behind the OpenCode Zen gateway with live model discovery (5-minute scoped cache). Free/data-training endpoints are quarantined and never chosen automatically
-- **Legacy direct providers (fallback posture)** — Direct Anthropic, OpenAI, Google Gemini, NVIDIA NIM, and DeepInfra routes remain available when the OpenCode gateway is not configured; each role keeps a deterministic, priced legacy mapping
+- **Auto routing and cost controls.** The server selects from eligible priced routes based on intent and complexity. The response details show the route, model, and reason when available. The server also applies request, spend, rate, and concurrency limits.
+- **Provider connections.** OpenRouter can serve models whose native provider is disabled when the model has an OpenRouter route. The router resolves credentials from the signed-in user's encrypted provider configuration.
 - **Multi-provider streaming** — Normalised SSE stream across all gateways and protocols (OpenAI Responses/Chat, Anthropic Messages, Gemini). One client, every model
-- **Debate mode** — Optional multi-model deliberation: parallel challenger models critique the prompt, a synthesis model produces the final answer
+- **Debate mode (optional)** — Optional multi-model deliberation: parallel challenger models critique the prompt, a synthesis model produces the final answer
 - **SMD pipeline** — Structured Multi-Draft: Draft → Skeptic → SynthDecision → Formatter, gated by a fast-path complexity guard (experimental, off by default)
-- **Video pipeline** — Upload, process, and query video assets via Supabase Storage + a background worker edge function
+- **Video pipeline (feature-gated)** — Upload, process, and query video assets via Supabase Storage + a background worker edge function
 - **Cost tracking** — Pre-flight cost estimates, live token counting during streaming, per-message final cost logged to Supabase `cost_logs`, plus server-side request, daily spend, rate, and concurrent-stream guards. Unknown rates are never shown as $0.00
 - **Long-term memory** — Conversation windows are periodically summarised and injected as context on future requests
 - **Auth** — Supabase email/password auth with JWT verification on every edge function call
@@ -63,11 +61,9 @@ Captured from [`c516e3683d0d`](https://github.com/gthgomez/Prismatix/tree/c516e3
 
 Pricing freshness is audited in CI (`npm test`). `supabase/functions/_shared/model_tariff.ts` is the single authoritative source of truth for model pricing across all backend modules and frontend mirrors. `npm run audit:models` enforces committed stale-model budgets.
 
-### What Prismatix is NOT
+### Verification scope
 
-- Not a model-intelligence platform, eval platform, or benchmark ingestion system
-- Not a model marketplace or enterprise gateway
-- Not a provider observability or SLA-analytics product
+The public demo uses scripted responses. CI browser journeys use synthetic users, provider responses, and persistence fixtures. Live provider eligibility and optional workflows depend on the deployed backend and require separate qualification.
 
 ---
 
@@ -77,7 +73,7 @@ Pricing freshness is audited in CI (`npm test`). `supabase/functions/_shared/mod
 |---|---|
 | Frontend | TypeScript (Vite) — React 18 used only for UI components (~17 `.tsx` files); the bulk of the codebase is plain `.ts` (services, engine, hooks, types) |
 | Backend | TypeScript on Deno — edge functions on Supabase |
-| AI Providers | Anthropic, OpenAI, Google Gemini, NVIDIA NIM, DeepInfra |
+| AI Providers | OpenRouter and supported direct providers |
 | Database | Supabase Postgres (conversations, messages, cost_logs, user_memories, video_assets) |
 | Auth | Supabase Auth (JWT, RLS) |
 | Deployment | Vercel (frontend) + Supabase (backend) |
@@ -161,6 +157,8 @@ used to dispatch user or background work.
 ---
 
 ## Development
+
+CI runs the full test suite on Node 24 to match the observed Vercel project runtime. Node 20 and 22 also run clean-install and build checks. The local `.nvmrc` pins Node 22.12.0.
 
 ### First-time setup
 

@@ -57,6 +57,27 @@ export function writeSelectedConversation(
   }
 }
 
+export function composerDraftKey(userId: string, conversationId: string | null): string {
+  return `prismatix.composer.${userId}.${conversationId ?? NEW_CHAT_SELECTION}`;
+}
+
+export function readTabDraft(key: string): string {
+  try {
+    return sessionStorage.getItem(key) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function writeTabDraft(key: string, text: string): void {
+  try {
+    if (text.trim()) sessionStorage.setItem(key, text);
+    else sessionStorage.removeItem(key);
+  } catch {
+    // Draft text remains available in memory while the tab is open.
+  }
+}
+
 export interface StreamUpdateGuard {
   activeConversationId: string | null;
   activeClientRequestId: string | null;

@@ -16,6 +16,32 @@
   box-sizing: border-box;
 }
 
+/* These surfaces are intentionally dark in both page themes. Scope the
+   matching Arctic dark tokens to them instead of inheriting light-page text. */
+.resume-demo-nav,
+.spec-badge,
+.bento-card {
+  --color-bg: #03070b;
+  --color-surface: #0d141b;
+  --color-surface-selected: #09292f;
+  --color-surface-hover: #17232c;
+  --color-surface-success: #10251f;
+  --color-surface-warning: #2a2110;
+  --color-border: rgb(255 255 255 / 10%);
+  --color-border-subtle: rgb(255 255 255 / 6%);
+  --color-border-strong: rgb(178 195 206 / 30%);
+  --color-field-border: #738899;
+  --color-text: #ffffff;
+  --color-text-dim: #b2c3ce;
+  --color-text-muted: #91a3b0;
+  --color-primary: #4ecdc4;
+  --color-warning: #ffc446;
+  --color-success: #7ef3db;
+  --color-content-on-warning: #ffe0a0;
+  --color-content-on-success: #baf9e8;
+  --color-focus: #65e8ff;
+}
+
 /* --------------------------------------------------------------------------
    Navigation Bar
    -------------------------------------------------------------------------- */
@@ -283,8 +309,12 @@
 .resume-demo-button-primary:hover {
   background: rgba(78, 205, 196, 0.26);
   border-color: var(--color-primary);
-  color: #ccfaff;
+  color: var(--color-accent);
   box-shadow: 0 6px 20px -2px rgba(78, 205, 196, 0.25);
+}
+
+:root[data-theme='dark'] .resume-demo-button-primary:hover {
+  color: var(--color-primary);
 }
 
 .button-arrow {
@@ -563,40 +593,8 @@
 }
 
 /* --------------------------------------------------------------------------
-   Bento Card 3: Verified Proof Points
+   Bento Card 3: Repository implementation and tests
    -------------------------------------------------------------------------- */
-.proof-metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 1.25rem;
-}
-
-.proof-metric-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.85rem;
-  background: rgba(8, 12, 16, 0.85);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-}
-
-.metric-num {
-  font-family: var(--font-mono);
-  font-size: 1.5rem;
-  font-weight: 800;
-  color: var(--color-primary);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
-
-.metric-caption {
-  font-size: 0.72rem;
-  color: var(--color-text-dim);
-  font-weight: 500;
-}
-
 .proof-list {
   list-style: none;
   margin: 0;

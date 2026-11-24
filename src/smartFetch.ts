@@ -6,6 +6,7 @@ import { CONFIG } from './config';
 import { devLog, devWarn, devError } from './utils';
 import { noteServerTariffVersion } from './catalogSkew';
 import { readRouterStream } from './hooks/useStreamHandler';
+import { isKnownModel } from './modelCatalog';
 import type { StreamTerminationStatus } from './hooks/useStreamHandler';
 import type { TerminalReceipt } from '../supabase/functions/_shared/execution_receipt';
 import type { AttachmentRef } from '../supabase/functions/_shared/conversation_attachments';
@@ -30,6 +31,8 @@ export interface DebateRequestOptions {
   debateProfile?: DebateProfile;
   routingProfile?: 'balanced' | 'economy' | 'capability';
   spendCapUsd?: number;
+  /** PX08: binds the two Compare executions to one server-validated group. */
+  comparisonGroupId?: string;
 }
 
 export interface DebateResponseMetadata {
@@ -61,11 +64,15 @@ interface RouterRequestPayload {
   debateProfile?: DebateProfile;
   routingProfile?: 'balanced' | 'economy' | 'capability';
   spendCapUsd?: number;
+  comparisonGroupId?: string;
 }
 
 export interface RouterResponseBase {
   memoryHits?: number;
-  model: RouterModel;
+  /** Absent when the router does not identify the model that served the turn. */
+  model?: RouterModel;
+  /** Raw nonempty server identifier when it is not in this client's model catalog. */
+  reportedModel?: string;
   provider?: RouterProvider;
   complexityScore: number;
   modelId?: string;
@@ -196,8 +203,12 @@ function hostOf(value: string): string {
   }
 }
 
-async function signOutLocal(context: string): Promise<void> {
+async function signOutLocal(context: string, expectedUserId?: string): Promise<void> {
   try {
+    if (expectedUserId) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id !== expectedUserId) return;
+    }
     devWarn('[smartFetch] Local sign-out:', context);
     await supabase.auth.signOut({ scope: 'local' });
   } catch (err) {
@@ -284,14 +295,14 @@ function getEnvVar(key: string): string {
  * Gets the current user's access token from Supabase session
  * Includes automatic token refresh if expired or expiring soon
  */
-async function getAccessToken(): Promise<string> {
+async function getAccessToken(expectedUserId?: string): Promise<string> {
   const { data: { session }, error } = await supabase.auth.getSession();
   
   if (error) {
     devError('[smartFetch] Session error:', error);
     const lowered = String(error.message || '').toLowerCase();
     if (lowered.includes('invalid refresh token') || lowered.includes('refresh token not found')) {
-      await signOutLocal('invalid-refresh-token');
+      await signOutLocal('invalid-refresh-token', expectedUserId);
       throw new Error('Session expired. Please sign in again.');
     }
     throw new Error('Failed to get session: ' + error.message);
@@ -299,6 +310,9 @@ async function getAccessToken(): Promise<string> {
   
   if (!session?.access_token) {
     throw new Error('No active session. Please sign in.');
+  }
+  if (expectedUserId && session.user?.id !== expectedUserId) {
+    throw new Error('The signed-in account changed before the request could be sent.');
   }
 
   const expectedHost = hostOf(CONFIG.SUPABASE_URL);
@@ -308,7 +322,7 @@ async function getAccessToken(): Promise<string> {
 
   if (expectedHost && issuerHost && expectedHost !== issuerHost) {
     devError('[smartFetch] Token issuer mismatch:', { issuerHost, expectedHost });
-    await signOutLocal('token-issuer-mismatch');
+    await signOutLocal('token-issuer-mismatch', expectedUserId);
     throw new Error(
       `Session token is for ${issuerHost}, but app is configured for ${expectedHost}. ` +
       'Clear site data and sign in again.'
@@ -329,6 +343,11 @@ async function getAccessToken(): Promise<string> {
  * @param modelOverride - Optional manual model selection (bypasses auto-routing)
  * @param imageStorageUrl - Optional private Supabase storage reference for persisted history
  */
+interface RouterRequestScope {
+  conversationId: string;
+  userId?: string;
+}
+
 export async function askPrismatix(
   query: string,
   history: Message[] = [],
@@ -341,14 +360,15 @@ export async function askPrismatix(
   attachmentRefs?: AttachmentRef[],
   routingProfile?: 'balanced' | 'economy' | 'capability',
   spendCapUsd?: number,
+  scope?: RouterRequestScope,
 ): Promise<(RouterResponseBase & { stream: ReadableStream<Uint8Array> }) | null> {
   try {
     const routerEndpoint = CONFIG.ROUTER_ENDPOINT || getEnvVar('VITE_ROUTER_ENDPOINT');
     if (!routerEndpoint) {
       throw new Error('Missing VITE_ROUTER_ENDPOINT. Check your Vercel env vars.');
     }
-    let accessToken = await getAccessToken();
-    const conversationId = getConversationId();
+    let accessToken = await getAccessToken(scope?.userId);
+    const conversationId = scope?.conversationId ?? getConversationId();
     // PX07: ONE stable id per logical send. It is reused on the 401 retry so a
     // retried request cannot create a second execution.
     const clientRequestId = generateUUID();
@@ -383,6 +403,9 @@ export async function askPrismatix(
       history: messagesToHistory(history),
       geminiFlashThinkingLevel,
     };
+    if (debateOptions?.comparisonGroupId) {
+      payload.comparisonGroupId = debateOptions.comparisonGroupId;
+    }
 
     // PX07: keep the user's ORIGINAL query for display/persistence. The model
     // still receives `finalQuery` (with text-file content); the persisted
@@ -520,14 +543,14 @@ export async function askPrismatix(
       
       if (response.status === 401) {
         devWarn('[smartFetch] 401 from router, retrying once with latest session');
-        accessToken = await getAccessToken();
+        accessToken = await getAccessToken(scope?.userId);
         response = await doFetch(accessToken);
 
         if (!response.ok) {
           const retryText = await response.text();
           devError('[smartFetch] Router Error (after retry):', response.status, retryText);
           if (response.status === 401) {
-            await signOutLocal('router-401-after-retry');
+            await signOutLocal('router-401-after-retry', scope?.userId);
             throw new Error('Session expired. Please sign in again.');
           }
           throwRouterError(response.status, retryText, response.headers);
@@ -538,10 +561,7 @@ export async function askPrismatix(
     }
 
     // Extract model info from headers
-    const modelHeader = (
-      response.headers.get('X-Router-Model') ||
-      'gemini-2.5-flash'
-    ) as RouterModel;
+    const modelHeader = response.headers.get('X-Router-Model');
     const modelIdHeader = response.headers.get('X-Router-Model-Id') || '';
     const providerHeader = response.headers.get('X-Provider') as RouterProvider | null;
     const overrideHeader = response.headers.get('X-Model-Override') || '';
@@ -558,6 +578,11 @@ export async function askPrismatix(
     noteServerTariffVersion(response.headers.get('X-Prismatix-Tariff'));
     const routeDecisionHeader = response.headers.get('X-Route-Decision');
     const routeInfo = parseRouteDecisionHeader(routeDecisionHeader);
+    // Use only an identified catalog model. The request selection is not proof
+    // of which route actually served the turn, so missing/invalid server
+    // identity stays explicitly unknown instead of inheriting a guessed rate.
+    const reportedModel = modelHeader?.trim() || undefined;
+    const model = reportedModel && isKnownModel(reportedModel) ? reportedModel : undefined;
     const debateModeHeader = response.headers.get('X-Debate-Mode');
     const debateProfileHeader = response.headers.get('X-Debate-Profile');
     const debateTriggerHeader = response.headers.get('X-Debate-Trigger');
@@ -592,7 +617,7 @@ export async function askPrismatix(
     };
 
     devLog('[smartFetch] Response:', {
-      model: modelHeader,
+      model: model ?? reportedModel ?? 'unreported',
       provider: providerHeader || undefined,
       modelId: modelIdHeader,
       override: overrideHeader,
@@ -616,7 +641,8 @@ export async function askPrismatix(
 
     return {
       stream: response.body,
-      model: modelHeader,
+      model,
+      reportedModel,
       provider: providerHeader || undefined,
       complexityScore,
       modelId: modelIdHeader || undefined,
@@ -657,6 +683,8 @@ export async function askPrismatixSync(
   routingProfile?: 'balanced' | 'economy' | 'capability',
   spendCapUsd?: number,
   signal?: AbortSignal,
+  scope?: RouterRequestScope,
+  onStreamContent?: (content: string) => void,
 ): Promise<(RouterResponseBase & { content: string }) | null> {
   const result = await askPrismatix(
     query,
@@ -670,6 +698,7 @@ export async function askPrismatixSync(
     undefined,
     routingProfile,
     spendCapUsd,
+    scope,
   );
   if (!result) return null;
 
@@ -680,10 +709,12 @@ export async function askPrismatixSync(
       {
         onFirstToken: () => {},
         onUsageUpdate: () => {},
-        onContentUpdate: () => {},
+        onContentUpdate: (content) => onStreamContent?.(content),
       },
       signal,
     );
+
+    onStreamContent?.(streamResult.assistantContent);
 
     const { stream: _, ...base } = result;
     return {
@@ -696,6 +727,13 @@ export async function askPrismatixSync(
     };
   } catch (error) {
     devError('[smartFetch] Stream reading error:', error);
-    return null;
+    const { stream: _, ...base } = result;
+    return {
+      ...base,
+      content: '',
+      terminationStatus: 'error',
+      isDoneReceived: false,
+      streamError: error,
+    };
   }
 }

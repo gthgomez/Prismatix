@@ -100,6 +100,7 @@ import {
   type ExecutionStoreClient,
 } from './execution_store.ts';
 import type { TerminalReceipt } from '../_shared/execution_receipt.ts';
+import { classifyBreakdownSource, deriveSettledBreakdown } from '../_shared/execution_receipt.ts';
 import {
   attachmentRefIsOwned,
   type AttachmentRef,
@@ -2746,7 +2747,9 @@ Deno.serve(async (req: Request) => {
       conversationId,
       clientRequestKey,
       payloadHash,
-      requestedMode: mode ?? null,
+      requestedMode: normalizedBody.value.comparisonGroupId
+        ? `compare:${normalizedBody.value.comparisonGroupId}`
+        : mode ?? null,
       requestedModel: normalizedOverride ?? manualModelOverride ?? null,
       routeVersion: RELEASE_IDENTITY.protocolVersion,
       pricingVersion: preFlightCost.pricingVersion,
@@ -3564,27 +3567,57 @@ Deno.serve(async (req: Request) => {
             }
           }
 
-          // Authoritative execution cost for user-facing cost logs:
-          // In Debate Mode, historical conversation costs derive from authoritative
-          // execution accounting rather than synthesis-only estimates.
-          const authoritativeTotalCost = (debateActive && interimReceipt?.settlement?.committedUsd && interimReceipt.settlement.committedUsd > 0)
+          // Settled execution accounting is authoritative for every mode. The
+          // token-derived breakdown is only a fallback when the ledger is not
+          // settled (and can differ from provider-reported usage).
+          const authoritativeTotalCost = interimReceipt?.settlement?.state === 'settled'
             ? interimReceipt.settlement.committedUsd
             : debateActive
             ? fallbackEstimateUsd
             : costBreakdown.totalUsd;
+
+          // PXQ-41 / R1: a settled row must not mix a settled total with an
+          // estimated token/cost breakdown. When the ledger exposes complete
+          // per-call usage, project the log from the same rows the settlement
+          // was committed from so tokens, components and total agree. When it
+          // does not, keep the authoritative total and mark the breakdown
+          // unavailable rather than presenting estimates as confirmed costs.
+          const settlementState = interimReceipt?.settlement?.state;
+          const settledBreakdown = interimReceipt
+            ? deriveSettledBreakdown(interimReceipt)
+            : null;
+          const breakdownSource = classifyBreakdownSource(settledBreakdown, settlementState);
+          const loggedTokens = settledBreakdown ?? (breakdownSource === 'unavailable'
+            ? {
+              promptTokens: 0,
+              completionTokens: 0,
+              reasoningTokens: 0,
+              inputCostUsd: 0,
+              outputCostUsd: 0,
+              reasoningCostUsd: 0,
+            }
+            : {
+              promptTokens: costBreakdown.promptTokens,
+              completionTokens: costBreakdown.completionTokens,
+              reasoningTokens: costBreakdown.reasoningTokens,
+              inputCostUsd: costBreakdown.inputCostUsd,
+              outputCostUsd: costBreakdown.outputCostUsd,
+              reasoningCostUsd: costBreakdown.reasoningCostUsd,
+            });
 
           const costLogRecord = {
             user_id: userId,
             conversation_id: conversationId,
             model: responseDecision.modelTier,
             provider: responseDecision.provider,
-            input_tokens: costBreakdown.promptTokens,
-            output_tokens: costBreakdown.completionTokens,
-            thinking_tokens: costBreakdown.reasoningTokens,
-            input_cost: costBreakdown.inputCostUsd,
-            output_cost: costBreakdown.outputCostUsd,
-            thinking_cost: costBreakdown.reasoningCostUsd,
+            input_tokens: loggedTokens.promptTokens,
+            output_tokens: loggedTokens.completionTokens,
+            thinking_tokens: loggedTokens.reasoningTokens,
+            input_cost: loggedTokens.inputCostUsd,
+            output_cost: loggedTokens.outputCostUsd,
+            thinking_cost: loggedTokens.reasoningCostUsd,
             total_cost: authoritativeTotalCost,
+            breakdown_source: breakdownSource,
             pricing_version: costBreakdown.pricingVersion,
             complexity_score: responseDecision.complexityScore,
             route_rationale: responseDecision.rationaleTag,

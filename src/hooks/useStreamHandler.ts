@@ -29,6 +29,49 @@ export interface StreamHandlerCallbacks {
   onContentUpdate: (content: string, thinkingLog: string[]) => void;
 }
 
+const RECEIPT_STATUSES = new Set(['completed', 'cancelled', 'failed', 'indeterminate', 'started']);
+const SETTLEMENT_STATES = new Set(['settled', 'pending', 'released']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Treat the wire receipt as untrusted input: only settlement fields that are
+ * internally consistent may reach UI code that records authoritative cost. */
+function parseReceipt(value: unknown): TerminalReceipt | undefined {
+  if (!isRecord(value)
+    || typeof value.executionId !== 'string'
+    || value.executionId.trim().length === 0
+    || typeof value.status !== 'string'
+    || !RECEIPT_STATUSES.has(value.status)
+    || !Array.isArray(value.calls)
+    || !isRecord(value.settlement)) return undefined;
+
+  const { state, committedUsd, pendingCalls } = value.settlement;
+  if (typeof state !== 'string' || !SETTLEMENT_STATES.has(state)
+    || typeof pendingCalls !== 'number' || !Number.isSafeInteger(pendingCalls) || pendingCalls < 0) return undefined;
+
+  // Older pending receipts may use null for an unknown amount. That is safe
+  // only while state remains pending; normalize it to zero because consumers
+  // must consult state before treating the amount as authoritative.
+  const amount = committedUsd === null && state === 'pending' ? 0 : committedUsd;
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0
+    || (state === 'settled' && (pendingCalls !== 0 || value.calls.length === 0))
+    || (state === 'settled' && value.calls.some((call) => !isRecord(call) || call.costStatus !== 'settled'))
+    || (state === 'released' && (amount !== 0 || pendingCalls !== 0 || value.calls.length !== 0))) return undefined;
+
+  const { type: _type, ...body } = value;
+  const transcript = isRecord(body.transcript) && typeof body.transcript.saved === 'boolean'
+    ? { saved: body.transcript.saved }
+    : undefined;
+  const { transcript: _untrustedTranscript, ...safeBody } = body;
+  return {
+    ...safeBody,
+    settlement: { state, committedUsd: amount, pendingCalls },
+    ...(transcript ? { transcript } : {}),
+  } as unknown as TerminalReceipt;
+}
+
 /**
  * Reads SSE events from a ReadableStream produced by the Prismatix router.
  * Handles content_block_delta, thought, meta and receipt event types and calls
@@ -104,8 +147,8 @@ export async function readRouterStream(
         debateParticipants = json.debate_participants as DebateParticipant[];
       }
     } else if (json.type === 'receipt') {
-      const { type: _type, ...body } = json;
-      receipt = body as unknown as TerminalReceipt;
+      const parsed = parseReceipt(json);
+      if (parsed) receipt = parsed;
     }
   };
 
@@ -147,8 +190,6 @@ export async function readRouterStream(
 
       callbacks.onContentUpdate(assistantContent, [...thinkingLog]);
     }
-
-    processEvents(parser.flush());
   } catch (err) {
     streamError = err;
   } finally {
@@ -160,6 +201,25 @@ export async function readRouterStream(
     } catch {
       // ignore
     }
+  }
+
+  // A valid final event may arrive without its blank-line delimiter when a
+  // connection closes or fails. Flush it and notify the UI as well as the
+  // returned result so useful trailing text does not disappear on screen.
+  try {
+    const previousContent = assistantContent;
+    const previousThinkingCount = thinkingLog.length;
+    processEvents(parser.flush());
+    if (assistantContent !== previousContent || thinkingLog.length !== previousThinkingCount) {
+      callbacks.onUsageUpdate({
+        promptTokens: promptTokenEstimate,
+        completionTokens: estimateTokenCount(assistantContent),
+        thinkingTokens: estimateTokenCount(thinkingLog.join('')),
+      });
+      callbacks.onContentUpdate(assistantContent, [...thinkingLog]);
+    }
+  } catch (err) {
+    streamError ??= err;
   }
 
   let terminationStatus: StreamTerminationStatus;

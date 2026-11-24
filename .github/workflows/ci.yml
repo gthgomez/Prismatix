@@ -17,7 +17,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -32,7 +32,10 @@ jobs:
       - name: Run tests
         run: npm run test
 
-      - name: Build
+      - name: Build synthetic browser fixture
+        env:
+          VITE_SUPABASE_URL: https://prismatix-fixture.invalid
+          VITE_SUPABASE_ANON_KEY: synthetic-browser-anon-key
         run: npm run build
 
       - name: Set up Deno
@@ -56,7 +59,169 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright acceptance tests
-        run: npx playwright test --project=chromium
+        run: npx playwright test --project=chromium --output=test-results/desktop
 
-      - name: Run Pixel mobile authenticated journey
-        run: npx playwright test --project=mobile tests/e2e/auth_chat_journey.spec.ts
+      - name: Run Pixel mobile authentication, provider and recovery journeys
+        run: npx playwright test --project=mobile --output=test-results/mobile tests/e2e/auth_chat_journey.spec.ts tests/e2e/first_run_connection_journey.spec.ts tests/e2e/first_run_accessibility.spec.ts tests/e2e/chat_transcript_contrast.spec.ts tests/e2e/arctic_shell_reliability.spec.ts
+
+      - name: Verify the opt-in Compare fixture
+        env:
+          VITE_SUPABASE_URL: https://prismatix-fixture.invalid
+          VITE_SUPABASE_ANON_KEY: synthetic-browser-anon-key
+          VITE_PX08_COMPARE_DURABILITY: 'true'
+        run: |
+          npm run build
+          npx playwright test --project=chromium tests/e2e/compare_persistence.spec.ts --output=test-results/compare
+
+      - name: Upload synthetic browser evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-synthetic-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  runtime-compatibility:
+    name: Node ${{ matrix.node }} compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  compare-postgres:
+    name: Compare · PostgreSQL 17
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/integration/run-compare-postgres.sh
+
+  migration-replay:
+    name: Migrations · fresh + existing install
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The main-branch upgrade gate reconstructs the real baseline.
+          fetch-depth: 0
+      # Fresh install: every migration applies to an empty database.
+      - run: bash tests/integration/run-fresh-replay.sh
+      # Existing install: every migration also applies over a database that
+      # already has the scheduler rows a live project carries. This is the case
+      # that a session-GUC-gated cron migration broke.
+      - run: bash tests/integration/run-existing-install-replay.sh
+      # Genuine upgrade: baseline built from the actual main migration set,
+      # historical data seeded, then upgraded by the real CLI runner.
+      - name: Upgrade an actual main installation
+        run: bash tests/integration/run-main-upgrade.sh
+
+  real-backend:
+    name: Real backend · Supabase + Edge + browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      # The Supabase registry enforces an anonymous data limit; repeated large
+      # pulls fail with "Data limit exceeded". Cache the image set so the job
+      # does not depend on pulling several gigabytes on every push.
+      - name: Restore Supabase image cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/supabase-images.tar
+          key: supabase-images-2.98.2-v1
+      - name: Isolated real-backend qualification
+        env:
+          SUPABASE_CLI_VERSION: '2.98.2'
+        run: bash scripts/qualification/ci-real-backend.sh
+      - name: Upload real-backend diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-backend-${{ github.sha }}
+          path: |
+            /tmp/stub-provider.log
+            /tmp/functions-serve.log
+            /tmp/seed.log
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  environment-isolation:
+    name: Environment isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      # A preview must never build against the production Supabase project.
+      - name: Reject a production-backed preview
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: https://sqjfbqjogylkfwzsyprd.supabase.co
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+          VITE_ROUTER_ENDPOINT: https://sqjfbqjogylkfwzsyprd.supabase.co/functions/v1/router
+        run: |
+          if node scripts/assert-environment-isolation.mjs; then
+            echo "::error::isolation guard accepted a production-backed preview"
+            exit 1
+          fi
+          echo "guard correctly rejected a production-backed preview"
+      # A preview pointed at a nonproduction project must pass.
+      - name: Accept an isolated preview
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: https://abcdefghijklmnopqrst.supabase.co
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+          VITE_ROUTER_ENDPOINT: https://abcdefghijklmnopqrst.supabase.co/functions/v1/router
+        run: node scripts/assert-environment-isolation.mjs
+      # The qualification scripts share an identity-based target contract; the
+      # self-test proves unsafe targets fail before any request is made.
+      - name: Qualification environment contract negative controls
+        run: node scripts/qualification/env-contract.selftest.mjs
+      - name: Reject a malformed preview URL
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: 'not a url'
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+        run: |
+          if node scripts/assert-environment-isolation.mjs; then
+            echo "::error::isolation guard accepted a malformed URL"
+            exit 1
+          fi
+      - name: Reject a loopback preview
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: http://127.0.0.1:54321
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+        run: |
+          if node scripts/assert-environment-isolation.mjs; then
+            echo "::error::isolation guard accepted a loopback preview"
+            exit 1
+          fi
+      - name: Reject a production subdomain
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: https://evil.sqjfbqjogylkfwzsyprd.supabase.co
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+        run: |
+          if node scripts/assert-environment-isolation.mjs; then
+            echo "::error::isolation guard accepted a production subdomain"
+            exit 1
+          fi

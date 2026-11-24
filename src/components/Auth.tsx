@@ -5,8 +5,8 @@ import React, { useRef, useState } from 'react';
 import { CONFIG } from '../config';
 import '../styles/Auth.css';
 
-// PX01: signup UI is gated behind VITE_ALLOW_SIGNUP (default off). Server-side
-// signup is disabled independently; this only hides the client path.
+// PX01: signup UI is gated behind VITE_ALLOW_SIGNUP (default off). Supabase
+// server-side signup policy is configured independently and must be verified.
 const ALLOW_SIGNUP = CONFIG.ALLOW_SIGNUP;
 
 interface AuthProps {
@@ -14,6 +14,8 @@ interface AuthProps {
   onSignUp: (email: string, password: string) => Promise<{ error: Error | null }>;
   onSignInWithProvider?: (provider: 'google' | 'github') => Promise<{ error: Error | null }>;
   onResetPassword?: (email: string) => Promise<{ error: Error | null }>;
+  sessionCheckError?: string | null;
+  onRetrySessionCheck?: () => void;
 }
 
 type AuthMode = 'signin' | 'signup';
@@ -25,7 +27,9 @@ export const Auth: React.FC<AuthProps> = ({
   onSignIn,
   onSignUp,
   onSignInWithProvider,
-  onResetPassword
+  onResetPassword,
+  sessionCheckError,
+  onRetrySessionCheck
 }) => {
   const [mode, setMode] = useState<AuthMode>('signin');
   const [email, setEmail] = useState('');
@@ -34,6 +38,7 @@ export const Auth: React.FC<AuthProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [errorField, setErrorField] = useState<AuthField | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -75,6 +80,7 @@ export const Auth: React.FC<AuthProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
     clearMessages();
 
     // PX01 gate: never submit a signup while signups are disabled.
@@ -107,6 +113,7 @@ export const Auth: React.FC<AuthProps> = ({
       }
     }
 
+    setLoadingMessage(mode === 'signin' ? 'Signing in…' : 'Creating your account…');
     setIsLoading(true);
 
     try {
@@ -124,13 +131,15 @@ export const Auth: React.FC<AuthProps> = ({
       reportError('An unexpected error occurred');
     } finally {
       setIsLoading(false);
+      setLoadingMessage(null);
     }
   };
 
   const handleProviderSignIn = async (provider: 'google' | 'github') => {
-    if (!onSignInWithProvider) return;
+    if (isLoading || !onSignInWithProvider) return;
 
     clearMessages();
+    setLoadingMessage(`Connecting with ${provider === 'google' ? 'Google' : 'GitHub'}…`);
     setIsLoading(true);
 
     try {
@@ -142,10 +151,12 @@ export const Auth: React.FC<AuthProps> = ({
       reportError('An unexpected error occurred');
     } finally {
       setIsLoading(false);
+      setLoadingMessage(null);
     }
   };
 
   const toggleMode = () => {
+    if (isLoading) return;
     if (!ALLOW_SIGNUP) {
       setMode('signin');
       return;
@@ -156,7 +167,7 @@ export const Auth: React.FC<AuthProps> = ({
   };
 
   const handleForgotPassword = async () => {
-    if (!onResetPassword) return;
+    if (isLoading || !onResetPassword) return;
 
     clearMessages();
 
@@ -165,6 +176,7 @@ export const Auth: React.FC<AuthProps> = ({
       return;
     }
 
+    setLoadingMessage('Sending password reset email…');
     setIsLoading(true);
     try {
       const result = await onResetPassword(email);
@@ -177,6 +189,7 @@ export const Auth: React.FC<AuthProps> = ({
       reportError('An unexpected error occurred');
     } finally {
       setIsLoading(false);
+      setLoadingMessage(null);
     }
   };
 
@@ -185,30 +198,37 @@ export const Auth: React.FC<AuthProps> = ({
       <div className="auth-card">
         {/* Header */}
         <div className="auth-header">
-          <div className="auth-logo">🤖</div>
+          <img className="auth-logo" src="/prismatix-arctic-mark.svg" alt="" />
           <h1>Prismatix</h1>
-          <p>Adaptive Model Selection</p>
+          <p>{mode === 'signup' ? 'Create your AI workspace account.' : 'Sign in to your AI workspace.'}</p>
         </div>
+
+        {sessionCheckError && (
+          <div className="auth-message error auth-session-check-error" role="alert">
+            <span>{sessionCheckError}</span>
+            {onRetrySessionCheck && <button type="button" className="auth-session-retry" onClick={onRetrySessionCheck} disabled={isLoading}>Retry session check</button>}
+          </div>
+        )}
 
         {/* Tab Switcher — hidden entirely when signup is disabled (PX01):
             a single-tab pill is a dead control and reads as a rendering bug */}
         {ALLOW_SIGNUP && (
-          <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+          <div className="auth-tabs" role="group" aria-label="Authentication mode">
             <button
               type="button"
-              role="tab"
-              aria-selected={mode === 'signin'}
+              aria-pressed={mode === 'signin'}
               className={`auth-tab ${mode === 'signin' ? 'active' : ''}`}
               onClick={() => setMode('signin')}
+              disabled={isLoading}
             >
               Sign In
             </button>
             <button
               type="button"
-              role="tab"
-              aria-selected={mode === 'signup'}
+              aria-pressed={mode === 'signup'}
               className={`auth-tab ${mode === 'signup' ? 'active' : ''}`}
               onClick={() => setMode('signup')}
+              disabled={isLoading}
             >
               Sign Up
             </button>
@@ -228,7 +248,7 @@ export const Auth: React.FC<AuthProps> = ({
           </div>
         )}
         {successMessage && (
-          <div className="auth-message success">
+          <div className="auth-message success" role="status">
             <span>✓</span> {successMessage}
           </div>
         )}
@@ -300,17 +320,20 @@ export const Auth: React.FC<AuthProps> = ({
             type="submit"
             className="auth-submit"
             disabled={isLoading}
+            aria-busy={isLoading}
             aria-label={mode === 'signin' ? 'Sign in to Prismatix' : 'Create Prismatix account'}
           >
             {isLoading ? (
-              <div className="loading-spinner" />
+              <div className="loading-spinner" aria-hidden="true" />
             ) : (
               mode === 'signin' ? 'Sign In' : 'Create Account'
             )}
           </button>
 
+          {loadingMessage && <p className="auth-loading-status" role="status" aria-live="polite">{loadingMessage}</p>}
+
           {mode === 'signin' && onResetPassword && (
-            <button type="button" className="auth-link forgot-link" onClick={handleForgotPassword}>
+            <button type="button" className="auth-link forgot-link" onClick={handleForgotPassword} disabled={isLoading}>
               Forgot password?
             </button>
           )}
@@ -359,7 +382,7 @@ export const Auth: React.FC<AuthProps> = ({
           <div className="auth-footer">
             <p>
               {mode === 'signin' ? "Don't have an account? " : "Already have an account? "}
-              <button type="button" onClick={toggleMode} className="auth-link">
+              <button type="button" onClick={toggleMode} className="auth-link" disabled={isLoading}>
                 {mode === 'signin' ? 'Sign Up' : 'Sign In'}
               </button>
             </p>

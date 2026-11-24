@@ -257,13 +257,11 @@ describe('F28: BYOK Image Generation', () => {
 
     expect(res.success).toBe(true);
     expect(res.imageUrl).toContain('data:image/svg+xml');
-    expect(res.costUsd).toBe(0.040);
+    expect(res.costUsd).toBe(0);
     expect(res.prompt).toBe('Futuristic city with flying vehicles at twilight');
   });
 
-  it('requires API key for live external providers without fabrication', async () => {
-    // In test mode, inject a client without an edge-function transport so this
-    // fixture proves the safe local mock path without a real Supabase request.
+  it('does not substitute a mock result for an unavailable live request', async () => {
     const res = await executeImageGeneration({
       prompt: 'A sunset over the Pacific ocean',
       modelId: 'dall-e-3',
@@ -271,8 +269,10 @@ describe('F28: BYOK Image Generation', () => {
       mockMode: false,
     }, {});
 
-    // In NODE_ENV=test, executeImageGeneration uses mock mode for test safety unless forced
-    expect(res.imageUrl || res.error).toBeDefined();
+    expect(res.success).toBe(false);
+    expect(res.isMock).toBe(false);
+    expect(res.imageUrl).toBeUndefined();
+    expect(res.error).toMatch(/live image generation.*unavailable/i);
   });
 });
 
@@ -448,7 +448,7 @@ describe('Wave 2 Multimodal Hardening: UUID Identity, RPC Revisions, Truthful Se
     expect(res.imageUrl).toContain('data:image/svg+xml');
   });
 
-  it('invokes image-generation edge function for authenticated live generation', async () => {
+  it('refuses live generation without calling even an available edge transport', async () => {
     let invokedBody: any = null;
     const mockClient = {
       functions: {
@@ -486,13 +486,10 @@ describe('Wave 2 Multimodal Hardening: UUID Identity, RPC Revisions, Truthful Se
       mockClient,
     );
 
-    expect(res.success).toBe(true);
-    expect(res.isMock).toBe(false);
-    expect(res.costStatus).toBe('settled');
-    expect(res.executionId).toBe('exec1');
-    expect(invokedBody.prompt).toBe('Aurora borealis over snow covered mountains');
-    expect(invokedBody.modelId).toBe('dall-e-3');
-    expect(invokedBody.conversationId).toBe('conv-123');
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/live image generation.*unavailable/i);
+    expect(invokedBody).toBeNull();
+    expect(mockClient.functions.invoke).not.toHaveBeenCalled();
   });
 
   it('getOrCreateArtifactForMessage retrieves existing artifact from database without generating fresh ID', async () => {

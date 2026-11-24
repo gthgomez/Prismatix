@@ -88,6 +88,21 @@ afterEach(() => {
 });
 
 describe('ChatInterface in-flight conversation load invalidation', () => {
+  it('clears account A even if account B has the same stale selected conversation and its load fails', async () => {
+    writeSelectedConversation(USER_A.id, CONV_A);
+    writeSelectedConversation(USER_B.id, CONV_A);
+    vi.mocked(loadConversation).mockResolvedValueOnce([loadedMessage('Account A private transcript')]);
+    root = renderInto(container, <ChatInterface user={USER_A} onSignOut={onSignOut} />);
+    await flush();
+    expect(container.textContent).toContain('Account A private transcript');
+
+    vi.mocked(loadConversation).mockRejectedValueOnce(new Error('not authorized'));
+    act(() => root!.render(<ChatInterface user={USER_B} onSignOut={onSignOut} />));
+    await flush();
+    expect(container.textContent).not.toContain('Account A private transcript');
+    expect(container.textContent).toContain('Failed to load conversation history.');
+  });
+
   it('does not apply an in-flight load after New Chat clears the conversation', async () => {
     writeSelectedConversation(USER_A.id, CONV_A);
     const load = deferred<LoadedMessage[]>();
@@ -95,7 +110,7 @@ describe('ChatInterface in-flight conversation load invalidation', () => {
 
     root = renderInto(container, <ChatInterface user={USER_A} onSignOut={onSignOut} />);
     await flush();
-    expect(loadConversation).toHaveBeenCalledWith(expect.anything(), CONV_A, { limit: 200 });
+    expect(loadConversation).toHaveBeenCalledWith(expect.anything(), CONV_A, { limit: 200, compareGroups: false });
 
     // New Chat before A's load resolves.
     act(() => container.querySelector<HTMLButtonElement>('.conversation-new-button')!.click());
@@ -116,7 +131,7 @@ describe('ChatInterface in-flight conversation load invalidation', () => {
 
     root = renderInto(container, <ChatInterface user={USER_A} onSignOut={onSignOut} />);
     await flush();
-    expect(loadConversation).toHaveBeenCalledWith(expect.anything(), CONV_A, { limit: 200 });
+    expect(loadConversation).toHaveBeenCalledWith(expect.anything(), CONV_A, { limit: 200, compareGroups: false });
 
     // Switch to account B (no stored selection) before A's load resolves.
     act(() => root!.render(<ChatInterface user={USER_B} onSignOut={onSignOut} />));

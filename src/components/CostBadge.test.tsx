@@ -167,6 +167,22 @@ describe('CostBadge', () => {
     });
   });
 
+  it('labels unmetered execution without showing a tariff or invented amount', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<CostBadge cost={{ status: 'unmetered' }} model='gemini-3.8-flash' />);
+    });
+
+    const badge = container?.querySelector('.cost-badge-interactive') as HTMLButtonElement;
+    expect(badge.textContent).toContain('unmetered');
+    await act(async () => badge.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(container?.querySelector('.popover-status-badge')?.textContent).toBe('Unmetered Execution');
+    expect(container?.querySelector('.popover-tariffs')).toBeNull();
+    expect(container?.textContent).not.toContain('$0.0000');
+
+    await act(async () => root.unmount());
+  });
+
   it('displays truthful price illustration vs frontier baseline without misleading savings claims', async () => {
     const root = createRoot(container!);
     await act(async () => {

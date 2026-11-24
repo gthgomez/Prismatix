@@ -7,6 +7,9 @@ import {
   getDailyTotal,
   getFinanceStore,
   getSpendStats,
+  fetchAuthoritativeCostLogs,
+  exportSpendToCsv,
+  filterAndGroupSpend,
   recordCost,
 } from './financeTracker';
 
@@ -14,6 +17,8 @@ const STORAGE_KEY = 'prismatix_finance_v1';
 
 function clearStore() {
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(`${STORAGE_KEY}.first-user`);
+  localStorage.removeItem(`${STORAGE_KEY}.second-user`);
 }
 
 beforeEach(clearStore);
@@ -40,6 +45,26 @@ describe('getFinanceStore', () => {
 });
 
 describe('recordCost', () => {
+  it('keeps advisory spend isolated by account and excludes the legacy shared cache', () => {
+    recordCost({ model: 'gemini-3.8-flash', cost: 1, conversationId: 'legacy-shared' });
+    recordCost({ model: 'gemini-3.8-flash', cost: 0.25, conversationId: 'account-a' }, 'first-user');
+    expect(getFinanceStore('first-user').history.map((entry) => entry.conversationId)).toEqual(['account-a']);
+    expect(getDailyTotal(undefined, 'first-user')).toBe(0.25);
+    expect(getFinanceStore('second-user').history).toEqual([]);
+    expect(getDailyTotal(undefined, 'second-user')).toBe(0);
+  });
+
+  it('preserves a completed turn when the advisory cache cannot be written', () => {
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage disabled', 'QuotaExceededError');
+    });
+    try {
+      expect(recordCost({ model: 'gemini-3.8-flash', cost: 0.25 }, 'first-user').history).toHaveLength(1);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it('appends an entry with today\'s date when no date is provided', () => {
     const today = new Date().toISOString().slice(0, 10);
     const store = recordCost({ model: 'haiku-4.5', cost: 0.001 });
@@ -47,6 +72,22 @@ describe('recordCost', () => {
     expect(store.history[0]!.date).toBe(today);
     expect(store.history[0]!.model).toBe('haiku-4.5');
     expect(store.history[0]!.cost).toBe(0.001);
+  });
+
+  it('keeps settled spend with an explicit unreported model label through grouping and CSV export', () => {
+    const store = recordCost({
+      model: 'Unreported model',
+      cost: 0.023,
+      costStatus: 'settled',
+      executionId: 'execution-unreported-model',
+    }, 'first-user');
+
+    expect(store.history[0]).toMatchObject({ model: 'Unreported model', cost: 0.023, costStatus: 'settled' });
+    expect(filterAndGroupSpend(store.history, 'all', 'model')).toMatchObject([
+      { groupKey: 'Unreported model', totalCost: 0.023, settledCost: 0.023 },
+    ]);
+    expect(exportSpendToCsv(store.history)).toContain('Unreported model');
+    expect(exportSpendToCsv(store.history)).toContain('0.0230');
   });
 
   it('accepts a custom date', () => {
@@ -77,6 +118,36 @@ describe('recordCost', () => {
   it('stores pricingVersion when provided', () => {
     const store = recordCost({ model: 'haiku-4.5', cost: 0.001, pricingVersion: '2026-01-01' });
     expect(store.history[0]!.pricingVersion).toBe('2026-01-01');
+  });
+
+  it('preserves micro-USD receipts in the cache and CSV instead of rounding to 4dp', () => {
+    const store = recordCost({
+      model: 'gemini-3.8-flash',
+      cost: 0.000075,
+      breakdownSource: 'confirmed',
+      promptTokens: 40,
+      completionTokens: 12,
+      executionId: 'exec-micro',
+    });
+    expect(store.history[0]!.cost).toBe(0.000075);
+    expect(store.totals.month).toBe(0.000075);
+    expect(exportSpendToCsv(store.history)).toContain('0.000075');
+    expect(exportSpendToCsv(store.history)).toContain('confirmed');
+    expect(exportSpendToCsv(store.history)).toContain('40,12');
+  });
+
+  it('omits token facts for an unavailable breakdown instead of storing zero', () => {
+    const store = recordCost({
+      model: 'gemini-3.8-flash',
+      cost: 0.000075,
+      breakdownSource: 'unavailable',
+      promptTokens: 40,
+      completionTokens: 12,
+      executionId: 'exec-unavailable',
+    });
+    expect(store.history[0]!.breakdownSource).toBe('unavailable');
+    expect(store.history[0]!.promptTokens).toBeUndefined();
+    expect(store.history[0]!.completionTokens).toBeUndefined();
   });
 });
 
@@ -149,5 +220,87 @@ describe('getSpendStats', () => {
     const stats = getSpendStats();
     expect(stats.thisWeek).toBe(0);
     expect(stats.thisMonth).toBe(5);
+  });
+});
+
+describe('fetchAuthoritativeCostLogs', () => {
+  it('does not substitute the local cache when the server ledger fails', async () => {
+    recordCost({ model: 'gemini-3.8-flash', cost: 0.25 });
+    const client = {
+      from: () => ({
+        select: () => ({
+          order: async () => ({ data: null, error: { message: 'offline' } }),
+        }),
+      }),
+    } as never;
+
+    await expect(fetchAuthoritativeCostLogs(client)).rejects.toThrow('offline');
+  });
+
+  it('preserves authoritative micro-USD totals and provenance from the server ledger', async () => {
+    const client = {
+      from: () => ({
+        select: () => ({
+          order: async () => ({
+            data: [{
+              id: 'exec-micro',
+              created_at: '2026-11-24T12:00:00.000Z',
+              conversation_id: 'conv-1',
+              model: 'gemini-3.8-flash',
+              provider: 'openrouter',
+              total_cost: '0.000075',
+              cost_status: 'settled',
+              breakdown_source: 'confirmed',
+              input_tokens: 40,
+              output_tokens: 12,
+              pricing_version: '2026-11-21-v13',
+            }],
+            error: null,
+          }),
+        }),
+      }),
+    } as never;
+
+    const [entry] = await fetchAuthoritativeCostLogs(client);
+    expect(entry).toBeDefined();
+    expect(entry!).toMatchObject({
+      cost: 0.000075,
+      breakdownSource: 'confirmed',
+      promptTokens: 40,
+      completionTokens: 12,
+      costStatus: 'settled',
+    });
+    expect(exportSpendToCsv([entry!])).toContain('0.000075');
+  });
+
+  it('does not expose token facts when the server marks the breakdown unavailable', async () => {
+    const client = {
+      from: () => ({
+        select: () => ({
+          order: async () => ({
+            data: [{
+              id: 'exec-unavailable',
+              created_at: '2026-11-24T12:00:00.000Z',
+              conversation_id: 'conv-1',
+              model: 'gemini-3.8-flash',
+              provider: 'openrouter',
+              total_cost: '0.000075',
+              cost_status: 'settled',
+              breakdown_source: 'unavailable',
+              input_tokens: 0,
+              output_tokens: 0,
+              pricing_version: '2026-11-21-v13',
+            }],
+            error: null,
+          }),
+        }),
+      }),
+    } as never;
+
+    const [entry] = await fetchAuthoritativeCostLogs(client);
+    expect(entry).toBeDefined();
+    expect(entry!.breakdownSource).toBe('unavailable');
+    expect(entry!.promptTokens).toBeUndefined();
+    expect(entry!.completionTokens).toBeUndefined();
   });
 });

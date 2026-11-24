@@ -275,6 +275,19 @@ export async function recordModelCall(
   client: ExecutionStoreClient,
   record: RecordModelCallInput,
 ): Promise<ModelCallRecord> {
+  const costStatus = record.cost_status ?? 'pending';
+  if (
+    costStatus === 'settled' &&
+    (typeof record.total_cost !== 'number' ||
+      !Number.isFinite(record.total_cost) ||
+      record.total_cost < 0)
+  ) {
+    throw new ExecutionStoreError(
+      'invalid_settled_model_call_cost',
+      'settled model calls require an explicit finite nonnegative total_cost',
+    );
+  }
+
   const response = await client.rpc('px03_record_model_call', {
     p_execution_id: record.execution_id,
     p_stage: record.stage ?? null,
@@ -293,7 +306,7 @@ export async function recordModelCall(
     p_thinking_cost: record.thinking_cost ?? 0,
     p_total_cost: record.total_cost ?? 0,
     p_price_snapshot: record.price_snapshot ?? null,
-    p_cost_status: record.cost_status ?? 'pending',
+    p_cost_status: costStatus,
   });
 
   if (response.error) {

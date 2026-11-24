@@ -11,7 +11,7 @@
 //     (execution_id, role) conflict (SQLSTATE PT409) is rejected;
 //   * a post-inference assistant persist failure still completes the stream but
 //     reports `transcript.saved = false` on the terminal receipt.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projectReceipt } from '../../supabase/functions/_shared/execution_receipt.ts';
 import { FAKE_BYOK_CIPHERTEXT, TEST_BYOK_ENCRYPTION_KEY } from '../helpers/byok-fixtures';
 
@@ -197,6 +197,7 @@ function receiptPayload(): Record<string, unknown> {
  */
 function makeRoutes(
   persist: (body: Record<string, unknown>, call: FetchCall) => Response | null,
+  receipt = receiptPayload(),
 ): (call: FetchCall) => Response | null {
   return (call) => {
     if (call.url.includes('/auth/v1/user')) {
@@ -270,7 +271,7 @@ function makeRoutes(
       return jsonResponse({ execution: { id: EXECUTION_ID, status: 'completed' }, finalized: true });
     }
     if (call.url.includes('/rest/v1/rpc/px03_get_execution_receipt')) {
-      return jsonResponse(receiptPayload());
+      return jsonResponse(receipt);
     }
     if (call.url.includes('api.anthropic.com')) {
       return new Response(STREAM_BODY, {
@@ -311,10 +312,19 @@ function receiptFromStream(text: string): Record<string, unknown> | undefined {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
+function freezeLegacyPricingFixtureDate(): void {
+  // These real-handler persistence cases intentionally exercise the legacy
+  // Anthropic provider fixture. Pricing freshness is covered separately.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-05-01T12:00:00Z'));
+}
+
 describe('PX07 user persist before dispatch', () => {
+  beforeEach(freezeLegacyPricingFixtureDate);
   it('persists the ORIGINAL query with owned attachments and ordinals, before any provider call', async () => {
     const calls = installFetchRecorder(makeRoutes(() => null));
     const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
@@ -398,6 +408,7 @@ describe('PX07 user persist before dispatch', () => {
 });
 
 describe('PX07 pre-inference persistence failure', () => {
+  beforeEach(freezeLegacyPricingFixtureDate);
   it('returns 503 transcript_unavailable, releases the reservation, and calls ZERO providers', async () => {
     const calls = installFetchRecorder(
       makeRoutes((body) =>
@@ -450,6 +461,7 @@ describe('PX07 pre-inference persistence failure', () => {
 });
 
 describe('PX07 idempotent replay', () => {
+  beforeEach(freezeLegacyPricingFixtureDate);
   it('proceeds (no duplicate turn) when the user turn is already durably recorded', async () => {
     const calls = installFetchRecorder(
       makeRoutes((body) =>
@@ -477,6 +489,125 @@ describe('PX07 idempotent replay', () => {
 });
 
 describe('PX07 post-inference assistant persistence failure', () => {
+  beforeEach(freezeLegacyPricingFixtureDate);
+  it('projects the settled receipt amount into cost_logs for ordinary chat', async () => {
+    const calls = installFetchRecorder(makeRoutes(() => null));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    expect(costLog?.total_cost).toBe(0.01);
+    expect(costLog?.cost_status).toBe('settled');
+  });
+
+  it('keeps a settled zero as zero in ordinary chat cost logs', async () => {
+    const settledZero = receiptPayload();
+    (settledZero.calls as Array<Record<string, unknown>>)[0]!.total_cost = 0;
+    (settledZero.reservation as Record<string, unknown>).committed_usd = '0';
+    const calls = installFetchRecorder(makeRoutes(() => null, settledZero));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    expect(costLog?.total_cost).toBe(0);
+    expect(costLog?.cost_status).toBe('settled');
+  });
+
+  it('keeps the final receipt and cost log pending when a settled call has an invalid amount', async () => {
+    const malformedReceipt = receiptPayload();
+    (malformedReceipt.calls as Array<Record<string, unknown>>)[0]!.total_cost = 'NaN';
+    const calls = installFetchRecorder(makeRoutes(() => null, malformedReceipt));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    const wire = await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    const finalReceipt = receiptFromStream(wire) as {
+      settlement?: { state?: string };
+      calls?: Array<Record<string, unknown>>;
+    } | undefined;
+    expect(costLog?.cost_status).toBe('pending');
+    expect(costLog?.total_cost).toBeGreaterThan(0);
+    expect(finalReceipt?.settlement?.state).toBe('pending');
+    expect(finalReceipt?.calls?.[0]).toMatchObject({ costStatus: 'pending', totalCost: 0 });
+  });
+
+  it('keeps the final receipt and cost log pending when a committed reservation amount is invalid', async () => {
+    const malformedReceipt = receiptPayload();
+    (malformedReceipt.reservation as Record<string, unknown>).committed_usd = 'NaN';
+    const calls = installFetchRecorder(makeRoutes(() => null, malformedReceipt));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    const wire = await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    expect(costLog?.cost_status).toBe('pending');
+    expect(costLog?.total_cost).toBeGreaterThan(0);
+    expect(receiptFromStream(wire)?.settlement).toMatchObject({ state: 'pending', committedUsd: 0 });
+  });
+
+  it('keeps token-derived cost as pending when the receipt is unsettled', async () => {
+    const pendingReceipt = receiptPayload();
+    (pendingReceipt.calls as Array<Record<string, unknown>>)[0]!.cost_status = 'pending';
+    (pendingReceipt.calls as Array<Record<string, unknown>>)[0]!.total_cost = 0;
+    (pendingReceipt.reservation as Record<string, unknown>).committed_usd = '0';
+    const calls = installFetchRecorder(makeRoutes(() => null, pendingReceipt));
+    const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
+
+    const res = await handler(
+      routerRequest({
+        conversationId: CONVERSATION_ID,
+        query: 'Hello',
+        modelOverride: 'anthropic:haiku',
+      }),
+    );
+    await readAll(res.body!);
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    expect(costLog?.total_cost).toBeGreaterThan(0);
+    expect(costLog?.cost_status).toBe('pending');
+  });
+
   it('still completes the stream but reports transcript.saved = false', async () => {
     const calls = installFetchRecorder(
       makeRoutes((body) =>
@@ -555,6 +686,7 @@ describe('PX07 post-inference assistant persistence failure', () => {
 });
 
 describe('PX07 legacy image_url ownership', () => {
+  beforeEach(freezeLegacyPricingFixtureDate);
   it('never persists a foreign legacy imageStorageUrl', async () => {
     const calls = installFetchRecorder(makeRoutes(() => null));
     const handler = await loadRouterHandler({ ...BASE_ROUTER_ENV });
@@ -630,6 +762,74 @@ describe('PX07 legacy image_url ownership', () => {
       },
     ]);
     await readAll(res.body!);
+  });
+});
+
+describe('PX07 current-priced OpenRouter persistence path', () => {
+  it('persists both turns and returns the settled receipt for a current model on the live clock', async () => {
+    const settledReceipt = receiptPayload();
+    const settledCall = (settledReceipt.calls as Array<Record<string, unknown>>)[0]!;
+    settledCall.participant = 'openrouter';
+    settledCall.served_model = 'anthropic/claude-haiku-5.5';
+    settledCall.total_cost = '0.0137';
+    (settledReceipt.reservation as Record<string, unknown>).committed_usd = '0.0137';
+
+    const calls = installFetchRecorder((call) => {
+      if (call.url === 'https://openrouter.ai/api/v1/chat/completions') {
+        return new Response(
+          'data: {"choices":[{"delta":{"content":"durable answer"}}]}\n\n' +
+            'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4}}\n\n' +
+            'data: [DONE]\n\n',
+          { headers: { 'content-type': 'text/event-stream' } },
+        );
+      }
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
+        return jsonResponse({
+          default_provider: 'openrouter',
+          providers: [{ provider: 'openrouter', enabled: true, has_key: true }],
+        });
+      }
+      return makeRoutes(() => null, settledReceipt)(call);
+    });
+    const handler = await loadRouterHandler({
+      ...BASE_ROUTER_ENV,
+      OPENROUTER_API_KEY: 'fixture-openrouter',
+    });
+
+    const res = await handler(routerRequest({
+      conversationId: CONVERSATION_ID,
+      query: 'Current pricing persistence probe',
+      modelOverride: 'claude-haiku-5-5',
+    }));
+
+    expect(res.status).toBe(200);
+    const wire = await readAll(res.body!);
+    expect(wire).toContain('durable answer');
+    expect(wire).toContain('[DONE]');
+
+    const persisted = persistBodies(calls);
+    const userTurn = persisted.find((body) => body.p_role === 'user');
+    const assistantTurn = persisted.find((body) => body.p_role === 'assistant');
+    expect(userTurn?.p_content).toBe('Current pricing persistence probe');
+    expect(assistantTurn?.p_content).toContain('durable answer');
+    expect(persisted.map((body) => body.p_role)).toEqual(['user', 'assistant']);
+
+    const providerCall = calls.find((call) => call.url === 'https://openrouter.ai/api/v1/chat/completions');
+    expect(providerCall).toBeDefined();
+    const providerRequest = JSON.parse(providerCall!.body) as { messages: Array<{ content: string }>; model: string };
+    expect(providerRequest.model).toBe('anthropic/claude-haiku-5.5');
+    expect(providerRequest.messages.some((message) => message.content.includes('Current pricing persistence probe'))).toBe(true);
+    expect(findCall(calls, '/rpc/px07_persist_message')).toBeLessThan(findCall(calls, 'openrouter.ai/api/v1/chat/completions'));
+
+    const receipt = receiptFromStream(wire);
+    expect(receipt?.status).toBe('completed');
+    expect(receipt?.settlement).toMatchObject({ state: 'settled', committedUsd: 0.0137 });
+    expect(receipt?.transcript).toEqual({ saved: true });
+
+    const costLog = calls
+      .filter((call) => call.url.includes('/rest/v1/cost_logs') && call.method === 'POST')
+      .map((call) => JSON.parse(call.body) as Record<string, unknown>)[0];
+    expect(costLog).toMatchObject({ provider: 'openrouter', model: 'claude-haiku-5-5', total_cost: 0.0137, cost_status: 'settled' });
   });
 });
 

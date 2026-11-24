@@ -148,7 +148,7 @@ describe('F13 & F14: Spend Caps and Grouped Analytics', () => {
     ];
 
     const csv = exportSpendToCsv(history);
-    expect(csv).toContain('Date,Conversation ID,Model,Provider,Cost Status,Prompt Tokens,Completion Tokens,Cost (USD)');
+    expect(csv).toContain('Date,Conversation ID,Model,Provider,Cost Status,Breakdown,Prompt Tokens,Completion Tokens,Cost (USD)');
     expect(csv).toContain('"c123,with,commas"');
     expect(csv).toContain('gpt-6-sol');
     expect(csv).toContain('0.0042');

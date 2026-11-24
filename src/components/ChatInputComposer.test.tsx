@@ -104,6 +104,25 @@ describe('ChatInputComposer', () => {
     expect(sendBtn.getAttribute('aria-label')).toBe(SEND_BLOCKED_TITLES.empty);
   });
 
+  it('explains that a saved disabled provider needs enabling in settings', () => {
+    const onOpenProviderSettings = vi.fn();
+    root = render(
+      <ChatInputComposer
+        {...defaultProps}
+        providerSetupBlocked
+        providerSetupNeedsEnable
+        onOpenProviderSettings={onOpenProviderSettings}
+      />,
+    );
+
+    const status = container.querySelector('.provider-setup-composer-status');
+    expect(status?.textContent).toContain('Sending is paused. Enable a provider in Provider Settings to send. Your draft stays here.');
+    const settingsButton = status?.querySelector<HTMLButtonElement>('button');
+    expect(settingsButton?.textContent).toBe('Provider Settings');
+    act(() => settingsButton?.click());
+    expect(onOpenProviderSettings).toHaveBeenCalledOnce();
+  });
+
   it('shows stop button and streaming status during active generation', () => {
     const onStop = vi.fn();
     root = render(

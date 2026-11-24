@@ -28,7 +28,7 @@ const features: FeatureCardItem[] = [
     tag: 'ROUTING HUB',
     title: 'Dynamic Multi-Model Routing',
     description:
-      'Routes every request through the OpenCode model hub by default, with OpenRouter and opt-in provider plug-ins (BYOK) as fallbacks.',
+      'Routes eligible requests through OpenRouter or enabled direct providers using your configured keys.',
   },
   {
     id: 'sse-stream',
@@ -39,10 +39,10 @@ const features: FeatureCardItem[] = [
   },
   {
     id: 'edge-secrets',
-    tag: 'ZERO LEAK',
-    title: 'Server-Side Secret Isolation',
+    tag: 'CREDENTIALS',
+    title: 'Encrypted Provider Keys',
     description:
-      'Keeps provider API keys in Supabase Edge Function secrets instead of the browser bundle.',
+      'Saved provider keys are encrypted on the server. Keys are sent from your browser when you connect them.',
   },
   {
     id: 'rls-boundary',
@@ -90,7 +90,7 @@ const pipelineNodes: ArchNode[] = [
     step: '04',
     name: 'Multi-Model Hub',
     role: 'Inference Layer',
-    description: 'Routes through OpenCode gateway with OpenRouter and BYOK fallback channels.',
+    description: 'Routes eligible models through OpenRouter or configured direct providers.',
   },
   {
     step: '05',
@@ -118,8 +118,8 @@ const proofPoints: ProofPoint[] = [
   },
   {
     id: 'verified-claims',
-    badge: 'GROUND TRUTH',
-    claim: 'The public page intentionally describes verified architecture rather than claiming production certification.',
+    badge: 'REPOSITORY',
+    claim: 'The repository includes router and isolation tests; hosted configuration requires separate verification.',
   },
 ];
 
@@ -147,7 +147,7 @@ export function ResumeDemo() {
       <header className="resume-demo-hero" aria-labelledby="resume-demo-title">
         <div className="resume-demo-kicker-group">
           <span className="resume-demo-status-dot" aria-hidden="true" />
-          <p className="resume-demo-kicker">Multi-Provider AI Router · Recruiter Demo Surface</p>
+          <p className="resume-demo-kicker">Multi-Provider AI Workspace · Interactive Demo</p>
         </div>
 
         <h1 id="resume-demo-title">Supabase-backed multi-provider AI router prototype</h1>
@@ -165,7 +165,7 @@ export function ResumeDemo() {
           </div>
           <div className="spec-badge">
             <span className="spec-label">SECRETS</span>
-            <span className="spec-val">100% Server-Side</span>
+            <span className="spec-val">Encrypted at rest</span>
           </div>
           <div className="spec-badge">
             <span className="spec-label">STREAMING</span>
@@ -202,11 +202,11 @@ export function ResumeDemo() {
               <span className="dot dot-red" />
               <span className="dot dot-yellow" />
               <span className="dot dot-green" />
-              <span className="topbar-title">sandbox://prismatix-router/live-simulation</span>
+              <span className="topbar-title">sandbox://prismatix-router/demo</span>
             </div>
             <div className="topbar-status">
               <span className="live-indicator" aria-hidden="true" />
-              <span className="topbar-status-text">LIVE STREAMING ENGINE · SYNTHETIC TARIFFS</span>
+              <span className="topbar-status-text">PRERECORDED DEMO · SYNTHETIC COSTS</span>
             </div>
           </div>
           <InteractivePublicDemo />
@@ -250,23 +250,12 @@ export function ResumeDemo() {
           </div>
         </article>
 
-        {/* Bento Cell 3: Verified Proof Points (4 cols) */}
+        {/* Bento Cell 3: Repository implementation and tests (4 cols) */}
         <article className="bento-card bento-card-proof bento-col-4" aria-labelledby="bento-proof-heading">
           <div className="bento-header-group">
-            <span className="bento-kicker">03 // VERIFIED PROOF</span>
-            <h2 id="bento-proof-heading">Repository Ground Truth</h2>
-            <p className="bento-subtext">Evidence-backed claims grounded in actual test suites and modules.</p>
-          </div>
-
-          <div className="proof-metrics-grid">
-            <div className="proof-metric-tile">
-              <span className="metric-num">100%</span>
-              <span className="metric-caption">Edge Secret Isolation</span>
-            </div>
-            <div className="proof-metric-tile">
-              <span className="metric-num">0 ms</span>
-              <span className="metric-caption">Client Token Exposure</span>
-            </div>
+            <span className="bento-kicker">03 // REPOSITORY</span>
+            <h2 id="bento-proof-heading">Implementation &amp; Tests</h2>
+            <p className="bento-subtext">Explore how the application is built. Hosted behavior depends on deployment configuration.</p>
           </div>
 
           <ul className="proof-list">
@@ -288,7 +277,7 @@ export function ResumeDemo() {
             <span className="bento-kicker">04 // CAPABILITIES & GUARDRAILS</span>
             <h2 id="bento-features-heading">Feature Slice & Guardrails</h2>
             <p className="bento-subtext">
-              Engineered for cost predictability, multi-provider failover, and strict tenant boundaries.
+              Designed for multiple provider routes, usage safeguards, and account-scoped data.
             </p>
           </div>
 
@@ -312,7 +301,7 @@ export function ResumeDemo() {
               <span className="safety-alert-icon" aria-hidden="true">⚠</span>
               <span className="bento-kicker kicker-safety">05 // SECURITY & COMPLIANCE BOUNDARY</span>
             </div>
-            <h2 id="bento-safety-heading">Demo Safety & Recruiter Notice</h2>
+            <h2 id="bento-safety-heading">About This Demo</h2>
           </div>
 
           <div className="safety-body">
@@ -336,7 +325,7 @@ export function ResumeDemo() {
               </div>
               <div className="safety-item">
                 <span className="safety-item-icon" aria-hidden="true">✓</span>
-                <span>All architecture assertions verified against repository AST.</span>
+                <span>Hosted configuration and isolation require separate verification.</span>
               </div>
             </div>
 

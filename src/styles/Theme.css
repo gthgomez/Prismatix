@@ -1,0 +1,79 @@
+:root {
+  --color-bg: #f7faff;
+  --color-surface: #ffffff;
+  --color-surface-elevated: #ffffff;
+  --color-surface-selected: #e4f2fb;
+  --color-surface-error: #fff2f0;
+  --color-surface-disabled: #edf2f7;
+  --color-surface-hover: #f0f6fc;
+  --color-surface-glass: rgb(255 255 255 / 92%);
+  --color-content-on-selected: #102034;
+  --color-content-on-error: #8c211b;
+  --color-content-disabled: #65748a;
+  --color-border: #d9e5f3;
+  --color-border-subtle: #e7eef7;
+  --color-border-strong: #c3d6eb;
+  --color-field-border: #75859c;
+  --color-text: #101828;
+  --color-text-dim: #3f5274;
+  --color-text-muted: #56667d;
+  --color-primary: #06758a;
+  --color-primary-dim: #dff5f5;
+  --color-accent: #086a91;
+  --color-danger: #b42318;
+  --color-warning: #a15c00;
+  --color-success: #067647;
+  --color-content-on-primary: #ffffff;
+  --color-surface-success: #ecfdf3;
+  --color-surface-warning: #fffaeb;
+  --color-content-on-warning: #7a3e00;
+  --color-content-on-success: #05603a;
+  --color-focus: #1570ef;
+  --glass-bg: rgb(255 255 255 / 94%);
+  --glass-fallback: #ffffff;
+  --glass-border: #d3e3f5;
+  --glass-shadow: 0 10px 28px rgb(30 64 110 / 10%);
+  color-scheme: light;
+  --shadow-elevated: 0 16px 36px rgb(30 64 110 / 12%);
+}
+
+:root[data-theme='dark'] {
+  /* Colors - Core */
+  color-scheme: dark;
+  --color-bg: #03070b;
+  --color-surface: #0d141b;
+  --color-surface-elevated: #14212b;
+  --color-surface-selected: #09292f;
+  --color-surface-error: #2d141a;
+  --color-surface-disabled: #111820;
+  --color-surface-hover: #17232c;
+  --color-surface-glass: rgba(13, 20, 27, 0.94);
+  --color-content-on-selected: #ccfaff;
+  --color-content-on-error: #ffb4b4;
+  --color-content-disabled: #91a3b0;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-strong: rgba(178, 195, 206, 0.3);
+  --color-field-border: #738899;
+  --color-text: #ffffff;
+  --color-text-dim: #b2c3ce;
+  --color-text-muted: #91a3b0;
+
+  /* Colors - Semantic */
+  --color-primary: #4ECDC4;
+  --color-primary-dim: rgba(78, 205, 196, 0.2);
+  --color-accent: #44A3B3;
+  --color-danger: #FF6B6B;
+  --color-warning: #FFC446;
+  --color-success: #7EF3DB;
+  --color-content-on-primary: #031012;
+  --color-surface-success: #10251f;
+  --color-surface-warning: #2a2110;
+  --color-content-on-warning: #ffe0a0;
+  --color-content-on-success: #baf9e8;
+
+  --shadow-elevated: 0 16px 36px rgb(0 0 0 / 50%);
+  --glass-border: #477586;
+  --glass-shadow: 0 12px 40px rgb(0 0 0 / 30%);
+  --color-focus: #65e8ff;
+}

@@ -7,6 +7,7 @@ import {
 
 const VALID_CONVERSATION_ID = '11111111-1111-4111-8111-111111111111';
 const VALID_VIDEO_ID = '22222222-2222-4222-8222-222222222222';
+const VALID_COMPARE_ID = '33333333-3333-4333-8333-333333333333';
 
 describe('router security guards', () => {
   it('rejects missing or malformed conversation IDs before provider routing', () => {
@@ -22,6 +23,20 @@ describe('router security guards', () => {
       ok: false,
       status: 400,
     });
+  });
+
+  it('validates and normalizes the shared Compare execution identity', () => {
+    const valid = normalizeRouterRequestBody({
+      conversationId: VALID_CONVERSATION_ID,
+      query: 'compare these options',
+      comparisonGroupId: VALID_COMPARE_ID,
+    });
+    expect(valid.ok && valid.value.comparisonGroupId).toBe(VALID_COMPARE_ID);
+    expect(normalizeRouterRequestBody({
+      conversationId: VALID_CONVERSATION_ID,
+      query: 'compare these options',
+      comparisonGroupId: 'not-a-uuid',
+    })).toMatchObject({ ok: false, status: 400 });
   });
 
   it('rejects untrusted history shapes and oversized history arrays', () => {
