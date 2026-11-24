@@ -2,13 +2,15 @@
 
 ## Current release status · 2026-11-24 (authoritative)
 
-**Qualified code candidate:** `25c5ff7e` on `campaign/overnight-2026-11-19`.
-This record is a documentation-only commit on top of it; the PR body carries
-the final head. Base `main` is `6a5c4cb0ad364490a1a0d959dcc60f68f63d7314`.
-PR [#73](https://github.com/gthgomez/Prismatix/pull/73) is open, draft and
-mergeable.
+**Candidate:** the head of PR
+[#73](https://github.com/gthgomez/Prismatix/pull/73) on
+`campaign/overnight-2026-11-19`. The **exact SHA and exact-head CI run are
+kept current in the PR description**, so this record cannot go stale on a
+docs-only or test-only follow-up. The last full local evidence run was produced
+from code SHA `25c5ff7e`; base `main` is
+`6a5c4cb0ad364490a1a0d959dcc60f68f63d7314`.
 
-**Exact-head CI: [run 45389922561](https://github.com/gthgomez/Prismatix/actions/runs/45389922561) —
+**Exact-head CI on `25c5ff7e`: [run 45389922561](https://github.com/gthgomez/Prismatix/actions/runs/45389922561) —
 all seven jobs pass**, including `Real backend · Supabase + Edge + browser` and
 `Migrations · fresh + existing install` with the main-baseline upgrade gate.
 
@@ -31,7 +33,7 @@ used for read-only inventory only.
 | ID | Finding | What was done | Evidence |
 |---|---|---|---|
 | R1 | A settled cost log could still pair a settled total with estimated components: the router fell back to `costBreakdown` when `deriveSettledBreakdown` returned null. The `1e-6 × calls` tolerance also permitted materially wrong reconciliation for micro-costs. | `cost_logs.breakdown_source` (`confirmed` / `estimated` / `unavailable`) via migration `20261124090000`. Reconciliation is integer micro-USD and checks **each call individually** and the reservation total, so offsetting errors cannot pass. A settled total with no confirmed breakdown stores zero components and is marked `unavailable`; a pending total keeps `estimated`. Receipt projection exposes per-call usage/costs. `financeTracker`/CSV consume the provenance. | Real turn: `40`/`12` tokens, `0.00003 + 0.000045 = 0.000075`. `no-usage` turn: pending + `estimated`, components reconcile with the estimate. `zero` turn: settled + `confirmed`, all zero. 8 new unit cases, including aggregate cancellation and sub-precision money. |
-| R2 | Real-backend qualification was not in CI. | New `real-backend` job runs `scripts/qualification/ci-real-backend.sh`: loopback stub reachable from the container network, stack with unused services excluded, migrations through the real runner, real Auth seed, acceptance gate, isolation checks, real Chromium suite, diagnostics upload, trap cleanup. | Job passes on the campaign head. Its first runs exposed a harness defect, not a product one: every suite drove one identity past the router's production 20/min limit (the 429 carried `Retry-After`, so it was the user limiter; the env override does not reliably reach the Edge runtime). The fix partitions identities — acceptance uses `qual-e`, isolation uses `qual-a`/`qual-b`, and each browser journey uses its own — and the cancellation test asserts a genuine partial prefix. Production limits are untouched. |
+| R2 | Real-backend qualification was not in CI. | New `real-backend` job runs `scripts/qualification/ci-real-backend.sh`: loopback stub reachable from the container network, stack with unused services excluded, migrations through the real runner, real Auth seed, acceptance gate, isolation checks, real Chromium suite, diagnostics upload, trap cleanup. The Supabase image set is cached between runs because the registry's anonymous data limit failed a run with "Data limit exceeded". | Job passes on the campaign head. Its first runs exposed a harness defect, not a product one: every suite drove one identity past the router's production 20/min limit (the 429 carried `Retry-After`, so it was the user limiter; the env override does not reliably reach the Edge runtime). The fix partitions identities — acceptance uses `qual-e`, isolation uses `qual-a`/`qual-b`, and each browser journey uses its own — and the cancellation test asserts a genuine partial prefix. Production limits are untouched. |
 | R3 | Nonlocal overrides were boolean and did not prove identity. | `scripts/qualification/env-contract.mjs`: loopback allowed; hosted target requires an allowlisted `<ref>.supabase.co` project **and** `QUALIFICATION_ENVIRONMENT=staging|preview`; production denied even if allowlisted; router host must match; remote stubs allowlisted; credentials-in-URL rejected. Wired into seed/smoke/isolation/e2e/screens. The Vercel guard now also rejects production subdomains, malformed URLs, http, embedded credentials and loopback previews. | `npm run qual:env`: 14/14 negative controls pass. CI isolation job runs them and the new guard negatives. |
 | R4 | The smoke script printed outcomes without failing. | Rewritten as an acceptance gate. Expected money comes from a reviewed tariff constant and the fixture, not the implementation. It asserts status/content/execution identity/receipt/settlement/tokens/components/persistence/ownership/one chat call, rejects **10** corrupted variants, and proves the pending/estimated and settled/confirmed-zero states. | `npm run qual:smoke` → `ACCEPTED`, `10/10 negative controls rejected`, breakdown provenance accepted. |
 | R5 | Enter during provider initialization dropped the submission and left a sticky error; the visible status also said "until a provider is connected" while merely checking. | Submission is rejected without dispatch, the draft and attachments are preserved, the composer states "Checking provider setup — sending will be available in a moment", the transient notice clears when readiness resolves, and nothing is auto-sent. Both keyboard and button use the same readiness gate. | New real-backend test `Enter during provider readiness preserves the draft and dispatches nothing`: delayed real provider-settings response, `data-state` transitions `provider-checking → ready`, draft intact, zero calls before, exactly one after. |

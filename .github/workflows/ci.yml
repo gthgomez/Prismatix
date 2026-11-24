@@ -135,6 +135,14 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      # The Supabase registry enforces an anonymous data limit; repeated large
+      # pulls fail with "Data limit exceeded". Cache the image set so the job
+      # does not depend on pulling several gigabytes on every push.
+      - name: Restore Supabase image cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/supabase-images.tar
+          key: supabase-images-2.98.2-v1
       - name: Isolated real-backend qualification
         env:
           SUPABASE_CLI_VERSION: '2.98.2'

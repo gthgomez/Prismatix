@@ -42,11 +42,28 @@ done
 curl -fsS "${STUB_URL}/__health" >/dev/null
 
 log "Supabase stack + migrations (CLI ${SUPABASE_CLI_VERSION})"
+# Optional pre-restored image cache (the workflow restores this path). The
+# Supabase registry enforces an anonymous data limit; repeated large pulls fail
+# with "Data limit exceeded" even though nothing is wrong with the code.
+IMAGE_CACHE="${SUPABASE_IMAGE_CACHE:-/tmp/supabase-images.tar}"
+if [[ -f "$IMAGE_CACHE" ]]; then
+  log "loading cached Supabase images"
+  docker load --input "$IMAGE_CACHE" >/dev/null
+fi
 # Skip services this qualification does not use: fewer image pulls (Docker Hub
 # rate limits are a real CI failure mode) and less resource pressure.
 npx --yes "supabase@${SUPABASE_CLI_VERSION}" start \
-  -x studio,imgproxy,realtime,storage-api,logflare,vector,supavisor
+  -x studio,imgproxy,realtime,storage-api,logflare,vector,supavisor,mailpit,postgres-meta
 npx --yes "supabase@${SUPABASE_CLI_VERSION}" db reset --no-seed
+
+if [[ ! -f "$IMAGE_CACHE" ]]; then
+  log "caching Supabase images for future runs"
+  mapfile -t images < <(docker images --format '{{.Repository}}:{{.Tag}}' \
+    | grep -E '^(public\.ecr\.aws/supabase|supabase)/' | sort -u)
+  if [[ ${#images[@]} -gt 0 ]]; then
+    docker save --output "$IMAGE_CACHE" "${images[@]}" || rm -f "$IMAGE_CACHE"
+  fi
+fi
 
 STATUS_ENV="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" status -o env)"
 status_value() {
