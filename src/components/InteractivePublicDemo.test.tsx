@@ -1,6 +1,6 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InteractivePublicDemo } from './InteractivePublicDemo';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -14,6 +14,7 @@ describe('InteractivePublicDemo', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (container) {
       document.body.removeChild(container);
       container = null;
@@ -114,6 +115,118 @@ describe('InteractivePublicDemo', () => {
     });
 
     expect(container?.textContent).toContain('(Click play to stream response...)');
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('keeps the visible Show Full Response label in the accessible name', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<InteractivePublicDemo autoplay={false} />);
+    });
+
+    const skipBtn = Array.from(container?.querySelectorAll('.demo-control-btn') || [])
+      .find((b) => b.textContent?.includes('Show Full Response')) as HTMLButtonElement | undefined;
+
+    expect(skipBtn).toBeDefined();
+    expect(skipBtn?.getAttribute('aria-label')?.toLowerCase()).toBe('show full response');
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('moves focus to Replay when keyboard Skip completes instead of dropping it', async () => {
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<InteractivePublicDemo autoplay={false} />);
+    });
+
+    const buttons = Array.from(container?.querySelectorAll('.demo-control-btn') || []) as HTMLButtonElement[];
+    const primaryBtn = buttons[0]!;
+    const skipBtn = buttons[1]!;
+
+    await act(async () => {
+      primaryBtn.click(); // start streaming so Skip is enabled
+    });
+    await act(async () => {
+      skipBtn.focus();
+    });
+    expect(document.activeElement).toBe(skipBtn);
+
+    await act(async () => {
+      skipBtn.click();
+    });
+
+    expect(skipBtn.disabled).toBe(true);
+    expect(primaryBtn.getAttribute('aria-label')).toBe('Replay scenario');
+    expect(document.activeElement).toBe(primaryBtn);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('moves focus to Replay when the animation completes while Skip is focused', async () => {
+    vi.useFakeTimers();
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<InteractivePublicDemo autoplay={false} />);
+    });
+
+    const buttons = Array.from(container?.querySelectorAll('.demo-control-btn') || []) as HTMLButtonElement[];
+    const primaryBtn = buttons[0]!;
+    const skipBtn = buttons[1]!;
+
+    await act(async () => {
+      primaryBtn.click(); // start streaming so Skip is enabled
+    });
+    await act(async () => {
+      skipBtn.focus();
+    });
+    expect(document.activeElement).toBe(skipBtn);
+
+    await act(async () => {
+      vi.advanceTimersByTime(12000);
+    });
+
+    expect(skipBtn.disabled).toBe(true);
+    expect(primaryBtn.getAttribute('aria-label')).toBe('Replay scenario');
+    expect(document.activeElement).toBe(primaryBtn);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('does not steal focus when the animation completes while another control is focused', async () => {
+    vi.useFakeTimers();
+    const root = createRoot(container!);
+    await act(async () => {
+      root.render(<InteractivePublicDemo autoplay={false} />);
+    });
+
+    const buttons = Array.from(container?.querySelectorAll('.demo-control-btn') || []) as HTMLButtonElement[];
+    const primaryBtn = buttons[0]!;
+    const skipBtn = buttons[1]!;
+
+    await act(async () => {
+      primaryBtn.click();
+    });
+    await act(async () => {
+      primaryBtn.focus();
+    });
+    expect(document.activeElement).toBe(primaryBtn);
+
+    await act(async () => {
+      vi.advanceTimersByTime(12000);
+    });
+
+    expect(skipBtn.disabled).toBe(true);
+    expect(primaryBtn.getAttribute('aria-label')).toBe('Replay scenario');
+    expect(document.activeElement).toBe(primaryBtn);
 
     await act(async () => {
       root.unmount();

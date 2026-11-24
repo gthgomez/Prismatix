@@ -274,6 +274,17 @@
   box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus);
 }
 
+/* Forced colors drops box-shadow; use a system color to outline focused links. */
+@media (forced-colors: active) {
+  .resume-demo-brand:focus-visible,
+  .resume-demo-nav-links a:focus-visible,
+  .resume-demo-button:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+}
+
 .resume-demo-button-primary {
   border-color: rgba(78, 205, 196, 0.55);
   background: rgba(78, 205, 196, 0.16);
