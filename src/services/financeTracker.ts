@@ -51,7 +51,9 @@ const EMPTY_STORE: FinanceStore = {
 };
 
 function roundUsd(value: number): number {
-  return Math.round(value * 10000) / 10000;
+  // Storage precision is numeric(12,6). Rounding to 4dp silently changed a
+  // real $0.000075 receipt into $0.0001 in the local cache and CSV export.
+  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 function currentDate(): string {

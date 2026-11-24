@@ -119,6 +119,36 @@ describe('recordCost', () => {
     const store = recordCost({ model: 'haiku-4.5', cost: 0.001, pricingVersion: '2026-01-01' });
     expect(store.history[0]!.pricingVersion).toBe('2026-01-01');
   });
+
+  it('preserves micro-USD receipts in the cache and CSV instead of rounding to 4dp', () => {
+    const store = recordCost({
+      model: 'gemini-3.8-flash',
+      cost: 0.000075,
+      breakdownSource: 'confirmed',
+      promptTokens: 40,
+      completionTokens: 12,
+      executionId: 'exec-micro',
+    });
+    expect(store.history[0]!.cost).toBe(0.000075);
+    expect(store.totals.month).toBe(0.000075);
+    expect(exportSpendToCsv(store.history)).toContain('0.000075');
+    expect(exportSpendToCsv(store.history)).toContain('confirmed');
+    expect(exportSpendToCsv(store.history)).toContain('40,12');
+  });
+
+  it('omits token facts for an unavailable breakdown instead of storing zero', () => {
+    const store = recordCost({
+      model: 'gemini-3.8-flash',
+      cost: 0.000075,
+      breakdownSource: 'unavailable',
+      promptTokens: 40,
+      completionTokens: 12,
+      executionId: 'exec-unavailable',
+    });
+    expect(store.history[0]!.breakdownSource).toBe('unavailable');
+    expect(store.history[0]!.promptTokens).toBeUndefined();
+    expect(store.history[0]!.completionTokens).toBeUndefined();
+  });
 });
 
 describe('getDailyTotal', () => {
@@ -205,5 +235,70 @@ describe('fetchAuthoritativeCostLogs', () => {
     } as never;
 
     await expect(fetchAuthoritativeCostLogs(client)).rejects.toThrow('offline');
+  });
+
+  it('preserves authoritative micro-USD totals and provenance from the server ledger', async () => {
+    const client = {
+      from: () => ({
+        select: () => ({
+          order: async () => ({
+            data: [{
+              id: 'exec-micro',
+              created_at: '2026-11-24T12:00:00.000Z',
+              conversation_id: 'conv-1',
+              model: 'gemini-3.8-flash',
+              provider: 'openrouter',
+              total_cost: '0.000075',
+              cost_status: 'settled',
+              breakdown_source: 'confirmed',
+              input_tokens: 40,
+              output_tokens: 12,
+              pricing_version: '2026-11-21-v13',
+            }],
+            error: null,
+          }),
+        }),
+      }),
+    } as never;
+
+    const [entry] = await fetchAuthoritativeCostLogs(client);
+    expect(entry).toMatchObject({
+      cost: 0.000075,
+      breakdownSource: 'confirmed',
+      promptTokens: 40,
+      completionTokens: 12,
+      costStatus: 'settled',
+    });
+    expect(exportSpendToCsv([entry])).toContain('0.000075');
+  });
+
+  it('does not expose token facts when the server marks the breakdown unavailable', async () => {
+    const client = {
+      from: () => ({
+        select: () => ({
+          order: async () => ({
+            data: [{
+              id: 'exec-unavailable',
+              created_at: '2026-11-24T12:00:00.000Z',
+              conversation_id: 'conv-1',
+              model: 'gemini-3.8-flash',
+              provider: 'openrouter',
+              total_cost: '0.000075',
+              cost_status: 'settled',
+              breakdown_source: 'unavailable',
+              input_tokens: 0,
+              output_tokens: 0,
+              pricing_version: '2026-11-21-v13',
+            }],
+            error: null,
+          }),
+        }),
+      }),
+    } as never;
+
+    const [entry] = await fetchAuthoritativeCostLogs(client);
+    expect(entry.breakdownSource).toBe('unavailable');
+    expect(entry.promptTokens).toBeUndefined();
+    expect(entry.completionTokens).toBeUndefined();
   });
 });
