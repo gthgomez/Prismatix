@@ -274,9 +274,7 @@
   box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus);
 }
 
-/* High-contrast mode drops box-shadow, so the custom ring must fall back to
-   the system Highlight outline. The component rules set outline: none, which
-   otherwise wins over the zero-specificity global focus rule. */
+/* Forced colors drops box-shadow; use a system color to outline focused links. */
 @media (forced-colors: active) {
   .resume-demo-brand:focus-visible,
   .resume-demo-nav-links a:focus-visible,
