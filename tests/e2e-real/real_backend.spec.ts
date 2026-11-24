@@ -16,6 +16,10 @@ const SUPABASE_URL = (process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321').repl
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? '';
 const USER_A = { email: 'qual-a@example.test', password: 'qual-pass-a-1234' };
 const USER_B = { email: 'qual-b@example.test', password: 'qual-pass-b-1234' };
+// One identity per journey keeps each one below the router's per-user rate
+// limit even when the acceptance gate and isolation checks run moments earlier.
+const USER_C = { email: 'qual-c@example.test', password: 'qual-pass-c-1234' };
+const USER_D = { email: 'qual-d@example.test', password: 'qual-pass-d-1234' };
 
 async function setScenario(scenario: string) {
   const response = await fetch(`${STUB_CONTROL}/__control`, {
@@ -160,7 +164,7 @@ test.describe('real backend', () => {
     await setScenario('streaming');
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/');
-    await signIn(page, USER_A);
+    await signIn(page, USER_C);
 
     const before = await stubChatRequestCount();
     await sendPrompt(page, `Slow stream stop probe ${Date.now()}`);
@@ -224,7 +228,7 @@ test.describe('real backend', () => {
     });
 
     await page.goto('/');
-    await signIn(page, USER_A);
+    await signIn(page, USER_D);
 
     const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
     const prompt = `Readiness race probe ${Date.now()}`;
@@ -262,7 +266,7 @@ test.describe('real backend', () => {
     await setScenario('default');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/');
-    await signIn(page, USER_A);
+    await signIn(page, USER_D);
 
     const prompt = `Mobile real probe ${Date.now()}`;
     await sendPrompt(page, prompt);

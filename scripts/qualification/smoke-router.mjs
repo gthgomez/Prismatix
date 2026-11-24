@@ -22,8 +22,8 @@ try {
 const SUPABASE_URL = target.supabaseUrl;
 const ANON_KEY = target.anonKey;
 const STUB_URL = target.stubUrl;
-const EMAIL = process.env.QUAL_EMAIL ?? 'qual-a@example.test';
-const PASSWORD = process.env.QUAL_PASSWORD ?? 'qual-pass-a-1234';
+const EMAIL = process.env.QUAL_EMAIL ?? 'qual-e@example.test';
+const PASSWORD = process.env.QUAL_PASSWORD ?? 'qual-pass-e-1234';
 const QUERY = 'Qualification acceptance prompt.';
 
 // Stub fixture (scripts/qualification/stub-provider.mjs, `default` scenario).

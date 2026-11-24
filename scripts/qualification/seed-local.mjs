@@ -30,6 +30,12 @@ const FAKE_CIPHERTEXT =
 const USERS = [
   { email: 'qual-a@example.test', password: 'qual-pass-a-1234' },
   { email: 'qual-b@example.test', password: 'qual-pass-b-1234' },
+  // Separate identities per suite keep each one below the router's per-user
+  // rate limit; one shared identity legitimately trips it when the acceptance
+  // gate, isolation checks and browser journeys run back to back.
+  { email: 'qual-c@example.test', password: 'qual-pass-c-1234' },
+  { email: 'qual-d@example.test', password: 'qual-pass-d-1234' },
+  { email: 'qual-e@example.test', password: 'qual-pass-e-1234' },
 ];
 
 if (!SERVICE_ROLE_KEY) {
