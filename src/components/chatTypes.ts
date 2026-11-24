@@ -1,7 +1,7 @@
 // src/components/chatTypes.ts
 // Shared types and accessible metadata for ChatInterface and ChatInputComposer
 
-export type SendBlockedReason = 'empty' | 'streaming' | 'pending' | 'history' | 'video' | 'invalid' | null;
+export type SendBlockedReason = 'empty' | 'streaming' | 'pending' | 'history' | 'video' | 'provider-checking' | 'invalid' | null;
 
 export interface StreamOutcomeState {
   status: 'cancelled' | 'receipt' | 'interrupted' | 'error';
@@ -34,5 +34,6 @@ export const SEND_BLOCKED_TITLES: Record<
   pending: 'Send message — checking the daily budget; please wait',
   history: 'Send message — loading the conversation; please wait',
   video: 'Send message — video is still processing',
+  'provider-checking': 'Send message — checking provider setup; your draft is preserved',
   invalid: 'Send message — resolve the routing issue below first',
 };

@@ -100,7 +100,7 @@ import {
   type ExecutionStoreClient,
 } from './execution_store.ts';
 import type { TerminalReceipt } from '../_shared/execution_receipt.ts';
-import { deriveSettledBreakdown } from '../_shared/execution_receipt.ts';
+import { classifyBreakdownSource, deriveSettledBreakdown } from '../_shared/execution_receipt.ts';
 import {
   attachmentRefIsOwned,
   type AttachmentRef,
@@ -3576,21 +3576,34 @@ Deno.serve(async (req: Request) => {
             ? fallbackEstimateUsd
             : costBreakdown.totalUsd;
 
-          // PXQ-41: a settled row must not mix a settled total with an
+          // PXQ-41 / R1: a settled row must not mix a settled total with an
           // estimated token/cost breakdown. When the ledger exposes complete
           // per-call usage, project the log from the same rows the settlement
-          // was committed from so tokens, components and total agree.
+          // was committed from so tokens, components and total agree. When it
+          // does not, keep the authoritative total and mark the breakdown
+          // unavailable rather than presenting estimates as confirmed costs.
+          const settlementState = interimReceipt?.settlement?.state;
           const settledBreakdown = interimReceipt
             ? deriveSettledBreakdown(interimReceipt)
             : null;
-          const loggedTokens = settledBreakdown ?? {
-            promptTokens: costBreakdown.promptTokens,
-            completionTokens: costBreakdown.completionTokens,
-            reasoningTokens: costBreakdown.reasoningTokens,
-            inputCostUsd: costBreakdown.inputCostUsd,
-            outputCostUsd: costBreakdown.outputCostUsd,
-            reasoningCostUsd: costBreakdown.reasoningCostUsd,
-          };
+          const breakdownSource = classifyBreakdownSource(settledBreakdown, settlementState);
+          const loggedTokens = settledBreakdown ?? (breakdownSource === 'unavailable'
+            ? {
+              promptTokens: 0,
+              completionTokens: 0,
+              reasoningTokens: 0,
+              inputCostUsd: 0,
+              outputCostUsd: 0,
+              reasoningCostUsd: 0,
+            }
+            : {
+              promptTokens: costBreakdown.promptTokens,
+              completionTokens: costBreakdown.completionTokens,
+              reasoningTokens: costBreakdown.reasoningTokens,
+              inputCostUsd: costBreakdown.inputCostUsd,
+              outputCostUsd: costBreakdown.outputCostUsd,
+              reasoningCostUsd: costBreakdown.reasoningCostUsd,
+            });
 
           const costLogRecord = {
             user_id: userId,
@@ -3604,6 +3617,7 @@ Deno.serve(async (req: Request) => {
             output_cost: loggedTokens.outputCostUsd,
             thinking_cost: loggedTokens.reasoningCostUsd,
             total_cost: authoritativeTotalCost,
+            breakdown_source: breakdownSource,
             pricing_version: costBreakdown.pricingVersion,
             complexity_score: responseDecision.complexityScore,
             route_rationale: responseDecision.rationaleTag,

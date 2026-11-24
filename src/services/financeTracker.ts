@@ -17,6 +17,12 @@ export interface FinanceEntry {
   provider?: string;
   conversationId?: string;
   costStatus?: 'settled' | 'estimated' | 'pending' | 'unknown';
+  /**
+   * Provenance of promptTokens/completionTokens. `unavailable` means the
+   * total is settled but the breakdown is unknown — the token fields are
+   * deliberately omitted rather than reported as zero.
+   */
+  breakdownSource?: 'confirmed' | 'estimated' | 'unavailable';
   promptTokens?: number;
   completionTokens?: number;
   executionId?: string;
@@ -213,7 +219,7 @@ export async function fetchAuthoritativeCostLogs(
   try {
     let query = client
       .from('cost_logs')
-      .select('id, created_at, conversation_id, model, provider, total_cost, cost_status, input_tokens, output_tokens, pricing_version')
+      .select('id, created_at, conversation_id, model, provider, total_cost, cost_status, breakdown_source, input_tokens, output_tokens, pricing_version')
       .order('created_at', { ascending: false });
 
     if (options.limit) {
@@ -228,18 +234,29 @@ export async function fetchAuthoritativeCostLogs(
       throw new Error(error?.message || 'Could not load server cost records.');
     }
 
-    return data.map((row) => ({
-      date: String(row.created_at || currentDate()),
-      model: String(row.model || 'Unreported model'),
-      cost: roundUsd(Number(row.total_cost || 0)),
-      pricingVersion: row.pricing_version ? String(row.pricing_version) : undefined,
-      provider: row.provider ? String(row.provider) : undefined,
-      conversationId: row.conversation_id ? String(row.conversation_id) : undefined,
-      costStatus: (row.cost_status as FinanceEntry['costStatus']) || 'settled',
-      promptTokens: row.input_tokens !== null && row.input_tokens !== undefined ? Number(row.input_tokens) : undefined,
-      completionTokens: row.output_tokens !== null && row.output_tokens !== undefined ? Number(row.output_tokens) : undefined,
-      executionId: row.id ? String(row.id) : undefined,
-    }));
+    return data.map((row) => {
+      const breakdownSource = row.breakdown_source === 'confirmed' || row.breakdown_source === 'unavailable'
+        ? row.breakdown_source
+        : 'estimated';
+      const hasConfirmedBreakdown = breakdownSource !== 'unavailable';
+      return {
+        date: String(row.created_at || currentDate()),
+        model: String(row.model || 'Unreported model'),
+        cost: roundUsd(Number(row.total_cost || 0)),
+        pricingVersion: row.pricing_version ? String(row.pricing_version) : undefined,
+        provider: row.provider ? String(row.provider) : undefined,
+        conversationId: row.conversation_id ? String(row.conversation_id) : undefined,
+        costStatus: (row.cost_status as FinanceEntry['costStatus']) || 'settled',
+        breakdownSource,
+        promptTokens: hasConfirmedBreakdown && row.input_tokens !== null && row.input_tokens !== undefined
+          ? Number(row.input_tokens)
+          : undefined,
+        completionTokens: hasConfirmedBreakdown && row.output_tokens !== null && row.output_tokens !== undefined
+          ? Number(row.output_tokens)
+          : undefined,
+        executionId: row.id ? String(row.id) : undefined,
+      };
+    });
   } catch (err) {
     throw err instanceof Error ? err : new Error('Could not load server cost records.');
   }
@@ -252,6 +269,7 @@ export function exportSpendToCsv(history: FinanceEntry[]): string {
     'Model',
     'Provider',
     'Cost Status',
+    'Breakdown',
     'Prompt Tokens',
     'Completion Tokens',
     'Cost (USD)',
@@ -270,9 +288,12 @@ export function exportSpendToCsv(history: FinanceEntry[]): string {
     escapeCsv(e.model),
     escapeCsv(e.provider || 'default'),
     escapeCsv(e.costStatus || 'settled'),
+    escapeCsv(e.breakdownSource || 'estimated'),
     e.promptTokens !== undefined ? String(e.promptTokens) : '',
     e.completionTokens !== undefined ? String(e.completionTokens) : '',
-    e.cost.toFixed(4),
+    // Export at storage precision (numeric(12,6)); toFixed(4) would export a
+    // $0.00003 component as 0.0000.
+    e.cost.toFixed(6),
   ]);
 
   return [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');

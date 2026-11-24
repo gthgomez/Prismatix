@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { CostStatus, MessageCost, RouterModel } from '../types';
 import { computeCostSavings } from '../utils/costSavingsCalculator';
+import { formatUsd } from '../utils/costFormat';
 
 export interface CostBadgeProps {
   cost?: MessageCost;
@@ -69,7 +70,7 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
       : status === 'unmetered'
       ? 'unmetered'
       : 'est';
-  const displayCost = value !== undefined ? `$${value.toFixed(4)} ${label}` : label;
+  const displayCost = value !== undefined ? `${formatUsd(value)} ${label}` : label;
 
   const analysis = computeCostSavings({
     model,
@@ -133,7 +134,7 @@ export const CostBadge: React.FC<CostBadgeProps> = ({
             <div className='cost-savings-banner'>
               <span className='savings-tag'>Price Illustration</span>
               <div className='savings-metric'>
-                Same tokens on frontier baseline (<code>{analysis.baselineModel}</code>): <strong>${analysis.baselineCostUsd.toFixed(4)}</strong>
+                Same tokens on frontier baseline (<code>{analysis.baselineModel}</code>): <strong>{formatUsd(analysis.baselineCostUsd)}</strong>
               </div>
             </div>
           )}

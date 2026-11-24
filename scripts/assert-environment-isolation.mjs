@@ -43,12 +43,22 @@ const anonKey = read('VITE_SUPABASE_ANON_KEY');
 const errors = [];
 const notes = [];
 
-function hostOf(value) {
+function parseUrl(value) {
   try {
-    return new URL(value).host.toLowerCase();
+    return new URL(value);
   } catch {
-    return '';
+    return null;
   }
+}
+
+function hostOf(value) {
+  return parseUrl(value)?.host.toLowerCase() ?? '';
+}
+
+function isProductionHost(host) {
+  // Match the project itself and any subdomain of it, so a crafted host like
+  // evil.sqjfbqjogylkfwzsyprd.supabase.co cannot slip past an equality check.
+  return host === productionHost || host.endsWith(`.${productionHost}`);
 }
 
 // Derived exactly as src/backendConfig.ts derives it, so the guard cannot pass
@@ -63,13 +73,13 @@ const productionHost = `${PRODUCTION_REF}.supabase.co`;
 
 // --- Rule 1: a non-production Vercel deployment may not target production ---
 if (isNonProductionTarget) {
-  if (effectiveHost === productionHost) {
+  if (isProductionHost(effectiveHost)) {
     errors.push(
       `VERCEL_ENV=${vercelEnv} resolves VITE_SUPABASE_URL to the production project ` +
         `(${productionHost}). Previews must point at a nonproduction Supabase project.`
     );
   }
-  if (hostOf(routerEndpoint) === productionHost) {
+  if (isProductionHost(hostOf(routerEndpoint))) {
     errors.push(
       `VERCEL_ENV=${vercelEnv} resolves VITE_ROUTER_ENDPOINT to the production project ` +
         `(${productionHost}). Previews must not call the production router.`
@@ -90,8 +100,32 @@ if (vercelEnv !== '') {
       );
     }
   }
-  if (effectiveUrl && !/^https?:\/\//i.test(effectiveUrl)) {
-    errors.push(`Resolved VITE_SUPABASE_URL is not an http(s) URL: ${effectiveUrl}`);
+  if (effectiveUrl) {
+    const parsed = parseUrl(effectiveUrl);
+    if (!parsed) {
+      errors.push(`Resolved VITE_SUPABASE_URL is not a valid URL: ${effectiveUrl}`);
+    } else {
+      if (parsed.protocol !== 'https:') {
+        errors.push(`Resolved VITE_SUPABASE_URL must use https on a deployed build: ${effectiveUrl}`);
+      }
+      if (parsed.username || parsed.password) {
+        errors.push('Resolved VITE_SUPABASE_URL must not embed credentials.');
+      }
+      if (['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsed.hostname.toLowerCase())) {
+        errors.push(
+          `VERCEL_ENV=${vercelEnv} resolves VITE_SUPABASE_URL to loopback (${parsed.hostname}); ` +
+            `a deployed preview cannot reach a developer machine.`
+        );
+      }
+    }
+  }
+  if (routerEndpoint) {
+    const parsedRouter = parseUrl(routerEndpoint);
+    if (!parsedRouter) {
+      errors.push(`VITE_ROUTER_ENDPOINT is not a valid URL: ${routerEndpoint}`);
+    } else if (parsedRouter.protocol !== 'https:') {
+      errors.push(`VITE_ROUTER_ENDPOINT must use https on a deployed build: ${routerEndpoint}`);
+    }
   }
 }
 

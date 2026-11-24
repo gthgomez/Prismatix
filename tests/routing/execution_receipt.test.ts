@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   TERMINAL_EXECUTION_STATUSES,
+  classifyBreakdownSource,
   deriveSettledBreakdown,
   projectReceipt,
   type RawReceiptCall,
@@ -137,7 +138,7 @@ describe('authoritative settled breakdown (PXQ-41)', () => {
   it('returns components that reconcile with the settled total', () => {
     const receipt = projectReceipt({
       execution: execution(),
-      calls: [call({ input_tokens: 40, output_tokens: 12, thinking_tokens: 0, input_cost: 0.00003, output_cost: 0.000045, thinking_cost: 0 })],
+      calls: [call({ input_tokens: 40, output_tokens: 12, thinking_tokens: 0, input_cost: 0.00003, output_cost: 0.000045, thinking_cost: 0, total_cost: 0.000075 })],
       reservation: reservation({ committed_usd: 0.000075 }),
     });
 
@@ -202,6 +203,91 @@ describe('authoritative settled breakdown (PXQ-41)', () => {
     });
 
     expect(deriveSettledBreakdown(receipt)).toBeNull();
+  });
+
+  it('rejects per-call errors that cancel out only in aggregate', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [
+        // Components 15 micros, total 16 micros.
+        call({ input_cost: 0.00001, output_cost: 0.000005, thinking_cost: 0, total_cost: 0.000016, input_tokens: 10, output_tokens: 5, thinking_tokens: 0 }),
+        // Components 42 micros, total 41 micros. Aggregate totals 57 micros and
+        // aggregate components 57 micros, so a sum-only check would pass.
+        call({ participant: 'openai', input_cost: 0.00002, output_cost: 0.000022, thinking_cost: 0, total_cost: 0.000041, input_tokens: 20, output_tokens: 7, thinking_tokens: 0 }),
+      ],
+      reservation: reservation({ committed_usd: 0.000057 }),
+    });
+
+    expect(deriveSettledBreakdown(receipt)).toBeNull();
+  });
+
+  it('rejects a reservation that disagrees with the settled call totals', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ input_cost: 0.00003, output_cost: 0.000045, thinking_cost: 0, total_cost: 0.000075, input_tokens: 40, output_tokens: 12, thinking_tokens: 0 })],
+      reservation: reservation({ committed_usd: 0.000076 }),
+    });
+
+    expect(deriveSettledBreakdown(receipt)).toBeNull();
+  });
+
+  it('reconciles at micro-USD precision for tiny amounts', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ input_cost: '0.000001', output_cost: 0, thinking_cost: 0, total_cost: '0.000001', input_tokens: 1, output_tokens: 0, thinking_tokens: 0 })],
+      reservation: reservation({ committed_usd: '0.000001' }),
+    });
+
+    expect(deriveSettledBreakdown(receipt)).toEqual({
+      promptTokens: 1,
+      completionTokens: 0,
+      reasoningTokens: 0,
+      inputCostUsd: 0.000001,
+      outputCostUsd: 0,
+      reasoningCostUsd: 0,
+      totalUsd: 0.000001,
+    });
+  });
+
+  it('rejects component money finer than the storage precision', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ input_cost: '0.0000004', output_cost: 0, thinking_cost: 0, total_cost: 0, input_tokens: 1, output_tokens: 0, thinking_tokens: 0 })],
+      reservation: reservation({ committed_usd: 0 }),
+    });
+
+    expect(deriveSettledBreakdown(receipt)).toBeNull();
+  });
+
+  it('treats a fully reconciled zero-cost call as a confirmed zero', () => {
+    const receipt = projectReceipt({
+      execution: execution(),
+      calls: [call({ input_cost: 0, output_cost: 0, thinking_cost: 0, total_cost: 0, input_tokens: 0, output_tokens: 0, thinking_tokens: 0 })],
+      reservation: reservation({ committed_usd: 0 }),
+    });
+
+    expect(deriveSettledBreakdown(receipt)).toMatchObject({
+      inputCostUsd: 0,
+      outputCostUsd: 0,
+      totalUsd: 0,
+    });
+  });
+
+  it('classifies breakdown provenance without conflating settled and estimated', () => {
+    const breakdown = {
+      promptTokens: 1,
+      completionTokens: 1,
+      reasoningTokens: 0,
+      inputCostUsd: 0.000001,
+      outputCostUsd: 0.000001,
+      reasoningCostUsd: 0,
+      totalUsd: 0.000002,
+    };
+    expect(classifyBreakdownSource(breakdown, 'settled')).toBe('confirmed');
+    expect(classifyBreakdownSource(null, 'settled')).toBe('unavailable');
+    expect(classifyBreakdownSource(null, 'pending')).toBe('estimated');
+    expect(classifyBreakdownSource(null, 'released')).toBe('estimated');
+    expect(classifyBreakdownSource(null, undefined)).toBe('estimated');
   });
 });
 

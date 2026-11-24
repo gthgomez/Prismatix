@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CONFIG } from '../config';
+import { formatUsd } from '../utils/costFormat';
 import { supabase } from '../lib/supabase';
 import {
   downloadSpendCsv,
@@ -55,11 +56,11 @@ function parseQualifiedSpend(value: unknown): QualifiedSpend | null {
 const SpendCard: React.FC<{ label: string; value: number | null; qualified?: SpendQualification }> = ({ label, value, qualified }) => (
   <div className='spend-card'>
     <div className='spend-label'>{label}</div>
-    <div className='spend-value'>{value === null ? '—' : `$${value.toFixed(4)}`}</div>
+    <div className='spend-value'>{value === null ? '—' : formatUsd(value)}</div>
     {qualified && <div className='spend-card-breakdown'>
-      <span>Recorded as settled ${qualified.settled.toFixed(4)}</span>
-      <span>Pending ${qualified.pending.toFixed(4)}</span>
-      <span>Legacy estimate ${qualified.estimatedLegacy.toFixed(4)}</span>
+      <span>Recorded as settled {formatUsd(qualified.settled)}</span>
+      <span>Pending {formatUsd(qualified.pending)}</span>
+      <span>Legacy estimate {formatUsd(qualified.estimatedLegacy)}</span>
     </div>}
   </div>
 );
@@ -294,7 +295,7 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
               <div className='spend-last'>
                 <div className="last-msg-row">
                   <span className="label">Last message</span>
-                  <span className="value">{lastSyncAt ? `$${stats.lastMessageCost.toFixed(6)}` : '—'}</span>
+                  <span className="value">{lastSyncAt ? formatUsd(stats.lastMessageCost) : '—'}</span>
                 </div>
                 <div className="msg-count-row">
                   <span className="label">Total messages</span>
@@ -377,12 +378,12 @@ export const SpendTracker: React.FC<SpendTrackerProps> = ({ refreshKey, userId }
                         <div>
                           <div style={{ fontWeight: 600, color: 'var(--color-text)' }}>{g.groupKey}</div>
                           <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                            {g.count} turn{g.count > 1 ? 's' : ''} • Locally marked settled: ${g.settledCost.toFixed(4)}
-                            {g.estimatedCost > 0 && ` • Est: $${g.estimatedCost.toFixed(4)}`}
+                            {g.count} turn{g.count > 1 ? 's' : ''} • Locally marked settled: {formatUsd(g.settledCost)}
+                            {g.estimatedCost > 0 && ` • Est: ${formatUsd(g.estimatedCost)}`}
                           </div>
                         </div>
                         <div style={{ fontWeight: 700, color: 'var(--color-primary, #4ecdc4)' }}>
-                          ${g.totalCost.toFixed(4)}
+                          {formatUsd(g.totalCost)}
                         </div>
                       </div>
                     ))}

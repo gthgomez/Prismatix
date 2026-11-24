@@ -30,6 +30,11 @@ import {
 } from './chatTypes';
 import '../styles/ChatInterface.css';
 
+// Shown when the user submits while provider readiness is still resolving.
+// It is intentionally transient: it clears as soon as the check completes and
+// never re-dispatches the preserved draft on the user's behalf.
+const PROVIDER_CHECKING_SEND_MESSAGE = 'Provider setup is still being checked. Please wait before sending.';
+
 interface CapabilityPillar {
   icon: string;
   title: string;
@@ -424,6 +429,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   useEffect(() => {
     setFirstRunOutcome((current) => reconcileFirstRunOutcome(current, openRouterProvider));
   }, [openRouterProvider]);
+
+  // R5: an early submit leaves a "still being checked" notice. Clear it when
+  // readiness resolves so the next Enter is processed normally. This effect
+  // never dispatches the preserved draft — sending always stays user-driven.
+  useEffect(() => {
+    if (!providerPlugins.loading) {
+      setSendValidationError((current) => (
+        current === PROVIDER_CHECKING_SEND_MESSAGE ? null : current
+      ));
+    }
+  }, [providerPlugins.loading]);
 
   // Single authoritative model preferences store (favorites, hidden models, provider tabs)
   const modelPreferences = useModelPickerPreferences(user?.id);
@@ -2933,7 +2949,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       setSendValidationError(providerPlugins.error
         ? 'Provider setup could not be checked. Retry the check or open Provider Settings.'
         : providerPlugins.loading
-          ? 'Provider setup is still being checked. Please wait before sending.'
+          ? PROVIDER_CHECKING_SEND_MESSAGE
           : providerVerificationRequiresAction
             ? routeRecoveryApplies
               ? 'The router recently rejected this route. Verify or update its provider before retrying.'
@@ -3409,6 +3425,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       ? 'history'
       : hasPendingVideoUploads
       ? 'video'
+      : providerPlugins.loading
+      ? 'provider-checking'
       : sendValidationError || conversationLoadError
         ? 'invalid'
         : !providerCanAttemptRouterSend
@@ -4345,6 +4363,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         duplicateNotice={duplicateNotice}
         composerValidationView={composerValidationView}
         providerSetupBlocked={messages.length === 0 && !providerCanAttemptRouterSend}
+        providerSetupChecking={providerPlugins.loading}
         providerSetupNeedsEnable={!providerPlugins.isConfigured && providerPlugins.providers.some((provider) => provider.hasKey && !provider.enabled)}
         providerSetupVerifyAvailable={messages.length === 0 && Boolean(failedTurnDraft) && providerPlugins.isConfigured && !providerPlugins.loading && !providerPlugins.error && !providerVerified}
         onVerifyProviderKeys={() => void handleVerifyProviders()}

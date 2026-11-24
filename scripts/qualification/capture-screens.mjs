@@ -6,10 +6,32 @@
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { resolveQualificationEnvironment } from './env-contract.mjs';
+
+let target;
+try {
+  target = resolveQualificationEnvironment(process.env, { requireAnonKey: false });
+} catch (error) {
+  console.error(`capture-screens: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
 
 const APP = process.env.APP_URL ?? 'http://127.0.0.1:4174';
+const APP_HOST = (() => {
+  try {
+    return new URL(APP).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+})();
+const appIsLoopback = ['127.0.0.1', 'localhost', '::1'].includes(APP_HOST);
+if (!appIsLoopback) {
+  console.error(`capture-screens: APP_URL must be the qualification preview (loopback), got ${APP}`);
+  process.exit(1);
+}
+
 const OUT = resolve(process.env.SCREENSHOT_DIR ?? 'docs/engineering/campaigns/evidence/2026-11-24/screens');
-const STUB = process.env.STUB_URL ?? 'http://127.0.0.1:8899';
+const STUB = target.stubUrl;
 const USER = { email: 'qual-a@example.test', password: 'qual-pass-a-1234' };
 const WIDTHS = (process.env.SCREEN_WIDTHS ?? '360,390,768,1440').split(',').map(Number);
 const THEMES = (process.env.SCREEN_THEMES ?? 'light,dark').split(',');

@@ -109,12 +109,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The main-branch upgrade gate reconstructs the real baseline.
+          fetch-depth: 0
       # Fresh install: every migration applies to an empty database.
       - run: bash tests/integration/run-fresh-replay.sh
       # Existing install: every migration also applies over a database that
       # already has the scheduler rows a live project carries. This is the case
       # that a session-GUC-gated cron migration broke.
       - run: bash tests/integration/run-existing-install-replay.sh
+      # Genuine upgrade: baseline built from the actual main migration set,
+      # historical data seeded, then upgraded by the real CLI runner.
+      - name: Upgrade an actual main installation
+        run: bash tests/integration/run-main-upgrade.sh
+
+  real-backend:
+    name: Real backend · Supabase + Edge + browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Isolated real-backend qualification
+        env:
+          SUPABASE_CLI_VERSION: '2.98.2'
+        run: bash scripts/qualification/ci-real-backend.sh
+      - name: Upload real-backend diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-backend-${{ github.sha }}
+          path: |
+            /tmp/stub-provider.log
+            /tmp/functions-serve.log
+            /tmp/seed.log
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
 
   environment-isolation:
     name: Environment isolation
@@ -147,3 +182,37 @@ jobs:
           VITE_SUPABASE_ANON_KEY: synthetic-anon-key
           VITE_ROUTER_ENDPOINT: https://abcdefghijklmnopqrst.supabase.co/functions/v1/router
         run: node scripts/assert-environment-isolation.mjs
+      # The qualification scripts share an identity-based target contract; the
+      # self-test proves unsafe targets fail before any request is made.
+      - name: Qualification environment contract negative controls
+        run: node scripts/qualification/env-contract.selftest.mjs
+      - name: Reject a malformed preview URL
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: 'not a url'
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+        run: |
+          if node scripts/assert-environment-isolation.mjs; then
+            echo "::error::isolation guard accepted a malformed URL"
+            exit 1
+          fi
+      - name: Reject a loopback preview
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: http://127.0.0.1:54321
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+        run: |
+          if node scripts/assert-environment-isolation.mjs; then
+            echo "::error::isolation guard accepted a loopback preview"
+            exit 1
+          fi
+      - name: Reject a production subdomain
+        env:
+          VERCEL_ENV: preview
+          VITE_SUPABASE_URL: https://evil.sqjfbqjogylkfwzsyprd.supabase.co
+          VITE_SUPABASE_ANON_KEY: synthetic-anon-key
+        run: |
+          if node scripts/assert-environment-isolation.mjs; then
+            echo "::error::isolation guard accepted a production subdomain"
+            exit 1
+          fi

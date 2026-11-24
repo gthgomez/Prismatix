@@ -8,9 +8,18 @@
 // No live provider: the router is backed by the deterministic stub.
 
 import { randomUUID } from 'node:crypto';
+import { resolveQualificationEnvironment } from './env-contract.mjs';
 
-const SUPABASE_URL = (process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321').replace(/\/$/, '');
-const ANON_KEY = process.env.SUPABASE_ANON_KEY ?? '';
+let target;
+try {
+  target = resolveQualificationEnvironment(process.env);
+} catch (error) {
+  console.error(`isolation: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
+
+const SUPABASE_URL = target.supabaseUrl;
+const ANON_KEY = target.anonKey;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
 
 if (!ANON_KEY || !SERVICE_ROLE_KEY) {

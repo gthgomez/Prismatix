@@ -5,12 +5,22 @@
 //   * one enabled OpenRouter BYOK row per identity (non-secret fixture key);
 //   * verification that the signup trigger created an access grant.
 //
-// Safety: refuses to run against a hosted project unless
-// ALLOW_NONLOCAL_SEED=1 is set explicitly, and never prints key material.
+// Safety: the shared qualification contract authorizes loopback automatically
+// and a hosted target only when its project ref is explicitly allowlisted as a
+// nonproduction staging identity. A boolean override is not sufficient.
+import { resolveQualificationEnvironment } from './env-contract.mjs';
 
-const SUPABASE_URL = (process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321').replace(/\/$/, '');
+let target;
+try {
+  target = resolveQualificationEnvironment(process.env, { requireAnonKey: false });
+} catch (error) {
+  console.error(`seed: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
+
+const SUPABASE_URL = target.supabaseUrl;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
-const ANON_KEY = process.env.SUPABASE_ANON_KEY ?? '';
+const ANON_KEY = target.anonKey;
 
 // Non-secret fixtures that encrypt only a fake provider credential.
 const BYOK_ENCRYPTION_KEY = Buffer.from('0123456789abcdef0123456789abcdef').toString('base64');
@@ -22,22 +32,8 @@ const USERS = [
   { email: 'qual-b@example.test', password: 'qual-pass-b-1234' },
 ];
 
-function isLocal(url) {
-  try {
-    const host = new URL(url).hostname;
-    return host === '127.0.0.1' || host === 'localhost' || host === '::1';
-  } catch {
-    return false;
-  }
-}
-
 if (!SERVICE_ROLE_KEY) {
   console.error('seed: SUPABASE_SERVICE_ROLE_KEY is required');
-  process.exit(1);
-}
-
-if (!isLocal(SUPABASE_URL) && process.env.ALLOW_NONLOCAL_SEED !== '1') {
-  console.error(`seed: refusing to seed a non-local target (${SUPABASE_URL}). Set ALLOW_NONLOCAL_SEED=1 to override.`);
   process.exit(1);
 }
 

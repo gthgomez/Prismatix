@@ -127,16 +127,19 @@ export const TERMINAL_EXECUTION_STATUSES: ReadonlySet<ExecutionReceiptStatus> = 
 ]);
 
 /** numeric(12,6) may arrive as a string from PostgREST. Reject invalid money. */
+const MICRO_USD = 1_000_000;
+
 function parseUsd(value: number | string | null | undefined): number | undefined {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && value >= 0 ? value : undefined;
-  }
-  if (typeof value === 'string') {
-    if (value.trim() === '') return undefined;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-  }
-  return undefined;
+  if (typeof value !== 'number' && typeof value !== 'string') return undefined;
+  if (typeof value === 'string' && value.trim() === '') return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  // The column cannot store sub-micro amounts. A value with finer precision is
+  // malformed (or from another unit); treating it as valid would let rounding
+  // silently change money.
+  const micros = parsed * MICRO_USD;
+  if (Math.abs(micros - Math.round(micros)) > 0.25) return undefined;
+  return parsed;
 }
 
 /** Token counts must be non-negative integers; anything else is unknown. */
@@ -272,6 +275,36 @@ export interface SettledBreakdown {
   totalUsd: number;
 }
 
+export type CostBreakdownSource = 'confirmed' | 'estimated' | 'unavailable';
+
+/**
+ * Provenance of the cost-log component columns.
+ *
+ *   confirmed   – settled total with a fully reconciled per-call breakdown;
+ *   unavailable – settled total, but no confirmed breakdown exists. Components
+ *                 must not be presented as confirmed (and are zeroed by the
+ *                 writer so no consumer can sum fabricated usage);
+ *   estimated   – the total itself is not settled, so components are estimates.
+ */
+export function classifyBreakdownSource(
+  breakdown: SettledBreakdown | null,
+  settlementState: SettlementState | undefined,
+): CostBreakdownSource {
+  if (breakdown) return 'confirmed';
+  if (settlementState === 'settled') return 'unavailable';
+  return 'estimated';
+}
+
+/**
+ * Money is stored as numeric(12,6). Reconciliation is therefore done in whole
+ * micro-USD (the storage unit), never in floating-point dollars: a 2e-6
+ * "tolerance" is 7% of a $0.00003 component and would let materially wrong
+ * breakdowns pass as reconciled.
+ */
+function toMicroUsd(value: number): number {
+  return Math.round(value * MICRO_USD);
+}
+
 export function deriveSettledBreakdown(receipt: TerminalReceipt): SettledBreakdown | null {
   if (receipt.settlement.state !== 'settled' || receipt.calls.length === 0) {
     return null;
@@ -279,36 +312,47 @@ export function deriveSettledBreakdown(receipt: TerminalReceipt): SettledBreakdo
   let promptTokens = 0;
   let completionTokens = 0;
   let reasoningTokens = 0;
-  let inputCostUsd = 0;
-  let outputCostUsd = 0;
-  let reasoningCostUsd = 0;
+  let inputMicros = 0;
+  let outputMicros = 0;
+  let reasoningMicros = 0;
+  let callTotalMicros = 0;
   for (const call of receipt.calls) {
     if (call.costStatus !== 'settled' || !call.usage || !call.costs) {
+      return null;
+    }
+    const callInput = toMicroUsd(call.costs.inputUsd);
+    const callOutput = toMicroUsd(call.costs.outputUsd);
+    const callThinking = toMicroUsd(call.costs.thinkingUsd);
+    const callTotal = toMicroUsd(call.totalCost);
+    // Every call must reconcile on its own. Summing first would let two calls
+    // with opposite errors cancel out and look authoritative in aggregate.
+    if (callInput + callOutput + callThinking !== callTotal) {
       return null;
     }
     promptTokens += call.usage.promptTokens;
     completionTokens += call.usage.completionTokens;
     reasoningTokens += call.usage.reasoningTokens;
-    inputCostUsd += call.costs.inputUsd;
-    outputCostUsd += call.costs.outputUsd;
-    reasoningCostUsd += call.costs.thinkingUsd;
+    inputMicros += callInput;
+    outputMicros += callOutput;
+    reasoningMicros += callThinking;
+    callTotalMicros += callTotal;
   }
-  const totalUsd = receipt.settlement.committedUsd;
-  const componentSum = inputCostUsd + outputCostUsd + reasoningCostUsd;
-  // Each stored component is numeric(12,6); summing N rows can drift by at
-  // most N*0.5e-6 from the settled amount. Anything larger is a real
-  // disagreement, not rounding, and must not be presented as a breakdown.
-  const tolerance = 1e-6 * (receipt.calls.length + 1);
-  if (Math.abs(componentSum - totalUsd) > tolerance) {
+  const settledMicros = toMicroUsd(receipt.settlement.committedUsd);
+  // The reservation the money was committed from must equal the calls it was
+  // committed for, and the components must equal both.
+  if (
+    callTotalMicros !== settledMicros
+    || inputMicros + outputMicros + reasoningMicros !== settledMicros
+  ) {
     return null;
   }
   return {
     promptTokens,
     completionTokens,
     reasoningTokens,
-    inputCostUsd: roundUsd(inputCostUsd),
-    outputCostUsd: roundUsd(outputCostUsd),
-    reasoningCostUsd: roundUsd(reasoningCostUsd),
-    totalUsd: roundUsd(totalUsd),
+    inputCostUsd: inputMicros / MICRO_USD,
+    outputCostUsd: outputMicros / MICRO_USD,
+    reasoningCostUsd: reasoningMicros / MICRO_USD,
+    totalUsd: settledMicros / MICRO_USD,
   };
 }

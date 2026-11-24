@@ -20,7 +20,14 @@
 import { createServer } from 'node:http';
 
 const PORT = Number(process.env.STUB_PORT ?? 8899);
-const HOST = '127.0.0.1';
+// Loopback by default. CI runs the stub on an isolated machine and needs the
+// Edge runtime container to reach it through the Docker bridge gateway, so a
+// non-loopback bind is allowed only when explicitly opted in.
+const HOST = process.env.STUB_HOST ?? '127.0.0.1';
+if (!['127.0.0.1', 'localhost', '::1'].includes(HOST) && process.env.STUB_ALLOW_NETWORK_BIND !== '1') {
+  console.error(`[stub-provider] refusing non-loopback bind ${HOST}; set STUB_ALLOW_NETWORK_BIND=1 only on an isolated CI host`);
+  process.exit(1);
+}
 const TEXT = process.env.STUB_TEXT ?? 'Prismatix deterministic stub response.';
 const EXPECTED_KEY = process.env.STUB_EXPECTED_KEY ?? 'fake-byok-provider-key';
 const DELAY_MS = Number(process.env.STUB_DELAY_MS ?? 250);

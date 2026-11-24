@@ -9,31 +9,24 @@
 //   STUB_URL                  default http://127.0.0.1:8899
 //   PLAYWRIGHT_PORT           default 4174
 //
-// Safety: refuses a non-local SUPABASE_URL unless ALLOW_NONLOCAL_QUALIFICATION=1.
+// Safety: the shared qualification contract authorizes loopback automatically
+// and a hosted target only when its project ref is explicitly allowlisted as a
+// nonproduction staging identity. A boolean override is not sufficient.
 // Never run this against production: it seeds and writes disposable data.
 
 import { spawnSync } from 'node:child_process';
+import { resolveQualificationEnvironment } from './env-contract.mjs';
 
-const SUPABASE_URL = (process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321').replace(/\/$/, '');
-const ANON_KEY = process.env.SUPABASE_ANON_KEY ?? '';
-
-function isLocal(url) {
-  try {
-    const host = new URL(url).hostname;
-    return host === '127.0.0.1' || host === 'localhost' || host === '::1';
-  } catch {
-    return false;
-  }
-}
-
-if (!ANON_KEY) {
-  console.error('run-real-e2e: SUPABASE_ANON_KEY is required (supabase status -o env)');
+let target;
+try {
+  target = resolveQualificationEnvironment(process.env);
+} catch (error) {
+  console.error(`run-real-e2e: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 }
-if (!isLocal(SUPABASE_URL) && process.env.ALLOW_NONLOCAL_QUALIFICATION !== '1') {
-  console.error(`run-real-e2e: refusing non-local SUPABASE_URL ${SUPABASE_URL}`);
-  process.exit(1);
-}
+
+const SUPABASE_URL = target.supabaseUrl;
+const ANON_KEY = target.anonKey;
 
 function run(command, args, env) {
   console.log(`\n[run-real-e2e] ${command} ${args.join(' ')}`);
@@ -59,6 +52,8 @@ const buildEnv = {
 run('npm', ['run', 'build'], buildEnv);
 run('npx', ['playwright', 'test', '--config=playwright.real.config.ts', ...process.argv.slice(2)], {
   ...buildEnv,
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY: ANON_KEY,
   PLAYWRIGHT_PORT: process.env.PLAYWRIGHT_PORT ?? '4174',
   STUB_URL: process.env.STUB_URL ?? 'http://127.0.0.1:8899',
 });

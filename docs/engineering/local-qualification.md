@@ -11,8 +11,24 @@ It never contacts a live AI provider. The router is pointed at
 
 ## Safety contract
 
-- Everything below is local (`127.0.0.1`). The seed script refuses any
-  non-loopback `SUPABASE_URL` unless `ALLOW_NONLOCAL_QUALIFICATION=1` is set.
+All qualification scripts resolve their target through
+`scripts/qualification/env-contract.mjs`:
+
+- loopback (`127.0.0.1` / `localhost` / `::1`) is allowed automatically;
+- a hosted target is allowed **only** when its hostname is a
+  `<project-ref>.supabase.co` identity whose ref is listed in
+  `QUALIFICATION_ALLOWED_PROJECT_REFS` **and**
+  `QUALIFICATION_ENVIRONMENT=staging|preview`;
+- the production ref is denied unconditionally, even if allowlisted;
+- a remote stub provider requires `QUALIFICATION_ALLOWED_STUB_HOSTS`;
+- the router endpoint must share the Supabase host;
+- a boolean such as `ALLOW_NONLOCAL_QUALIFICATION` is never sufficient.
+
+`npm run qual:env` runs the negative controls for this contract (14 cases,
+including production, production subdomains, malformed URLs, embedded
+credentials, router-host mismatch and remote stubs). Run it before any hosted
+qualification.
+
 - `OPENROUTER_BASE_URL` is set only in `supabase/functions/.env`, which is
   gitignored. Never copy it into hosted secrets.
 - Do not reuse these credentials or fixtures in a hosted project. Production
@@ -44,11 +60,19 @@ npx --yes supabase@2.98.2 status -o env
 ```
 
 Migrations are applied by `supabase start` through the real migration runner
-(`supabase/migrations`, 33 files at this commit). To replay from scratch:
+(`supabase/migrations`, 34 files at this commit, including the cost-log
+breakdown-provenance migration). To replay from scratch:
 
 ```powershell
 npx --yes supabase@2.98.2 db reset
 ```
+
+**Start a full browser run from a clean database.** Every turn reserves budget
+(up to `$0.10` per execution) against the test user's `$0.50` daily grant.
+Failed or cancelled turns can leave `pending_reconcile` holds, and repeated runs
+without a reset eventually produce `402 insufficient_budget` — which looks like
+a broken app but is fixture exhaustion. `db reset` + `qual:seed` is the
+deterministic setup the CI job uses.
 
 ## Seed identities and provider material
 
@@ -106,14 +130,38 @@ must match the preview origin — the router locks CORS to it.
 
 | Command | Proves |
 |---|---|
-| `npm run qual:smoke` | Auth → RLS insert → router → stub → settled receipt → cost log → persisted messages |
+| `npm run qual:env` | 14 negative controls for the shared environment contract |
+| `npm run qual:smoke` | Acceptance gate: fixture content, execution identity, settled receipt, 40/12 provider tokens, independently computed `$0.000075` total, components reconcile, exactly one chat call, two messages, no duplicate settlement — plus 10 negative controls that must be rejected and the `pending/estimated` and `settled/confirmed-zero` breakdown states |
 | `npm run qual:isolation` | 14 cross-account / anonymous / service-role boundary checks against real RLS |
-| `npm run qual:e2e` | Builds against the local stack and runs `tests/e2e-real/` in Chromium (persistence, mid-stream stop, account isolation, mobile) |
+| `npm run qual:e2e` | Builds against the local stack and runs `tests/e2e-real/` (persistence, mid-stream stop, account isolation, provider-readiness race, mobile) |
 | `npm run qual:screens` | Desktop/mobile light+dark screenshots under `docs/engineering/campaigns/evidence/` |
+| `npm run qual:ci` | The whole sequence above on a Linux host (used by the `real-backend` CI job) |
+
+The smoke gate fails with a non-zero exit and a labelled failure list when a
+business invariant is wrong; it is not a diagnostic printer. Expected money is
+derived from the reviewed tariff constant and the stub fixture, not from the
+implementation under test.
 
 The real E2E config (`playwright.real.config.ts`) sets
 `reuseExistingServer: false` so it always serves a freshly built bundle on
-port 4174.
+port 4174. Its `beforeAll` warms the Edge runtime once so a cold module compile
+is not mistaken for a stuck generation. Call counts exclude the separately
+metered background memory extraction (`stream_options.include_usage`).
+
+## CI
+
+`.github/workflows/ci.yml` runs:
+
+- `Migrations · fresh + existing install` — fresh replay, the cron-surface
+  replay, and `tests/integration/run-main-upgrade.sh`, which builds a baseline
+  from **origin/main's actual migration set**, seeds historical/invalid rows,
+  then upgrades with `supabase migration up --db-url` and verifies history,
+  NOT VALID guards, preserved totals and preserved reservations.
+- `Environment isolation` — the Vercel guard plus the qualification contract
+  negative controls.
+- `Real backend · Supabase + Edge + browser` — boots the stack, applies
+  migrations, serves the Edge functions against the stub, seeds identities,
+  runs the acceptance gate, isolation checks and the real Chromium suite.
 
 ## Cleanup
 

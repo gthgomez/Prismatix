@@ -1,21 +1,53 @@
 #!/usr/bin/env node
-// Direct, non-browser qualification of the REAL router Edge function against
-// the local Supabase stack + deterministic stub provider.
+// Acceptance gate for the REAL router Edge function against the local Supabase
+// stack + deterministic stub provider.
 //
-// Proves: Auth -> PostgREST/RLS -> router -> provider stub -> ledger/receipt.
-// No live provider call, no mocked network.
+// Unlike a diagnostic smoke run, this script FAILS (exit 1) when a business
+// invariant is wrong: a wrong total, missing message, wrong token counts,
+// duplicate execution, unexpected provider call, or a malformed receipt.
+// Expected money is derived from the reviewed provider tariff below and the
+// stub fixture's usage — never from the implementation under test.
 
 import { randomUUID } from 'node:crypto';
+import { resolveQualificationEnvironment } from './env-contract.mjs';
 
-const SUPABASE_URL = (process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321').replace(/\/$/, '');
-const ANON_KEY = process.env.SUPABASE_ANON_KEY ?? '';
-const STUB_URL = (process.env.STUB_URL ?? 'http://127.0.0.1:8899').replace(/\/$/, '');
+let target;
+try {
+  target = resolveQualificationEnvironment(process.env);
+} catch (error) {
+  console.error(`smoke: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
+
+const SUPABASE_URL = target.supabaseUrl;
+const ANON_KEY = target.anonKey;
+const STUB_URL = target.stubUrl;
 const EMAIL = process.env.QUAL_EMAIL ?? 'qual-a@example.test';
 const PASSWORD = process.env.QUAL_PASSWORD ?? 'qual-pass-a-1234';
+const QUERY = 'Qualification acceptance prompt.';
 
-if (!ANON_KEY) {
-  console.error('smoke: SUPABASE_ANON_KEY is required');
-  process.exit(1);
+// Stub fixture (scripts/qualification/stub-provider.mjs, `default` scenario).
+const FIXTURE = {
+  content: process.env.STUB_TEXT ?? 'Prismatix deterministic stub response.',
+  promptTokens: 40,
+  completionTokens: 12,
+  provider: 'openrouter',
+  model: /gemini-3\.8-flash/i,
+};
+
+// Reviewed Gemini 3.8 Flash tariff, USD per 1M tokens (2026-11-24). Kept
+// independent of src/pricingRegistry.ts / model_tariff.ts so a regression in
+// the tariff cannot silently redefine the expected result.
+const TARIFF = { inputPerM: 0.75, outputPerM: 3.75 };
+const EXPECTED = {
+  inputCostUsd: (FIXTURE.promptTokens * TARIFF.inputPerM) / 1_000_000,
+  outputCostUsd: (FIXTURE.completionTokens * TARIFF.outputPerM) / 1_000_000,
+};
+EXPECTED.totalCostUsd = Math.round((EXPECTED.inputCostUsd + EXPECTED.outputCostUsd) * 1_000_000) / 1_000_000;
+
+const MICRO = 1_000_000;
+function micros(value) {
+  return Math.round(Number(value) * MICRO);
 }
 
 async function json(response) {
@@ -55,11 +87,11 @@ async function createConversation(token, userId) {
   return id;
 }
 
-async function stub(scenario) {
-  const response = await fetch(`${STUB_URL}/__control`, {
+async function stubControl(path, scenario) {
+  const response = await fetch(`${STUB_URL}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ scenario }),
+    ...(path === '/__control' ? { body: JSON.stringify({ scenario }) } : {}),
   });
   return json(response);
 }
@@ -82,21 +114,32 @@ async function runTurn(token, conversationId, query) {
 
   const headers = Object.fromEntries(response.headers.entries());
   const text = await response.text();
-  const events = text
-    .split('\n\n')
-    .map((block) => block.trim())
-    .filter((block) => block.startsWith('data: '))
-    .map((block) => block.slice(6))
-    .filter((payload) => payload !== '[DONE]')
-    .map((payload) => {
-      try {
-        return JSON.parse(payload);
-      } catch {
-        return { unparsed: payload.slice(0, 120) };
-      }
-    });
+  const events = [];
+  for (const block of text.split('\n\n')) {
+    const line = block.trim();
+    if (!line.startsWith('data: ')) continue;
+    const payload = line.slice(6);
+    if (payload === '[DONE]') continue;
+    try {
+      events.push(JSON.parse(payload));
+    } catch {
+      events.push({ malformed: payload.slice(0, 120) });
+    }
+  }
 
-  return { status: response.status, headers, events, rawLength: text.length };
+  return {
+    status: response.status,
+    contentType: headers['content-type'] ?? '',
+    executionId: headers['x-prismatix-execution-id'] ?? null,
+    model: headers['x-router-model-id'] ?? null,
+    provider: headers['x-provider'] ?? null,
+    events,
+    content: events
+      .filter((event) => event.type === 'content_block_delta')
+      .map((event) => event.delta?.text ?? '')
+      .join(''),
+    rawLength: text.length,
+  };
 }
 
 async function fetchReceipt(token, executionId) {
@@ -128,40 +171,312 @@ async function readMessages(token, conversationId) {
   return { status: response.status, body: await json(response) };
 }
 
+/** Bounded readiness polling instead of a fixed sleep. */
+async function waitFor(read, predicate, { label, timeoutMs = 15000, intervalMs = 150 }) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  while (Date.now() < deadline) {
+    last = await read();
+    if (predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`timed out waiting for ${label}; last=${JSON.stringify(last)?.slice(0, 400)}`);
+}
+
+class AcceptanceError extends Error {
+  constructor(failures) {
+    super(`${failures.length} acceptance failure(s): ${failures.map((f) => f.label).join('; ')}`);
+    this.failures = failures;
+  }
+}
+
+/**
+ * Pure invariant check. Exported for negative controls: mutating the evidence
+ * must make this throw.
+ */
+export function validateTurnEvidence(evidence) {
+  const failures = [];
+  const check = (condition, label, detail) => {
+    if (!condition) failures.push({ label, detail });
+  };
+  const { turn, receipt, costLogs, messages, providerCalls, userId, conversationId } = evidence;
+  const receiptBody = receipt?.body?.receipt;
+
+  check(turn.status === 200, 'router HTTP status is 200', turn.status);
+  check(/text\/event-stream/i.test(turn.contentType), 'router returns an SSE stream', turn.contentType);
+  check(Boolean(turn.executionId), 'router reports an execution id', turn.executionId);
+  check(
+    !turn.events.some((event) => event.malformed !== undefined),
+    'every SSE data frame is valid JSON',
+    turn.events.filter((event) => event.malformed !== undefined),
+  );
+  check(turn.content === FIXTURE.content, 'assistant content matches the fixture', turn.content);
+  check(FIXTURE.provider === turn.provider, 'router reports the expected provider', turn.provider);
+  check(FIXTURE.model.test(String(turn.model ?? '')), 'router reports the expected model', turn.model);
+
+  check(receipt?.status === 200, 'receipt action returns 200', receipt?.status);
+  check(Boolean(receiptBody), 'receipt body carries a receipt', receipt?.body);
+  check(receiptBody?.executionId === turn.executionId, 'receipt belongs to this execution', receiptBody?.executionId);
+  check(receiptBody?.status === 'completed', 'receipt status is completed', receiptBody?.status);
+  check(receiptBody?.settlement?.state === 'settled', 'receipt settlement is settled', receiptBody?.settlement);
+  check(
+    receiptBody?.settlement?.committedUsd !== undefined
+      && micros(receiptBody.settlement.committedUsd) === micros(EXPECTED.totalCostUsd),
+    'settled amount equals the independently computed total',
+    { actual: receiptBody?.settlement?.committedUsd, expected: EXPECTED.totalCostUsd },
+  );
+  check(
+    Array.isArray(receiptBody?.calls)
+      && receiptBody.calls.length > 0
+      && receiptBody.calls.every((call) => call.costStatus === 'settled'),
+    'every ledger call is settled',
+    receiptBody?.calls,
+  );
+
+  check(costLogs?.status === 200, 'cost-log read returns 200', costLogs?.status);
+  const rows = Array.isArray(costLogs?.body) ? costLogs.body : [];
+  check(rows.length === 1, 'exactly one cost-log row for the turn', rows.length);
+  const row = rows[0] ?? {};
+  check(row.user_id === userId, 'cost log belongs to the signed-in account', row.user_id);
+  check(row.conversation_id === conversationId, 'cost log belongs to the conversation', row.conversation_id);
+  check(row.idempotency_key === turn.executionId, 'cost log idempotency key is the execution id', row.idempotency_key);
+  check(row.cost_status === 'settled', 'cost-log status is settled', row.cost_status);
+  check(row.breakdown_source === 'confirmed', 'cost-log breakdown is confirmed', row.breakdown_source);
+  check(Number(row.input_tokens) === FIXTURE.promptTokens, 'input token count matches provider usage', row.input_tokens);
+  check(Number(row.output_tokens) === FIXTURE.completionTokens, 'output token count matches provider usage', row.output_tokens);
+  check(micros(row.input_cost) === micros(EXPECTED.inputCostUsd), 'input cost matches the tariff', row.input_cost);
+  check(micros(row.output_cost) === micros(EXPECTED.outputCostUsd), 'output cost matches the tariff', row.output_cost);
+  check(micros(row.total_cost) === micros(EXPECTED.totalCostUsd), 'total cost matches the tariff', row.total_cost);
+  check(
+    micros(row.input_cost) + micros(row.output_cost) + micros(row.thinking_cost) === micros(row.total_cost),
+    'cost-log components reconcile with the total',
+    { input: row.input_cost, output: row.output_cost, thinking: row.thinking_cost, total: row.total_cost },
+  );
+
+  const messageRows = Array.isArray(messages?.body) ? messages.body : [];
+  check(messages?.status === 200, 'message read returns 200', messages?.status);
+  check(messageRows.length === 2, 'exactly one user and one assistant message', messageRows.length);
+  check(messageRows[0]?.role === 'user' && messageRows[0]?.content === QUERY, 'user message persisted verbatim', messageRows[0]);
+  check(messageRows[1]?.role === 'assistant' && messageRows[1]?.content === FIXTURE.content, 'assistant message persisted', messageRows[1]);
+  check(messageRows.filter((m) => m.role === 'assistant').length === 1, 'assistant message is not duplicated', messageRows);
+
+  check(providerCalls.length >= 1, 'the turn dispatched a provider call', providerCalls);
+  // Memory extraction is a separately admitted, metered execution that asks
+  // for usage frames. Only `include_usage: false` calls are the chat turn.
+  const chatCalls = providerCalls.filter((call) => call.hasUsageOption === false);
+  check(chatCalls.length === 1, 'exactly one chat provider call', chatCalls);
+  check(chatCalls.every((call) => call.authMatched === true), 'the chat call carries the decrypted BYOK key', chatCalls);
+  check(
+    providerCalls.filter((call) => call.hasUsageOption === true).length <= 1,
+    'at most one background extraction call (independently metered)',
+    providerCalls.filter((call) => call.hasUsageOption === true),
+  );
+
+  if (failures.length > 0) throw new AcceptanceError(failures);
+}
+
+function negativeControls(evidence) {
+  const mutations = [
+    ['wrong settled total', (copy) => { copy.receipt.body.receipt.settlement.committedUsd = 0.000076; }],
+    ['wrong input tokens', (copy) => { copy.costLogs.body[0].input_tokens = 127; }],
+    ['wrong total cost', (copy) => { copy.costLogs.body[0].total_cost = 0.000074; }],
+    ['unconfirmed breakdown labelled settled', (copy) => { copy.costLogs.body[0].breakdown_source = 'estimated'; }],
+    ['missing assistant message', (copy) => { copy.messages.body = [copy.messages.body[0]]; }],
+    ['duplicate assistant message', (copy) => { copy.messages.body.push({ ...copy.messages.body[1], id: 'duplicate' }); }],
+    ['extra chat provider call', (copy) => { copy.providerCalls.push({ ...copy.providerCalls[0] }); }],
+    ['malformed receipt state', (copy) => { copy.receipt.body.receipt.settlement.state = 'pending'; }],
+    ['wrong assistant content', (copy) => { copy.turn.content = 'different text'; }],
+    ['duplicate cost log', (copy) => { copy.costLogs.body.push({ ...copy.costLogs.body[0] }); }],
+  ];
+
+  const results = [];
+  for (const [label, mutate] of mutations) {
+    const copy = structuredClone(evidence);
+    mutate(copy);
+    let rejected = false;
+    try {
+      validateTurnEvidence(copy);
+    } catch (error) {
+      rejected = error instanceof AcceptanceError;
+    }
+    results.push({ label, rejected });
+  }
+  const missed = results.filter((item) => !item.rejected);
+  if (missed.length > 0) {
+    throw new Error(`negative controls were NOT rejected: ${missed.map((item) => item.label).join(', ')}`);
+  }
+  return results;
+}
+
+/**
+ * R1 real-backend probes for the non-happy breakdown states.
+ *
+ * no-usage: the provider reports no usage, so the execution stays PENDING and
+ *           the cost log must say `estimated` (total and components both
+ *           estimates that reconcile with each other — never "confirmed").
+ * zero:     a settled zero-cost turn must be `confirmed` with zero components,
+ *           which is different from an unavailable breakdown.
+ */
+async function runBreakdownProbes(token, userId) {
+  const failures = [];
+  const check = (condition, label, detail) => {
+    if (!condition) failures.push({ label, detail });
+  };
+
+  for (const [scenario, query] of [
+    ['no-usage', 'No-usage breakdown probe.'],
+    ['zero', 'Zero-cost breakdown probe.'],
+  ]) {
+    await stubControl('/__control', scenario);
+    const conversationId = await createConversation(token, userId);
+    const before = await stubRequests();
+    const turn = await runTurn(token, conversationId, query);
+    const receiptResponse = turn.executionId
+      ? await waitFor(
+        () => fetchReceipt(token, turn.executionId),
+        (value) => value.status === 200 && Boolean(value.body?.receipt ?? value.body?.executionId),
+        { label: `${scenario} receipt` },
+      )
+      : { status: 0, body: null };
+    const receipt = receiptResponse.body?.receipt ?? receiptResponse.body;
+    const costLogs = await waitFor(
+      () => readCostLogs(token, conversationId),
+      (value) => value.status === 200 && Array.isArray(value.body) && value.body.length > 0,
+      { label: `${scenario} cost log` },
+    );
+    const messages = await waitFor(
+      () => readMessages(token, conversationId),
+      (value) => value.status === 200 && Array.isArray(value.body) && value.body.length >= 2,
+      { label: `${scenario} messages` },
+    );
+    const after = await stubRequests();
+    const chatCalls = (after.requests ?? [])
+      .slice(before.requests?.length ?? 0)
+      .filter((call) => call.path === '/v1/chat/completions' && call.hasUsageOption === false);
+
+    const row = (costLogs.body ?? [])[0] ?? {};
+    const totalMicros = micros(row.total_cost);
+    const componentMicros = micros(row.input_cost) + micros(row.output_cost) + micros(row.thinking_cost);
+
+    check(turn.status === 200 && turn.content === FIXTURE.content, `${scenario}: turn completes`, turn.status);
+    check((costLogs.body ?? []).length === 1, `${scenario}: exactly one cost-log row`, (costLogs.body ?? []).length);
+    check((messages.body ?? []).length === 2, `${scenario}: both messages persist`, messages.body);
+    check(chatCalls.length === 1, `${scenario}: exactly one chat call`, chatCalls);
+    check(chatCalls.every((call) => call.authMatched === true), `${scenario}: BYOK key used`, chatCalls);
+
+    if (scenario === 'no-usage') {
+      check(receipt?.settlement?.state === 'pending', 'no-usage: settlement stays pending', receipt?.settlement);
+      check(row.cost_status === 'pending', 'no-usage: cost log stays pending', row.cost_status);
+      check(row.breakdown_source === 'estimated', 'no-usage: breakdown is estimated', row.breakdown_source);
+      check(totalMicros > 0, 'no-usage: estimate is positive', row.total_cost);
+      check(componentMicros === totalMicros, 'no-usage: estimated components reconcile with the estimate', row);
+    } else {
+      check(receipt?.settlement?.state === 'settled', 'zero: settlement is settled', receipt?.settlement);
+      check(micros(receipt?.settlement?.committedUsd) === 0, 'zero: settled total is zero', receipt?.settlement?.committedUsd);
+      check(row.cost_status === 'settled', 'zero: cost log is settled', row.cost_status);
+      check(row.breakdown_source === 'confirmed', 'zero: zero breakdown is confirmed, not unavailable', row.breakdown_source);
+      check(totalMicros === 0 && componentMicros === 0, 'zero: no invented cost', row);
+      check(Number(row.input_tokens) === 0 && Number(row.output_tokens) === 0, 'zero: no invented tokens', row);
+    }
+  }
+
+  await stubControl('/__control', 'default');
+
+  if (failures.length > 0) {
+    console.error('\nsmoke: BREAKDOWN-PROVENANCE CHECK FAILED');
+    for (const failure of failures) {
+      console.error(`  ✗ ${failure.label}`);
+      console.error(`    ${JSON.stringify(failure.detail)}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+  console.log('smoke: breakdown provenance ACCEPTED (pending/estimated and settled/confirmed zero both honest)');
+}
+
 async function main() {
   const session = await signIn();
   const token = session.access_token;
   const userId = session.user.id;
-  console.log(JSON.stringify({ step: 'sign-in', userId, expiresIn: session.expires_in }, null, 2));
 
-  await stub('default');
+  await stubControl('/__reset');
   const conversationId = await createConversation(token, userId);
-  console.log(JSON.stringify({ step: 'conversation', conversationId }, null, 2));
+  const baselineRequests = await stubRequests();
 
-  const turn = await runTurn(token, conversationId, 'Qualification smoke prompt.');
+  const turn = await runTurn(token, conversationId, QUERY);
+  const receiptResponse = turn.executionId
+    ? await waitFor(
+      () => fetchReceipt(token, turn.executionId),
+      (value) => value.status === 200 && Boolean(value.body?.receipt ?? value.body?.executionId),
+      { label: 'execution receipt' },
+    )
+    : { status: 0, body: null };
+  // The action has been observed both wrapped ({ receipt }) and flat.
+  const receipt = {
+    status: receiptResponse.status,
+    body: { receipt: receiptResponse.body?.receipt ?? receiptResponse.body },
+  };
+
+  const costLogs = await waitFor(
+    () => readCostLogs(token, conversationId),
+    (value) => value.status === 200 && Array.isArray(value.body) && value.body.length > 0,
+    { label: 'cost log' },
+  );
+  const messages = await waitFor(
+    () => readMessages(token, conversationId),
+    (value) => value.status === 200 && Array.isArray(value.body) && value.body.length >= 2,
+    { label: 'persisted messages' },
+  );
+  const after = await stubRequests();
+  const providerCalls = (after.requests ?? [])
+    .slice(baselineRequests.requests?.length ?? 0)
+    .filter((request) => request.path === '/v1/chat/completions');
+
+  const evidence = { turn, receipt, costLogs, messages, providerCalls, userId, conversationId };
+
   console.log(JSON.stringify({
-    step: 'router-turn',
+    step: 'evidence',
+    userId,
+    conversationId,
+    executionId: turn.executionId,
     status: turn.status,
-    executionId: turn.headers['x-prismatix-execution-id'] ?? null,
-    model: turn.headers['x-router-model-id'] ?? null,
-    provider: turn.headers['x-provider'] ?? null,
-    estimate: turn.headers['x-cost-estimate-usd'] ?? null,
-    eventTypes: turn.events.map((event) => event.type ?? Object.keys(event)[0]),
-    receipt: turn.events.find((event) => event.type === 'receipt') ?? null,
-    content: turn.events
-      .filter((event) => event.type === 'content_block_delta')
-      .map((event) => event.delta?.text ?? '')
-      .join(''),
+    contentLength: turn.content.length,
+    events: turn.events.map((event) => event.type ?? Object.keys(event)[0]),
+    receiptState: receipt.body?.receipt?.settlement?.state ?? null,
+    committedUsd: receipt.body?.receipt?.settlement?.committedUsd ?? null,
+    costLog: costLogs.body?.[0]
+      ? {
+        total: costLogs.body[0].total_cost,
+        status: costLogs.body[0].cost_status,
+        breakdown: costLogs.body[0].breakdown_source,
+        tokens: [costLogs.body[0].input_tokens, costLogs.body[0].output_tokens],
+      }
+      : null,
+    messages: (messages.body ?? []).map((message) => message.role),
+    chatProviderCalls: providerCalls.filter((call) => call.hasUsageOption === false).length,
+    backgroundProviderCalls: providerCalls.filter((call) => call.hasUsageOption === true).length,
+    expected: EXPECTED,
   }, null, 2));
 
-  const executionId = turn.headers['x-prismatix-execution-id'];
-  if (executionId) {
-    console.log(JSON.stringify({ step: 'receipt', ...(await fetchReceipt(token, executionId)) }, null, 2));
+  try {
+    validateTurnEvidence(evidence);
+  } catch (error) {
+    if (error instanceof AcceptanceError) {
+      console.error('\nsmoke: ACCEPTANCE FAILED');
+      for (const failure of error.failures) {
+        console.error(`  ✗ ${failure.label}`);
+        console.error(`    ${JSON.stringify(failure.detail)}`);
+      }
+      process.exit(1);
+    }
+    throw error;
   }
 
-  console.log(JSON.stringify({ step: 'cost-logs', ...(await readCostLogs(token, conversationId)) }, null, 2));
-  console.log(JSON.stringify({ step: 'messages', ...(await readMessages(token, conversationId)) }, null, 2));
-  console.log(JSON.stringify({ step: 'stub-requests', ...(await stubRequests()) }, null, 2));
+  const controls = negativeControls(evidence);
+  console.log(`\nsmoke: ${controls.length}/${controls.length} negative controls rejected`);
+  console.log('smoke: ACCEPTED — fixture content, usage, tariff, settlement, persistence and call count all reconcile');
+
+  await runBreakdownProbes(token, userId);
 }
 
 main().catch((error) => {

@@ -43,6 +43,11 @@ export interface CostLogRecord {
   output_cost: number;
   thinking_cost: number;
   total_cost: number;
+  /**
+   * Provenance of the token/component columns. A settled total with
+   * `unavailable` components must never be rendered as a confirmed breakdown.
+   */
+  breakdown_source?: 'confirmed' | 'estimated' | 'unavailable';
   pricing_version?: string;
   complexity_score?: number;
   route_rationale?: string;

@@ -93,7 +93,17 @@ describe('CostEstimator pricing freshness', () => {
     expect(formatUsd(0.000075)).toBe('$0.000075');
     expect(formatUsd(0.0123)).toBe('$0.0123');
     expect(formatUsd(0)).toBe('$0.0000');
-    expect(formatUsd(Number.NaN)).toBe('$0.0000');
+    // Unavailable/invalid money is not a confident zero.
+    expect(formatUsd(Number.NaN)).toBe('—');
+    expect(formatUsd(-0.01)).toBe('—');
+    expect(formatUsd(null)).toBe('—');
+    expect(formatUsd(undefined)).toBe('—');
+    // Below storage precision the amount is not zero, but cannot be shown.
+    expect(formatUsd(0.0000004)).toBe('<$0.000001');
+    expect(formatUsd(0.000001)).toBe('$0.000001');
+    // Formatting boundary.
+    expect(formatUsd(0.0000999)).toBe('$0.000100');
+    expect(formatUsd(0.0001)).toBe('$0.0001');
   });
 
   it('does not present a zero client breakdown beside a positive settled receipt', () => {
