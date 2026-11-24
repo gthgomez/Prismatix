@@ -1,10 +1,153 @@
-# Prismatix stabilization and release evidence · 2026-11-21 UTC
+# Prismatix stabilization and release evidence
 
-GitHub `main` and the production Vercel deployment both resolve to
+## Current release status · 2026-11-24 (authoritative)
+
+**Qualified code candidate:** `9aef6de679a425302ad86b5a3e48d2b53818370a`
+on `campaign/overnight-2026-11-19`. This record and the refreshed screenshots
+are a documentation-only commit on top of it; the PR body links the exact-head
+CI run. Base `main` is `6a5c4cb0ad364490a1a0d959dcc60f68f63d7314`.
+PR [#73](https://github.com/gthgomez/Prismatix/pull/73) is open, draft and
+mergeable.
+
+**No merge, production migration, secret change, worker change, or production
+deployment was performed.** The Vercel preview remains **failing by design**
+(see Staging blocker).
+
+### Environment actually exercised
+
+Local Docker Supabase, CLI **2.98.2**: PostgreSQL 17, GoTrue Auth,
+PostgREST/RLS, Storage, and the Edge runtime, with all **34** migrations applied
+by the real runner. Two disposable Auth identities and a deterministic,
+non-billable provider substitute (`scripts/qualification/stub-provider.mjs`)
+through the router's `OPENROUTER_BASE_URL` seam. **No hosted Supabase
+environment was exercised.** The linked hosted project is production and was
+used for read-only inventory only.
+
+### Round-two findings and repairs
+
+| ID | Finding | What was done | Evidence |
+|---|---|---|---|
+| R1 | A settled cost log could still pair a settled total with estimated components: the router fell back to `costBreakdown` when `deriveSettledBreakdown` returned null. The `1e-6 × calls` tolerance also permitted materially wrong reconciliation for micro-costs. | `cost_logs.breakdown_source` (`confirmed` / `estimated` / `unavailable`) via migration `20261124090000`. Reconciliation is integer micro-USD and checks **each call individually** and the reservation total, so offsetting errors cannot pass. A settled total with no confirmed breakdown stores zero components and is marked `unavailable`; a pending total keeps `estimated`. Receipt projection exposes per-call usage/costs. `financeTracker`/CSV consume the provenance. | Real turn: `40`/`12` tokens, `0.00003 + 0.000045 = 0.000075`. `no-usage` turn: pending + `estimated`, components reconcile with the estimate. `zero` turn: settled + `confirmed`, all zero. 8 new unit cases, including aggregate cancellation and sub-precision money. |
+| R2 | Real-backend qualification was not in CI. | New `real-backend` job runs `scripts/qualification/ci-real-backend.sh`: stack, migrations, stub, functions, seed, acceptance gate, isolation checks, real Chromium suite, diagnostics upload, trap cleanup. | Job added to `.github/workflows/ci.yml`; see the PR checks for this head. |
+| R3 | Nonlocal overrides were boolean and did not prove identity. | `scripts/qualification/env-contract.mjs`: loopback allowed; hosted target requires an allowlisted `<ref>.supabase.co` project **and** `QUALIFICATION_ENVIRONMENT=staging|preview`; production denied even if allowlisted; router host must match; remote stubs allowlisted; credentials-in-URL rejected. Wired into seed/smoke/isolation/e2e/screens. The Vercel guard now also rejects production subdomains, malformed URLs, http, embedded credentials and loopback previews. | `npm run qual:env`: 14/14 negative controls pass. CI isolation job runs them and the new guard negatives. |
+| R4 | The smoke script printed outcomes without failing. | Rewritten as an acceptance gate. Expected money comes from a reviewed tariff constant and the fixture, not the implementation. It asserts status/content/execution identity/receipt/settlement/tokens/components/persistence/ownership/one chat call, rejects **10** corrupted variants, and proves the pending/estimated and settled/confirmed-zero states. | `npm run qual:smoke` → `ACCEPTED`, `10/10 negative controls rejected`, breakdown provenance accepted. |
+| R5 | Enter during provider initialization dropped the submission and left a sticky error; the visible status also said "until a provider is connected" while merely checking. | Submission is rejected without dispatch, the draft and attachments are preserved, the composer states "Checking provider setup — sending will be available in a moment", the transient notice clears when readiness resolves, and nothing is auto-sent. Both keyboard and button use the same readiness gate. | New real-backend test `Enter during provider readiness preserves the draft and dispatches nothing`: delayed real provider-settings response, `data-state` transitions `provider-checking → ready`, draft intact, zero calls before, exactly one after. |
+| R6 | Existing-installation testing was not an upgrade from main. | `tests/integration/run-main-upgrade.sh` builds a database from `origin/main`'s actual migration set (recorded in `supabase_migrations`), seeds historical data including an inconsistent cost log and a NOT VALID-guard target reservation, then upgrades with `supabase migration up --db-url`. Verifies history, guards, preserved totals/reservations, and spend aggregation. | Added to the migrations CI job. Local execution of the POSIX/Docker script was not possible on this Windows host; CI is the first execution. |
+| R7 | An intermittent New Chat timeout was unexplained. | Reproduced as host oversubscription: at the default 8 workers on a 16-thread host, different tests fail on each run with 30s timeouts (including "Loading Prismatix…" under a deliberate 12-worker ×2 stress), all pass in isolation, and the full suite passes with 4 workers (twice). Playwright workers are now bounded by `min(4, cpus-1)`. | Isolated reruns pass; `--workers=4` full desktop: 131 passed / 2 skipped, reproduced twice. |
+| R8 | Real browser tests used fixed sleeps. | Persistence waits for the settled receipt badge (emitted after transcript + cost-log writes) instead of 1.5s; cancellation uses a justified bounded quiet window that fails fast; reload waits for the recovery UI (mount complete) instead of 2.5s. The Edge runtime is warmed once; provider-call counting excludes separately metered memory extraction. | `tests/e2e-real/real_backend.spec.ts`. |
+| R9 | Formatting could turn nonzero micro-costs into `$0.0000` and used `$0.0000` for invalid data. | `formatUsd`: confirmed zero → `$0.0000`; unavailable/invalid/negative → `—`; `< $0.000001` → `<$0.000001`; sub-cent → 6 dp; otherwise 4 dp. CostBadge, SpendTracker and CSV use it; CSV exports at storage precision and includes provenance. | Unit cases for NaN/negative/null, sub-precision, boundary and micro amounts; component rows and reconcile note verified against a real settled receipt. |
+| R10 | The release record mixed superseded claims with current evidence. | This section replaces the old "current status" opening; everything below is explicitly historical. The PR description records the exact head, CI, preview status, environments and blockers. | This document and the PR body. |
+
+### Verification run on the code candidate
+
+| Check | Result |
+|---|---|
+| TypeScript (`tsc --noEmit`) | pass |
+| ESLint | 0 errors / 136 warnings (baseline unchanged) |
+| Vitest | **1092 passed**, 107 files |
+| Deno check (`router/index.ts`) | pass |
+| Production build (real + synthetic envs) | pass |
+| Synthetic desktop Chromium | **131 passed / 2 skipped** (Compare is opt-in) |
+| Synthetic mobile (CI subset) | **49 passed** |
+| Fresh migration replay through the CLI | **34 applied** (`db reset`) |
+| Environment-contract negatives | **14/14** |
+| Router acceptance gate | **ACCEPTED**; 10/10 negative controls rejected; pending/estimated and settled/confirmed-zero accepted |
+| Account isolation against real RLS | **14/14** |
+| Real-backend browser journeys (clean DB) | **5/5**: persistence+reload, mid-stream stop with no duplicate call or replay, cross-account history isolation, readiness race, mobile turn |
+| UI screenshots | Refreshed for this candidate at 360/390/768/1440 in light/dark (10 curated in `evidence/2026-11-24/screens`) |
+
+A full browser run must start from a clean database (`db reset` + `qual:seed`).
+Each turn reserves up to `$0.10` against the `$0.50` daily grant; failed or
+cancelled turns can leave `pending_reconcile` holds that eventually produce
+`402` responses. That is fixture exhaustion, not an application defect, and it
+is why repeated local runs cascade after a first failure.
+
+### Release gates
+
+| Criterion | Status | Note |
+|---|---|---|
+| No settled/estimated misrepresentation | VERIFIED (local) | R1 contract + unit and real-backend evidence |
+| Automated real-backend qualification | VERIFIED (local) / PARTIALLY VERIFIED (CI) | Job implemented; first CI execution is on this head |
+| Unsafe environments rejected | VERIFIED | 14 contract negatives + hardened Vercel guard negatives in CI |
+| Smoke fails on wrong business outcomes | VERIFIED | 10/10 mutations rejected |
+| Composer readiness repaired | VERIFIED | Real-backend regression |
+| Genuine main→candidate upgrade | PARTIALLY VERIFIED | Harness implemented and wired into CI; not executed locally |
+| Flake diagnosed | VERIFIED | Host oversubscription; worker cap |
+| Cost formatting | VERIFIED | Unit + rendered views |
+| Release record exact | VERIFIED | This section + PR body |
+| Hosted staging / preview | BLOCKED | No nonproduction project; provisioning requires authorization |
+| Hosted qualification | BLOCKED | Depends on staging |
+| Production merge/deployment | BLOCKED | Requires explicit production authorization |
+
+### Staging blocker (Track B)
+
+Current inventory: three Supabase projects (production Prismatix + two unrelated
+projects), zero preview branches for `sqjfbqjogylkfwzsyprd`, and Vercel Preview
+still resolves to the production project, which the isolation guard correctly
+refuses. No nonproduction project was provisioned and no billing/account change
+was made.
+
+**Exact remaining action:** authorize one of
+(a) a dedicated nonproduction Supabase project (or a paid preview branch) with
+its own Auth users, Edge secrets and provider allowlist, or
+(b) an existing authorized isolated project identity.
+Then set Preview-scoped `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` and
+`VITE_ROUTER_ENDPOINT`, plus Edge secrets pointing at a deterministic provider,
+and re-run `qual:env` / `qual:smoke` / `qual:isolation` / `qual:e2e` against it
+with `QUALIFICATION_ALLOWED_PROJECT_REFS` and `QUALIFICATION_ENVIRONMENT`.
+Until then there is no reviewable preview and no hosted qualification.
+
+### Restricted capabilities
+
+- **Durable Compare** remains behind `VITE_PX08_COMPARE_DURABILITY` (default
+  off). Its tables/execution identity are migrated and the opt-in fixture
+  passes, but it has not been qualified on a hosted environment.
+- **Live image generation** remains disabled in client and server. The disabled
+  path is contained and tested; no deterministic image-provider seam exists to
+  qualify the live path safely, so it must not be presented as available.
+- **Video worker** remains disabled. Operations scripts are separated from
+  migrations and fail closed without `pg_cron`; managed extension privileges are
+  unverified.
+- **15 legacy direct-provider prices** remain unavailable pending authoritative
+  rate review. Fail-closed pricing was not weakened.
+
+### Deployment sequence and recovery
+
+1. Apply candidate migrations with the real runner; verify fresh replay **and**
+   the main→candidate upgrade (CI gates).
+2. Deploy Edge Functions before the frontend. Set release identity variables so
+   the client's catalog-skew hint is meaningful.
+3. Deploy the frontend with the matching protocol/schema/catalog versions.
+4. Keep Compare, image generation and the video worker disabled until their
+   gates pass; do not enable the scheduler during a deploy.
+5. Verify sign-in, one settled turn, cost-log provenance, conversation reload
+   and cross-account denial against the deployed environment.
+6. Recovery: frontend rollback is independent; Edge rollback is a function
+   redeploy; database changes require forward repair (the new column is
+   additive and nullable-by-default). Do not roll back a migration by replaying
+   an old production-targeted SQL file.
+
+### Backlog (deliberately not in this candidate)
+
+- Mobile header density at ≤390px (diagnostic catalog hint occupies a row).
+- Compact cost popover can overlap the composer's model row at 1440px.
+- `PRISMATIX_*` release-identity variables must be set on the hosted router or
+  every client shows "catalog may be outdated".
+- Physical Android and screen-reader qualification remain unperformed.
+
+---
+
+> Everything below this line documents earlier campaign states and is
+> **historical**. Where it conflicts with the section above, the section above
+> wins.
+
+# Historical record · 2026-11-21 campaign
+
+GitHub `main` and the production Vercel deployment both resolved to
 `6a5c4cb0ad364490a1a0d959dcc60f68f63d7314`. The public shell identifies
 `sqjfbqjogylkfwzsyprd.supabase.co` as its backend. Public HTTP checks returned
 200 for the shell, demo, recovery route and service worker, plus 404 for a missing
-asset. The connected Supabase inventory did not include the identified project.
+asset.
 [Production deployment](https://vercel.com/jonathan-gomez-aguilars-projects/prismatix/17qK2FFxyNdWjXbd9LsDMRvG3XGw)
 
 PR [#73](https://github.com/gthgomez/Prismatix/pull/73) is the integration branch.
