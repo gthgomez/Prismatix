@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Production-equivalent per-user admission rate-limit probe.
 //
-// The router's default window is 20 admitted executions per user per minute.
-// Qualification must not raise that limit: a passing suite with a 500-request
-// override would not prove the control users actually get.
+// The authoritative database admission policy allows 10 execution starts per
+// user per minute (`DEFAULT_ADMISSION_CONFIG.requestLimitPerMinute`). The
+// `USER_RATE_LIMIT_MAX_REQUESTS` value (20) is only a per-isolate in-memory
+// pre-check; it is not the binding control. Qualification must exercise the
+// database authority, not a raised override.
 //
 // This probe uses a dedicated disposable identity and the deterministic
-// zero-cost provider scenario, so 20 admitted turns do not spend money. It
+// zero-cost provider scenario, so admitted turns do not spend money. It
 // asserts:
 //   * the first `limit` requests are admitted;
 //   * the next request is rejected with 429 and a Retry-After in the window;
@@ -15,7 +17,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolveQualificationEnvironment } from './env-contract.mjs';
 
-const LIMIT = 20;
+const LIMIT = 10;
 
 let target;
 try {
@@ -176,7 +178,7 @@ async function main() {
 
   // Recovery: wait out the published window, then prove admission resumes.
   const waitMs = (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 60) + 2;
-  console.log(`rate-limit: 20/20 admitted, 21st rejected with Retry-After=${retryAfter}s; waiting ${waitMs}s for window recovery`);
+  console.log(`rate-limit: 10/10 admitted, 11th rejected with Retry-After=${retryAfter}s; waiting ${waitMs}s for window recovery`);
   await sleep(waitMs * 1000);
   const recovered = await runTurn(token, conversationId);
   if (recovered.status !== 200) {

@@ -262,14 +262,15 @@ describe('fetchAuthoritativeCostLogs', () => {
     } as never;
 
     const [entry] = await fetchAuthoritativeCostLogs(client);
-    expect(entry).toMatchObject({
+    expect(entry).toBeDefined();
+    expect(entry!).toMatchObject({
       cost: 0.000075,
       breakdownSource: 'confirmed',
       promptTokens: 40,
       completionTokens: 12,
       costStatus: 'settled',
     });
-    expect(exportSpendToCsv([entry])).toContain('0.000075');
+    expect(exportSpendToCsv([entry!])).toContain('0.000075');
   });
 
   it('does not expose token facts when the server marks the breakdown unavailable', async () => {
@@ -297,8 +298,9 @@ describe('fetchAuthoritativeCostLogs', () => {
     } as never;
 
     const [entry] = await fetchAuthoritativeCostLogs(client);
-    expect(entry.breakdownSource).toBe('unavailable');
-    expect(entry.promptTokens).toBeUndefined();
-    expect(entry.completionTokens).toBeUndefined();
+    expect(entry).toBeDefined();
+    expect(entry!.breakdownSource).toBe('unavailable');
+    expect(entry!.promptTokens).toBeUndefined();
+    expect(entry!.completionTokens).toBeUndefined();
   });
 });

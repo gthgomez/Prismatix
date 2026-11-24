@@ -118,10 +118,11 @@ ENABLE_DEEPINFRA=false
 ENABLE_VIDEO_PIPELINE=false
 ```
 
-Do **not** add `USER_RATE_LIMIT_MAX_REQUESTS` here. Qualification exercises the
-production 20 requests/user/minute default; suites use separate disposable
-identities, and `npm run qual:rate` verifies the limiter itself (20 admitted,
-21st `429` with `Retry-After`, no provider dispatch, recovery after the window).
+Do **not** add `USER_RATE_LIMIT_MAX_REQUESTS` here. The binding limit is the
+database admission policy (10 starts/user/minute); the 20/min value is only a
+legacy per-isolate pre-check. Suites use separate disposable identities, and
+`npm run qual:rate` verifies the database limiter itself (10 admitted, 11th
+`429` with `Retry-After`, no provider dispatch, recovery after the window).
 
 
 ```powershell
@@ -138,7 +139,7 @@ must match the preview origin — the router locks CORS to it.
 |---|---|
 | `npm run qual:env` | 14 negative controls for the shared environment contract |
 | `npm run qual:smoke` | Acceptance gate: fixture content, execution identity, settled receipt, 40/12 provider tokens, independently computed `$0.000075` total, components reconcile, exactly one chat call, two messages, no duplicate settlement - plus 10 negative controls that must be rejected and the `pending/estimated`, `settled/confirmed-zero` and `settled/unavailable` breakdown states |
-| `npm run qual:rate` | Production 20/min limit: 20 admitted, 21st `429` with `Retry-After`, no provider dispatch, no message write, recovery after the window |
+| `npm run qual:rate` | Production database limit (10/min): 10 admitted, 11th `429` with `Retry-After`, no provider dispatch, no message write, recovery after the window |
 | `npm run qual:isolation` | 14 cross-account / anonymous / service-role boundary checks against real RLS |
 | `npm run qual:e2e` | Builds against the local stack and runs `tests/e2e-real/` (persistence, mid-stream stop, account isolation, provider-readiness race, mobile) |
 | `npm run qual:screens` | Desktop/mobile light+dark screenshots under `docs/engineering/campaigns/evidence/` |

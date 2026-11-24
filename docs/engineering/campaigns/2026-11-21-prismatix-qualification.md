@@ -32,13 +32,17 @@ regression or negative control.
 | RC2 | The same harness claimed `db push` atomicity but ran `psql < file` in autocommit and recorded each history row in a separate command. A migration failing halfway left partial DDL and could still record success. Fresh/existing replay scripts made the same claim. | Each migration and its `schema_migrations` row now share one explicit transaction in all three replay scripts. Two negative controls run through the same apply function: a division-by-zero migration and a connection-terminated migration must leave no table and no history row; a repaired forward migration must then apply. | `atomicity fixtures PASS (failed and interrupted migrations left no DDL and no history; forward repair applied)`. |
 | RC3 | `parseUsd` accepted deviations up to 0.25 micro-USD, so `0.0000001` passed validation and rounded to zero. | Precision is validated with a representation-noise tolerance (`max(1e-9, abs(micros) * EPSILON * 8)`) that is far below one micro-USD at every supported magnitude, plus the real `numeric(12,6)` ceiling. Tests cover 6dp, 1 micro, sub-micro, half-micro, negative, non-numeric, scientific notation and out-of-column values. | `tests/routing/execution_receipt.test.ts`; 1101 unit tests pass. |
 | RC4 | `CostEstimator` still recalculated components from client usage and used a `1e-5` reconciliation-warning threshold, so a settled `$0.0001` receipt could display `$0.0000` components without a trustworthy provenance signal. `recordCost` also dropped the `breakdownSource` it was given. | The terminal receipt is now projected to `deriveSettledBreakdown`. A settled total renders confirmed ledger components when they reconcile; otherwise it either shows client rows explicitly labelled `(est.)` with "the total is the confirmed receipt", or states that components/usage are unavailable. The threshold was removed. `MessageCost`, `CostBadge`, finance history and CSV carry the provenance; unavailable token fields are omitted, never zero. | CostEstimator/CostBadge/execution-receipt tests; real-backend `settled/unavailable` ledger probe in `qual:smoke`. |
+| RC5 | The local finance cache and CSV path rounded every receipt to 4 decimal places. A real `$0.000075` turn became `$0.0001`, and the CSV exported the rounded value despite claiming storage precision. | Round at the `numeric(12,6)` storage precision instead. `fetchAuthoritativeCostLogs` preserves the server total and omits token facts when the server marks the breakdown unavailable. | `financeTracker.test.ts`: 0.000075 survives cache, totals, authoritative fetch and CSV export. |
 
 Two further review items were addressed at the qualification layer:
 
 - **Production-equivalent rate limiting.** `scripts/qualification/ci-real-backend.sh`
   no longer sets `USER_RATE_LIMIT_MAX_REQUESTS=500`. A new dedicated identity
-  (`qual-f`) drives `scripts/qualification/rate-limit-check.mjs`: 20 admitted
-  zero-cost turns, 21st `429 rate_limited` with `Retry-After`, zero provider
+  (`qual-f`) drives `scripts/qualification/rate-limit-check.mjs`. The binding
+  control is the database admission policy
+  (`DEFAULT_ADMISSION_CONFIG.requestLimitPerMinute = 10`), not the legacy
+  20/min per-isolate pre-check; the probe therefore asserts 10 admitted
+  zero-cost turns, 11th `429 rate_limited` with `Retry-After`, zero provider
   calls and zero messages for the rejection, then admission resumes after the
   window.
 - **Settled/unavailable financial state.** `qual:smoke` now creates a real
@@ -79,7 +83,7 @@ used for read-only inventory only.
 |---|---|
 | TypeScript (`tsc --noEmit`) | pass |
 | ESLint | 0 errors / 136 warnings (baseline unchanged) |
-| Vitest | **1101 passed**, 107 files |
+| Vitest | **1106 passed**, 107 files |
 | Deno check (`router/index.ts`) | pass |
 | Production build (real + synthetic envs) | pass |
 | Synthetic desktop Chromium | **131 passed / 2 skipped** (Compare is opt-in) |
@@ -90,7 +94,7 @@ used for read-only inventory only.
 | Main upgrade atomicity fixtures | **PASS**: failed and interrupted migrations left no DDL/history; forward repair applied |
 | Environment-contract negatives | **14/14** |
 | Router acceptance gate | **ACCEPTED**; 10/10 negative controls rejected; pending/estimated, settled/confirmed-zero and settled/unavailable accepted |
-| Rate limit (production default 20/min) | **PARTIALLY VERIFIED**: probe implemented; first real-backend run is on the closure candidate |
+| Rate limit (database authority 10/min) | **PARTIALLY VERIFIED**: probe implemented; exact-head real-backend run is pending |
 | Account isolation against real RLS | **14/14** |
 | Real-backend browser journeys (clean DB) | **5/5**: persistence+reload, mid-stream stop with no duplicate call or replay, cross-account history isolation, readiness race, mobile turn |
 | UI screenshots | Refreshed for this candidate at 360/390/768/1440 in light/dark (10 curated in `evidence/2026-11-24/screens`) |
