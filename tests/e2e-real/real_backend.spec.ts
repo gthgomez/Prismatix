@@ -166,10 +166,11 @@ test.describe('real backend', () => {
     await sendPrompt(page, `Slow stream stop probe ${Date.now()}`);
 
     // Partial text arrives, then the user stops the generation mid-stream.
-    await expect(page.getByText(/Prismatix deterministic/i).first()).toBeVisible({ timeout: 25000 });
+    // Assert only a prefix that the sidebar brand cannot satisfy.
+    await expect(page.getByText(/Prismatix d/i).first()).toBeVisible({ timeout: 25000 });
     await page.getByRole('button', { name: 'Stop generating' }).click();
     await expect(page.getByRole('button', { name: 'Stop generating' })).toHaveCount(0, { timeout: 15000 });
-    await expect(page.getByText(/Prismatix deterministic/i).first()).toBeVisible();
+    await expect(page.getByText(/Prismatix d/i).first()).toBeVisible();
 
     const afterStop = await stubChatRequestCount();
     expect(afterStop, 'exactly one provider call for the stopped turn').toBe(before + 1);

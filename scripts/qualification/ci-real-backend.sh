@@ -42,7 +42,10 @@ done
 curl -fsS "${STUB_URL}/__health" >/dev/null
 
 log "Supabase stack + migrations (CLI ${SUPABASE_CLI_VERSION})"
-npx --yes "supabase@${SUPABASE_CLI_VERSION}" start
+# Skip services this qualification does not use: fewer image pulls (Docker Hub
+# rate limits are a real CI failure mode) and less resource pressure.
+npx --yes "supabase@${SUPABASE_CLI_VERSION}" start \
+  -x studio,imgproxy,realtime,storage-api,logflare,vector,supavisor
 npx --yes "supabase@${SUPABASE_CLI_VERSION}" db reset --no-seed
 
 STATUS_ENV="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" status -o env)"
@@ -69,10 +72,15 @@ fi
 log "Edge runtime reaches the stub at http://${GATEWAY}:8899"
 
 # Non-secret fixture key/ciphertext shared with seed-local.mjs.
+# The rate limit is raised ONLY for this disposable qualification runtime: the
+# acceptance gate, isolation checks and browser journeys all drive one identity
+# inside a minute, which legitimately exceeds the production default of 20/min.
+# Production keeps the default; no product control is weakened here.
 cat > supabase/functions/.env <<EOF
 OPENROUTER_BASE_URL=http://${GATEWAY}:8899/v1
 BYOK_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 ALLOWED_ORIGIN=http://127.0.0.1:${PLAYWRIGHT_PORT}
+USER_RATE_LIMIT_MAX_REQUESTS=500
 ENABLE_ANTHROPIC=false
 ENABLE_OPENAI=false
 ENABLE_GOOGLE=false

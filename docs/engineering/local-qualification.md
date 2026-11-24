@@ -116,7 +116,11 @@ ENABLE_OPENCODE=false
 ENABLE_NVIDIA=false
 ENABLE_DEEPINFRA=false
 ENABLE_VIDEO_PIPELINE=false
+# Qualification-only: the acceptance gate, isolation checks and browser suites
+# drive one identity inside a minute. Production keeps the 20/min default.
+USER_RATE_LIMIT_MAX_REQUESTS=500
 ```
+
 
 ```powershell
 npx --yes supabase@2.98.2 functions serve --env-file supabase/functions/.env
@@ -179,3 +183,4 @@ npx --yes supabase@2.98.2 stop
 - Physical-device keyboards, screen readers, and native browser zoom on mobile.
 - Vercel preview behavior; the isolation guard intentionally refuses a preview
   built against the production project.
+
