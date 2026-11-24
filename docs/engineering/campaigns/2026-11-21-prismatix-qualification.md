@@ -2,13 +2,13 @@
 
 ## Current release status · 2026-11-24 (authoritative)
 
-**Qualified code candidate:** `2f9dd8bd` on `campaign/overnight-2026-11-19`.
+**Qualified code candidate:** `25c5ff7e` on `campaign/overnight-2026-11-19`.
 This record is a documentation-only commit on top of it; the PR body carries
 the final head. Base `main` is `6a5c4cb0ad364490a1a0d959dcc60f68f63d7314`.
 PR [#73](https://github.com/gthgomez/Prismatix/pull/73) is open, draft and
 mergeable.
 
-**Exact-head CI: [run 45387394101](https://github.com/gthgomez/Prismatix/actions/runs/45387394101) —
+**Exact-head CI: [run 45389922561](https://github.com/gthgomez/Prismatix/actions/runs/45389922561) —
 all seven jobs pass**, including `Real backend · Supabase + Edge + browser` and
 `Migrations · fresh + existing install` with the main-baseline upgrade gate.
 
