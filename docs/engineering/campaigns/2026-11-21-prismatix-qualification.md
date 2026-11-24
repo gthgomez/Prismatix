@@ -2,12 +2,15 @@
 
 ## Current release status · 2026-11-24 (authoritative)
 
-**Qualified code candidate:** `9aef6de679a425302ad86b5a3e48d2b53818370a`
-on `campaign/overnight-2026-11-19`. This record and the refreshed screenshots
-are a documentation-only commit on top of it; the PR body links the exact-head
-CI run. Base `main` is `6a5c4cb0ad364490a1a0d959dcc60f68f63d7314`.
+**Qualified code candidate:** `2f9dd8bd` on `campaign/overnight-2026-11-19`.
+This record is a documentation-only commit on top of it; the PR body carries
+the final head. Base `main` is `6a5c4cb0ad364490a1a0d959dcc60f68f63d7314`.
 PR [#73](https://github.com/gthgomez/Prismatix/pull/73) is open, draft and
 mergeable.
+
+**Exact-head CI: [run 45387394101](https://github.com/gthgomez/Prismatix/actions/runs/45387394101) —
+all seven jobs pass**, including `Real backend · Supabase + Edge + browser` and
+`Migrations · fresh + existing install` with the main-baseline upgrade gate.
 
 **No merge, production migration, secret change, worker change, or production
 deployment was performed.** The Vercel preview remains **failing by design**
