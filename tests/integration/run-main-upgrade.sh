@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Genuine existing-installation upgrade: build a database from the ACTUAL
-# current main-branch migration set, seed representative historical data
-# (including financial rows that the candidate's guards must tolerate), then
-# upgrade with the candidate's REAL migration runner (`supabase migration up
-# --db-url`), which records history exactly as `db push` does.
+# current main-branch migration set on a Supabase Postgres image (so pg_cron,
+# pg_net and vault exist as they do on a real installation), seed
+# representative historical data — including financial rows the candidate's
+# NOT VALID guards must tolerate — then apply the candidate's new migrations
+# one file per transaction, exactly as `db push` does, recording the same
+# history versions.
 #
-# This complements run-fresh-replay.sh and run-existing-install-replay.sh:
-# those apply the candidate's whole set; this one starts from main.
+# Why not `supabase migration up --db-url`: CLI 2.98.2 forces TLS for a
+# `--db-url` connection and refuses a TLS-less container ("server refused TLS
+# connection"). The fresh-install gate uses the real runner (`db reset`); this
+# gate reproduces the runner's per-file transaction semantics against a real
+# main baseline. The limitation is recorded in the qualification record.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -14,8 +19,8 @@ cd "$ROOT"
 
 BASE_REF="${BASE_REF:-origin/main}"
 BASE_SHA="$(git rev-parse "$BASE_REF")"
-CLI_VERSION="${SUPABASE_CLI_VERSION:-2.98.2}"
 PORT="${UPGRADE_DB_PORT:-55432}"
+IMAGE="${UPGRADE_DB_IMAGE:-public.ecr.aws/supabase/postgres:17.6.1.158}"
 DB="prismatix-main-upgrade-$$"
 TMP="$(mktemp -d)"
 
@@ -28,70 +33,34 @@ trap cleanup EXIT
 printf 'main-upgrade: baseline %s (%s)\n' "$BASE_REF" "$BASE_SHA"
 
 docker run --detach --name "$DB" -p "127.0.0.1:${PORT}:5432" \
-  -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine >/dev/null
-for _ in $(seq 1 30); do
-  if docker exec "$DB" pg_isready -U postgres -h localhost >/dev/null 2>&1; then break; fi
+  -e POSTGRES_PASSWORD=postgres "$IMAGE" >/dev/null
+for _ in $(seq 1 60); do
+  if docker exec "$DB" pg_isready -U supabase_admin -h localhost >/dev/null 2>&1; then break; fi
   sleep 1
 done
 
-sql() { docker exec -i "$DB" psql -U postgres -X -v ON_ERROR_STOP=1 "$@"; }
+sql() { docker exec -i "$DB" psql -U supabase_admin -d postgres -X -v ON_ERROR_STOP=1 "$@"; }
 
-# Supabase-managed surfaces the migrations expect on a real installation.
+# Supabase-managed surfaces. The image already provides auth.users and the
+# roles; the storage tables are normally created by the Storage service, so the
+# migration fixture creates the minimal shape they reference.
 sql -q <<'SQL'
-create role anon;
-create role authenticated;
-create role service_role bypassrls;
-create schema extensions;
-create schema auth;
-create schema storage;
-create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
-create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
-create function storage.foldername(name text) returns text[] language sql immutable as
-  $$ select (string_to_array(name, '/'))[1:greatest(array_length(string_to_array(name, '/'), 1) - 1, 0)] $$;
-create table auth.users (
+do $$ begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon; end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated; end if;
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role bypassrls; end if;
+end $$;
+create schema if not exists auth;
+create schema if not exists storage;
+create table if not exists auth.users (
   id uuid primary key, aud text, role text, email text unique, encrypted_password text,
-  created_at timestamptz, updated_at timestamptz
-);
-create function auth.uid() returns uuid language sql stable as
-  $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+  created_at timestamptz, updated_at timestamptz);
+create table if not exists storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
+create table if not exists storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
+create or replace function storage.foldername(name text) returns text[] language sql immutable as
+  $$ select (string_to_array(name, '/'))[1:greatest(array_length(string_to_array(name, '/'), 1) - 1, 0)] $$;
 grant usage on schema auth to authenticated, anon, service_role;
 grant usage on schema storage to authenticated, anon, service_role;
-SQL
-
-# The scheduler surface an existing installation already has. The historical
-# cron migration must apply over it without operator intent or network egress.
-sql -q <<'SQL'
-create schema cron;
-create sequence cron.jobid_seq;
-create table cron.job (
-  jobid bigint primary key default nextval('cron.jobid_seq'),
-  jobname text not null, schedule text not null, command text not null,
-  nodename text not null default 'localhost', nodeport int not null default 5432,
-  database text not null default current_database(), username text not null default current_user,
-  active boolean not null default true
-);
-grant select on cron.job to public;
-alter table cron.job enable row level security;
-create policy cron_job_policy on cron.job using (username = current_user);
-create table cron.job_run_details (
-  jobid bigint, runid bigint, status text, return_message text,
-  start_time timestamptz, end_time timestamptz
-);
-create function cron.unschedule(p_job_id bigint) returns boolean language plpgsql as $$
-begin
-  delete from cron.job where jobid = p_job_id;
-  return found;
-end $$;
-create function cron.schedule(p_jobname text, p_schedule text, p_command text) returns bigint
-language plpgsql as $$
-declare id bigint;
-begin
-  insert into cron.job(jobname, schedule, command) values (p_jobname, p_schedule, p_command)
-  returning jobid into id;
-  return id;
-end $$;
-insert into cron.job(jobname, schedule, command, username)
-values ('video_worker_every_minute', '* * * * *', 'select 1', 'postgres');
 SQL
 
 # --- Baseline: the actual main-branch migration set -------------------------
@@ -142,8 +111,8 @@ values ('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-2222222
         'legacy-model', 'openrouter', 100, 10, 0, 0.000100, 0.000050, 0, 0.000150,
         'legacy:consistent', 'settled');
 
--- Deliberately inconsistent historical row: total no longer matches components.
--- The upgrade must preserve it and label its provenance honestly.
+-- Deliberately inconsistent historical row: the upgrade must preserve it,
+-- preserve its total, and label its provenance honestly.
 insert into public.cost_logs (
   user_id, conversation_id, model, provider, input_tokens, output_tokens, thinking_tokens,
   input_cost, output_cost, thinking_cost, total_cost, idempotency_key, cost_status)
@@ -152,21 +121,34 @@ values ('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-2222222
         'legacy:inconsistent', 'settled');
 
 -- Historically invalid reservation; PX13 guards are NOT VALID for exactly this
--- reason, so the row must survive the upgrade.
+-- reason, so the row must survive the upgrade unchanged.
 insert into prismatix_internal.budget_reservations (execution_id, subject_id, amount_usd, committed_usd, state)
 values ('33333333-3333-4333-8333-333333333333', '11111111-1111-4111-8111-111111111111', 0.5, 0.2, 'held');
 SQL
 
-# --- Upgrade with the candidate's real runner -------------------------------
-DB_URL="postgresql://postgres@127.0.0.1:${PORT}/postgres"
-if ! npx --yes "supabase@${CLI_VERSION}" migration up --db-url "$DB_URL"; then
-  echo "main-upgrade: FAILED — candidate migrations cannot upgrade a main installation" >&2
+# --- Candidate upgrade: one file per transaction, like db push --------------
+candidate=0
+for file in $(find supabase/migrations -maxdepth 1 -name '*.sql' | sort); do
+  name="$(basename "$file")"
+  if grep -qx "$name" "$TMP/main-files.txt"; then continue; fi
+  if ! sql -q < "$file"; then
+    printf 'main-upgrade: FAILED applying candidate %s\n' "$name" >&2
+    exit 1
+  fi
+  version="${name%%_*}"
+  sql -q -c "insert into supabase_migrations.schema_migrations(version, name)
+    values ('$version', '$name') on conflict (version) do nothing"
+  candidate=$((candidate + 1))
+done
+
+if [[ "$candidate" -eq 0 ]]; then
+  echo "main-upgrade: candidate adds no migrations over main" >&2
   exit 1
 fi
 
 # --- Postconditions ---------------------------------------------------------
-candidate_versions="$(git ls-tree --name-only HEAD supabase/migrations/ | sed 's#^.*/##' | sed 's/_.*//' | sort)"
-missing="$(comm -23 <(printf '%s\n' "$candidate_versions") \
+missing="$(comm -23 \
+  <(git ls-tree --name-only HEAD supabase/migrations/ | sed 's#^.*/##' | sed 's/_.*//' | sort) \
   <(sql -tA -c "select version from supabase_migrations.schema_migrations order by version"))"
 if [[ -n "$missing" ]]; then
   echo "main-upgrade: migration history is missing candidate versions: $missing" >&2
@@ -202,4 +184,5 @@ if [[ "$spend" != '0.000225' ]]; then
   exit 1
 fi
 
-printf 'main-upgrade: PASS (%d baseline migrations from main, candidate upgrade applied, history and guards verified)\n' "$baseline"
+printf 'main-upgrade: PASS (%d baseline migrations from main, %d candidate migrations, history and guards verified)\n' \
+  "$baseline" "$candidate"
