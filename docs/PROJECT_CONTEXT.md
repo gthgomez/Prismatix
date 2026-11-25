@@ -1,17 +1,16 @@
 # PROJECT_CONTEXT.md - Prismatix
 
-Purpose: first-read context for Prismatix in this workspace.
+Purpose: project facts and navigation for Prismatix contributors.
 
 Repository: this repository (Prismatix; clone root is the folder above `docs/`).
 Product: multi-provider chat and routing system with streaming responses, cost tracking, debate mode, and Supabase-backed conversation storage.
 
-## Required Startup Order
+## Startup
 
-1. Read `../../PROJECT_SAAS_BIBLE.md` (workspace file one level above this repository; if present).
-2. Read this file.
-3. Read `prismatix_PROJECT_CONTEXT.md`.
-4. Read the root `AGENTS.md`.
-5. Load only the smallest additional file set needed for the active task.
+Start with the root [AGENTS.md](../AGENTS.md) and this context. Use
+[prismatix_PROJECT_CONTEXT.md](prismatix_PROJECT_CONTEXT.md) for deeper product
+context when the task needs it. Standalone clones do not require sibling
+workspace files.
 
 Note: the root `AGENTS.md` is the sole instruction authority. Vendor instruction files (`GEMINI.md`, `CLAUDE.md`, `CODEX.md`) and nested `AGENTS.md` files are prohibited and have been retired.
 
@@ -77,16 +76,6 @@ deno lint .\supabase\functions\router\
 
 ## Babel Local Mode
 
-If the user says `use Babel`, `read the Bible`, `use the Babel system`, or asks for prompt-stack assembly, layer routing, or control-plane guidance, treat Babel Local Mode as active.
-
-Canonical entrypoint:
-`../../Babel-private/BABEL_BIBLE.md` (workspace `Babel-private` checkout, one level above the repository's parent folder)
-
-In Babel Local Mode:
-1. Read `BABEL_BIBLE.md`.
-2. Read the `Babel-private` checkout's `PROJECT_CONTEXT.md`.
-3. Read this repo `PROJECT_CONTEXT.md`.
-4. Load only the relevant Babel layers and any repo rules or skills.
-5. Follow the assembled stack before planning or acting.
-
-Do not improvise the Babel stack from memory.
+Use the [root Babel Local Mode route](../AGENTS.md#babel-local-mode) when the
+task requires the Babel prompt stack. Ordinary Prismatix work does not require
+that checkout.

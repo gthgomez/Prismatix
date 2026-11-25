@@ -47,11 +47,13 @@ relevant context before changing unfamiliar areas.
   `>=22.12.0` and npm 10+. CI currently uses Node 20 and Deno 2.x. These are
   repository-supported versions; do not rely on one agent VM's installed paths
   or patch versions.
-- For Babel-specific work only, locate the authorized Babel checkout through
-  the workspace catalog or a user-provided location. For Babel Local Mode, use
-  that checkout's `BABEL_BIBLE.md` and `PROJECT_CONTEXT.md` to resolve the
-  relevant stack. If the checkout is unavailable, report that dependency and
-  continue independent work.
+### Babel Local Mode
+
+For tasks that require the Babel prompt stack, find the authorized checkout
+that owns `BABEL_BIBLE.md` (`babel-private` in the managed workspace catalog,
+or a user-provided location). Follow its Bible and `PROJECT_CONTEXT.md` to
+resolve the relevant stack. If that checkout is unavailable, report the
+dependency and continue work that does not require it.
 
 ## Verification
 
@@ -80,8 +82,12 @@ npm run test
 npm run build
 deno check --config supabase/functions/deno.json supabase/functions/router/index.ts
 deno check --config supabase/functions/deno.json supabase/functions/provider-settings/index.ts
+npx playwright install chromium
 npx playwright test --project=chromium
 ```
+
+On a fresh Linux setup without browser system dependencies, CI uses
+`npx playwright install --with-deps chromium`.
 
 Report the exact files and checks actually used, their results, and any
 unverified behavior. State the highest observed delivery stage; passing local
