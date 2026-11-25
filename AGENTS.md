@@ -1,108 +1,94 @@
 # AGENTS.md — Prismatix
 
-Purpose: sole instruction authority and quick entrypoint for agents working in Prismatix.
+This is the repository's sole agent-instruction file. Do not add vendor-specific
+or nested instruction files. Product facts and architecture belong in
+`docs/PROJECT_CONTEXT.md` and `docs/prismatix_PROJECT_CONTEXT.md`; read the
+relevant context before changing unfamiliar areas.
 
-**Instruction authority:** this root `AGENTS.md` is the only agent instruction file in this repository. Model/vendor instruction files (`CLAUDE.md`, `GEMINI.md`, `CODEX.md`) and nested `AGENTS.md` files are prohibited. Normative content from the retired `docs/AGENTS.md` and `docs/GEMINI.md` was merged here; factual context lives in `docs/PROJECT_CONTEXT.md` and `docs/prismatix_PROJECT_CONTEXT.md`.
+## Project map
 
-## Read Order
+- `src/`: React/Vite client, authentication, provider settings, and chat UX.
+- `supabase/functions/router/`: provider resolution, request payloads, SSE
+  normalization, persistence, and cost accounting.
+- `supabase/functions/provider-settings/` and `supabase/functions/_shared/`:
+  per-user provider configuration and BYOK secret handling.
+- `supabase/migrations/`: persistence, ownership, and policy contracts.
 
-1. `../PROJECT_SAAS_BIBLE.md` (workspace file one level above this repository; if present)
-2. `docs/PROJECT_CONTEXT.md`
-3. `docs/prismatix_PROJECT_CONTEXT.md`
-4. This file
-5. Only the exact implementation files needed for the task
+## Security and correctness invariants
 
-## Babel Local Mode
+- Preserve authenticated user ownership and row-level scoping on every read and
+  write. Verify the actual query/RPC path before changing an auth or data boundary.
+- Keep provider credentials out of frontend code, logs, and client responses.
+  BYOK keys are encrypted server-side at rest; provider settings return metadata,
+  never plaintext keys. Preserve the encryption and per-user key isolation path.
+- Preserve normalized SSE behavior across providers and align cost records with
+  the provider/model that actually ran. Do not fabricate settled usage or cost.
+- Treat provider payloads and routing rules as provider-specific contracts.
+  Inspect the owning router/provider files; do not guess fields or broaden a
+  localized fix into an unrelated routing refactor.
+- Treat migrations as compatibility-sensitive contracts. Before changing one,
+  identify affected tables and callers, compatibility implications, and rollback
+  considerations. Do not apply or deploy migrations unless the active task
+  authorizes that target and effect.
+- Follow the applicable workspace independent-review policy and repository
+  protections. Local checks do not waive required review or release gates.
 
-If the user says `use Babel`, `read the Bible`, `use the Babel system`, or asks for prompt-stack assembly, layer routing, or control-plane guidance, treat Babel Local Mode as active.
+## Routes and local environment
 
-Canonical entrypoint: `BABEL_BIBLE.md` in the workspace `Babel-private` checkout (`../../Babel-private/BABEL_BIBLE.md` relative to this repository).
+- `/demo` and `/about` render the public `ResumeDemo` without loading
+  `AuthenticatedApp`; they do not require Supabase configuration.
+- Other paths load the authenticated app and Supabase client. For real auth and
+  backend behavior, provide `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+  `VITE_ROUTER_ENDPOINT` is optional: the client derives the router URL from the
+  Supabase URL unless a same-host endpoint is supplied. Missing settings can
+  fall back to mock configuration, so a page rendering is not proof that auth
+  or backend requests work.
+- `.nvmrc` selects Node 22.12.0; `package.json` accepts Node `^20.19.0` or
+  `>=22.12.0` and npm 10+. CI currently uses Node 20 and Deno 2.x. These are
+  repository-supported versions; do not rely on one agent VM's installed paths
+  or patch versions.
+### Babel Local Mode
 
-In Babel Local Mode:
+For tasks that require the Babel prompt stack, find the authorized checkout
+that owns `BABEL_BIBLE.md` (`babel-private` in the managed workspace catalog,
+or a user-provided location). Follow its Bible and `PROJECT_CONTEXT.md` to
+resolve the relevant stack. If that checkout is unavailable, report the
+dependency and continue work that does not require it.
 
-1. Read `BABEL_BIBLE.md`.
-2. Read the `Babel-private` checkout's `PROJECT_CONTEXT.md`.
-3. Read this repo's `docs/PROJECT_CONTEXT.md`.
-4. Load only the relevant Babel layers and any repo rules or skills.
-5. Follow the assembled stack before planning or acting.
+## Verification
 
-Do not improvise the Babel stack from memory.
+- Frontend changes: `npm run type-check` and `npm run build`.
+- Frontend behavior changes: run relevant Vitest tests with `npm run test`.
+- Router, provider, or BYOK changes: run the relevant tests and
+  Deno check for the affected Edge Function, for example
+  `deno check --config supabase/functions/deno.json supabase/functions/router/index.ts`.
+  Run `deno lint supabase/functions/router/` for router edits. For BYOK changes,
+  verify encrypted-at-rest storage and that plaintext stays server-side.
+- Stream or payload changes: inspect adjacent router and client parsing code for
+  contract alignment; test the affected provider path when available.
+- Migration changes: report impacted tables/callers and rollback considerations,
+  and verify compatibility before any separately authorized application.
+- Run `npm run lint` for lint-relevant source changes. CI also runs
+  `npm run type-check`, `npm run lint`, `npm run test`, `npm run build`, Deno
+  checks for Edge Function entrypoints, and Playwright acceptance tests.
 
-## Repo Map
+Useful repository checks:
 
-- `src/` - frontend UI, auth hooks, pricing displays, and fetch logic
-- `supabase/functions/router/` - routed generation, provider payloads, SSE normalization, cost accounting
-- `supabase/migrations/` - schema and policy history
-
-## High-Risk Zones
-
-- `supabase/functions/router/index.ts`
-- `supabase/functions/router/router_logic.ts`
-- `supabase/functions/router/provider_payloads.ts`
-- `supabase/functions/router/provider_availability.ts`
-- `supabase/functions/router/provider_resolver.ts`
-- `supabase/functions/router/sse_normalizer.ts`
-- `supabase/functions/router/cost_engine.ts`
-- `supabase/functions/provider-settings/index.ts`
-- `supabase/functions/_shared/byok_crypto.ts`
-- `supabase/functions/_shared/provider_registry.ts`
-- `supabase/migrations/`
-- `src/lib/supabase.ts`
-
-## Non-Negotiables
-
-- Preserve conversation ownership checks and user scoping.
-- Preserve normalized SSE behavior across providers; SSE normalization is a contract surface, not a cosmetic detail.
-- Keep provider secrets server-side only.
-- Keep cost logs aligned with actual provider/model execution.
-- Treat migrations as compatibility-sensitive contract changes; state impacted tables and rollback implications before editing.
-
-## How To Work Here
-
-- Identify whether the task is frontend, router, stream-shape, or schema work before editing.
-- Be concise, file-backed, and explicit about unknowns; separate observed facts, inference, and unknowns in non-trivial analysis.
-- Name the exact provider, model, function, route, or migration before proposing edits.
-- For stream or provider issues, inspect the owning router file before proposing broader refactors; do not refactor the whole routing layer to fix a localized bug.
-- For auth or data-boundary issues, verify the exact query path and user scoping logic before changing behavior.
-- Use PowerShell-native commands on Windows.
-
-## Hallucination Controls
-
-- Do not invent provider fields, SSE event shapes, or migration column names.
-- Verify payload shapes against `provider_payloads.ts`, `router_logic.ts`, and `sse_normalizer.ts` before editing.
-- Do not claim routing behavior from memory; inspect the current router code.
-- For frontend changes, verify the actual props and fetch contract in the owning component and utility file.
-
-## Verification Gates
-
-- Frontend-only changes: `npm run type-check` and `npm run build`
-- Frontend logic changes: run relevant Vitest tests when available
-- Router changes: `deno check .\supabase\functions\router\index.ts`
-- Provider plug-in / BYOK changes: `deno check .\supabase\functions\provider-settings\index.ts` and verify user keys are encrypted at rest (never plaintext, never returned to the client)
-- Router stream or payload changes: inspect adjacent router files for contract alignment
-- Migration changes: state impacted tables and rollback implications before editing
-
-## Quick Commands
-
-```powershell
+```sh
+npm ci
 npm run type-check
+npm run lint
 npm run test
 npm run build
-deno check .\supabase\functions\router\index.ts
-deno lint .\supabase\functions\router\
+deno check --config supabase/functions/deno.json supabase/functions/router/index.ts
+deno check --config supabase/functions/deno.json supabase/functions/provider-settings/index.ts
+npx playwright install chromium
+npx playwright test --project=chromium
 ```
 
-## Response Expectations
+On a fresh Linux setup without browser system dependencies, CI uses
+`npx playwright install --with-deps chromium`.
 
-- Name the exact files inspected.
-- If the task touches auth, routing, streaming, costs, or migrations, call out the risk before editing.
-- Do not call work complete without naming the checks actually run.
-
-## Cursor Cloud specific instructions
-
-- This VM is Linux. Use bash. The PowerShell snippets in Quick Commands are for Windows workstations; the same npm scripts and `deno check supabase/functions/router/index.ts` apply here.
-- Tool versions below are observations from one Cloud Agent image, rechecked on 2026-10-17. They are not repository pins. That image's login shell resolved `node` to v22.14.0 at `/exec-daemon/node` and `npm` to 10.9.9. `deno` 2.9.7 was at `/usr/local/bin/deno` because the environment install script placed it there. `package.json` `engines` accept Node `^20.19.0 || >=22.12.0`. `.nvmrc` pins 22.12.0 for local development. CI uses Node 20.
-- `vite.config.ts` sets the dev server port to 3000. `server.open` is true; a missing display does not stop the server.
-- `/demo` and `/about` render without Supabase env vars. `src/main.tsx` skips its anon-key check on those routes, and those pages do not load the Supabase client.
-- Every other route lazy-loads `AuthenticatedApp`, which constructs the shared client before auth state is known. That includes the signed-out screens on `/` and `/reset-password`, not only a signed-in session. Those screens need a resolved Supabase URL and `VITE_SUPABASE_ANON_KEY`. `src/config.ts` uses `VITE_SUPABASE_URL` when it is set. Otherwise it derives the project URL by stripping a trailing `/functions/v1/router` from `VITE_ROUTER_ENDPOINT`. When a URL resolves and `VITE_ROUTER_ENDPOINT` is unset or its host differs, the router URL becomes `${SUPABASE_URL}/functions/v1/router`. `VITE_ROUTER_ENDPOINT` is not a third mandatory variable. `createClient` throws `supabaseUrl is required.` when the resolved URL is empty. When that URL is present and the anon key is empty, it throws `supabaseKey is required.` `src/main.tsx` also logs a missing `VITE_SUPABASE_ANON_KEY` on non-public routes and still mounts React; the client throw is the failure that stops those screens.
-- On that same image, `deno check supabase/functions/router/index.ts` exited 0, and `deno lint supabase/functions/router/` reported existing `no-explicit-any` findings in router sources. Re-run both after router edits. That lint output is repository code, not a missing toolchain. Unit tests, `npm run type-check`, `npm run lint`, and `npm run build` do not need Supabase env vars.
+Report the exact files and checks actually used, their results, and any
+unverified behavior. State the highest observed delivery stage; passing local
+checks does not establish CI, review, migration application, or deployment.
