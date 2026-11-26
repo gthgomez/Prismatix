@@ -128,6 +128,7 @@ log "OpenAI-only BYOK acceptance gate"
 node scripts/qualification/byok-openai.mjs
 node scripts/qualification/byok-opencode.mjs
 node scripts/qualification/byok-catalog.mjs
+node scripts/qualification/byok-policy.mjs
 
 log "API acceptance gate (assertions, not diagnostics)"
 node scripts/qualification/smoke-router.mjs

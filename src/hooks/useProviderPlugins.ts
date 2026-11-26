@@ -171,16 +171,16 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   }, [providers]);
 
   const enabledKeyProviders = useMemo(
-    () => providers.filter((provider) => provider.hasKey && provider.enabled),
+    () => providers.filter((provider) => provider.hasKey && (provider.userEnabled ?? provider.enabled)),
     [providers],
   );
   const isVerified = enabledKeyProviders.length > 0
     && enabledKeyProviders.every((provider) => statuses[provider.id]?.status === 'enabled');
   const verificationStatus: ProviderPlugins['verificationStatus'] = isVerified
     ? 'verified'
-    : enabledKeyProviders.some((provider) => statuses[provider.id]?.status === 'invalid_revoked')
+    : enabledKeyProviders.some((provider) => provider.status === 'invalid_revoked')
       ? 'invalid'
-      : enabledKeyProviders.some((provider) => statuses[provider.id]?.status === 'unavailable')
+      : enabledKeyProviders.some((provider) => provider.status === 'unavailable')
         ? 'unavailable'
         : 'unverified';
 
