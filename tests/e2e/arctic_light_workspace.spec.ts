@@ -1,6 +1,6 @@
 import { test, expect, type Locator } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
-import { MOCK_USER, setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
+import { MOCK_USER, MOCK_CHAT_ROUTES, selectMockCompareRoutes, setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 type RequestRecord = {
   query: string;
@@ -155,12 +155,13 @@ test('New Chat keeps Chat, Compare and Debate dispatches isolated', async ({ pag
   await workflow.getByRole('button', { name: 'Compare' }).click();
   await expect(workflow.getByRole('button', { name: 'Compare' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByLabel('Debate profile')).toHaveValue('off');
+  await selectMockCompareRoutes(page);
   await sendPrompt('Compare fixture prompt', true);
   await expect(page.getByText('Mock reply 2')).toBeVisible();
   await expect(page.getByText('Mock reply 3')).toBeVisible();
   expect(routerRequests).toHaveLength(3);
   expect(routerRequests.slice(1).map((request) => request.query)).toEqual(['Compare fixture prompt', 'Compare fixture prompt']);
-  expect(routerRequests.slice(1).map((request) => request.modelOverride)).toEqual(['gemini-3.8-flash', 'gpt-6-sol']);
+  expect(routerRequests.slice(1).map((request) => request.modelOverride)).toEqual(MOCK_CHAT_ROUTES.map((route) => route.id));
   expect(routerRequests.slice(1).every((request) => !request.mode || request.mode === 'off')).toBe(true);
   expect(routerRequests.slice(1).every((request) => request.routingProfile === 'balanced')).toBe(true);
 

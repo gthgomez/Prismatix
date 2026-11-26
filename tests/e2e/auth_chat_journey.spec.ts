@@ -53,7 +53,7 @@ test.describe('Authenticated chat journey (mock provider)', () => {
     await page.route('**/functions/v1/provider-settings*', async (route) => route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ providers: [], defaultProvider: 'openrouter' }),
+      body: JSON.stringify({ providers: [], routes: [], defaultProvider: null }),
     }));
     await page.route('**/auth/v1/user*', async (route) => route.fulfill({
       status: 200,
@@ -103,7 +103,7 @@ test.describe('Authenticated chat journey (mock provider)', () => {
     await page.route('**/functions/v1/provider-settings*', async (route) => route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ providers: [], defaultProvider: 'openrouter' }),
+      body: JSON.stringify({ providers: [], routes: [], defaultProvider: null }),
     }));
     await page.route('**/auth/v1/user*', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_USER) }));
     await page.route('**/auth/v1/token*', async (route) => {

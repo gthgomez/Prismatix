@@ -204,7 +204,8 @@ export async function discoverProviderInventory(provider: ProviderId, apiKey: st
       if (!authCheck.ok) return { status: authCheck.status >= 500 || authCheck.status === 429 ? 'unavailable' : 'unverified', discoveredAt: null, checkedAt: now, modelCount: 0, routes: [] };
       await authCheck.body?.cancel();
     }
-    const endpoint = options.baseOverride ? `${options.baseOverride}/models` : `${spec.base}${spec.path}`;
+    const resource = provider === 'openrouter' ? 'models/user' : 'models';
+    const endpoint = options.baseOverride ? `${options.baseOverride}/${resource}` : `${spec.base}${spec.path}`;
     const response = await (options.fetchFn ?? fetch)(endpoint, {
       headers: provider === 'anthropic' ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' } : provider === 'google' ? { 'x-goog-api-key': apiKey } : { Authorization: `Bearer ${apiKey}` },
       redirect: 'error',
@@ -217,7 +218,7 @@ export async function discoverProviderInventory(provider: ProviderId, apiKey: st
     const payload = await response.json();
     const modelRows = provider === 'google' ? arrayAt(payload, ['models']) : arrayAt(payload, ['data']);
     if (modelRows.length === 0 || modelRows.some((row) => !(provider === 'google' ? str(row, 'name') : str(row, 'id')))) {
-      return { status: 'unverified', discoveredAt: null, checkedAt: now, modelCount: 0, routes: [] };
+      return { status: 'unavailable', discoveredAt: null, checkedAt: now, modelCount: 0, routes: [] };
     }
     let routes = normalizeProviderModels(provider, payload, await options.publicMetadata);
     if (provider === 'opencode_go' && routes.length) {

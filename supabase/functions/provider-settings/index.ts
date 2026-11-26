@@ -18,7 +18,6 @@ import {
   isDefaultProviderChoice,
   isProviderId,
   resolveDefaultProvider,
-  resolveEnabledProviderIds,
   type ProviderId,
 } from '../_shared/provider_registry.ts';
 
@@ -285,7 +284,6 @@ export function buildProviderStates(
   }
 
   const defaultProvider = resolveDefaultProvider(config);
-  const enabledSet = resolveEnabledProviderIds(config);
   const now = Date.now();
   const usable = (row: RawProviderRow | undefined): row is RawProviderRow & { inventory: ProviderInventory } =>
     Boolean(row && row.enabled === true && row.has_key === true && isCurrentInventory(row.inventory as ProviderInventory | undefined, now));
@@ -301,7 +299,7 @@ export function buildProviderStates(
     const plugin = PROVIDER_PLUGINS[id];
     const row = rows.get(id);
     const hasKey = row?.has_key === true;
-    const userEnabled = enabledSet.has(id) && row?.enabled === true && hasKey;
+    const userEnabled = row?.enabled === true && hasKey;
     const enabled = id === 'brave'
       ? userEnabled
       : routes.some((route) => route.provider === id);

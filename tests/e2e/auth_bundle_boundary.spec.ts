@@ -57,7 +57,7 @@ test('normal mocked sign-in downloads chat only after authentication', async ({ 
   await page.route('**/functions/v1/provider-settings*', async (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ providers: [], defaultProvider: 'openrouter' }),
+    body: JSON.stringify({ providers: [], routes: [], defaultProvider: null }),
   }));
   await page.route('**/rest/v1/**', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
   await page.goto('/');

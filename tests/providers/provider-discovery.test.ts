@@ -20,7 +20,7 @@ describe('provider discovery', () => {
   it('rejects malformed and empty catalogs without marking them verified', async () => {
     for (const body of [{ data: [] }, { nope: [] }]) {
       const inventory = await discoverProviderInventory('openai', 'fixture-key', { fetchFn: async () => new Response(JSON.stringify(body), { status: 200 }) });
-      expect(inventory.status).toBe('unverified');
+      expect(inventory.status).toBe('unavailable');
       expect(inventory.discoveredAt).toBeNull();
     }
   });

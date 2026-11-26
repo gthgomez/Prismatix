@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // Deterministic, non-billable provider substitute for local qualification.
 //
-// The router dispatches to `${OPENROUTER_BASE_URL}/chat/completions`. Pointing
-// that variable at this process lets the real Edge function, the real database
-// and the real settlement path run end to end without a live provider call.
+// Point the local stack's PRISMATIX_QUAL_PROVIDER_BASE_URL at this process
+// to exercise the Edge handlers, database and settlement against fixtures.
 //
 // Safety properties:
 //   * binds to 127.0.0.1 only;

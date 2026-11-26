@@ -26,6 +26,23 @@ export const MOCK_SESSION = {
   user: MOCK_USER,
 };
 
+export const MOCK_CHAT_ROUTES = [
+  { ...servingRouteFixture('openrouter', 'google/gemini-3.8-flash'), name: 'Gemini 3.8 Flash', canonicalId: 'gemini-3.8-flash', developer: 'Google' },
+  { ...servingRouteFixture('openrouter', 'openai/gpt-6-sol'), name: 'GPT-6 Sol', canonicalId: 'gpt-6-sol', developer: 'OpenAI' },
+];
+
+export async function selectMockCompareRoutes(page: Page) {
+  const toggle = page.getByRole('button', { name: 'Routing details', exact: true });
+  if (await toggle.isVisible()) await toggle.click();
+  const panel = page.getByRole('complementary', { name: 'Routing details' });
+  const summary = panel.getByText('Model options', { exact: true });
+  if (!await summary.evaluate((element) => element.closest('details')?.open)) await summary.click();
+  await panel.getByLabel('Model A').selectOption(MOCK_CHAT_ROUTES[0]!.id);
+  await panel.getByLabel('Model B').selectOption(MOCK_CHAT_ROUTES[1]!.id);
+  const close = panel.getByRole('button', { name: 'Close routing details' });
+  if (await close.isVisible()) await close.click();
+}
+
 export interface MockAppOptions {
   hasProviderKey?: boolean;
   routes?: ServingRoute[];
@@ -54,7 +71,7 @@ export interface MockAppOptions {
 
 export async function setupAuthenticatedMock(page: Page, options: MockAppOptions = {}) {
   const hasKey = options.hasProviderKey ?? true;
-  const routes = options.routes ?? [servingRouteFixture('openrouter', 'google/gemini-3.8-flash')];
+  const routes = options.routes ?? MOCK_CHAT_ROUTES;
   const conversations = options.conversations ?? [
     {
       id: 'c1111111-1111-4111-8111-111111111111',

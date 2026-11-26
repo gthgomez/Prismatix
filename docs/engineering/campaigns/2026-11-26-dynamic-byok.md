@@ -41,3 +41,31 @@ Official documentation consulted includes [OpenAI Models](https://platform.opena
 3. Invoke `catalog-reconcile` with the existing server-side job infrastructure on a six-hour cadence. Verify service authentication and the last successful snapshot timestamp. The implementation also reconciles on demand with coalescing, bounded fetches and retry backoff. Hosted scheduling is pending release authorization.
 4. Execute the remaining matrix with authorized provider accounts and spending. Keep fixture endpoints and the staging isolation guard in place for their respective environments. The loopback fixture override belongs only in the local stack.
 5. For rollback, pause affected inference entry points, then roll back the web and Edge releases as a coordinated set. Preserve the additive migration, encrypted credentials, versions and accounting history. Use an authorization-safe rollback build or leave inference paused. The previous production router can reintroduce the defect documented here. Do not restore the old default-provider behavior or the old unrestricted dispatch path.
+
+## Acceptance evidence
+
+| Provider or integration | Evidence on the local application candidate | Live qualification |
+| --- | --- | --- |
+| OpenAI direct | Authenticated inventory exposed GPT-6.2 Sol and excluded the unpriced item. Exact manual and all three Auto policies used Responses with matched fixture authorization. Each API fixture turn settled at $0.000200 from 40 input, 8 output and 4 reasoning tokens. The browser also sent both manual and Auto from a newly configured account. | Awaiting an authorized account and spend cap |
+| OpenRouter | Matched account key, exact chat route, persisted transcript and settled receipt. The base fixture produced $0.000075 from 40 input and 12 output tokens. The browser compared this route with OpenAI under the account execution lease. | Awaiting an authorized account and spend cap |
+| OpenCode Console (Zen) | Separate key, inventory, protocol and credit-based tariff exercised through the connection and router functions. The fixture settled at $0.000064. | Awaiting an authorized account and spend cap |
+| OpenCode Go | Separate Go inventory and coding route, stable session header and allowance checks. The fixture logged a $0.000064 tariff estimate. General chat and exhausted allowance controls made zero inference calls. | Awaiting an authorized subscription, allowance and spend cap |
+| Command Code | Public discovery and native protocol translation covered by code and contract tests. No account-entitled, priced route can be admitted with the available evidence. | Open, requires account entitlement and price evidence |
+| Anthropic and Google | Native protocol contracts, usage parsers and eligibility covered by automated tests. | Awaiting authorized credentials and native execution |
+| NVIDIA and DeepInfra | Adapter paths support exact compatible inventory and require verified pricing. NVIDIA public free offers do not establish the account's rate. DeepInfra retains its operator gate. | Awaiting qualified tariffs, enabled environments and authorized accounts |
+| Brave Search | Retained as a separate search integration. | Inference is outside its scope |
+
+The real browser served the compiled app and current handlers against local GoTrue, PostgREST and PostgreSQL. Provider responses and charges were deterministic fixtures. The cloud Docker host could not run the Edge container’s normal network path with its file-descriptor limit and proxy restrictions, so a local Deno listener hosted the same function sources for these runs. GitHub Actions runs the Supabase CLI and Edge container separately. Acceptance review inspected the browser artifacts, sanitized provider call metadata and the PostgreSQL authorization checks independently.
+
+- A fresh identity reported no key, route, enabled provider or preference. Unavailable manual routes, a too-low cap, exhausted Go quota and an invalidated restricted model had zero subsequent upstream inference. Cross-account checks passed 14 protected boundaries.
+- The local PostgreSQL test returned a credential for a verified fixture route, then rejected its old revision after disabling the connection in the same transaction. The authenticated role could not execute the dispatch RPC. The transaction was rolled back.
+- Catalog reconciliation rejected an unauthenticated call with HTTP 403 and stored Models.dev snapshot `6b27120a3324b6f9f84d2f511758d036a477319d0a042e7c45c4871d4175c1b4` locally at 2026-11-26 23:19:21 UTC. The new-model fixture admitted an exact ID that does not exist in the source catalog. Repricing moved its next receipt from $0.000065 to $0.000105 while the prior persisted receipt kept its original amount and tariff. A fixture retirement invalidated the route and the historical receipt remained readable.
+- Actual quality, latency and bill reductions are unmeasured. The above monetary values are test calculations from synthetic usage, never provider charges.
+
+See [stacked PR #76](https://github.com/gthgomez/Prismatix/pull/76) for the integration revision and Actions checks.
+
+## Open acceptance
+
+Hosted staging availability and deployment parity are unverified. The production project is inaccessible to the provisioned connector and the historical staging capacity limit could not be rechecked. The user has not authorized paid provider calls, a production merge, production migrations or deployment. No production action was taken.
+
+Command Code executability, full provider qualification, handset and tablet qualification across providers, an activated recurring hosted schedule, and measured routing outcomes are open. Public metadata and layout emulation provide a narrower level of evidence. The reviewed GPT-6.2 direct rates are a dated exact-ID override. Automatic refresh of those particular source rates and provider-specific long-context and ancillary charge assurance remain open. Inference attempts with uncertain provider billing are settled from the ledger without replaying them. Dynamic fallback after an upstream error and evidence-based tuning from live outcomes remain open.

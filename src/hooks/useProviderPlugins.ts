@@ -238,18 +238,34 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   const verifyEnabledProviders = useCallback(async (provider?: ProviderId): Promise<boolean> => {
     const accountGeneration = accountGenerationRef.current;
     const verificationRequest = ++verificationRequestRef.current;
-    const targets = providers.filter((candidate) => candidate.hasKey && candidate.enabled
+    const targets = providers.filter((candidate) => candidate.hasKey && (candidate.userEnabled ?? candidate.enabled)
       && (!provider || candidate.id === provider));
     if (targets.length === 0) return false;
     setVerificationLoading(true);
     try {
-      const results = await Promise.all(targets.map((provider) => validateKeyHandler(provider.id)));
+      const results: ProviderKeyStatus[] = [];
+      for (const target of targets) {
+        if (accountGeneration !== accountGenerationRef.current || verificationRequest !== verificationRequestRef.current || !mountedRef.current) return false;
+        if (target.enabled || target.id === 'brave' || !userId) {
+          results.push((await validateKeyHandler(target.id)).status);
+          continue;
+        }
+        // Refresh a saved connection without an eligible inventory. Checking
+        // metadata alone does not update the routes available for dispatch.
+        const next = await mutate(() => refreshProviderInventory(target.id, userId));
+        const ready = next?.routes.some((route) => route.provider === target.id);
+        if (ready && accountGeneration === accountGenerationRef.current
+            && verificationRequest === verificationRequestRef.current && mountedRef.current) {
+          setStatuses((prev) => ({ ...prev, [target.id]: { status: 'enabled' } }));
+        }
+        results.push(ready ? 'enabled' : 'unknown');
+      }
       if (accountGeneration !== accountGenerationRef.current || verificationRequest !== verificationRequestRef.current || !mountedRef.current) return false;
-      return results.length > 0 && results.every((result) => result.status === 'enabled');
+      return results.length > 0 && results.every((status) => status === 'enabled');
     } finally {
       if (accountGeneration === accountGenerationRef.current && verificationRequest === verificationRequestRef.current && mountedRef.current) setVerificationLoading(false);
     }
-  }, [providers, validateKeyHandler]);
+  }, [mutate, providers, userId, validateKeyHandler]);
 
   const invalidateVerification = useCallback(() => {
     validationSequenceRef.current = {};

@@ -1,7 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
-import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
+import { MOCK_CHAT_ROUTES, selectMockCompareRoutes, setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 import { getCatalogEntry } from '../../src/modelCatalog';
+import { servingRouteFixture } from '../helpers/serving-route-fixtures.ts';
 
 const successfulStream = (text: string, executionId: string) => ({
   status: 200,
@@ -161,7 +162,7 @@ test('Compare preserves interrupted model outcome and warns when either transcri
   await page.route('**/functions/v1/router*', async (route) => {
     const body = route.request().postDataJSON() as { modelOverride?: string };
     requests++;
-    if (body.modelOverride === 'gemini-3.8-flash') {
+    if (body.modelOverride === MOCK_CHAT_ROUTES[0]!.id) {
       const events = [
         { type: 'content_block_delta', delta: { text: 'Partial answer A' } },
         { type: 'receipt', executionId: 'compare-a', status: 'indeterminate', terminalOutcome: 'upstream_interrupted', transcript: { saved: false }, settlement: { state: 'pending', committedUsd: null, pendingCalls: 1 }, calls: [] },
@@ -173,6 +174,7 @@ test('Compare preserves interrupted model outcome and warns when either transcri
   });
   await signInAsMockUser(page);
   await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  await selectMockCompareRoutes(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
   await composer.fill('Compare without hiding a partial result');
   await composer.press('Enter');
@@ -203,6 +205,7 @@ test('Compare keeps its rollout-disabled result visible without writing assistan
   });
   await signInAsMockUser(page);
   await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  await selectMockCompareRoutes(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
   await composer.fill('Compare without rewriting an assistant row');
   await composer.press('Enter');
@@ -411,7 +414,8 @@ test('reload during Compare preserves each received response without resending',
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: content } })}\n\n`));
-          init?.signal?.addEventListener('abort', () => controller.close(), { once: true });
+          if (previous === 0) controller.close();
+          else init?.signal?.addEventListener('abort', () => controller.close(), { once: true });
         },
       });
       return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'Access-Control-Expose-Headers': 'X-Router-Model', 'X-Router-Model': request.modelOverride } });
@@ -419,6 +423,7 @@ test('reload during Compare preserves each received response without resending',
   });
   await signInAsMockUser(page);
   await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  await selectMockCompareRoutes(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
   await composer.fill('Keep both partial responses');
   await composer.press('Enter');
@@ -430,7 +435,7 @@ test('reload during Compare preserves each received response without resending',
   await summaries.nth(1).click();
   const recovered = page.getByRole('textbox', { name: 'Recovered response text' });
   await expect(recovered).toHaveCount(2);
-  expect(await Promise.all((await recovered.all()).map((item) => item.inputValue()))).toEqual(expect.arrayContaining(['Partial gemini-3.8-flash', 'Partial gpt-6-sol']));
+  expect(await Promise.all((await recovered.all()).map((item) => item.inputValue()))).toEqual(expect.arrayContaining(MOCK_CHAT_ROUTES.map((route) => `Partial ${route.id}`)));
   expect(await page.evaluate(() => sessionStorage.getItem('synthetic-compare-calls'))).toBe('2');
 });
 
@@ -984,6 +989,7 @@ for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
   test(`unrelated ${unrelatedStatus} provider does not block Auto or current-priced manual sends`, async ({ page }) => {
     const currentPricedModel = 'gemini-3.8-flash';
     const currentPricedModelName = getCatalogEntry(currentPricedModel).shortName;
+    const currentRoute = { ...servingRouteFixture('google', currentPricedModel), name: currentPricedModelName };
     await page.setViewportSize({ width: 1440, height: 900 });
     await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
     await page.route('**/functions/v1/provider-settings*', async (route) => {
@@ -1002,6 +1008,7 @@ for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
             { id: 'anthropic', label: 'Anthropic', enabled: true, hasKey: true, status: unrelatedStatus },
           ],
           defaultProvider: 'google',
+          routes: [currentRoute],
         }),
       });
     });
@@ -1029,11 +1036,11 @@ for (const unrelatedStatus of ['invalid_revoked', 'unavailable'] as const) {
 
     expect(routerRequests).toHaveLength(2);
     expect(routerRequests[0]?.modelOverride).toBeUndefined();
-    expect(routerRequests[1]?.modelOverride).toBe(currentPricedModel);
+    expect(routerRequests[1]?.modelOverride).toBe(currentRoute.id);
   });
 }
 
-test('stale legacy model is labeled and rejected with a safe next step without retry', async ({ page }) => {
+test('stale legacy model stays out of the executable model picker', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await setupAuthenticatedMock(page, { hasProviderKey: true, conversations: [], messages: [] });
   await page.route('**/functions/v1/provider-settings*', async (route) => {
@@ -1048,6 +1055,7 @@ test('stale legacy model is labeled and rejected with a safe next step without r
       body: JSON.stringify({
         providers: [{ id: 'google', label: 'Google', enabled: true, hasKey: true, status: 'enabled' }],
         defaultProvider: 'google',
+        routes: [servingRouteFixture('google', 'gemini-3.8-flash')],
       }),
     });
   });
@@ -1072,20 +1080,9 @@ test('stale legacy model is labeled and rejected with a safe next step without r
   await expect(page.getByText('Initial current-priced response')).toBeVisible();
   await page.getByRole('button', { name: 'Choose routing mode: automatic' }).click();
   await page.getByRole('tab', { name: 'Models' }).click();
-  const staleModelId = 'gemini-2.5-flash';
-  const staleModelName = getCatalogEntry(staleModelId).shortName;
-  await page.getByRole('region', { name: 'Historic model catalog' }).getByRole('button', { name: /Historic models/ }).click();
-  const staleModelOption = page.locator('.model-option').filter({ hasText: staleModelName });
-  await expect(staleModelOption).toContainText('Pricing needs review');
-  await staleModelOption.click();
-  await expect(page.getByRole('button', { name: `Choose model: ${staleModelName}` })).toBeVisible();
-
-  await composer.fill('Use the stale model only once');
-  await composer.press('Enter');
-  await expect(page.getByRole('alert')).toContainText('Pricing for this model is not verified or current');
-  await expect(page.getByRole('alert')).toContainText('Choose a model with current pricing');
-  await expect(composer).toHaveValue('Use the stale model only once');
-  expect(routerRequests).toBe(2);
+  await page.getByRole('searchbox', { name: 'Search models' }).fill(getCatalogEntry('gemini-2.5-flash').shortName);
+  await expect(page.locator('.model-option')).toHaveCount(0);
+  expect(routerRequests).toBe(1);
 });
 
 test('provider settings lookup failure blocks send, keeps draft, and retry restores router-authorized readiness', async ({ page }) => {
@@ -1101,7 +1098,7 @@ test('provider settings lookup failure blocks send, keeps draft, and retry resto
     if (checks === 1) {
       await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'temporary unavailable' }) });
     } else {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, status: 'enabled' }], defaultProvider: 'openrouter' }) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ routes: MOCK_CHAT_ROUTES, providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, status: 'enabled' }], defaultProvider: 'openrouter' }) });
     }
   });
   let sends = 0;
@@ -1320,7 +1317,7 @@ test('saved history exposes provider-check retry and keeps drafts blocked until 
     if (check === 1) {
       await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'temporary unavailable' }) });
     } else {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, status: 'enabled' }], defaultProvider: 'openrouter' }) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ routes: MOCK_CHAT_ROUTES, providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, status: 'enabled' }], defaultProvider: 'openrouter' }) });
     }
   });
   let sends = 0;
@@ -1349,27 +1346,38 @@ test('first-run unverified provider blocks; a returning configured key is router
   await setupAuthenticatedMock(page, { hasProviderKey: false, conversations: [], messages: [] });
   let validationCalls = 0;
   let savedKey = false;
+  let inventoryVerified = false;
   await page.route('**/functions/v1/provider-settings*', async (route) => {
     const body = route.request().method() === 'POST'
       ? route.request().postDataJSON() as Record<string, unknown>
       : {};
     if (body.action === 'validate_key') {
       validationCalls++;
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider: 'openrouter', status: validationCalls === 1 ? 'unavailable' : 'enabled', message: 'metadata check unavailable' }) });
-      return;
+      return route.fulfill({ json: { provider: 'openrouter', status: 'unavailable', message: 'metadata check unavailable' } });
     }
-    if (body.action === 'set_key') {
-      savedKey = true;
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: '0715', status: 'enabled' }], defaultProvider: 'openrouter' }) });
-      return;
-    }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ providers: savedKey ? [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: '0715', status: 'enabled' }] : [], defaultProvider: 'openrouter' }) });
+    if (body.action === 'set_key') savedKey = true;
+    if (body.action === 'refresh_inventory') inventoryVerified = true;
+    return route.fulfill({ json: {
+      routes: inventoryVerified ? MOCK_CHAT_ROUTES : [],
+      providers: savedKey ? [{
+        id: 'openrouter',
+        label: 'OpenRouter',
+        enabled: inventoryVerified,
+        userEnabled: true,
+        hasKey: true,
+        keyLast4: '0715',
+        status: inventoryVerified ? 'enabled' : 'unavailable',
+        inventoryStatus: inventoryVerified ? 'verified' : 'unavailable',
+        qualifiedModelCount: inventoryVerified ? MOCK_CHAT_ROUTES.length : 0,
+      }] : [],
+      defaultProvider: null,
+    } });
   });
   await signInAsMockUser(page);
   await page.locator('#first-run-openrouter-key').fill('sk-or-synthetic-unverified-0715');
   await page.getByRole('button', { name: 'Connect provider' }).click();
   const routeStatus = page.locator('.arctic-route-status');
-  await expect(routeStatus).toContainText('Verification unavailable');
+  await expect(page.getByText('Could not verify provider key')).toBeVisible();
   await expect(routeStatus).toHaveClass(/setup/);
   let routerCalls = 0;
   await page.route('**/functions/v1/router*', async (route) => {
