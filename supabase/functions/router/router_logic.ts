@@ -2,8 +2,9 @@
 
 import { CURATED_OPENCODE_REGISTRY, CURATED_ROUTE_POLICY, type Gateway, type RouteRole, resolveRoleCandidates } from './models_hub.ts';
 import { getPricingForModel } from './pricing_registry.ts';
+import type { InferenceProviderId, ServingRoute } from '../_shared/serving_routes.ts';
 
-export type Provider = 'opencode' | 'openrouter' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'deepinfra';
+export type Provider = InferenceProviderId;
 
 export function nativeProviderForTier(modelTier: string): Provider {
   const family = CURATED_OPENCODE_REGISTRY[modelTier]?.family;
@@ -305,6 +306,7 @@ export interface RoutingDebugInfo {
 }
 
 export interface RouteDecision {
+  servingRoute?: ServingRoute;
   provider: Provider;
   model: string;
   modelTier: RouterModel;

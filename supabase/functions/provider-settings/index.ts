@@ -7,6 +7,11 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { ByokConfigError, decryptKey, encryptKey } from '../_shared/byok_crypto.ts';
+import { discoverProviderInventory } from '../_shared/provider_discovery.ts';
+import { loadModelsDevMetadata } from '../_shared/models_dev_metadata.ts';
+import { isCurrentInventory, isCurrentRouteTariff, type ProviderInventory, type ServingRoute } from '../_shared/serving_routes.ts';
+import { inferenceProviderEnabled, qualificationProviderBase } from '../_shared/provider_endpoint.ts';
+import type { InferenceProviderId } from '../_shared/serving_routes.ts';
 import {
   PROVIDER_PLUGIN_ORDER,
   PROVIDER_PLUGINS,
@@ -17,7 +22,8 @@ import {
   type ProviderId,
 } from '../_shared/provider_registry.ts';
 
-const _ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') || 'http://localhost:3000';
+const denoRuntime = (globalThis as unknown as { Deno?: { env: { get(key: string): string | undefined }; serve(handler: (req: Request) => Promise<Response>): void } }).Deno;
+const _ALLOWED_ORIGIN = denoRuntime?.env.get('ALLOWED_ORIGIN') || 'http://localhost:3000';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': _ALLOWED_ORIGIN,
@@ -30,6 +36,7 @@ const MIN_KEY_LENGTH = 8;
 // Visible ASCII only: rejects whitespace/control characters that would produce
 // opaque upstream failures.
 const KEY_CHARSET = /^[\x21-\x7E]+$/;
+const activeRefreshes = new Map<string, Promise<'saved' | 'changed' | 'missing'>>();
 
 export interface ProviderSettingsUser {
   id: string;
@@ -53,6 +60,7 @@ export type ProviderKeyStatus =
   | 'enabled'
   | 'disabled'
   | 'invalid_revoked'
+  | 'restricted'
   | 'unavailable'
   | 'unknown';
 
@@ -72,6 +80,8 @@ interface RawProviderRow {
   enabled?: unknown;
   has_key?: unknown;
   key_last4?: unknown;
+  credential_revision?: unknown;
+  inventory?: unknown;
 }
 
 export interface ProviderStatePayload {
@@ -79,14 +89,20 @@ export interface ProviderStatePayload {
     id: ProviderId;
     label: string;
     enabled: boolean;
+    userEnabled: boolean;
     hasKey: boolean;
     keyLast4: string | null;
     offeredByDefault: boolean;
     defaultProvider: boolean;
     status: ProviderKeyStatus;
     statusMessage?: string;
+    inventoryStatus: string;
+    lastSuccessfulRefresh: string | null;
+    availableModelCount: number;
+    qualifiedModelCount: number;
   }>;
-  defaultProvider: ProviderId;
+  defaultProvider: ProviderId | null;
+  routes: ServingRoute[];
 }
 
 /**
@@ -98,19 +114,22 @@ export async function validateProviderKeyMetadata(
   provider: ProviderId,
   apiKey: string,
   fetchFn: typeof fetch = fetch,
+  baseOverride?: string,
 ): Promise<{ status: ProviderKeyStatus; message?: string }> {
   try {
     if (provider === 'openrouter') {
-      const res = await fetchFn('https://openrouter.ai/api/v1/auth/key', {
+      const res = await fetchFn(baseOverride ? `${baseOverride}/auth/key` : 'https://openrouter.ai/api/v1/auth/key', {
         headers: { Authorization: `Bearer ${apiKey}` },
+        redirect: 'error',
         signal: AbortSignal.timeout(6000),
       });
       if (res.ok) {
         return { status: 'enabled', message: 'OpenRouter key verified' };
       }
-      if (res.status === 401 || res.status === 403) {
-        return { status: 'invalid_revoked', message: 'OpenRouter returned 401/403: Key invalid or revoked' };
+      if (res.status === 401) {
+        return { status: 'invalid_revoked', message: 'OpenRouter returned 401: Key invalid or revoked' };
       }
+      if (res.status === 403 || res.status === 402) return { status: 'restricted', message: 'OpenRouter account or model access is restricted' };
       if (res.status >= 500) {
         return { status: 'unavailable', message: `OpenRouter metadata service unavailable (${res.status})` };
       }
@@ -118,16 +137,18 @@ export async function validateProviderKeyMetadata(
     }
 
     if (provider === 'openai') {
-      const res = await fetchFn('https://api.openai.com/v1/models', {
+      const res = await fetchFn(baseOverride ? `${baseOverride}/models` : 'https://api.openai.com/v1/models', {
         headers: { Authorization: `Bearer ${apiKey}` },
+        redirect: 'error',
         signal: AbortSignal.timeout(6000),
       });
       if (res.ok) {
         return { status: 'enabled', message: 'OpenAI key verified' };
       }
-      if (res.status === 401 || res.status === 403) {
-        return { status: 'invalid_revoked', message: 'OpenAI returned 401/403: Key invalid or revoked' };
+      if (res.status === 401) {
+        return { status: 'invalid_revoked', message: 'OpenAI returned 401: Key invalid or revoked' };
       }
+      if (res.status === 403 || res.status === 402) return { status: 'restricted', message: 'OpenAI account or model access is restricted' };
       if (res.status >= 500) {
         return { status: 'unavailable', message: `OpenAI metadata service unavailable (${res.status})` };
       }
@@ -135,19 +156,21 @@ export async function validateProviderKeyMetadata(
     }
 
     if (provider === 'anthropic') {
-      const res = await fetchFn('https://api.anthropic.com/v1/models', {
+      const res = await fetchFn(baseOverride ? `${baseOverride}/models` : 'https://api.anthropic.com/v1/models', {
         headers: {
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
         },
+        redirect: 'error',
         signal: AbortSignal.timeout(6000),
       });
       if (res.ok) {
         return { status: 'enabled', message: 'Anthropic key verified' };
       }
-      if (res.status === 401 || res.status === 403) {
-        return { status: 'invalid_revoked', message: 'Anthropic returned 401/403: Key invalid or revoked' };
+      if (res.status === 401) {
+        return { status: 'invalid_revoked', message: 'Anthropic returned 401: Key invalid or revoked' };
       }
+      if (res.status === 403 || res.status === 402) return { status: 'restricted', message: 'Anthropic account or model access is restricted' };
       if (res.status >= 500) {
         return { status: 'unavailable', message: `Anthropic metadata service unavailable (${res.status})` };
       }
@@ -155,16 +178,18 @@ export async function validateProviderKeyMetadata(
     }
 
     if (provider === 'google') {
-      const res = await fetchFn('https://generativelanguage.googleapis.com/v1beta/models', {
+      const res = await fetchFn(baseOverride ? `${baseOverride}/models` : 'https://generativelanguage.googleapis.com/v1beta/models', {
         headers: { 'x-goog-api-key': apiKey },
+        redirect: 'error',
         signal: AbortSignal.timeout(6000),
       });
       if (res.ok) {
         return { status: 'enabled', message: 'Google Gemini key verified' };
       }
-      if (res.status === 400 || res.status === 401 || res.status === 403) {
+      if (res.status === 400 || res.status === 401) {
         return { status: 'invalid_revoked', message: 'Google returned error: Key invalid or revoked' };
       }
+      if (res.status === 403 || res.status === 402) return { status: 'restricted', message: 'Google account or model access is restricted' };
       if (res.status >= 500) {
         return { status: 'unavailable', message: `Google metadata service unavailable (${res.status})` };
       }
@@ -172,12 +197,14 @@ export async function validateProviderKeyMetadata(
     }
 
     if (provider === 'deepinfra') {
-      const res = await fetchFn('https://api.deepinfra.com/v1/models', {
+      const res = await fetchFn(baseOverride ? `${baseOverride}/models` : 'https://api.deepinfra.com/v1/models', {
         headers: { Authorization: `Bearer ${apiKey}` },
+        redirect: 'error',
         signal: AbortSignal.timeout(6000),
       });
       if (res.ok) return { status: 'enabled', message: 'DeepInfra key verified' };
-      if (res.status === 401 || res.status === 403) return { status: 'invalid_revoked', message: 'DeepInfra key invalid' };
+      if (res.status === 401) return { status: 'invalid_revoked', message: 'DeepInfra key invalid' };
+      if (res.status === 403 || res.status === 402) return { status: 'restricted', message: 'DeepInfra account or model access is restricted' };
       if (res.status >= 500) return { status: 'unavailable', message: `DeepInfra service unavailable (${res.status})` };
       return { status: 'unknown', message: `DeepInfra response: HTTP ${res.status}` };
     }
@@ -188,10 +215,12 @@ export async function validateProviderKeyMetadata(
           Accept: 'application/json',
           'X-Subscription-Token': apiKey,
         },
+        redirect: 'error',
         signal: AbortSignal.timeout(6000),
       });
       if (res.ok) return { status: 'enabled', message: 'Brave Search key verified' };
-      if (res.status === 401 || res.status === 403) return { status: 'invalid_revoked', message: 'Brave Search key invalid' };
+      if (res.status === 401) return { status: 'invalid_revoked', message: 'Brave Search key invalid' };
+      if (res.status === 403 || res.status === 402) return { status: 'restricted', message: 'Brave Search account or plan is restricted' };
       if (res.status >= 500) return { status: 'unavailable', message: `Brave Search service unavailable (${res.status})` };
       return { status: 'unknown', message: `Brave Search response: HTTP ${res.status}` };
     }
@@ -233,14 +262,20 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
+function retainLastSuccessfulInventory(previous: unknown, next: ProviderInventory): ProviderInventory {
+  if (next.status === 'verified' || !previous || typeof previous !== 'object') return next;
+  const old = previous as ProviderInventory;
+  return old.discoveredAt && Array.isArray(old.routes)
+    ? { ...next, discoveredAt: old.discoveredAt, modelCount: old.modelCount, routes: old.routes }
+    : next;
+}
+
 /**
- * Resolves per-provider plug-in state for the client. Providers are enabled
- * only when selected in the user's config; OpenCode is disabled in BYOK-only
- * mode because it has no per-user BYOK key path.
+ * Keeps the user's setting and the set of routes ready for dispatch distinct.
  */
 export function buildProviderStates(
   config: RawUserConfig | null,
-  _getEnv: (key: string) => string | undefined,
+  getEnv: (key: string) => string | undefined,
 ): ProviderStatePayload {
   const rows = new Map<ProviderId, RawProviderRow>();
   if (Array.isArray(config?.providers)) {
@@ -251,36 +286,59 @@ export function buildProviderStates(
 
   const defaultProvider = resolveDefaultProvider(config);
   const enabledSet = resolveEnabledProviderIds(config);
+  const now = Date.now();
+  const usable = (row: RawProviderRow | undefined): row is RawProviderRow & { inventory: ProviderInventory } =>
+    Boolean(row && row.enabled === true && row.has_key === true && isCurrentInventory(row.inventory as ProviderInventory | undefined, now));
+  const routes = PROVIDER_PLUGIN_ORDER.flatMap((id) => {
+    const row = rows.get(id);
+    if (id === 'brave' || !usable(row) || !inferenceProviderEnabled(id, getEnv)) return [];
+    const restricted = row.inventory.restrictedRouteIds ?? [];
+    return row.inventory.routes.filter((route) => !restricted.includes(route.id) && isCurrentRouteTariff(route.tariff, now));
+  });
+  const selectedDefault = defaultProvider && routes.some((route) => route.provider === defaultProvider) ? defaultProvider : null;
 
   const providers = PROVIDER_PLUGIN_ORDER.map((id) => {
     const plugin = PROVIDER_PLUGINS[id];
     const row = rows.get(id);
-    const hasKey = id !== 'opencode' && row?.has_key === true;
-    const enabled = enabledSet.has(id);
+    const hasKey = row?.has_key === true;
+    const userEnabled = enabledSet.has(id) && row?.enabled === true && hasKey;
+    const enabled = id === 'brave'
+      ? userEnabled
+      : routes.some((route) => route.provider === id);
+    const inventory = row?.inventory && typeof row.inventory === 'object' ? row.inventory as ProviderInventory : null;
     let status: ProviderKeyStatus = 'not_configured';
     if (!hasKey) {
       status = 'not_configured';
-    } else if (!enabled) {
-      status = 'disabled';
-    } else {
+    } else if (inventory?.status === 'invalid_revoked') {
+      status = 'invalid_revoked';
+    } else if (inventory?.status === 'unavailable') {
+      status = 'unavailable';
+    } else if (enabled) {
       status = 'enabled';
+    } else {
+      status = row?.enabled === true ? 'unknown' : 'disabled';
     }
 
     return {
       id,
       label: plugin.label,
       enabled,
+      userEnabled,
       // Server secrets are never credentials in BYOK-only mode. Only the
       // caller's encrypted provider row can make a provider key-present.
       hasKey,
       keyLast4: typeof row?.key_last4 === 'string' ? row.key_last4 : null,
       offeredByDefault: plugin.offeredByDefault,
-      defaultProvider: defaultProvider === id,
+      defaultProvider: selectedDefault === id,
       status,
+      inventoryStatus: !hasKey ? 'not_configured' : typeof inventory?.status === 'string' ? inventory.status : 'unverified',
+      lastSuccessfulRefresh: typeof inventory?.discoveredAt === 'string' ? inventory.discoveredAt : null,
+      availableModelCount: typeof inventory?.modelCount === 'number' ? inventory.modelCount : 0,
+      qualifiedModelCount: routes.filter((route) => route.provider === id).length,
     };
   });
 
-  return { providers, defaultProvider };
+  return { providers, defaultProvider: selectedDefault, routes };
 }
 
 async function loadUserConfig(
@@ -301,7 +359,7 @@ export async function handleProviderSettings(
   req: Request,
   deps: ProviderSettingsDeps = {},
 ): Promise<Response> {
-  const getEnv = deps.getEnv ?? ((key: string): string | undefined => Deno.env.get(key));
+  const getEnv = deps.getEnv ?? ((key: string): string | undefined => denoRuntime?.env.get(key));
   const makeClient = deps.createClient ?? createServiceRoleClient;
 
   if (req.method === 'OPTIONS') {
@@ -333,8 +391,53 @@ export async function handleProviderSettings(
     return jsonResponse(buildProviderStates(config, getEnv), 200);
   };
 
+  const subjectId = user.id;
+  function refreshSavedRow(provider: InferenceProviderId, row: RawProviderRow): Promise<'saved' | 'changed' | 'missing'> {
+    const revision = row.credential_revision;
+    if (typeof revision !== 'string') return Promise.resolve('missing');
+    const scope = `${subjectId}:${provider}:${revision}`;
+    const pending = activeRefreshes.get(scope);
+    if (pending) return pending;
+    const refresh = (async (): Promise<'saved' | 'changed' | 'missing'> => {
+      const { data: ciphertext, error } = await supabase.rpc('get_user_provider_key_material', {
+        p_subject_id: subjectId, p_provider: provider,
+      });
+      if (error || typeof ciphertext !== 'string' || !ciphertext) return 'missing';
+      const key = await decryptKey(ciphertext);
+      const baseOverride = qualificationProviderBase(provider, getEnv);
+      const freshInventory = await discoverProviderInventory(provider, key, {
+        fetchFn: deps.fetchFn ?? fetch, baseOverride,
+        publicMetadata: !baseOverride && !deps.fetchFn ? loadModelsDevMetadata(provider, supabase) : undefined,
+      });
+      const inventory = retainLastSuccessfulInventory(row.inventory, freshInventory);
+      const { data: saved, error: saveError } = await supabase.rpc('save_user_provider_inventory', {
+        p_subject_id: subjectId, p_provider: provider, p_credential_revision: revision,
+        p_expected_ciphertext: ciphertext, p_inventory: inventory,
+      });
+      if (saveError) throw new Error('save_inventory_failed');
+      return saved === true ? 'saved' : 'changed';
+    })().finally(() => { activeRefreshes.delete(scope); });
+    activeRefreshes.set(scope, refresh);
+    return refresh;
+  }
+
   try {
     if (req.method === 'GET') {
+      const config = await loadUserConfig(supabase, user.id);
+      const rows = Array.isArray(config?.providers) ? config.providers as RawProviderRow[] : [];
+      // Only active saved connections are eligible for opportunistic refresh.
+      // Bound outbound work even when several inventories expired together.
+      const stale = rows.filter((row) => {
+        const id = row.provider;
+        if (!isProviderId(id) || id === 'brave' || !inferenceProviderEnabled(id, getEnv) ||
+            row.enabled !== true || row.has_key !== true || typeof row.credential_revision !== 'string') return false;
+        const inventory = row.inventory as ProviderInventory | undefined;
+        const lastAttempt = inventory?.checkedAt ? Date.parse(inventory.checkedAt) : 0;
+        if (inventory?.status === 'invalid_revoked' || inventory?.status === 'restricted' || isCurrentInventory(inventory)) return false;
+        return Date.now() - lastAttempt > 30 * 60_000;
+      }).slice(0, 2);
+      if (!stale.length) return jsonResponse(buildProviderStates(config, getEnv), 200);
+      await Promise.allSettled(stale.map((row) => refreshSavedRow(row.provider as InferenceProviderId, row)));
       return await respondWithState();
     }
 
@@ -354,7 +457,7 @@ export async function handleProviderSettings(
     switch (action) {
       case 'set_key': {
         const provider = body.provider;
-        if (!isProviderId(provider) || provider === 'opencode') {
+        if (!isProviderId(provider)) {
           return jsonResponse({ error: 'invalid_provider' }, 400);
         }
         const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
@@ -385,12 +488,43 @@ export async function handleProviderSettings(
           p_enabled: true,
         });
         if (error) throw new Error(error.message ?? 'set_key_failed');
+        if (provider === 'brave') return await respondWithState();
+        const baseOverride = qualificationProviderBase(provider, getEnv);
+        const current = await loadUserConfig(supabase, user.id);
+        const row = Array.isArray(current?.providers) ? (current.providers as RawProviderRow[]).find((r) => r.provider === provider) : undefined;
+        const freshInventory = await discoverProviderInventory(provider, apiKey, { fetchFn: deps.fetchFn ?? fetch, baseOverride, publicMetadata: !baseOverride && !deps.fetchFn ? loadModelsDevMetadata(provider, supabase) : undefined });
+        const inventory = retainLastSuccessfulInventory(row?.inventory, freshInventory);
+        if (row && typeof row.credential_revision === 'string') {
+          const { data: saved, error: saveError } = await supabase.rpc('save_user_provider_inventory', {
+            p_subject_id: user.id, p_provider: provider, p_credential_revision: row.credential_revision,
+            p_expected_ciphertext: encrypted.ciphertext, p_inventory: inventory,
+          });
+          if (saveError) throw new Error(saveError.message ?? 'save_inventory_failed');
+          if (saved !== true) return jsonResponse({ error: 'credential_changed_during_refresh' }, 409);
+        }
+        return await respondWithState();
+      }
+
+      case 'refresh_inventory': {
+        const provider = body.provider;
+        if (!isProviderId(provider) || provider === 'brave') return jsonResponse({ error: 'invalid_provider' }, 400);
+        const config = await loadUserConfig(supabase, user.id);
+        const row = Array.isArray(config?.providers) ? (config.providers as RawProviderRow[]).find((r) => r.provider === provider) : undefined;
+        if (!row || typeof row.credential_revision !== 'string') return jsonResponse({ error: 'not_configured' }, 409);
+        const previousInventory = row.inventory as ProviderInventory | undefined;
+        const lastCheckAge = previousInventory?.checkedAt ? Date.now() - Date.parse(previousInventory.checkedAt) : Number.POSITIVE_INFINITY;
+        if (lastCheckAge >= 0 && lastCheckAge < 30_000) {
+          return jsonResponse({ error: 'refresh_throttled', retryAfterSeconds: Math.ceil((30_000 - lastCheckAge) / 1000) }, 429);
+        }
+        const refreshed = await refreshSavedRow(provider, row);
+        if (refreshed === 'missing') return jsonResponse({ error: 'not_configured' }, 409);
+        if (refreshed === 'changed') return jsonResponse({ error: 'credential_changed_during_refresh' }, 409);
         return await respondWithState();
       }
 
       case 'set_enabled': {
         const provider = body.provider;
-        if (!isProviderId(provider) || provider === 'opencode') {
+        if (!isProviderId(provider)) {
           return jsonResponse({ error: 'invalid_provider' }, 400);
         }
         const enabled = body.enabled === true;
@@ -405,7 +539,7 @@ export async function handleProviderSettings(
 
       case 'delete_key': {
         const provider = body.provider;
-        if (!isProviderId(provider) || provider === 'opencode') {
+        if (!isProviderId(provider)) {
           return jsonResponse({ error: 'invalid_provider' }, 400);
         }
         const { error } = await supabase.rpc('delete_user_provider_key', {
@@ -431,7 +565,7 @@ export async function handleProviderSettings(
 
       case 'validate_key': {
         const provider = body.provider;
-        if (!isProviderId(provider) || provider === 'opencode') {
+        if (!isProviderId(provider)) {
           return jsonResponse({ error: 'invalid_provider' }, 400);
         }
 
@@ -457,6 +591,7 @@ export async function handleProviderSettings(
           provider,
           keyToValidate,
           deps.fetchFn ?? fetch,
+          provider === 'brave' ? undefined : qualificationProviderBase(provider as InferenceProviderId, getEnv),
         );
 
         return jsonResponse({
@@ -469,10 +604,10 @@ export async function handleProviderSettings(
       default:
         return jsonResponse({ error: 'unknown_action' }, 400);
     }
-  } catch (err) {
-    console.error('[provider-settings] request failed:', err);
+  } catch {
+    console.error('[provider-settings] request failed');
     return jsonResponse({ error: 'provider_settings_failed' }, 500);
   }
 }
 
-Deno.serve((req: Request): Promise<Response> => handleProviderSettings(req));
+denoRuntime?.serve((req: Request): Promise<Response> => handleProviderSettings(req));

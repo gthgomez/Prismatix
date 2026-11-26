@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_PROVIDER_CHOICES,
   FALLBACK_DEFAULT_PROVIDER,
+  PROVIDER_PLUGIN_ORDER,
   PROVIDER_PLUGINS,
   filterVisibleModels,
   isModelVisible,
@@ -13,27 +14,31 @@ import {
 import { MODEL_ORDER } from './modelCatalog';
 
 describe('provider plug-in defaults', () => {
-  it('offers only the BYOK OpenRouter gateway by default', () => {
-    expect(DEFAULT_PROVIDER_CHOICES).toEqual(['openrouter']);
+  it('offers inference providers as default choices, but not key-only Brave Search', () => {
+    expect(DEFAULT_PROVIDER_CHOICES).toEqual(PROVIDER_PLUGIN_ORDER.filter((provider) => provider !== 'brave'));
     const offered = Object.values(PROVIDER_PLUGINS)
       .filter((p) => p.offeredByDefault)
       .map((p) => p.id)
       .sort();
-    expect(offered).toEqual(['openrouter']);
+    expect(offered).toEqual([...DEFAULT_PROVIDER_CHOICES].sort());
   });
 
-  it('defaults fresh and legacy-default users to OpenRouter BYOK', () => {
-    expect(resolveDefaultProvider(null)).toBe(FALLBACK_DEFAULT_PROVIDER);
-    expect([...resolveEnabledProviderIds(null)]).toEqual(['openrouter']);
-    expect(resolveDefaultProvider({ default_provider: 'opencode' })).toBe('openrouter');
+  it('leaves fresh and legacy-default users without a preference or enabled inference route', () => {
+    expect(FALLBACK_DEFAULT_PROVIDER).toBeNull();
+    expect(resolveDefaultProvider(null)).toBeNull();
+    expect([...resolveEnabledProviderIds(null)]).toEqual([]);
+    expect(resolveDefaultProvider({ default_provider: 'opencode' })).toBe('opencode');
     expect([...resolveEnabledProviderIds({
       default_provider: 'opencode',
       providers: [{ provider: 'opencode', enabled: true, has_key: false }],
-    })]).toEqual(['openrouter']);
+    })]).toEqual([]);
   });
 
-  it('enables the chosen default gateway when it is openrouter', () => {
-    const enabled = resolveEnabledProviderIds({ default_provider: 'openrouter', providers: [] });
+  it('enables the chosen default gateway only with fresh verified inventory', () => {
+    const enabled = resolveEnabledProviderIds({ default_provider: 'openrouter', providers: [{
+      provider: 'openrouter', enabled: true, has_key: true,
+      inventory: { status: 'verified', discoveredAt: new Date().toISOString(), routes: [{ id: 'openrouter:google/gemini-3.8-flash' }] },
+    }] });
     expect([...enabled]).toEqual(['openrouter']);
   });
 
@@ -42,7 +47,7 @@ describe('provider plug-in defaults', () => {
       default_provider: 'opencode',
       providers: [
         { provider: 'opencode', enabled: true, has_key: false },
-        { provider: 'anthropic', enabled: true, has_key: true },
+        { provider: 'anthropic', enabled: true, has_key: true, inventory: { status: 'verified', discoveredAt: new Date().toISOString(), routes: [{ id: 'anthropic:claude-sonnet-5' }] } },
         { provider: 'deepinfra', enabled: false, has_key: true },
       ],
     });

@@ -281,13 +281,13 @@ export function validateTurnEvidence(evidence) {
   check(providerCalls.length >= 1, 'the turn dispatched a provider call', providerCalls);
   // Memory extraction is a separately admitted, metered execution that asks
   // for usage frames. Only `include_usage: false` calls are the chat turn.
-  const chatCalls = providerCalls.filter((call) => call.hasUsageOption === false);
+  const chatCalls = providerCalls.filter((call) => call.workload === 'chat');
   check(chatCalls.length === 1, 'exactly one chat provider call', chatCalls);
   check(chatCalls.every((call) => call.authMatched === true), 'the chat call carries the decrypted BYOK key', chatCalls);
   check(
-    providerCalls.filter((call) => call.hasUsageOption === true).length <= 1,
+    providerCalls.filter((call) => call.workload === 'memory').length <= 1,
     'at most one background extraction call (independently metered)',
-    providerCalls.filter((call) => call.hasUsageOption === true),
+    providerCalls.filter((call) => call.workload === 'memory'),
   );
 
   if (failures.length > 0) throw new AcceptanceError(failures);
@@ -370,7 +370,7 @@ async function runBreakdownProbes(token, userId) {
     const after = await stubRequests();
     const chatCalls = (after.requests ?? [])
       .slice(before.requests?.length ?? 0)
-      .filter((call) => call.path === '/v1/chat/completions' && call.hasUsageOption === false);
+      .filter((call) => call.path === '/openrouter/v1/chat/completions' && call.workload === 'chat');
 
     const row = (costLogs.body ?? [])[0] ?? {};
     const totalMicros = micros(row.total_cost);
@@ -552,7 +552,7 @@ async function main() {
   const after = await stubRequests();
   const providerCalls = (after.requests ?? [])
     .slice(baselineRequests.requests?.length ?? 0)
-    .filter((request) => request.path === '/v1/chat/completions');
+    .filter((request) => request.path === '/openrouter/v1/chat/completions');
 
   const evidence = { turn, receipt, costLogs, messages, providerCalls, userId, conversationId };
 
@@ -575,8 +575,8 @@ async function main() {
       }
       : null,
     messages: (messages.body ?? []).map((message) => message.role),
-    chatProviderCalls: providerCalls.filter((call) => call.hasUsageOption === false).length,
-    backgroundProviderCalls: providerCalls.filter((call) => call.hasUsageOption === true).length,
+    chatProviderCalls: providerCalls.filter((call) => call.workload === 'chat').length,
+    backgroundProviderCalls: providerCalls.filter((call) => call.workload === 'memory').length,
     expected: EXPECTED,
   }, null, 2));
 

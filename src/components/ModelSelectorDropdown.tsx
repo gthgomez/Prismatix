@@ -48,17 +48,19 @@ function readStoredTab(): SelectorTab {
 }
 
 import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
+import type { ServingRoute } from '../../supabase/functions/_shared/serving_routes.ts';
 
 interface ModelSelectorDropdownProps {
   currentModel: RouterModel;
   currentComplexity: number;
-  manualModelOverride: RouterModel | null;
+  manualModelOverride: string | null;
+  routes?: ServingRoute[];
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
   debateSelection: DebateSelection;
   sendValidationError: string | null;
   enabledProviders: ReadonlySet<ProviderId>;
   preferences: ModelPickerPreferencesHook;
-  onModelSelect: (model: RouterModel) => void;
+  onModelSelect: (model: string) => void;
   onClearOverride: () => void;
   onGeminiThinkingChange: (level: GeminiFlashThinkingLevel) => void;
   onDebateChange: (selection: DebateSelection) => void;
@@ -71,6 +73,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   currentModel,
   currentComplexity,
   manualModelOverride,
+  routes: accountRoutes,
   geminiFlashThinkingLevel,
   debateSelection,
   sendValidationError,
@@ -84,6 +87,8 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   onOpenProviderSettings,
   onClose,
 }) => {
+  const accountCatalog = accountRoutes !== undefined;
+  const routes = accountRoutes ?? [];
   const [activeTab, setActiveTab] = useState<SelectorTab>(() =>
     sendValidationError ? 'routing' : readStoredTab(),
   );
@@ -91,8 +96,14 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
   const [groupByProvider, setGroupByProvider] = useState(readStoredGroupByProvider);
   const [modelSearch, setModelSearch] = useState('');
   const [showHistoric, setShowHistoric] = useState(false);
+  const query = modelSearch.trim().toLowerCase();
+  const matchingRoutes = routes.filter((route) => `${route.name} ${route.developer} ${route.id}`.toLowerCase().includes(query));
   const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
+  const selectedRoute = routes.find((route) => route.id === manualModelOverride);
+  const selectedCatalogModel = !accountCatalog && manualModelOverride && MODEL_ORDER.includes(manualModelOverride as RouterModel)
+    ? manualModelOverride as RouterModel
+    : null;
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     menuRef.current?.querySelector<HTMLElement>('[role=tab][aria-selected=true]')?.focus();
@@ -407,15 +418,33 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
           </label>
           <p className='model-selection-hint' aria-live='polite'>
             {manualModelOverride
-              ? `Manual model: ${getCatalogEntry(manualModelOverride).shortName}`
+              ? `Manual model: ${selectedRoute?.name ?? (selectedCatalogModel ? getCatalogEntry(selectedCatalogModel).shortName : manualModelOverride)}`
               : `Automatic routing · currently using ${getCatalogEntry(currentModel).shortName}`}
           </p>
-          {manualModelOverride && isHistoricModel(manualModelOverride) && !showHistoric && (
-            <div aria-label='Selected historic model'>{renderModelButton(manualModelOverride)}</div>
+          {selectedCatalogModel && isHistoricModel(selectedCatalogModel) && !showHistoric && (
+            <div aria-label='Selected historic model'>{renderModelButton(selectedCatalogModel)}</div>
           )}
 
           <div className='model-options-scroll'>
-            {filteredOverrideKeys.length === 0 ? (
+            {matchingRoutes.length > 0 && (
+              <div className='model-provider-group'>
+                <div className='model-provider-heading'>Verified account routes</div>
+                <div className='model-provider-models'>
+                  {matchingRoutes.map((route) => (
+                    <button key={route.id} type='button' className={`model-option ${manualModelOverride === route.id ? 'manual' : ''}`} aria-pressed={manualModelOverride === route.id} onClick={() => onModelSelect(route.id)}>
+                      <span className='option-icon' aria-hidden='true'>↗</span>
+                      <div className='option-info'><span className='option-name'>{route.name}</span>
+                      <span className='option-desc'>{route.id} · {route.protocol}</span>
+                      <span className='option-price'>${route.tariff.inputPerMillion}/$1M in · ${route.tariff.outputPerMillion}/$1M out</span></div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {accountCatalog && matchingRoutes.length === 0 && (
+              <p className='model-search-empty' role='status'>{query ? 'No connected routes match your search.' : 'Connect a provider with qualified models to choose a route.'}</p>
+            )}
+            {!accountCatalog && (filteredOverrideKeys.length === 0 ? (
               <p className='model-search-empty' role='status'>No models match “{modelSearch}”.</p>
             ) : groupByProvider ? (
               <div className='model-options model-options--grouped'>
@@ -432,10 +461,10 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
               <div className='model-options'>
                 {filteredOverrideKeys.map((key) => renderModelButton(key))}
               </div>
-            )}
+            ))}
           </div>
 
-          {!modelSearch.trim() && !showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
+          {!accountCatalog && !modelSearch.trim() && !showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
             <button
               type='button'
               className='model-override-expand'
@@ -444,7 +473,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
               Show all models ({visibleOrder.length})
             </button>
           )}
-          {!modelSearch.trim() && showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
+          {!accountCatalog && !modelSearch.trim() && showAllOverrides && !extendedIncludesSelection && hasMoreThanHighlights && (
             <button
               type='button'
               className='model-override-expand'
@@ -454,7 +483,7 @@ export const ModelSelectorDropdown: React.FC<ModelSelectorDropdownProps> = ({
             </button>
           )}
 
-          {historicModels.length > 0 && (
+          {!accountCatalog && historicModels.length > 0 && (
             <section aria-label='Historic model catalog'>
               <button type='button' className='model-override-expand'
                 aria-expanded={showHistoric} onClick={() => setShowHistoric((value) => !value)}>

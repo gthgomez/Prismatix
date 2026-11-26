@@ -11,6 +11,8 @@ import type { ReactNode } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { User } from '@supabase/supabase-js';
+import type { ServingRoute } from '../../supabase/functions/_shared/serving_routes.ts';
+import { servingRouteFixture } from '../../tests/helpers/serving-route-fixtures.ts';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -42,6 +44,7 @@ vi.mock('../smartFetch', async (importOriginal) => {
 });
 
 const providerPlugins = vi.hoisted(() => ({
+  routes: [] as ServingRoute[],
   providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }],
   defaultProvider: 'openrouter',
   enabledProviders: new Set(['openrouter']),
@@ -56,8 +59,9 @@ const providerPlugins = vi.hoisted(() => ({
   error: null,
   refresh: vi.fn(async () => {}),
   setEnabled: vi.fn(async () => true),
-  setKey: vi.fn(async () => true),
+  setKey: vi.fn(async () => ({ saved: true, verified: true, inventoryStatus: 'verified', availableModelCount: 1, qualifiedModelCount: 1 })),
   removeKey: vi.fn(async () => true),
+  refreshInventory: vi.fn(async () => true),
   setDefault: vi.fn(async () => true),
 }));
 
@@ -160,12 +164,13 @@ describe('ChatInterface End-to-End Integration Flow', () => {
 
   beforeEach(() => {
     localStorage.clear();
+    providerPlugins.routes = [servingRouteFixture('openrouter', 'google/gemini-3.8-flash')];
     providerPlugins.providers = [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }];
     providerPlugins.isConfigured = true;
     providerPlugins.isVerified = true;
     providerPlugins.verificationStatus = 'verified';
     providerPlugins.validateKey = vi.fn(async () => ({ provider: 'openrouter', status: 'unknown', clientAccountGeneration: 0 }));
-    providerPlugins.setKey = vi.fn(async () => true);
+    providerPlugins.setKey = vi.fn(async () => ({ saved: true, verified: false, inventoryStatus: 'unverified', availableModelCount: 0, qualifiedModelCount: 0 }));
     providerPlugins.verifyEnabledProviders = vi.fn(async () => true);
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -196,12 +201,13 @@ describe('ChatInterface End-to-End Integration Flow', () => {
   });
 
   it('recovers first-run OpenRouter without requiring unsupported providers to verify', async () => {
+    providerPlugins.routes = [];
     providerPlugins.isConfigured = false;
     providerPlugins.isVerified = false;
     providerPlugins.verificationStatus = 'unverified';
     providerPlugins.providers = [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: false, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }];
     providerPlugins.validateKey = vi.fn(async () => ({ provider: 'openrouter', status: 'unknown', clientAccountGeneration: 0 }));
-    providerPlugins.setKey = vi.fn(async () => true);
+    providerPlugins.setKey = vi.fn(async () => ({ saved: true, verified: false, inventoryStatus: 'unverified', availableModelCount: 0, qualifiedModelCount: 0 }));
     providerPlugins.verifyEnabledProviders = vi.fn(async () => true);
 
     root = renderInto(host, <ChatInterface user={TEST_USER} onSignOut={async () => {}} />);

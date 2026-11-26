@@ -13,7 +13,8 @@ interface RpcCall {
 type Loaded = {
   buildProviderStates: (config: unknown, getEnv: (k: string) => string | undefined) => {
     providers: Array<{ id: string; enabled: boolean; hasKey: boolean; defaultProvider: boolean }>;
-    defaultProvider: string;
+    defaultProvider: string | null;
+    routes: unknown[];
   };
   validateProviderKeyMetadata: (
     provider: string,
@@ -76,30 +77,36 @@ async function invoke(
   userId: string | null = 'user-1',
   calls: RpcCall[] = [],
   config: unknown = null,
+  fetchFn?: typeof fetch,
 ): Promise<Response> {
   return mod.handleProviderSettings(post(body), {
     getEnv: (k) => env[k],
     createClient: () => stubClient(userId, calls, config),
+    fetchFn,
   });
 }
 
 describe('provider-settings — state', () => {
-  it('a fresh or legacy-OpenCode-default user gets OpenRouter BYOK', async () => {
+  it('a fresh or legacy-OpenCode-default user has no enabled providers or default', async () => {
     const mod = await loadModule({});
     const state = mod.buildProviderStates({ default_provider: 'opencode', providers: [] }, () => undefined);
-    expect(state.providers.filter((p) => p.enabled).map((p) => p.id)).toEqual(['openrouter']);
-    expect(state.defaultProvider).toBe('openrouter');
+    expect(state.providers.filter((p) => p.enabled)).toEqual([]);
+    expect(state.defaultProvider).toBeNull();
+    expect(state.routes).toEqual([]);
   });
 
   it('reports only user-stored key metadata even when a fake server key exists', async () => {
     const mod = await loadModule({});
     const state = mod.buildProviderStates(
-      { default_provider: 'openrouter', providers: [{ provider: 'deepinfra', enabled: true, has_key: true, key_last4: 'abcd' }] },
+      { default_provider: 'openrouter', providers: [
+        { provider: 'openrouter', enabled: true, has_key: true, inventory: { status: 'verified', discoveredAt: new Date().toISOString(), checkedAt: new Date().toISOString(), modelCount: 1, routes: [{ id: 'openrouter:model', provider: 'openrouter', upstreamId: 'model', canonicalId: 'model', protocol: 'chat_completions', contextWindow: 1000, maxOutputTokens: 500, tariff: { version: 'fixture', source: 'fixture', inputPerMillion: 1, outputPerMillion: 1, billing: 'pay_as_you_go' } }] } },
+        { provider: 'deepinfra', enabled: true, has_key: true, key_last4: 'abcd', inventory: { status: 'unverified', routes: [] } },
+      ] },
       (k) => (k === 'OPENCODE_API_KEY' ? 'server-key' : undefined),
     );
     const byId = new Map(state.providers.map((p) => [p.id, p]));
     expect(byId.get('openrouter')?.enabled).toBe(true);
-    expect(byId.get('deepinfra')?.enabled).toBe(true);
+    expect(byId.get('deepinfra')?.enabled).toBe(false);
     expect(byId.get('deepinfra')?.hasKey).toBe(true);
     expect(byId.get('opencode')?.hasKey).toBe(false);
     expect(byId.get('openrouter')?.defaultProvider).toBe(true);
@@ -161,6 +168,7 @@ describe('provider-settings — key handling', () => {
       'user-1',
       calls,
       { default_provider: 'opencode', providers: [] },
+      async () => new Response(JSON.stringify({ data: [{ id: 'fixture/model' }] }), { status: 200 }),
     );
 
     expect(res.status).toBe(200);
@@ -191,9 +199,13 @@ describe('provider-settings — key handling', () => {
     expect(res.status).toBe(500);
   });
 
-  it('rejects setting a key for opencode (server-managed)', async () => {
+  it('accepts a per-user key for the OpenCode Console provider', async () => {
     const mod = await loadModule(BASE_ENV);
-    expect((await invoke(mod, { action: 'set_key', provider: 'opencode', apiKey: 'di-secret-abcd' })).status).toBe(400);
+    const res = await mod.handleProviderSettings(post({ action: 'set_key', provider: 'opencode', apiKey: 'fixture-console-key' }), {
+      getEnv: (key) => BASE_ENV[key], createClient: () => stubClient('user-1', []),
+      fetchFn: async () => Response.json({ data: [{ id: 'console-fixture' }] }),
+    });
+    expect(res.status).toBe(200);
   });
 });
 
@@ -227,7 +239,7 @@ describe('provider-settings — enable / default / delete', () => {
     });
   });
 
-  it('allows only the BYOK OpenRouter gateway as the default', async () => {
+  it('allows an inference preference and rejects a search integration', async () => {
     const mod = await loadModule(BASE_ENV);
     const calls: RpcCall[] = [];
     const ok = await invoke(mod, { action: 'set_default', provider: 'openrouter' }, BASE_ENV, 'user-1', calls);
@@ -237,14 +249,14 @@ describe('provider-settings — enable / default / delete', () => {
       p_provider: 'openrouter',
     });
 
-    const bad = await invoke(mod, { action: 'set_default', provider: 'opencode' });
+    const bad = await invoke(mod, { action: 'set_default', provider: 'brave' });
     expect(bad.status).toBe(400);
   });
 
-  it('rejects opencode for enable and delete', async () => {
+  it('allows OpenCode key enable and delete actions', async () => {
     const mod = await loadModule(BASE_ENV);
-    expect((await invoke(mod, { action: 'set_enabled', provider: 'opencode', enabled: true })).status).toBe(400);
-    expect((await invoke(mod, { action: 'delete_key', provider: 'opencode' })).status).toBe(400);
+    expect((await invoke(mod, { action: 'set_enabled', provider: 'opencode', enabled: true })).status).toBe(200);
+    expect((await invoke(mod, { action: 'delete_key', provider: 'opencode' })).status).toBe(200);
   });
 });
 

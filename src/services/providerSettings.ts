@@ -55,7 +55,11 @@ async function request(
     throw new Error(message);
   }
 
-  return (await response.json()) as ProviderSettingsPayload;
+  const payload: unknown = await response.json();
+  if (!payload || typeof payload !== 'object' || !Array.isArray((payload as { routes?: unknown }).routes)) {
+    throw new Error('provider_settings_invalid_response: routes are required');
+  }
+  return payload as ProviderSettingsPayload;
 }
 
 export function fetchProviderSettings(expectedUserId: string): Promise<ProviderSettingsPayload> {
@@ -72,6 +76,10 @@ export function setProviderEnabled(
   expectedUserId: string,
 ): Promise<ProviderSettingsPayload> {
   return request('POST', expectedUserId, { action: 'set_enabled', provider, enabled });
+}
+
+export function refreshProviderInventory(provider: ProviderId, expectedUserId: string): Promise<ProviderSettingsPayload> {
+  return request('POST', expectedUserId, { action: 'refresh_inventory', provider });
 }
 
 export function deleteProviderKey(provider: ProviderId, expectedUserId: string): Promise<ProviderSettingsPayload> {

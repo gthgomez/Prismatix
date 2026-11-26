@@ -1,20 +1,12 @@
 import { memoryRpc, type MemoryRpcClient } from '../_shared/memory_contract.ts';
 import { isEntitled, loadAccessGrant } from '../_shared/access_policy.ts';
-import {
-  openRouterModelId,
-  type RawUserProviderConfig,
-  resolveDefaultProvider,
-} from '../_shared/provider_registry.ts';
+import { resolveDefaultProvider, type RawUserProviderConfig } from '../_shared/provider_registry.ts';
+import { inferenceProviderEnabled } from '../_shared/provider_endpoint.ts';
 import { decryptKey } from '../_shared/byok_crypto.ts';
 import { createProviderResolver } from '../router/provider_resolver.ts';
-import { CURATED_OPENCODE_REGISTRY } from '../router/models_hub.ts';
-import { isHistoricModel } from '../_shared/model_lifecycle.ts';
+import { dispatchServingRoute } from '../router/provider_stream.ts';
 import { createUsageTracker } from '../router/usage.ts';
 import { createSseParser, isDoneData } from '../_shared/sse_parser.ts';
-import {
-  getModelPricing,
-  PRICING_VERSION,
-} from '../router/pricing_registry.ts';
 import {
   computePayloadHash,
   createExecution,
@@ -27,7 +19,7 @@ import {
   releaseReservation,
   resolveEffectiveLimits,
 } from '../router/admission.ts';
-import { runMeteredCall } from '../router/metered_call.ts';
+import { MeteredDispatchNotSentError, priceSnapshotForRoute, runMeteredCall } from '../router/metered_call.ts';
 import type { MemoryJob } from './worker.ts';
 
 export async function createMemoryExtractor(
@@ -39,41 +31,21 @@ export async function createMemoryExtractor(
     | RawUserProviderConfig
     | null;
   const resolver = createProviderResolver(raw, {
-    globalEnabled: (p) => {
-      if (p !== 'openrouter') return false;
-      const flag = getEnv('ENABLE_' + p.toUpperCase());
-      return flag ? !['0', 'false', 'no', 'off'].includes(flag.toLowerCase()) : true;
-    },
-    fetchUserKey: async (p) => {
-      const value = await memoryRpc(client, 'get_user_provider_key_material', {
-        p_subject_id: subject,
-        p_provider: p,
+    globalEnabled: (provider) => inferenceProviderEnabled(provider, getEnv),
+    fetchRouteKey: async (provider, revision, routeId) => {
+      const value = await memoryRpc(client, 'get_user_provider_dispatch_key', {
+        p_subject_id: subject, p_provider: provider, p_credential_revision: revision, p_route_id: routeId,
       });
       return typeof value === 'string' && value ? await decryptKey(value) : null;
     },
   });
   const preferred = resolveDefaultProvider(raw);
-  const gateway = preferred === 'openrouter' && resolver.isReady('openrouter')
-    ? 'openrouter'
-    : null;
-  if (!gateway) throw new Error('memory_provider_unavailable');
-  const base = getEnv('OPENROUTER_BASE_URL') ?? 'https://openrouter.ai/api/v1';
-  const getPrices = (tier: string) => getModelPricing(tier);
-  const tiers = Object.keys(CURATED_OPENCODE_REGISTRY).filter((t) =>
-    !isHistoricModel(t) && !getPrices(t).isUnknown
-  );
-  // Prefer a small current Haiku; other available current models remain a fallback.
-  tiers.sort((a, b) =>
-    Number(!CURATED_OPENCODE_REGISTRY[a]!.displayName.includes('Haiku')) -
-      Number(!CURATED_OPENCODE_REGISTRY[b]!.displayName.includes('Haiku')) ||
-    getPrices(a).inputRatePer1M - getPrices(b).inputRatePer1M
-  );
-  const tier = tiers.find((t) =>
-    !!openRouterModelId(t)
-  );
-  if (!tier) throw new Error('memory_provider_unavailable');
-  const model = openRouterModelId(tier)!;
-  const prices = getPrices(tier);
+  const routes = resolver.eligibleRoutes().filter((route) => route.provider !== 'opencode_go');
+  if (!routes.length) throw new Error('memory_provider_unavailable');
+  const inputRate = (prices: typeof routes[number]['tariff']) =>
+    Math.max(prices.inputPerMillion, prices.cachedReadPerMillion ?? 0, prices.cachedWritePerMillion ?? 0);
+  const outputRate = (prices: typeof routes[number]['tariff']) =>
+    Math.max(prices.outputPerMillion, prices.reasoningPerMillion ?? 0);
   return async (job: MemoryJob): Promise<string> => {
     const grant = await loadAccessGrant(client, subject);
     if (
@@ -93,29 +65,32 @@ export async function createMemoryExtractor(
     const maximum = Math.min(.025, limits.maxPerExecutionUsd);
     // UTF-8 byte count is a conservative token ceiling for the bounded extraction prompt.
     const inputMax = new TextEncoder().encode(prompt).length;
-    const inputEstimate = inputMax * prices.inputRatePer1M / 1e6;
-    const outputMax = Math.min(
-      768,
-      Math.floor(
-        (maximum - inputEstimate) * 1e6 /
-          Math.max(prices.outputRatePer1M, prices.reasoningRatePer1M ?? 0, .001),
-      ),
-    );
-    if (outputMax < 128 || limits.userDailyUsd <= 0) throw new Error('memory_budget_deferred');
+    const candidates = routes.map((route) => {
+      const inputEstimate = inputMax * inputRate(route.tariff) / 1e6 + (route.tariff.requestUsd ?? 0);
+      const outputMax = Math.min(768, route.maxOutputTokens, route.contextWindow - inputMax,
+        Math.floor((maximum - inputEstimate) * 1e6 / Math.max(outputRate(route.tariff), .001)));
+      return { route, outputMax, estimateUsd: inputEstimate + outputMax * outputRate(route.tariff) / 1e6 };
+    }).filter((candidate) => candidate.outputMax >= 128);
+    candidates.sort((a, b) => a.estimateUsd - b.estimateUsd ||
+      Number(b.route.provider === preferred) - Number(a.route.provider === preferred) || a.route.id.localeCompare(b.route.id));
+    const candidate = candidates[0];
+    if (!candidate || limits.userDailyUsd <= 0) throw new Error('memory_budget_deferred');
+    const { route, outputMax, estimateUsd } = candidate;
+    const { provider: gateway, upstreamId: model, tariff } = route;
     const { execution, reused } = await createExecution(client, {
       subjectId: subject,
       conversationId: job.conversation_id,
       clientRequestKey: 'memory:' + job.id + ':' + job.window_end_id + ':' + job.attempts,
       payloadHash: await computePayloadHash({ prompt, model }),
       requestedMode: 'memory',
-      requestedModel: tier,
-      pricingVersion: PRICING_VERSION,
+      requestedModel: route.id,
+      pricingVersion: tariff.version,
     });
     if (reused) throw new Error('memory_budget_deferred');
     const admitted = await admitExecution(client, {
       subjectId: subject,
       executionId: execution.id,
-      estimateUsd: inputEstimate + outputMax * prices.outputRatePer1M / 1e6,
+      estimateUsd,
       maxUsd: maximum,
       leaseSeconds: 90,
       requestLimit: config.requestLimitPerMinute,
@@ -132,48 +107,29 @@ export async function createMemoryExtractor(
     }
     let dispatched = false;
     try {
-      const apiKey = await resolver.resolveKey(gateway);
       const text = await runMeteredCall({
         store: client,
         execution,
         stage: 'memory-extract',
         participant: gateway,
         attemptNumber: 1,
-        requestedModel: tier,
+        requestedModel: route.id,
         resolvedModel: model,
-        priceSnapshot: {
-          pricingVersion: PRICING_VERSION,
-          inputRatePer1M: prices.inputRatePer1M,
-          outputRatePer1M: prices.outputRatePer1M,
-          thinkingRatePer1M: prices.reasoningRatePer1M ?? prices.outputRatePer1M,
-        },
+        priceSnapshot: priceSnapshotForRoute(route),
       }, async () => {
+        let apiKey: string;
+        try {
+          apiKey = await resolver.resolveKey(gateway, route);
+        } catch (error) {
+          throw new MeteredDispatchNotSentError(error);
+        }
         dispatched = true;
-        const signal = AbortSignal.timeout(30000);
-        const result = {
-          response: await fetch(base.replace(/\/$/, '') + '/chat/completions', {
-            method: 'POST',
-            headers: {
-              Authorization: 'Bearer ' + apiKey,
-              'Content-Type': 'application/json',
-              'X-Title': 'Prismatix',
-            },
-            body: JSON.stringify({
-              model,
-              messages: [{ role: 'user', content: prompt }],
-              max_tokens: outputMax,
-              stream: true,
-              stream_options: { include_usage: true },
-            }),
-            signal,
-          }),
-          extractDeltas: (payload: any): string[] =>
-            typeof payload?.choices?.[0]?.delta?.content === 'string'
-              ? [payload.choices[0].delta.content]
-              : [],
-        };
+        const result = await dispatchServingRoute({
+          route, apiKey, messages: [{ role: 'user', content: prompt }], images: [],
+          outputCap: outputMax, signal: AbortSignal.timeout(30000), getEnv, sessionId: job.conversation_id,
+        });
         if (!result.response.ok || !result.response.body) throw new Error('memory_upstream_failed');
-        const tracker = createUsageTracker(gateway),
+        const tracker = createUsageTracker(gateway, route.protocol),
           parser = createSseParser(),
           reader = result.response.body.getReader();
         let answer = '';

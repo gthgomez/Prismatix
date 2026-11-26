@@ -2,6 +2,8 @@
 // Deterministic mock fixtures for authenticated Playwright testing without paid API calls.
 
 import { expect, type Page } from '@playwright/test';
+import type { ServingRoute } from '../../../supabase/functions/_shared/serving_routes.ts';
+import { servingRouteFixture } from '../../helpers/serving-route-fixtures.ts';
 
 export const MOCK_USER = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -26,6 +28,7 @@ export const MOCK_SESSION = {
 
 export interface MockAppOptions {
   hasProviderKey?: boolean;
+  routes?: ServingRoute[];
   authSession?: typeof MOCK_SESSION;
   additionalAuthStorageKeys?: string[];
   conversations?: Array<{ id: string; title: string; last_activity_at: string; project_id?: string | null }>;
@@ -51,6 +54,7 @@ export interface MockAppOptions {
 
 export async function setupAuthenticatedMock(page: Page, options: MockAppOptions = {}) {
   const hasKey = options.hasProviderKey ?? true;
+  const routes = options.routes ?? [servingRouteFixture('openrouter', 'google/gemini-3.8-flash')];
   const conversations = options.conversations ?? [
     {
       id: 'c1111111-1111-4111-8111-111111111111',
@@ -163,6 +167,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({
+            routes,
             providers: [
               {
                 id: 'openrouter',
@@ -185,6 +190,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
+        routes: hasKey ? routes : [],
         providers: [
           {
             id: 'openrouter',

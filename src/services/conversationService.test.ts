@@ -596,6 +596,15 @@ describe('parseModelUsed', () => {
     });
   });
 
+  it('retains the provider prefix for dynamically discovered provider IDs', () => {
+    expect(parseModelUsed('commandcode:model-via-account')).toEqual({
+      provider: 'commandcode',
+      model: undefined,
+      reportedModel: 'model-via-account',
+      modelId: 'model-via-account',
+    });
+  });
+
   it('handles null, undefined, or empty strings gracefully', () => {
     expect(parseModelUsed(null)).toEqual({});
     expect(parseModelUsed(undefined)).toEqual({});

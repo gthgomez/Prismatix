@@ -4,6 +4,17 @@ import { createMemoryExtractor } from "../../supabase/functions/memory/provider"
 import { decryptKey } from "../../supabase/functions/_shared/byok_crypto";
 import { FAKE_BYOK_CIPHERTEXT, installTestByokEnv } from "../helpers/byok-fixtures";
 const subject = "11111111-1111-4111-8111-111111111111";
+const qualified = {
+  provider: 'openrouter', enabled: true, has_key: true, credential_revision: 'revision',
+  inventory: {
+    status: 'verified', discoveredAt: new Date().toISOString(), checkedAt: new Date().toISOString(), modelCount: 1,
+    routes: [{
+      id: 'openrouter:anthropic/haiku', provider: 'openrouter', upstreamId: 'anthropic/haiku',
+      canonicalId: 'haiku', developer: 'anthropic', protocol: 'chat_completions', contextWindow: 100000,
+      maxOutputTokens: 4096, tariff: { version: 'fixture', source: 'fixture', billing: 'prepaid_credits', inputPerMillion: 1, outputPerMillion: 2 },
+    }],
+  },
+};
 const job = {
   id: "job",
   conversation_id: "conv",
@@ -23,7 +34,7 @@ describe("memory provider control and admission", () => {
 
   it('uses OpenRouter BYOK for background extraction', async () => {
     const rpc = vi.fn(async () => ({ data: { default_provider: 'anthropic', providers: [
-      { provider: 'anthropic', enabled: true, has_key: true }, { provider: 'openrouter', enabled: true, has_key: true },
+      { provider: 'anthropic', enabled: true, has_key: true }, qualified,
       { provider: 'opencode', enabled: false },
     ] }, error: null }));
     await expect(createMemoryExtractor({ rpc }, subject, k =>
@@ -51,9 +62,9 @@ describe("memory provider control and admission", () => {
           data: name === "get_user_provider_config"
             ? {
               default_provider: "openrouter",
-              providers: [{ provider: "openrouter", enabled: true, has_key: true }],
+              providers: [qualified],
             }
-            : name === "get_user_provider_key_material"
+            : name === "get_user_provider_dispatch_key"
             ? FAKE_BYOK_CIPHERTEXT
             : name === "get_access_grant"
             ? {
@@ -127,7 +138,7 @@ describe("memory provider control and admission", () => {
       data: name === "get_user_provider_config"
         ? {
           default_provider: "openrouter",
-          providers: [{ provider: "openrouter", enabled: true, has_key: true }],
+          providers: [qualified],
         }
         : name === "get_access_grant"
         ? {
@@ -137,7 +148,7 @@ describe("memory provider control and admission", () => {
           max_daily_usd: 1,
           max_per_execution_usd: .1,
         }
-            : name === "get_user_provider_key_material"
+            : name === "get_user_provider_dispatch_key"
             ? FAKE_BYOK_CIPHERTEXT
             : name === "px03_create_execution"
         ? { execution: { id: "execution" }, reused: false }

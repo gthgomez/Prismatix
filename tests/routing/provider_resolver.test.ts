@@ -1,119 +1,48 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  ProviderCredentialError,
-  createProviderResolver,
-  type ProviderResolverConfig,
-} from '../../supabase/functions/router/provider_resolver.ts';
-import type { Provider } from '../../supabase/functions/router/router_logic.ts';
+import { createProviderResolver, ProviderCredentialError, ProviderKeyUnavailableError } from '../../supabase/functions/router/provider_resolver.ts';
+import { providerRow, servingRouteFixture } from '../helpers/serving-route-fixtures.ts';
 
-function makeDeps(over: Partial<ProviderResolverConfig> = {}): ProviderResolverConfig {
-  return {
-    globalEnabled: () => true,
-    fetchUserKey: async () => null,
-    ...over,
-  };
-}
+const route = servingRouteFixture();
+const config = { providers: [providerRow(route)] };
+const globalEnabled = () => true;
 
-describe('createProviderResolver', () => {
-  it('only enables BYOK providers the user turned on and keeps server-only OpenCode off', () => {
-    const resolver = createProviderResolver(
-      {
-        default_provider: 'opencode',
-        providers: [{ provider: 'anthropic', enabled: true, has_key: true }],
-      },
-      makeDeps(),
-    );
-
-    expect(resolver.isEnabled('opencode')).toBe(false);
-    expect(resolver.isEnabled('anthropic')).toBe(true);
-    expect(resolver.isEnabled('openai')).toBe(false);
-    expect(resolver.isReady('openai')).toBe(false);
+describe('provider resolver', () => {
+  it('authorizes only the selected account route and its current revision', async () => {
+    const fetchRouteKey = vi.fn(async () => 'fixture-key');
+    const resolver = createProviderResolver(config, { globalEnabled, fetchRouteKey });
+    expect(resolver.eligibleRoutes()).toEqual([route]);
+    await expect(resolver.resolveKey(route.provider, route)).resolves.toBe('fixture-key');
+    expect(fetchRouteKey).toHaveBeenCalledExactlyOnceWith(route.provider, 'fixture-revision', route.id);
   });
 
-  it('respects the operator kill-switch', () => {
-    const resolver = createProviderResolver(null, makeDeps({ globalEnabled: () => false }));
-    expect(resolver.isEnabled('openrouter')).toBe(false);
-    expect(resolver.readyForModelTier('deepseek-v4-1-flash')).toBe(false);
+  it.each([
+    ['fresh', null],
+    ['preference only', { default_provider: 'openai' }],
+    ['keyless', { providers: [{ ...providerRow(route), has_key: false }] }],
+    ['disabled', { providers: [providerRow(route, false)] }],
+    ['unverified', { providers: [{ ...providerRow(route), inventory: null }] }],
+    ['stale', { providers: [{ ...providerRow(route), inventory: { ...providerRow(route).inventory, discoveredAt: '2025-01-01T00:00:00Z' } }] }],
+    ['restricted', { providers: [{ ...providerRow(route), inventory: { ...providerRow(route).inventory, restrictedRouteIds: [route.id] } }] }],
+  ])('keeps %s account routes out of dispatch', async (_name, providerConfig) => {
+    const fetchRouteKey = vi.fn(async () => 'fixture-key');
+    const resolver = createProviderResolver(providerConfig, { globalEnabled, fetchRouteKey });
+    expect(resolver.anyReady()).toBe(false);
+    expect(resolver.eligibleRoutes()).toEqual([]);
+    await expect(resolver.resolveKey(route.provider, route)).rejects.toBeInstanceOf(ProviderCredentialError);
+    expect(fetchRouteKey).not.toHaveBeenCalled();
   });
 
-  it('resolves only the user key (BYOK)', async () => {
-    const fetchUserKey = vi.fn(async () => 'user-secret');
-    const resolver = createProviderResolver(
-      {
-        default_provider: 'openrouter',
-        providers: [{ provider: 'anthropic', enabled: true, has_key: true }],
-      },
-      makeDeps({ fetchUserKey }),
-    );
-
-    await expect(resolver.resolveKey('anthropic')).resolves.toBe('user-secret');
-    expect(fetchUserKey).toHaveBeenCalledWith('anthropic');
+  it('applies the operator switch to a verified account', () => {
+    expect(createProviderResolver(config, { globalEnabled: () => false }).anyReady()).toBe(false);
   });
 
-  it('never falls back to a fake deployment key when the user has no key', async () => {
-    const fetchUserKey = vi.fn(async () => null);
-    const resolver = createProviderResolver(
-      { default_provider: 'openrouter', providers: [{ provider: 'openrouter', enabled: true, has_key: false }] },
-      makeDeps({ fetchUserKey }),
-    );
-    await expect(resolver.resolveKey('openrouter')).rejects.toBeInstanceOf(ProviderCredentialError);
-    expect(fetchUserKey).not.toHaveBeenCalled();
+  it('fails closed when the final database read rejects a stale revision', async () => {
+    const resolver = createProviderResolver(config, { globalEnabled, fetchRouteKey: async () => null });
+    await expect(resolver.resolveKey('openai', route)).rejects.toBeInstanceOf(ProviderCredentialError);
   });
 
-  it('fails closed with ProviderCredentialError when no key resolves', async () => {
-    const resolver = createProviderResolver(null, makeDeps());
-    await expect(resolver.resolveKey('opencode' as Provider)).rejects.toBeInstanceOf(
-      ProviderCredentialError,
-    );
-  });
-
-  it('reports anyReady only when an enabled provider has credentials', () => {
-    const noneReady = createProviderResolver(null, makeDeps());
-    expect(noneReady.anyReady()).toBe(false);
-
-    const byokReady = createProviderResolver(
-      { default_provider: 'openrouter', providers: [{ provider: 'openrouter', enabled: true, has_key: true }] },
-      makeDeps(),
-    );
-    expect(byokReady.anyReady()).toBe(true);
-  });
-
-  it('flips the same provider between strict and empty state (differential)', () => {
-    const deps = makeDeps();
-
-    // A deployment secret cannot make an absent BYOK row ready.
-    const configured = createProviderResolver(
-      { default_provider: 'opencode', providers: [{ provider: 'anthropic', enabled: true, has_key: false }] },
-      deps,
-    );
-    expect(configured.isEnabled('openai')).toBe(false);
-    expect(configured.isReady('openai')).toBe(false);
-  });
-
-  it('treats an enabled-but-keyless provider as enabled but not ready', () => {
-    const resolver = createProviderResolver(
-      { default_provider: 'opencode', providers: [{ provider: 'openrouter', enabled: true, has_key: false }] },
-      makeDeps(),
-    );
-    expect(resolver.isEnabled('openrouter')).toBe(true);
-    expect(resolver.isReady('openrouter')).toBe(false);
-  });
-
-  it('readyForModelTier is true for a ready native provider', () => {
-    const resolver = createProviderResolver(
-      { default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] },
-      makeDeps({ fetchUserKey: async () => 'key' }),
-    );
-    expect(resolver.readyForModelTier('sonnet-4.6')).toBe(true);
-    // Unknown tier fails closed.
-    expect(resolver.readyForModelTier('not-a-tier')).toBe(false);
-  });
-
-  it('refuses to resolve a key for a provider that is not enabled', async () => {
-    const resolver = createProviderResolver(
-      { default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: false, has_key: true }] },
-      makeDeps({ fetchUserKey: async () => 'user-key' }),
-    );
-    await expect(resolver.resolveKey('anthropic')).rejects.toBeInstanceOf(ProviderCredentialError);
+  it('fails closed on unavailable key material', async () => {
+    const resolver = createProviderResolver(config, { globalEnabled, fetchRouteKey: async () => { throw new Error('unavailable'); } });
+    await expect(resolver.resolveKey('openai', route)).rejects.toBeInstanceOf(ProviderKeyUnavailableError);
   });
 });

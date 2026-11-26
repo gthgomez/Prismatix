@@ -93,13 +93,14 @@ log "Edge runtime reaches the stub at http://${GATEWAY}:8899"
 # 20 requests/user/minute default users receive. Suites use separate disposable
 # identities; the dedicated rate-limit probe verifies the control itself.
 cat > supabase/functions/.env <<EOF
-OPENROUTER_BASE_URL=http://${GATEWAY}:8899/v1
+PRISMATIX_QUAL_PROVIDER_BASE_URL=http://${GATEWAY}:8899
 BYOK_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 ALLOWED_ORIGIN=http://127.0.0.1:${PLAYWRIGHT_PORT}
 ENABLE_ANTHROPIC=false
-ENABLE_OPENAI=false
+ENABLE_OPENAI=true
 ENABLE_GOOGLE=false
-ENABLE_OPENCODE=false
+ENABLE_OPENCODE=true
+ENABLE_OPENCODE_GO=true
 ENABLE_NVIDIA=false
 ENABLE_DEEPINFRA=false
 EOF
@@ -123,6 +124,11 @@ fi
 log "seed disposable identities"
 node scripts/qualification/seed-local.mjs > /tmp/seed.log
 
+log "OpenAI-only BYOK acceptance gate"
+node scripts/qualification/byok-openai.mjs
+node scripts/qualification/byok-opencode.mjs
+node scripts/qualification/byok-catalog.mjs
+
 log "API acceptance gate (assertions, not diagnostics)"
 node scripts/qualification/smoke-router.mjs
 
@@ -134,6 +140,6 @@ node scripts/qualification/isolation-check.mjs
 
 log "real-backend browser journeys"
 npx playwright install --with-deps chromium
-node scripts/qualification/run-real-e2e.mjs
+VITE_PX08_COMPARE_DURABILITY=true node scripts/qualification/run-real-e2e.mjs
 
 log "real-backend qualification passed"

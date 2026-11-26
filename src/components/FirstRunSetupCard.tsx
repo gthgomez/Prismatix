@@ -48,16 +48,14 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
         setIsSubmitting(false);
         return;
       }
-      const verified = validation.status === 'enabled';
-
-      const saved = await plugins.setKey('openrouter', apiKey.trim(), validation);
-      if (saved) {
-        const message = verified
+      const saveResult = await plugins.setKey('openrouter', apiKey.trim(), validation);
+      if (saveResult.saved) {
+        const message = saveResult.verified
           ? 'Key saved and verified. You are ready to chat.'
           : 'Key saved, but could not be verified. Chat is paused until you verify this key or update it in Provider Settings.';
         setStatusMessage(message);
-        setStatusTone(verified ? 'success' : 'pending');
-        onSaved?.(message, verified);
+        setStatusTone(saveResult.verified ? 'success' : 'pending');
+        onSaved?.(message, saveResult.verified);
         setApiKey('');
       } else {
         setStatusMessage(null);

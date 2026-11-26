@@ -5,9 +5,9 @@ reliability campaign. It runs the **actual** Supabase stack locally — Postgres
 GoTrue Auth, PostgREST/RLS, Storage and the Edge runtime — so browser and API
 journeys exercise real boundaries instead of HTTP mocks.
 
-It never contacts a live AI provider. The router is pointed at
-`scripts/qualification/stub-provider.mjs` through its supported
-`OPENROUTER_BASE_URL` seam.
+The suite uses synthetic inference endpoints in
+`scripts/qualification/stub-provider.mjs`. The
+`PRISMATIX_QUAL_PROVIDER_BASE_URL` override is restricted to a local stack.
 
 ## Safety contract
 
@@ -29,7 +29,7 @@ including production, production subdomains, malformed URLs, embedded
 credentials, router-host mismatch and remote stubs). Run it before any hosted
 qualification.
 
-- `OPENROUTER_BASE_URL` is set only in `supabase/functions/.env`, which is
+- `PRISMATIX_QUAL_PROVIDER_BASE_URL` is set only in `supabase/functions/.env`, which is
   gitignored. Never copy it into hosted secrets.
 - Do not reuse these credentials or fixtures in a hosted project. Production
   authorization is a separate, explicit decision.
@@ -60,8 +60,7 @@ npx --yes supabase@2.98.2 status -o env
 ```
 
 Migrations are applied by `supabase start` through the real migration runner
-(`supabase/migrations`, 34 files at this commit, including the cost-log
-breakdown-provenance migration). To replay from scratch:
+from `supabase/migrations`, including the dynamic provider inventory migration. To replay from scratch:
 
 ```powershell
 npx --yes supabase@2.98.2 db reset
@@ -83,10 +82,9 @@ $env:SUPABASE_SERVICE_ROLE_KEY='<SERVICE_ROLE_KEY>'
 npm run qual:seed
 ```
 
-The script creates two confirmed Auth users, writes an enabled OpenRouter BYOK
-row through the service-role RPC, sets the default provider, and verifies that
-the signup trigger created an access grant. It prints the user ids and the
-non-secret BYOK encryption key.
+The script creates confirmed fixture identities and verifies their access grants.
+It seeds eligible OpenRouter rows for existing-connection journeys and leaves
+the onboarding identity without a key. All keys and responses are fixtures.
 
 ## Deterministic provider substitute
 
@@ -106,13 +104,14 @@ node scripts/qualification/stub-provider.mjs
 Create `supabase/functions/.env` (gitignored):
 
 ```dotenv
-OPENROUTER_BASE_URL=http://host.docker.internal:8899/v1
+PRISMATIX_QUAL_PROVIDER_BASE_URL=http://host.docker.internal:8899
 BYOK_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 ALLOWED_ORIGIN=http://127.0.0.1:4174
 ENABLE_ANTHROPIC=false
-ENABLE_OPENAI=false
+ENABLE_OPENAI=true
 ENABLE_GOOGLE=false
-ENABLE_OPENCODE=false
+ENABLE_OPENCODE=true
+ENABLE_OPENCODE_GO=true
 ENABLE_NVIDIA=false
 ENABLE_DEEPINFRA=false
 ENABLE_VIDEO_PIPELINE=false
@@ -137,6 +136,9 @@ must match the preview origin — the router locks CORS to it.
 
 | Command | Proves |
 |---|---|
+| `node scripts/qualification/byok-openai.mjs` | Fresh account, exact manual route, all Auto policies, Responses usage settlement and zero-dispatch guards |
+| `node scripts/qualification/byok-opencode.mjs` | Console and Go reach their respective endpoints with separate credentials, with Go quota and coding restrictions enforced |
+| `node scripts/qualification/byok-catalog.mjs` | Dynamic model admission, tariff refresh, historical receipts, retirement, and malformed discovery |
 | `npm run qual:env` | 14 negative controls for the shared environment contract |
 | `npm run qual:smoke` | Acceptance gate: fixture content, execution identity, settled receipt, 40/12 provider tokens, independently computed `$0.000075` total, components reconcile, exactly one chat call, two messages, no duplicate settlement - plus 10 negative controls that must be rejected and the `pending/estimated`, `settled/confirmed-zero` and `settled/unavailable` breakdown states |
 | `npm run qual:rate` | Production database limit (10/min): 10 admitted, 11th `429` with `Retry-After`, no provider dispatch, no message write, recovery after the window |

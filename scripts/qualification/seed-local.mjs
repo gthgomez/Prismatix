@@ -12,7 +12,7 @@ import { resolveQualificationEnvironment } from './env-contract.mjs';
 
 let target;
 try {
-  target = resolveQualificationEnvironment(process.env, { requireAnonKey: false });
+  target = resolveQualificationEnvironment(process.env);
 } catch (error) {
   console.error(`seed: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
@@ -24,9 +24,6 @@ const ANON_KEY = target.anonKey;
 
 // Non-secret fixtures that encrypt only a fake provider credential.
 const BYOK_ENCRYPTION_KEY = Buffer.from('0123456789abcdef0123456789abcdef').toString('base64');
-const FAKE_CIPHERTEXT =
-  'BwcHBwcHBwcHBwcH0uOcYiLwPUwm4V3k2QUnCdr7wF6z6dQVvnbDMeeBV2H6hw4RWXE=';
-
 const USERS = [
   { email: 'qual-a@example.test', password: 'qual-pass-a-1234' },
   { email: 'qual-b@example.test', password: 'qual-pass-b-1234' },
@@ -40,6 +37,7 @@ const USERS = [
   // deliberately exhausts the per-minute window, so it must not share an
   // identity with any other suite.
   { email: 'qual-f@example.test', password: 'qual-pass-f-1234' },
+  { email: 'qual-g@example.test', password: 'qual-pass-g-1234', fresh: true },
 ];
 
 if (!SERVICE_ROLE_KEY) {
@@ -91,22 +89,23 @@ async function ensureUser({ email, password }, existing) {
   return { id: created.id, email, password, created: true };
 }
 
-async function seedProviderKey(subjectId) {
-  await api('/rest/v1/rpc/set_user_provider_key', {
-    method: 'POST',
-    body: JSON.stringify({
-      p_subject_id: subjectId,
-      p_provider: 'openrouter',
-      p_ciphertext: FAKE_CIPHERTEXT,
-      p_last4: 'key1',
-      p_fingerprint: 'qualification-fixture-fingerprint',
-      p_enabled: true,
-    }),
+async function seedProviderKey({ email, password }) {
+  const signIn = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST', headers: { apikey: ANON_KEY, 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password }),
   });
-  await api('/rest/v1/rpc/set_user_default_provider', {
+  if (!signIn.ok) throw new Error(`qualification sign-in failed (${signIn.status})`);
+  const { access_token: token } = await signIn.json();
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/provider-settings`, {
     method: 'POST',
-    body: JSON.stringify({ p_subject_id: subjectId, p_provider: 'openrouter' }),
+    headers: { apikey: ANON_KEY, authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'set_key', provider: 'openrouter', apiKey: 'fake-byok-provider-key' }),
   });
+  if (!response.ok) throw new Error(`qualification provider connection failed (${response.status})`);
+  const result = await response.json();
+  if (!result.routes?.some((route) => route.provider === 'openrouter')) {
+    throw new Error('qualification fixture discovered no OpenRouter route');
+  }
 }
 
 async function readGrant(subjectId) {
@@ -138,7 +137,7 @@ async function main() {
   const seeded = [];
   for (const candidate of USERS) {
     const user = await ensureUser(candidate, existing);
-    await seedProviderKey(user.id);
+    if (!candidate.fresh) await seedProviderKey(user);
     const grant = await readGrant(user.id);
     const config = await readProviderConfig(user.id);
     seeded.push({

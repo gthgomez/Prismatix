@@ -58,7 +58,7 @@ interface RouterRequestPayload {
   imageStorageUrl?: string;
   videoAssetIds?: string[];
   attachmentRefs?: AttachmentRef[];
-  modelOverride?: RouterModel;
+  modelOverride?: string;
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel;
   mode?: 'debate' | 'off';
   debateProfile?: DebateProfile;
@@ -352,7 +352,7 @@ export async function askPrismatix(
   query: string,
   history: Message[] = [],
   attachments: FileUploadPayload[] = [],
-  modelOverride?: RouterModel | null,
+  modelOverride?: string | null,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel = 'high',
   debateOptions?: DebateRequestOptions,
   imageStorageUrl?: string,
@@ -677,7 +677,7 @@ export async function askPrismatixSync(
   query: string,
   history: Message[] = [],
   attachments: FileUploadPayload[] = [],
-  modelOverride?: RouterModel | null,
+  modelOverride?: string | null,
   geminiFlashThinkingLevel: GeminiFlashThinkingLevel = 'high',
   debateOptions?: DebateRequestOptions,
   routingProfile?: 'balanced' | 'economy' | 'capability',

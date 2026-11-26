@@ -28,6 +28,7 @@ function makeProvider(hasKey: boolean): ProviderState {
 function makePlugins(provider: ProviderState): ProviderPlugins {
   return {
     providers: [provider],
+    routes: [],
     defaultProvider: 'openrouter',
     enabledProviders: new Set(['openrouter']),
     isConfigured: true,
@@ -40,8 +41,9 @@ function makePlugins(provider: ProviderState): ProviderPlugins {
     error: null,
     refresh: vi.fn(async () => {}),
     setEnabled: vi.fn(async () => true),
-    setKey: vi.fn(async () => true),
+    setKey: vi.fn(async () => ({ saved: true, verified: true, inventoryStatus: 'verified' as const, availableModelCount: 1, qualifiedModelCount: 1 })),
     removeKey: vi.fn(async () => true),
+    refreshInventory: vi.fn(async () => true),
     setDefault: vi.fn(async () => true),
     validateKey: vi.fn(async () => ({ provider: 'openrouter' as const, status: 'enabled' as const })),
   };
@@ -70,7 +72,7 @@ describe('ProviderSettings', () => {
     roots.splice(0).forEach((root) => act(() => root.unmount()));
   });
 
-  it('clearly marks the server-key-only OpenCode path as disabled', () => {
+  it('allows connecting OpenCode Zen as an account provider', () => {
     const container = document.createElement('div');
     roots.push(
       renderInto(
@@ -83,12 +85,9 @@ describe('ProviderSettings', () => {
       ),
     );
     const note = document.body.querySelector('.provider-card-note')?.textContent ?? '';
-    expect(note).toContain('disabled in BYOK-only mode');
-    expect(note).toContain('OpenRouter key');
-    expect(document.body.querySelector('.provider-badge:not(.provider-badge--default)')?.textContent)
-      .toBe('Unavailable');
-    expect(document.body.querySelector('[role="switch"]')).toBeNull();
-    expect(document.body.querySelector('[aria-label="OpenCode API key"]')).toBeNull();
+    expect(note).toContain('No verified model inventory');
+    expect(document.body.querySelector('[role="switch"]')).not.toBeNull();
+    expect(document.body.querySelector('[aria-label="OpenCode Zen API key"]')).not.toBeNull();
     act(() => roots.pop()!.unmount());
   });
 
@@ -152,7 +151,7 @@ describe('ProviderSettings', () => {
     });
     await act(async () => { document.body.querySelector<HTMLButtonElement>('.provider-key-save')!.click(); });
     expect(plugins.setKey).toHaveBeenCalled();
-    expect(document.body.querySelector('.provider-settings-notice')?.textContent).toContain('Key saved. Verification was inconclusive.');
+    expect(document.body.querySelector('.provider-settings-notice')?.textContent).toContain('Key saved and verified. 1 models are ready.');
     expect(document.body.querySelector('.provider-settings-notice')?.textContent).not.toContain('synthetic-private-key');
     container.remove();
   });

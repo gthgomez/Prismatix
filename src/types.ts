@@ -36,22 +36,14 @@ export type RouterModel =
   | 'gemini-2.5-flash'
   | 'gemini-3.1-pro';
 
-export type RouterProvider =
-  | 'opencode'
-  | 'openrouter'
-  | 'anthropic'
-  | 'openai'
-  | 'google'
-  | 'nvidia'
-  | 'deepinfra'
-  | 'brave'
-  | 'other';
+export type RouterProvider = import('../supabase/functions/_shared/provider_registry').ProviderId | 'other';
 
 export type ProviderKeyStatus =
   | 'not_configured'
   | 'enabled'
   | 'disabled'
   | 'invalid_revoked'
+  | 'restricted'
   | 'unavailable'
   | 'unknown';
 
@@ -60,17 +52,23 @@ export interface ProviderState {
   id: import('../supabase/functions/_shared/provider_registry').ProviderId;
   label: string;
   enabled: boolean;
+  userEnabled?: boolean;
   hasKey: boolean;
   keyLast4: string | null;
   offeredByDefault: boolean;
   defaultProvider: boolean;
   status?: ProviderKeyStatus;
   statusMessage?: string;
+  inventoryStatus?: import('../supabase/functions/_shared/serving_routes.ts').InventoryStatus | 'not_configured';
+  lastSuccessfulRefresh?: string | null;
+  availableModelCount?: number;
+  qualifiedModelCount?: number;
 }
 
 export interface ProviderSettingsPayload {
   providers: ProviderState[];
-  defaultProvider: import('../supabase/functions/_shared/provider_registry').ProviderId;
+  defaultProvider: import('../supabase/functions/_shared/provider_registry').ProviderId | null;
+  routes: import('../supabase/functions/_shared/serving_routes.ts').ServingRoute[];
 }
 
 export type RouteRole =

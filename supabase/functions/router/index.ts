@@ -1,17 +1,16 @@
 // index.ts - Multi-provider Router Edge Function (Anthropic + OpenAI + Google)
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { openRouterModelId, resolveDefaultProvider } from '../_shared/provider_registry.ts';
+import { resolveDefaultProvider, type RawUserProviderConfig } from '../_shared/provider_registry.ts';
+import { inferenceProviderEnabled, qualificationProviderBase, trustedInferenceEndpoint } from '../_shared/provider_endpoint.ts';
+import type { ServingRoute } from '../_shared/serving_routes.ts';
+import { checkOpenCodeGoAllowance } from '../_shared/opencode_allowance.ts';
 import {
   countImageTokens,
   countTokens,
   type ImageAttachment,
   type Message,
   MODEL_REGISTRY,
-  ModalityMismatchError,
-  assertRouteSupportsModalities,
-  normalizeModelOverride,
-  type Provider,
   type RouteDecision,
   type RouterModel,
   type RouterParams,
@@ -19,7 +18,6 @@ import {
 import {
   calculateCostBreakdown,
   calculatePreFlightCost,
-  evaluateAutoSendSafety,
   roundUsd,
 } from './cost_engine.ts';
 import {
@@ -35,14 +33,9 @@ import {
   type ChallengerOutput,
 } from './debate_prompts.ts';
 import { createNormalizedProxyStream } from './sse_normalizer.ts';
-import {
-  applyOpenRouterFallback,
-  decisionFromModel,
-  normalizeDecisionAgainstProviderAvailability,
-} from './provider_availability.ts';
-import { CURATED_OPENCODE_REGISTRY, ModelUnavailableError } from './models_hub.ts';
-import { dispatchOpenCodeStream } from './opencode_adapters.ts';
-import { resolveProductionRoute } from './production_routing.ts';
+import { decisionFromModel } from './provider_availability.ts';
+import { selectAuthorizedRoute } from './authorized_routing.ts';
+import { dispatchServingRoute } from './provider_stream.ts';
 import {
   createProviderResolver,
   ProviderCredentialError,
@@ -52,10 +45,7 @@ import {
 import { decryptKey } from '../_shared/byok_crypto.ts';
 import {
   type GeminiFlashThinkingLevel,
-  buildAnthropicStreamPayload,
   buildGoogleJsonPayload,
-  buildGoogleStreamPayload,
-  buildOpenAILegacyStreamPayload,
   buildOpenAIStreamPayload,
 } from './provider_payloads.ts';
 import {
@@ -118,9 +108,11 @@ import {
   resolveEffectiveLimits,
   type AdmissionResult,
 } from './admission.ts';
-import { configureOpenCodePricing, getModelPricing, PRICING_VERSION } from './pricing_registry.ts';
+import { getModelPricing, PRICING_VERSION } from './pricing_registry.ts';
 import {
   MeteredCallAccountingError,
+  MeteredDispatchNotSentError,
+  priceSnapshotForRoute,
   runMeteredCall,
   settleMeteredCallFromUsage,
   type MeteredCallContext,
@@ -175,6 +167,7 @@ interface UpstreamCallResult {
   response: Response;
   extractDeltas: (payload: unknown) => string[];
   effectiveModelId: string;
+  isComplete?: () => boolean;
   effectiveGeminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
   // PX05: for streaming calls, resolves with the provider-reported usage once
   // the (teed) response body has been consumed. Undefined for non-streaming.
@@ -183,11 +176,6 @@ interface UpstreamCallResult {
 
 // PX03: per-dispatch metering context is defined in metered_call.ts and shared
 // with the memory summarization path.
-
-interface GoogleModelRecord {
-  name: string;
-  supportedGenerationMethods: string[];
-}
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
@@ -221,10 +209,6 @@ const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const VIDEO_CONTEXT_MAX_CHARS = 5000;
 const DEV_MODE = Deno.env.get('DEV_MODE') === 'true';
 
-const OPENCODE_BASE_URL = Deno.env.get('OPENCODE_BASE_URL') || 'https://opencode.ai/zen/v1';
-configureOpenCodePricing(OPENCODE_BASE_URL);
-const OPENROUTER_BASE_URL = Deno.env.get('OPENROUTER_BASE_URL') || 'https://openrouter.ai/api/v1';
-
 function envFlag(name: string, defaultValue: boolean): boolean {
   const raw = Deno.env.get(name);
   if (raw === null || raw === undefined || raw.trim() === '') return defaultValue;
@@ -246,13 +230,6 @@ export class BudgetExhaustedError extends Error {
   }
 }
 
-const ENABLE_OPENCODE = envFlag('ENABLE_OPENCODE', true);
-const ENABLE_ANTHROPIC = envFlag('ENABLE_ANTHROPIC', true);
-const ENABLE_OPENAI = envFlag('ENABLE_OPENAI', true);
-const ENABLE_GOOGLE = envFlag('ENABLE_GOOGLE', true);
-const ENABLE_NVIDIA = envFlag('ENABLE_NVIDIA', true);
-const ENABLE_DEEPINFRA = envFlag('ENABLE_DEEPINFRA', false);
-const ENABLE_OPENROUTER = envFlag('ENABLE_OPENROUTER', true);
 const ENABLE_VIDEO_PIPELINE = envFlag('ENABLE_VIDEO_PIPELINE', false);
 
 // Debate Mode flags (router "tool" toggle)
@@ -297,8 +274,6 @@ const MAX_ACTIVE_STREAMS_PER_USER = Number(Deno.env.get('MAX_ACTIVE_STREAMS_PER_
 // remain only as a non-authoritative fast pre-check.
 const ADMISSION_CONFIG = loadAdmissionConfig((key) => Deno.env.get(key) ?? undefined);
 
-const GOOGLE_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
-let googleModelsCache: { fetchedAt: number; models: GoogleModelRecord[] } | null = null;
 const requestTimestampsByUser = new Map<string, number[]>();
 const activeStreamsByUser = new Map<string, number>();
 
@@ -307,25 +282,7 @@ const activeStreamsByUser = new Map<string, number>();
 // PROVIDER HELPERS
 // ============================================================================
 
-/** Operator kill-switch for a provider (the ENABLE_* env flags). */
-function globalProviderEnabled(provider: Provider): boolean {
-  switch (provider) {
-    case 'opencode':
-      return ENABLE_OPENCODE;
-    case 'openrouter':
-      return ENABLE_OPENROUTER;
-    case 'anthropic':
-      return ENABLE_ANTHROPIC;
-    case 'openai':
-      return ENABLE_OPENAI;
-    case 'google':
-      return ENABLE_GOOGLE;
-    case 'nvidia':
-      return ENABLE_NVIDIA;
-    case 'deepinfra':
-      return ENABLE_DEEPINFRA;
-  }
-}
+const getEnv = (key: string) => Deno.env.get(key);
 
 function normalizeGeminiFlashThinkingLevel(input?: string): GeminiFlashThinkingLevel {
   const normalized = String(input || '').trim().toLowerCase();
@@ -404,6 +361,11 @@ function acquireUserStreamSlot(userId: string): (() => void) | null {
       activeStreamsByUser.set(userId, current - 1);
     }
   };
+}
+
+function maximumRouteInputRate(route: ServingRoute): number {
+  const tariff = route.tariff;
+  return Math.max(tariff.inputPerMillion, tariff.cachedReadPerMillion ?? 0, tariff.cachedWritePerMillion ?? 0);
 }
 
 function promptTokensForCost(
@@ -563,6 +525,13 @@ async function consumeUpstreamToText(
   return acc.trim();
 }
 
+function routedStage(base: RouteDecision, route: ServingRoute, budgetCap = base.budgetCap): RouteDecision {
+  return {
+    ...base, servingRoute: route, provider: route.provider, model: route.upstreamId,
+    modelTier: route.canonicalId, budgetCap: Math.min(budgetCap, route.maxOutputTokens),
+  };
+}
+
 function isProviderReadyForModelTier(modelTier: RouterModel, resolver: ProviderResolver): boolean {
   return resolver.readyForModelTier(modelTier);
 }
@@ -625,13 +594,11 @@ async function maybeRunDebateMode(params: {
     return null;
   }
 
-  const basePrimaryDecision = params.forcedModelTier
-    ? decisionFromModel(
-      params.forcedModelTier,
-      params.decision.complexityScore,
-      `debate-${params.debateProfile}-synthesis`,
-    )
-    : params.decision;
+  const primaryRoute = params.forcedModelTier
+    ? params.resolver.routeForTier(params.forcedModelTier)
+    : params.decision.servingRoute;
+  if (!primaryRoute) return null;
+  const basePrimaryDecision = routedStage(params.decision, primaryRoute);
   const synthesisBudgetCap = params.synthesisMaxTokens
     ? Math.min(basePrimaryDecision.budgetCap, params.synthesisMaxTokens)
     : basePrimaryDecision.budgetCap;
@@ -651,11 +618,10 @@ async function maybeRunDebateMode(params: {
   const plan = getDebatePlan(params.debateProfile, primaryTier, challengerCount);
 
   // Readiness gating: primary must be ready; each challenger needs at least one cascade option ready.
-  if (!isProviderReadyForModelTier(primaryTier, params.resolver)) return null;
   for (const c of plan.challengers) {
     const assignedTier = params.forcedModelTier || c.modelTier;
     const sequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role, primaryTier);
-    if (!sequence.some((tier) => isProviderReadyForModelTier(tier, params.resolver))) return null;
+    if (!sequence.some((tier) => tier === primaryTier || isProviderReadyForModelTier(tier, params.resolver))) return null;
   }
 
   const stageUsagePromises: Promise<NormalizedUsage | null>[] = [];
@@ -669,10 +635,7 @@ async function maybeRunDebateMode(params: {
   // ── Stage 1: Proposer Draft ──────────────────────────────────────────────
   // The primary model (or assigned tier) drafts an initial solution to the query.
   const proposerTier = params.forcedModelTier || primaryTier;
-  const proposerDecision: RouteDecision = {
-    ...decisionFromModel(proposerTier, params.decision.complexityScore, `debate-${params.debateProfile}-proposer`),
-    budgetCap: Math.min(params.workerMaxTokens, 2048),
-  };
+  const proposerDecision = routedStage(basePrimaryDecision, primaryRoute, Math.min(params.workerMaxTokens, 2048));
   const proposerMessages: Message[] = [
     ...params.allMessages.slice(Math.max(0, params.allMessages.length - 6)),
     { role: 'user', content: enrichedUserQuery },
@@ -742,42 +705,19 @@ async function maybeRunDebateMode(params: {
 
       const assignedTier = params.forcedModelTier || c.modelTier;
       const fallbackSequence = buildFallbackSequence(assignedTier, params.debateProfile, c.role, primaryTier);
-      for (const workerTier of fallbackSequence) {
-        if (workerController.signal.aborted) break;
-        if (!isProviderReadyForModelTier(workerTier, params.resolver)) continue;
-        try {
-          const workerDecision: RouteDecision = {
-            ...decisionFromModel(workerTier, params.decision.complexityScore, `debate-worker-${c.role}`),
-            budgetCap: params.workerMaxTokens,
-          };
-          const upstream = await callProviderStream(
-            workerDecision,
-            workerMessages,
-            [],
-            workerController.signal,
-            params.geminiFlashThinkingLevel,
-            params.resolver,
-            params.meter?.(
-              'debate-challenger',
-              `worker-${c.role}`,
-              workerTier,
-              null,
-            ) ?? undefined,
-          );
-          if (upstream.usagePromise) {
-            stageUsagePromises.push(upstream.usagePromise);
-          }
-          const text = await consumeUpstreamToText(
-            upstream,
-            workerController.signal,
-            plan.maxChallengerChars,
-          );
-          if (text) return { role: c.role, modelTier: workerTier, text };
-        } catch (workerError) {
-          if (workerError instanceof MeteredCallAccountingError) throw workerError;
-        }
-      }
-      return null;
+      const workerRoute = fallbackSequence.map((tier) =>
+        tier === primaryTier ? primaryRoute : params.resolver.routeForTier(tier)
+      ).find((route) => route !== undefined);
+      if (workerController.signal.aborted || !workerRoute) return null;
+      const workerDecision = routedStage(basePrimaryDecision, workerRoute, params.workerMaxTokens);
+      const upstream = await callProviderStream(
+        workerDecision, workerMessages, [], workerController.signal,
+        params.geminiFlashThinkingLevel, params.resolver,
+        params.meter?.('debate-challenger', `worker-${c.role}`, workerRoute.canonicalId) ?? undefined,
+      );
+      if (upstream.usagePromise) stageUsagePromises.push(upstream.usagePromise);
+      const text = await consumeUpstreamToText(upstream, workerController.signal, plan.maxChallengerChars);
+      return text ? { role: c.role, modelTier: workerRoute.canonicalId, text } : null;
     } catch (challengerError) {
       if (challengerError instanceof MeteredCallAccountingError) throw challengerError;
       return null;
@@ -854,435 +794,6 @@ async function maybeRunDebateMode(params: {
 // UPSTREAM DELTA EXTRACTORS
 // ============================================================================
 
-function extractAnthropicDeltas(payload: unknown): string[] {
-  if (!payload || typeof payload !== 'object') return [];
-  const data = payload as { type?: string; delta?: { text?: string } };
-  if (data.type === 'content_block_delta' && typeof data.delta?.text === 'string') {
-    return [data.delta.text];
-  }
-  return [];
-}
-
-function extractOpenAIDeltas(payload: unknown): string[] {
-  if (!payload || typeof payload !== 'object') return [];
-
-  const data = payload as {
-    choices?: Array<{ delta?: { content?: string | Array<{ text?: string }> } }>;
-  };
-
-  const deltas: string[] = [];
-  for (const choice of data.choices || []) {
-    const content = choice.delta?.content;
-    if (typeof content === 'string' && content) {
-      deltas.push(content);
-      continue;
-    }
-    if (Array.isArray(content)) {
-      for (const part of content) {
-        if (typeof part?.text === 'string' && part.text) {
-          deltas.push(part.text);
-        }
-      }
-    }
-  }
-
-  return deltas;
-}
-
-function extractGoogleDeltas(payload: unknown): string[] {
-  if (!payload || typeof payload !== 'object') return [];
-
-  const data = payload as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-
-  const deltas: string[] = [];
-  for (const candidate of data.candidates || []) {
-    for (const part of candidate.content?.parts || []) {
-      if (typeof part?.text === 'string' && part.text) {
-        deltas.push(part.text);
-      }
-    }
-  }
-
-  return deltas;
-}
-
-function normalizeGoogleModelName(rawName: string): string {
-  return rawName.startsWith('models/') ? rawName.slice('models/'.length) : rawName;
-}
-
-function hasGenerateContentSupport(model: GoogleModelRecord): boolean {
-  return model.supportedGenerationMethods.includes('generateContent');
-}
-
-async function listGoogleModels(signal: AbortSignal, apiKey: string): Promise<GoogleModelRecord[]> {
-  const now = Date.now();
-  if (googleModelsCache && now - googleModelsCache.fetchedAt < GOOGLE_MODELS_CACHE_TTL_MS) {
-    return googleModelsCache.models;
-  }
-
-  const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models';
-  const response = await fetch(endpoint, {
-    method: 'GET',
-    headers: { 'x-goog-api-key': apiKey },
-    signal,
-  });
-  const responseText = await response.text();
-
-  if (!response.ok) {
-    throw new Error(`Google ListModels failed (${response.status})`);
-  }
-
-  let payload: { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }> } = {};
-  try {
-    payload = JSON.parse(responseText) as typeof payload;
-  } catch {
-    throw new Error('Google ListModels returned invalid JSON payload');
-  }
-
-  const models = (payload.models || [])
-    .filter((item): item is { name: string; supportedGenerationMethods?: string[] } =>
-      typeof item?.name === 'string' && item.name.length > 0
-    )
-    .map((item) => ({
-      name: normalizeGoogleModelName(item.name),
-      supportedGenerationMethods: Array.isArray(item.supportedGenerationMethods)
-        ? item.supportedGenerationMethods
-        : [],
-    }))
-    .filter(hasGenerateContentSupport);
-
-  googleModelsCache = { fetchedAt: now, models };
-  return models;
-}
-
-function googleAliasScore(alias: string, modelName: string): number {
-  const normalizedAlias = alias.toLowerCase();
-  const normalizedName = modelName.toLowerCase();
-
-  let score = 0;
-
-  if (normalizedAlias === normalizedName) score += 1000;
-  if (normalizedName.includes(normalizedAlias)) score += 500;
-
-  if (normalizedAlias === 'gemini-2.5-flash' || normalizedAlias === 'gemini-3-flash' || normalizedAlias === 'gemini-3-flash-preview') {
-    if (normalizedName.includes('flash')) score += 300;
-    if (normalizedName.includes('gemini-2.5')) score += 200;
-    if (normalizedName.includes('gemini-3')) score += 100;
-    if (!normalizedName.includes('flash')) score -= 400;
-  }
-
-  if (
-    normalizedAlias === 'gemini-3.1-pro-preview' ||
-    normalizedAlias === 'gemini-3.1-pro' ||
-    normalizedAlias === 'gemini-3-pro'
-  ) {
-    if (normalizedName.includes('pro')) score += 300;
-    if (normalizedName.includes('gemini-3')) score += 200;
-    if (normalizedName.includes('gemini-2.5')) score += 100;
-    if (!normalizedName.includes('pro')) score -= 400;
-  }
-
-  if (normalizedName.includes('preview')) score -= 10;
-  if (normalizedName.includes('exp')) score -= 15;
-
-  return score;
-}
-
-async function resolveGoogleModelAlias(alias: string, signal: AbortSignal, apiKey: string): Promise<string> {
-  const models = await listGoogleModels(signal, apiKey);
-  if (models.length === 0) {
-    throw new Error('Google ListModels returned no models with generateContent support');
-  }
-
-  const exact = models.find((m) => m.name.toLowerCase() === alias.toLowerCase());
-  if (exact) return exact.name;
-
-  const ranked = models
-    .map((model) => ({ model, score: googleAliasScore(alias, model.name) }))
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score);
-
-  if (ranked.length > 0) {
-    return ranked[0]!.model.name;
-  }
-
-  throw new Error(
-    `No Google model available for alias '${alias}'. ` +
-      `Query ListModels and verify current Gemini model naming.`,
-  );
-}
-
-// ============================================================================
-// UPSTREAM CALLS
-// ============================================================================
-
-async function callAnthropic(
-  decision: RouteDecision,
-  allMessages: Message[],
-  images: ImageAttachment[],
-  signal: AbortSignal,
-  apiKey: string,
-): Promise<UpstreamCallResult> {
-  const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(buildAnthropicStreamPayload(decision, allMessages, images)),
-    signal,
-  });
-
-  return {
-    response: anthropicResponse,
-    extractDeltas: extractAnthropicDeltas,
-    effectiveModelId: decision.model,
-  };
-}
-
-async function callOpenAI(
-  decision: RouteDecision,
-  allMessages: Message[],
-  images: ImageAttachment[],
-  signal: AbortSignal,
-  apiKey: string,
-): Promise<UpstreamCallResult> {
-  const endpoint = 'https://api.openai.com/v1/chat/completions';
-
-  const doCall = (payload: Record<string, unknown>) =>
-    fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-      signal,
-    });
-
-  let openaiResponse = await doCall(
-    buildOpenAIStreamPayload(decision, allMessages, images, true),
-  );
-
-  if (openaiResponse.status === 400) {
-    const bodyText = await openaiResponse.text();
-    if (bodyText.toLowerCase().includes('max_completion_tokens')) {
-      openaiResponse = await doCall({
-        ...buildOpenAILegacyStreamPayload(decision, allMessages, images, true),
-      });
-    } else {
-      openaiResponse = new Response(bodyText, {
-        status: 400,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-  }
-
-  return {
-    response: openaiResponse,
-    extractDeltas: extractOpenAIDeltas,
-    effectiveModelId: decision.model,
-  };
-}
-
-async function callNvidia(
-  decision: RouteDecision,
-  allMessages: Message[],
-  signal: AbortSignal,
-  apiKey: string,
-): Promise<UpstreamCallResult> {
-  const endpoint = 'https://integrate.api.nvidia.com/v1/chat/completions';
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(buildOpenAIStreamPayload(decision, allMessages, [])),
-    signal,
-  });
-
-  return {
-    response,
-    extractDeltas: extractOpenAIDeltas,
-    effectiveModelId: decision.model,
-  };
-}
-
-async function callDeepInfra(
-  decision: RouteDecision,
-  allMessages: Message[],
-  signal: AbortSignal,
-  apiKey: string,
-): Promise<UpstreamCallResult> {
-  const endpoint = 'https://api.deepinfra.com/v1/openai/chat/completions';
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(buildOpenAIStreamPayload(decision, allMessages, [])),
-    signal,
-  });
-
-  return {
-    response,
-    extractDeltas: extractOpenAIDeltas,
-    effectiveModelId: decision.model,
-  };
-}
-
-async function callOpenRouter(
-  decision: RouteDecision,
-  allMessages: Message[],
-  images: ImageAttachment[],
-  signal: AbortSignal,
-  apiKey: string,
-): Promise<UpstreamCallResult> {
-  const endpoint = `${OPENROUTER_BASE_URL.replace(/\/$/, '')}/chat/completions`;
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'X-Title': 'Prismatix',
-    },
-    body: JSON.stringify(buildOpenAIStreamPayload(decision, allMessages, images)),
-    signal,
-  });
-
-  return {
-    response,
-    extractDeltas: extractOpenAIDeltas,
-    effectiveModelId: decision.model,
-  };
-}
-
-async function callGoogle(
-  decision: RouteDecision,
-  allMessages: Message[],
-  images: ImageAttachment[],
-  signal: AbortSignal,
-  geminiFlashThinkingLevel: GeminiFlashThinkingLevel,
-  apiKey: string,
-): Promise<UpstreamCallResult> {
-  const resolvedModel = await resolveGoogleModelAlias(decision.model, signal, apiKey);
-
-  const endpoint =
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(resolvedModel)}` +
-    ':streamGenerateContent?alt=sse';
-
-  const isGeminiFlash = decision.modelTier === 'gemini-2.5-flash';
-
-  const doCall = (includeThinkingConfig: boolean) =>
-    fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify(
-        buildGoogleStreamPayload(
-          decision,
-          allMessages,
-          images,
-          includeThinkingConfig,
-          geminiFlashThinkingLevel,
-        ),
-      ),
-      signal,
-    });
-
-  let effectiveGeminiFlashThinkingLevel: GeminiFlashThinkingLevel | undefined = isGeminiFlash
-    ? geminiFlashThinkingLevel
-    : undefined;
-
-  let googleResponse = await doCall(isGeminiFlash);
-
-  if (googleResponse.status === 400 && isGeminiFlash) {
-    const responseText = await googleResponse.text();
-    const lowered = responseText.toLowerCase();
-    const looksLikeThinkingConfigError = lowered.includes('thinking') ||
-      lowered.includes('thinkingconfig') ||
-      lowered.includes('thinking_level');
-
-    if (looksLikeThinkingConfigError) {
-      googleResponse = await doCall(false);
-      effectiveGeminiFlashThinkingLevel = undefined;
-    } else {
-      googleResponse = new Response(responseText, {
-        status: 400,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-  }
-
-  const result: UpstreamCallResult = {
-    response: googleResponse,
-    extractDeltas: extractGoogleDeltas,
-    effectiveModelId: resolvedModel,
-  };
-  if (effectiveGeminiFlashThinkingLevel) {
-    result.effectiveGeminiFlashThinkingLevel = effectiveGeminiFlashThinkingLevel;
-  }
-  return result;
-}
-
-async function callOpenCode(
-  decision: RouteDecision,
-  allMessages: Message[],
-  images: ImageAttachment[],
-  signal: AbortSignal,
-  apiKey: string,
-  sessionId?: string,
-): Promise<UpstreamCallResult> {
-  const modelConfig = CURATED_OPENCODE_REGISTRY[decision.modelTier] || {
-    modelId: decision.model,
-    displayName: decision.model,
-    gateway: 'opencode' as const,
-    protocol: 'openai-chat' as const,
-    family: 'other' as const,
-    supportsImages: images.length > 0,
-    budgetCap: 8192,
-    pricing: {
-      inputPer1M: 1.0,
-      outputPer1M: 5.0,
-      source: 'dynamic',
-      verifiedAt: '2026-08-16',
-    },
-  };
-
-  // PX05 (a): the opencode adapter reads its cap from the curated config, so
-  // apply the (already budget-clamped) decision cap as a ceiling here too.
-  const effectiveModelConfig = {
-    ...modelConfig,
-    budgetCap: Math.min(modelConfig.budgetCap, decision.budgetCap),
-  };
-
-  const streamResult = await dispatchOpenCodeStream({
-    config: effectiveModelConfig,
-    messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
-    images: images.map((img) => ({ data: img.data, mediaType: img.mediaType })),
-    openCodeApiKey: apiKey,
-    openCodeBaseUrl: OPENCODE_BASE_URL,
-    sessionId,
-    signal,
-  });
-
-  return {
-    response: streamResult.response,
-    extractDeltas: streamResult.extractDeltas,
-    effectiveModelId: decision.model,
-  };
-}
-
 export async function callProviderStream(
   decision: RouteDecision,
   allMessages: Message[],
@@ -1305,66 +816,56 @@ export async function callProviderStream(
     }
   }
 
-  if (memoryTools && meter && meter !== 'unmetered' && supportsMemoryTools(decision)) {
-    const gateway = decision.provider as 'opencode' | 'openrouter';
+  const route = decision.servingRoute ?? resolver.routeForTier(decision.modelTier);
+  if (!route) throw new ProviderCredentialError(decision.provider);
+  const snapshot = priceSnapshotForRoute(route);
+  const promptTokens = promptTokensForCost(allMessages, images, 0);
+  const routeCap = Math.min(decision.budgetCap, route.maxOutputTokens, route.contextWindow - promptTokens);
+  if ((images.length && !route.supportsImages) || routeCap < 16) {
+    throw new BudgetExhaustedError('route_context_exhausted');
+  }
+  if (memoryTools && meter && meter !== 'unmetered' && supportsMemoryTools({ ...decision, servingRoute: route })) {
     return await dispatchMemoryToolStream({
-      gateway, model: decision.model,
-      baseUrl: gateway === 'opencode' ? OPENCODE_BASE_URL : OPENROUTER_BASE_URL,
-      apiKey: await resolver.resolveKey(gateway),
+      gateway: 'openrouter', model: route.upstreamId, route,
+      endpoint: trustedInferenceEndpoint(route, getEnv),
+      resolveKey: () => resolver.resolveKey(route.provider, route),
       messages: buildOpenAIStreamPayload(decision, allMessages, images).messages as unknown[],
-      maxTokens: decision.budgetCap, signal, meter,
+      maxTokens: routeCap, signal, meter: { ...meter, priceSnapshot: snapshot },
       client: memoryTools.client, subject: memoryTools.subject, maxInputUsd: memoryTools.maxInputUsd,
     });
   }
-  // PX05 (a): clamp this stage's output cap through the shared execution budget
-  // so the SUM of all stage input and output maxima cannot exceed the admitted reservation.
-  if (meter !== 'unmetered' && meter?.outputBudget) {
-    const stagePricing = getModelPricing(decision.modelTier);
-    const promptTokens = promptTokensForCost(allMessages, images, 0);
-    const clampedCap = meter.outputBudget.clampTokenCap(
-      decision.budgetCap,
-      stagePricing.outputRatePer1M,
-      promptTokens,
-      stagePricing.inputRatePer1M,
-    );
-    if (clampedCap <= 0) {
-      throw new BudgetExhaustedError('execution_output_budget_exhausted');
-    }
-    if (clampedCap < decision.budgetCap) {
-      decision = { ...decision, budgetCap: clampedCap };
-    }
-  }
-
-  // OpenRouter unlock safety net: some sub-decisions (debate/SMD) are built from
-  // the native model tier. Re-point any decision whose native provider is not
-  // ready at its OpenRouter route before resolving credentials.
-  decision = applyOpenRouterFallback(
-    decision,
-    (provider) => resolver.isReady(provider),
-    resolver.isReady('openrouter'),
-  );
-
-    // Resolve credentials per request from the user's encrypted BYOK key only.
-    // Deployment secrets are not an authorized provider credential path.
-  const apiKey = await resolver.resolveKey(decision.provider);
+  const cap = meter !== 'unmetered' && meter?.outputBudget
+    ? meter.outputBudget.clampTokenCap(
+      routeCap, Math.max(route.tariff.outputPerMillion, route.tariff.reasoningPerMillion ?? 0),
+      promptTokens, maximumRouteInputRate(route), route.tariff.requestUsd,
+    )
+    : routeCap;
+  if (cap < 16) throw new BudgetExhaustedError('execution_output_budget_exhausted');
 
   const dispatch = async (): Promise<UpstreamCallResult> => {
-    switch (decision.provider) {
-      case 'opencode':
-        return await callOpenCode(decision, allMessages, images, signal, apiKey, meter !== 'unmetered' ? meter?.execution.conversation_id ?? undefined : undefined);
-      case 'openrouter':
-        return await callOpenRouter(decision, allMessages, images, signal, apiKey);
-      case 'anthropic':
-        return await callAnthropic(decision, allMessages, images, signal, apiKey);
-      case 'openai':
-        return await callOpenAI(decision, allMessages, images, signal, apiKey);
-      case 'google':
-        return await callGoogle(decision, allMessages, images, signal, geminiFlashThinkingLevel, apiKey);
-      case 'nvidia':
-        return await callNvidia(decision, allMessages, signal, apiKey);
-      case 'deepinfra':
-        return await callDeepInfra(decision, allMessages, signal, apiKey);
+    // The key read is the authorization point immediately before the upstream
+    // call. It verifies account, enablement and the exact inventory revision.
+    let apiKey: string;
+    try {
+      apiKey = await resolver.resolveKey(route.provider, route);
+      if (route.provider === 'opencode_go') {
+        const allowance = await checkOpenCodeGoAllowance(apiKey, fetch, qualificationProviderBase(route.provider, getEnv));
+        if (allowance !== 'verified') throw new BudgetExhaustedError('provider_quota_exhausted');
+        apiKey = await resolver.resolveKey(route.provider, route);
+      }
+    } catch (error) {
+      if (meter === 'unmetered') throw error;
+      throw new MeteredDispatchNotSentError(error);
     }
+    const result = await dispatchServingRoute({
+      route, apiKey, messages: allMessages, images, outputCap: cap, signal, getEnv,
+      sessionId: meter === 'unmetered' ? undefined : meter.execution.conversation_id ?? undefined,
+      geminiThinkingLevel: geminiFlashThinkingLevel,
+    });
+    if (route.protocol === 'google_generate_content' && route.upstreamId === 'gemini-2.5-flash') {
+      return { ...result, effectiveGeminiFlashThinkingLevel: geminiFlashThinkingLevel };
+    }
+    return result;
   };
 
   if (meter === 'unmetered') return await dispatch();
@@ -1376,8 +877,8 @@ export async function callProviderStream(
     participant: meter.participant,
     attemptNumber: meter.attemptNumber,
     requestedModel: meter.requestedModel,
-    resolvedModel: decision.model,
-    priceSnapshot: meter.priceSnapshot,
+    resolvedModel: route.upstreamId,
+    priceSnapshot: snapshot,
     // Streaming: the pre-dispatch row is written now, and the teed usage stream
     // settles it after the body is consumed.
     deferSettlement: true,
@@ -1388,21 +889,22 @@ export async function callProviderStream(
     meteredInput,
     async () => {
       const result = await dispatch();
-      const servedModel = result.effectiveModelId || decision.model;
+      const servedModel = result.effectiveModelId || route.upstreamId;
       // PX05: tee the SSE body. The client branch streams through unchanged; a
       // background parser accumulates provider-reported usage and settles the
       // pre-dispatch row once the stream ends. No usage => the row stays pending
       // (the execution-level bounded estimate handles it); never fabricated.
-      if (result.response.body) {
+      if (result.response.ok && result.response.body) {
         const [clientBody, usageBody] = result.response.body.tee();
         result.response = new Response(clientBody, {
           status: result.response.status,
           statusText: result.response.statusText,
           headers: result.response.headers,
         });
-        const tracker = createUsageTracker(decision.provider);
+        const tracker = createUsageTracker(route.provider, route.protocol);
         const p = consumeStreamUsage(usageBody, tracker).then(async (usage) => {
-          await settleMeteredCallFromUsage(meteredInput, usage, servedModel);
+          result.effectiveModelId = tracker.servedModel?.() ?? servedModel;
+          await settleMeteredCallFromUsage(meteredInput, usage, result.effectiveModelId);
           return usage;
         });
         result.usagePromise = p;
@@ -1448,18 +950,21 @@ async function callGoogleStructured(
   allMessages: Message[],
   responseSchema: Record<string, unknown>,
   signal: AbortSignal,
-  apiKey: string,
+  resolver: ProviderResolver,
   meter?: MeteredCallContext,
 ): Promise<{ responseText: string; ok: boolean; status: number }> {
-  // PX05 (a): clamp through the shared execution budget (same as streaming).
+  const route = decision.servingRoute;
+  if (!route || route.provider !== 'google' || route.protocol !== 'google_generate_content') {
+    throw new ProviderCredentialError('google');
+  }
+  const promptTokens = promptTokensForCost(allMessages, [], 0);
+  decision = routedStage(decision, route, Math.min(decision.budgetCap, route.contextWindow - promptTokens));
+  if (decision.budgetCap <= 0) throw new BudgetExhaustedError('route_context_exhausted');
   if (meter?.outputBudget) {
-    const stagePricing = getModelPricing(decision.modelTier);
-    const promptTokens = promptTokensForCost(allMessages, [], 0);
     const clampedCap = meter.outputBudget.clampTokenCap(
       decision.budgetCap,
-      stagePricing.outputRatePer1M,
-      promptTokens,
-      stagePricing.inputRatePer1M,
+      Math.max(route.tariff.outputPerMillion, route.tariff.reasoningPerMillion ?? 0),
+      promptTokens, maximumRouteInputRate(route), route.tariff.requestUsd,
     );
     if (clampedCap <= 0) {
       throw new BudgetExhaustedError('execution_output_budget_exhausted');
@@ -1470,10 +975,14 @@ async function callGoogleStructured(
   }
 
   const dispatch = async (): Promise<{ responseText: string; ok: boolean; status: number }> => {
-    const resolvedModel = await resolveGoogleModelAlias(decision.model, signal, apiKey);
-    const endpoint =
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(resolvedModel)}` +
-      ':generateContent';
+    const endpoint = trustedInferenceEndpoint(route, getEnv).replace(':streamGenerateContent?alt=sse', ':generateContent');
+    let apiKey: string;
+    try {
+      apiKey = await resolver.resolveKey('google', route);
+    } catch (error) {
+      if (!meter) throw error;
+      throw new MeteredDispatchNotSentError(error);
+    }
 
     const payload = buildGoogleJsonPayload(decision, allMessages, responseSchema);
 
@@ -1484,7 +993,7 @@ async function callGoogleStructured(
         'x-goog-api-key': apiKey,
       },
       body: JSON.stringify(payload),
-      signal,
+      signal, redirect: 'error',
     });
 
     const responseText = await response.text();
@@ -1502,7 +1011,7 @@ async function callGoogleStructured(
       attemptNumber: meter.attemptNumber,
       requestedModel: meter.requestedModel,
       resolvedModel: decision.model,
-      priceSnapshot: meter.priceSnapshot,
+      priceSnapshot: priceSnapshotForRoute(route),
     },
     async () => {
       const result = await dispatch();
@@ -1589,6 +1098,7 @@ interface SmdStageLog {
 interface SmdRunResult {
   upstream: UpstreamCallResult;
   log: SmdStageLog;
+  decision: RouteDecision;
 }
 
 // ============================================================================
@@ -1619,8 +1129,10 @@ async function maybeRunSmdMode(params: {
   meter?: MeteredCallFactory;
 }): Promise<SmdRunResult | null> {
   const runId = crypto.randomUUID().slice(0, 8);
-  const smdDecisionBase = decisionFromModel(SMD_MODEL_TIER, 50, 'smd-light');
-  const modelId = MODEL_REGISTRY[SMD_MODEL_TIER].modelId;
+  const smdRoute = params.resolver.routeForTier(SMD_MODEL_TIER, 'google');
+  if (!smdRoute) return null;
+  const smdDecisionBase = routedStage(decisionFromModel(SMD_MODEL_TIER, 50, 'smd-light'), smdRoute);
+  const modelId = smdRoute.upstreamId;
 
   const log: SmdStageLog = {
     runId,
@@ -1647,9 +1159,6 @@ async function maybeRunSmdMode(params: {
   };
 
   try {
-    // Resolve the Google key lazily inside the guarded block so a missing key
-    // falls back to the baseline path instead of escaping as a 502.
-    const googleKey = await params.resolver.resolveKey('google');
     // ── STAGE 1: DRAFT ──────────────────────────────────────────────────────
     const draftStart = Date.now();
     const draftDecision: RouteDecision = { ...smdDecisionBase, budgetCap: SMD_DRAFT_BUDGET };
@@ -1697,7 +1206,7 @@ async function maybeRunSmdMode(params: {
           skepticMessages,
           SKEPTIC_GEMINI_SCHEMA,
           params.signal,
-          googleKey,
+          params.resolver,
           params.meter?.('smd-skeptic', 'primary', skepticDecision.modelTier, null) ?? undefined,
         );
       } catch (fetchErr) {
@@ -1756,7 +1265,7 @@ async function maybeRunSmdMode(params: {
           synthMessages,
           SYNTH_DECISION_GEMINI_SCHEMA,
           params.signal,
-          googleKey,
+          params.resolver,
           params.meter?.('smd-synth', 'primary', synthDecisionModel.modelTier, null) ?? undefined,
         );
       } catch (fetchErr) {
@@ -1839,7 +1348,7 @@ async function maybeRunSmdMode(params: {
 
     console.log('[SMD] run complete:', JSON.stringify(log));
 
-    return { upstream: formatterUpstream, log };
+    return { upstream: formatterUpstream, log, decision: formatterDecision };
   } catch (err) {
     // Accounting failures must fail the request closed, never degrade to a
     // baseline provider call that we also cannot account for.
@@ -1887,10 +1396,8 @@ interface CapabilitiesPayload {
 //   - smd:    experimental SMD flag (ENABLE_SMD_LIGHT, default off)
 //   - memory: supported capability; actual access depends on account
 //             entitlement and setting. Mobile owns its memory.
-//   - models: the canonical manual model IDs accepted by
-//             normalizeModelOverride (the exact-match catalog — no substring
-//             mapping)
-function buildCapabilitiesPayload(): CapabilitiesPayload {
+//   - models: exact serving routes authorized for this caller
+function buildCapabilitiesPayload(models: string[]): CapabilitiesPayload {
   return {
     release: RELEASE_IDENTITY,
     capabilities: {
@@ -1906,7 +1413,7 @@ function buildCapabilitiesPayload(): CapabilitiesPayload {
         memory: true,
         smd: ENABLE_SMD_LIGHT,
       },
-      models: Object.keys(MODEL_REGISTRY),
+      models,
     },
   };
 }
@@ -2094,7 +1601,12 @@ Deno.serve(async (req: Request) => {
     // is handled after auth.getUser and the size guards, and BEFORE the
     // entitlement gate below — detected from the single canonical body read.
     if (!deferredBodyError && isCapabilitiesAction(body)) {
-      return new Response(JSON.stringify(buildCapabilitiesPayload()), {
+      const { data, error } = await supabaseClient.rpc('get_user_provider_config', { p_subject_id: userId });
+      const config = error ? null : data as RawUserProviderConfig | null;
+      const routes = createProviderResolver(config, {
+        globalEnabled: (provider) => inferenceProviderEnabled(provider, getEnv),
+      }).eligibleRoutes();
+      return new Response(JSON.stringify(buildCapabilitiesPayload(routes.map((route) => route.id))), {
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       });
@@ -2183,7 +1695,7 @@ Deno.serve(async (req: Request) => {
     // PX12 provider plug-ins: build the per-request resolver from the user's
     // stored provider state. Strict per-user enablement; a lookup failure leaves
     // the config empty, which leaves no provider key eligible for dispatch.
-    let userProviderConfig: { default_provider?: unknown; providers?: unknown } | null = null;
+    let userProviderConfig: RawUserProviderConfig | null = null;
     let providerConfigUnavailable = false;
     try {
       const { data: providerConfigData, error: providerConfigError } = await supabaseClient.rpc(
@@ -2215,24 +1727,14 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const providerResolver: ProviderResolver = createProviderResolver(userProviderConfig, {
-      globalEnabled: (provider) => globalProviderEnabled(provider),
-      fetchUserKey: async (provider) => {
-        const { data: ciphertext, error: keyError } = await supabaseClient.rpc(
-          'get_user_provider_key_material',
-          { p_subject_id: userId, p_provider: provider },
-        );
-        if (keyError) {
-          console.warn(`[PX12] key material lookup failed for provider '${provider}'`);
-          throw new ProviderKeyUnavailableError(provider);
-        }
-        if (typeof ciphertext !== 'string' || ciphertext === '') return null;
-        try {
-          return await decryptKey(ciphertext);
-        } catch {
-          console.warn(`[PX12] stored key decrypt failed for provider '${provider}'`);
-          throw new ProviderKeyUnavailableError(provider);
-        }
+    const providerResolver = createProviderResolver(userProviderConfig, {
+      globalEnabled: (provider) => inferenceProviderEnabled(provider, getEnv),
+      fetchRouteKey: async (provider, revision, routeId) => {
+        const { data: ciphertext, error } = await supabaseClient.rpc('get_user_provider_dispatch_key', {
+          p_subject_id: userId, p_provider: provider, p_credential_revision: revision, p_route_id: routeId,
+        });
+        if (error) throw new ProviderKeyUnavailableError(provider);
+        return typeof ciphertext === 'string' && ciphertext ? await decryptKey(ciphertext) : null;
       },
     });
 
@@ -2240,7 +1742,7 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           error: 'provider_key_required',
-          message: 'Connect and enable a provider key in Provider Settings before sending a request.',
+          message: 'Connect, verify, and enable an inference provider in Provider Settings.',
         }),
         {
           status: 400,
@@ -2441,122 +1943,42 @@ Deno.serve(async (req: Request) => {
     // The 'debate'/'debate:<profile>' compatibility toggle suppresses the
     // override (it is a mode switch, not a manual model selection).
     const manualModelOverride = debateReq.suppressModelOverride ? undefined : modelOverride;
-    // PX02 (F17): strict unknown manual model rejection. A manual selection
-    // that normalizeModelOverride cannot exact-match (registry key or synonym)
-    // is a 400 — never a silent fallback to Auto, and never a substring
-    // mapping of a new model generation onto an old one. Runs before routing,
-    // so zero provider calls happen for a rejected selection.
-    if (
-      typeof manualModelOverride === 'string' &&
-      manualModelOverride.trim() !== '' &&
-      manualModelOverride.trim().toLowerCase() !== 'auto' &&
-      normalizeModelOverride(manualModelOverride) === undefined
-    ) {
-      return new Response(
-        JSON.stringify({ error: 'unknown_model', code: 'unknown_model' }),
-        {
-          status: 400,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-    let normalizedOverride = normalizeModelOverride(manualModelOverride);
-    if (!normalizedOverride && routingProfile) {
-      if (routingProfile === 'economy') {
-        normalizedOverride = normalizeModelOverride('gemini-3.8-flash');
-      } else if (routingProfile === 'capability') {
-        normalizedOverride = normalizeModelOverride('gpt-6-sol');
-      }
-    }
-    const defaultGateway = resolveDefaultProvider(userProviderConfig);
-    let decision: RouteDecision;
-    try {
-      decision = await resolveProductionRoute(routerParams, normalizedOverride, {
-        openCodePrimary: false,
-        openCodeApiKey: undefined,
-        openCodeBaseUrl: OPENCODE_BASE_URL,
-      });
-    } catch (routeError) {
-      // Fail-closed cost safety: discovery unavailable/empty or no priced
-      // candidate for the role must produce a deterministic, readable
-      // failure — never a silent legacy-provider escalation.
-      if (routeError instanceof ModelUnavailableError) {
-        return new Response(
-          JSON.stringify({
-            error: 'auto_route_unavailable',
-            message:
-              `${routeError.message} Auto will not fall back to a more expensive provider. ` +
-              'Pick a model manually from the model menu, or try again shortly.',
-          }),
-          {
-            status: 409,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-      throw routeError;
-    }
-
-    // OpenRouter unlock: a model whose native provider is not enabled still
-    // routes when OpenRouter is on and the model has an OpenRouter route.
-    if (defaultGateway === 'openrouter' && providerResolver.isReady('openrouter')) {
-      const gatewayModelId = openRouterModelId(decision.modelTier);
-      if (gatewayModelId) decision = { ...decision, provider: 'openrouter', model: gatewayModelId };
-    }
-    decision = applyOpenRouterFallback(
-      decision,
-      (provider) => providerResolver.isReady(provider),
-      providerResolver.isReady('openrouter'),
-    );
-
-    const availabilityCheck = normalizeDecisionAgainstProviderAvailability(
-      decision,
-      normalizedOverride,
-      (provider) => providerResolver.isReady(provider),
-    );
-    if (availabilityCheck.error) {
-      return new Response(JSON.stringify({ error: availabilityCheck.error }), {
-        status: 400,
+    const normalizedOverride = manualModelOverride && manualModelOverride.trim().toLowerCase() !== 'auto'
+      ? manualModelOverride : undefined;
+    const historyContext = history.map((msg) => `${msg.role}: ${msg.content}`).join('\n');
+    const contextText = `${historyContext}\nuser: ${effectiveQuery}`;
+    const estimatedVideoPromptTokens = estimateVideoPromptTokens(videoValidation.ids.length);
+    const effectiveLimits = resolveEffectiveLimits(ADMISSION_CONFIG, activeGrant);
+    if (!isAdmissionAllowed(effectiveLimits)) {
+      return new Response(JSON.stringify({ error: 'budget_exhausted', code: 'budget_exhausted' }), {
+        status: 402,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       });
     }
-    decision = availabilityCheck.decision;
-
-    // PX04 image-modality guard: never send image attachments to a model whose
-    // routing registry marks supportsImages === false (or an unknown route),
-    // and never silently downgrade/substitute a family to make the request fit.
-    // Runs before any provider call, so a mismatch costs zero upstream calls.
-    try {
-      assertRouteSupportsModalities(decision.modelTier, { images: hasImages });
-    } catch (modalityError) {
-      if (modalityError instanceof ModalityMismatchError) {
-        return new Response(
-          JSON.stringify({ error: 'modality_mismatch', code: 'modality_mismatch' }),
-          {
-            status: 400,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-      throw modalityError;
-    }
-
-    const historyContext = history
-      .map((msg) => `${msg.role}: ${msg.content}`)
-      .join('\n');
-    const estimatedVideoPromptTokens = estimateVideoPromptTokens(videoValidation.ids.length);
-    let preFlightCost = calculatePreFlightCost(
-      decision.modelTier,
-      `${historyContext}\nuser: ${effectiveQuery}`,
-      imageAttachments.length,
-      estimatedVideoPromptTokens,
+    const requestMaximumUsd = Math.min(
+      effectiveLimits.maxPerExecutionUsd,
+      spendCapUsd ?? Number.POSITIVE_INFINITY,
+      ENABLE_SERVER_SPEND_LIMIT ? PER_REQUEST_COST_LIMIT_USD : Number.POSITIVE_INFINITY,
     );
+    const routing = selectAuthorizedRoute(providerResolver.eligibleRoutes(), {
+      params: routerParams, contextText, imageCount: imageAttachments.length,
+      additionalPromptTokens: estimatedVideoPromptTokens, maximumCostUsd: requestMaximumUsd,
+      manual: normalizedOverride, profile: routingProfile, preferredProvider: resolveDefaultProvider(userProviderConfig),
+    });
+    if (!routing.ok) {
+      return new Response(JSON.stringify({ error: routing.code, code: routing.code, message: routing.message }), {
+        status: routing.status,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
+    const decision = routing.decision;
+    let preFlightCost = routing.cost;
 
     let debateDisabledByBudget = false;
     const debateEligibility = computeDebateEligibility({
       profile: debateReq.profile,
       enableDebateMode: ENABLE_DEBATE_MODE,
-      enableDebateAuto: ENABLE_DEBATE_AUTO,
+      enableDebateAuto: ENABLE_DEBATE_AUTO && !normalizedOverride,
       debateRequested: debateReq.requested,
       debateOptOut: debateReq.optOut,
       hasImages,
@@ -2577,55 +1999,35 @@ Deno.serve(async (req: Request) => {
       );
       const plan = getDebatePlan(debateReq.profile, decision.modelTier, challengerCount);
 
-      // Proposer stage
-      const proposerTier = forcedVideoUiTier || decision.modelTier;
-      const proposerCost = calculatePreFlightCost(
-        proposerTier,
-        `${historyContext}\nuser: ${effectiveQuery}`,
-        imageAttachments.length,
-        estimatedVideoPromptTokens,
-      );
+      const primaryRoute = forcedVideoUiTier
+        ? providerResolver.routeForTier(forcedVideoUiTier) ?? decision.servingRoute!
+        : decision.servingRoute!;
+      const proposerCost = calculatePreFlightCost(primaryRoute.canonicalId, contextText,
+        imageAttachments.length, estimatedVideoPromptTokens, primaryRoute.tariff);
 
-      // Challenger stages: bound spend across the role-aware fallback cascade
       let challengersEstimatedUsd = 0;
       let challengersTokens = 0;
       let challengersPromptTokens = 0;
-      let challengersUnknownRate = false;
       const draftTokens = proposerCost.projectedOutputTokens;
+      const candidateQuery = `${contextText}\nproposer draft: ${'x'.repeat(draftTokens * 4)}`;
       for (const c of plan.challengers) {
-        const assignedTier = forcedVideoUiTier || c.modelTier;
-        const candidateTiers = buildFallbackSequence(assignedTier, debateReq.profile, c.role, decision.modelTier);
-        let maxCandidateCostUsd = 0;
-        let cTokens = 0;
-        let cPromptTokens = 0;
-        let cUnknown = false;
-        const candidateQuery = `${historyContext}\nuser: ${effectiveQuery}\nproposer draft: ${'x'.repeat(draftTokens * 4)}`;
-
-        for (const tier of candidateTiers) {
-          const cost = calculatePreFlightCost(tier, candidateQuery, 0, 0);
-          if (cost.estimatedUsd > maxCandidateCostUsd) {
-            maxCandidateCostUsd = cost.estimatedUsd;
-          }
-          if (cTokens === 0) {
-            cTokens = cost.tokenEstimate;
-            cPromptTokens = cost.promptTokens;
-          }
-          if (cost.hasUnknownRate) {
-            cUnknown = true;
-          }
-        }
-        challengersEstimatedUsd += maxCandidateCostUsd;
-        challengersTokens += cTokens;
-        challengersPromptTokens += cPromptTokens;
-        challengersUnknownRate = challengersUnknownRate || cUnknown;
+        const candidates = buildFallbackSequence(forcedVideoUiTier || c.modelTier, debateReq.profile, c.role, primaryRoute.canonicalId);
+        const route = candidates.map((tier) => tier === primaryRoute.canonicalId ? primaryRoute : providerResolver.routeForTier(tier))
+          .find((candidate) => candidate !== undefined);
+        if (!route) continue;
+        const cost = calculatePreFlightCost(route.canonicalId, candidateQuery, 0, 0, route.tariff);
+        challengersEstimatedUsd += cost.estimatedUsd;
+        challengersTokens += cost.tokenEstimate;
+        challengersPromptTokens += cost.promptTokens;
       }
 
       // Synthesis stage
       const synthesisCost = calculatePreFlightCost(
-        decision.modelTier,
+        primaryRoute.canonicalId,
         `${historyContext}\nuser: ${effectiveQuery}\nproposer draft: ${'x'.repeat(draftTokens * 4)}\ncritique: ${'x'.repeat(draftTokens * 4)}`,
         imageAttachments.length,
         estimatedVideoPromptTokens,
+        primaryRoute.tariff,
       );
 
       preFlightCost = {
@@ -2634,34 +2036,8 @@ Deno.serve(async (req: Request) => {
         projectedOutputTokens: proposerCost.projectedOutputTokens + synthesisCost.projectedOutputTokens,
         estimatedUsd: roundUsd(proposerCost.estimatedUsd + challengersEstimatedUsd + synthesisCost.estimatedUsd),
         pricingVersion: preFlightCost.pricingVersion,
-        hasUnknownRate: preFlightCost.hasUnknownRate || proposerCost.hasUnknownRate || challengersUnknownRate || synthesisCost.hasUnknownRate,
+        hasUnknownRate: preFlightCost.hasUnknownRate || proposerCost.hasUnknownRate || synthesisCost.hasUnknownRate,
       };
-    }
-
-    // Authoritative cost-safety gate: unknown pricing can never auto-send.
-    // This runs before the spend gate so an unpriced model is rejected with a
-    // clear reason instead of slipping through a $0 estimate.
-    const autoSendCheck = evaluateAutoSendSafety({
-      isAuto: !normalizedOverride,
-      modelTier: decision.modelTier,
-      hasUnknownRate: preFlightCost.hasUnknownRate,
-    });
-    if (!autoSendCheck.allowed) {
-      // Distinguish an unknown price from a model that is priced but not
-      // eligible for automatic routing, so the client can show the right reason.
-      const autoSendError = autoSendCheck.reason === 'auto_not_eligible'
-        ? 'auto_route_ineligible'
-        : 'unknown_model_pricing';
-      return new Response(
-        JSON.stringify({
-          error: autoSendError,
-          message: autoSendCheck.message,
-        }),
-        {
-          status: 409,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        },
-      );
     }
 
     if (ENABLE_SERVER_SPEND_LIMIT) {
@@ -2805,28 +2181,11 @@ Deno.serve(async (req: Request) => {
     // lease in ONE transaction. A denial returns 402 (budget) or 429
     // (rate/active) with a stable code and ZERO provider calls. Any authority
     // failure fails closed (503) — this gate never admits on uncertainty.
-    const effectiveLimits = resolveEffectiveLimits(ADMISSION_CONFIG, activeGrant);
-    if (!isAdmissionAllowed(effectiveLimits)) {
-      // An explicit $0 grant (or $0 daily ceiling) means no paid execution.
-      return new Response(
-        JSON.stringify({ error: 'budget_exhausted', code: 'budget_exhausted' }),
-        {
-          status: 402,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-
-    if (preFlightCost.estimatedUsd > effectiveLimits.maxPerExecutionUsd) {
+    if (preFlightCost.estimatedUsd > requestMaximumUsd) {
       if (debateEligibility.doDebate && !debateReq.requested) {
         // Auto-debate estimated cost exceeds max allowed per execution: degrade to baseline chat
-        const baselineCost = calculatePreFlightCost(
-          decision.modelTier,
-          `${historyContext}\nuser: ${effectiveQuery}`,
-          imageAttachments.length,
-          estimatedVideoPromptTokens,
-        );
-        if (baselineCost.estimatedUsd > effectiveLimits.maxPerExecutionUsd) {
+        const baselineCost = routing.cost;
+        if (baselineCost.estimatedUsd > requestMaximumUsd) {
           return new Response(
             JSON.stringify({ error: 'budget_exhausted', code: 'budget_exhausted' }),
             {
@@ -2851,7 +2210,7 @@ Deno.serve(async (req: Request) => {
       subjectId: userId,
       executionId: activeExecution.id,
       estimateUsd: preFlightCost.estimatedUsd,
-      maxUsd: effectiveLimits.maxPerExecutionUsd,
+      maxUsd: requestMaximumUsd,
       leaseSeconds: ADMISSION_CONFIG.leaseSeconds,
       requestLimit: ADMISSION_CONFIG.requestLimitPerMinute,
       userDailyUsd: effectiveLimits.userDailyUsd,
@@ -2881,16 +2240,16 @@ Deno.serve(async (req: Request) => {
     // PX05 (a): one shared output budget bounds the SUM of every stage's output
     // maximum by the admitted per-execution ceiling, so debate/SMD stages cannot
     // collectively exceed the single up-front reservation.
-    const executionOutputBudget = createExecutionOutputBudget(effectiveLimits.maxPerExecutionUsd);
+    const executionOutputBudget = createExecutionOutputBudget(requestMaximumUsd);
     // Offer native read-only tools for explicit recall requests when the full
     // bounded loop fits admission. Other queries/protocols use automatic recall.
     const toolInputUsd = memoryToolInputCeiling(
       buildOpenAIStreamPayload(decision, allMessages, imageAttachments).messages as unknown[],
-      getModelPricing(decision.modelTier).inputRatePer1M,
+      maximumRouteInputRate(decision.servingRoute!),
     );
     const memoryToolContext: MemoryToolContext | undefined = memoryEnabled &&
       wantsMemoryTools(query) && supportsMemoryTools(decision) &&
-      toolInputUsd < effectiveLimits.maxPerExecutionUsd * 0.75
+      toolInputUsd < requestMaximumUsd * 0.75
       ? { client: storeClient, subject: userId, maxInputUsd: toolInputUsd }
       : undefined;
 
@@ -3129,7 +2488,7 @@ Deno.serve(async (req: Request) => {
       // account (this also honours the ENABLE_GOOGLE kill-switch).
       const smdEligible =
         ENABLE_SMD_LIGHT && smdRequested && !hasImages && !hasVideoAssets &&
-        providerResolver.isReady('google');
+        !normalizedOverride && Boolean(providerResolver.routeForTier(SMD_MODEL_TIER, 'google'));
 
       if (smdEligible) {
         const queryTokens = countTokens(query);
@@ -3162,12 +2521,7 @@ Deno.serve(async (req: Request) => {
             upstream = smdResult.upstream;
             smdActive = true;
             smdRunLog = smdResult.log;
-            // SMD forces Gemini Flash for the entire pipeline; reflect in response decision.
-            responseDecision = decisionFromModel(
-              SMD_MODEL_TIER,
-              decision.complexityScore,
-              'smd-light',
-            );
+            responseDecision = smdResult.decision;
           } else {
             // All stage failures fall back silently to the normal baseline path.
             console.log('[SMD] pipeline returned null — falling back to baseline');
@@ -3188,7 +2542,7 @@ Deno.serve(async (req: Request) => {
       const debateEligibility = computeDebateEligibility({
         profile: debateReq.profile,
         enableDebateMode: ENABLE_DEBATE_MODE,
-        enableDebateAuto: ENABLE_DEBATE_AUTO,
+        enableDebateAuto: ENABLE_DEBATE_AUTO && !normalizedOverride,
         debateRequested: debateReq.requested,
         debateOptOut: debateReq.optOut,
         hasImages,
@@ -3294,7 +2648,7 @@ Deno.serve(async (req: Request) => {
         await settleAdmission('ledger');
         await finalizeLedger('failed', 'budget_exhausted');
         return new Response(
-          JSON.stringify({ error: 'budget_exhausted', code: 'execution_budget_exhausted' }),
+          JSON.stringify({ error: 'budget_exhausted', code: upstreamError.message === 'provider_quota_exhausted' ? upstreamError.message : 'execution_budget_exhausted' }),
           {
             status: 402,
             headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -3320,7 +2674,7 @@ Deno.serve(async (req: Request) => {
       if (upstreamError instanceof ProviderCredentialError) {
         return new Response(JSON.stringify({
           error: 'provider_key_required',
-          message: 'Connect and enable a provider key in Provider Settings before sending a request.',
+          message: 'Connect, verify, and enable an inference provider in Provider Settings.',
         }), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -3332,15 +2686,7 @@ Deno.serve(async (req: Request) => {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         });
       }
-      const message = upstreamError instanceof Error
-        ? upstreamError.message
-        : String(upstreamError);
-      if (DEV_MODE) {
-        console.error(
-          `[Upstream:${responseDecision.provider}] Request failed:`,
-          message,
-        );
-      }
+      if (DEV_MODE) console.error(`[Upstream:${responseDecision.provider}] request failed`);
       return new Response(
         JSON.stringify({
           error: 'Upstream provider error',
@@ -3355,26 +2701,35 @@ Deno.serve(async (req: Request) => {
 
     if (!upstream.response.ok) {
       releaseStreamSlot();
-      // The provider responded with an error; it may have been billed.
       await settleAdmission('ledger');
-      await finalizeLedger('failed', 'upstream_status');
-      if (DEV_MODE) {
-        console.error(
-          `[Upstream:${responseDecision.provider}] Error ${upstream.response.status}:`,
-          upstream.response.headers.get('content-type') || 'unknown content-type',
-        );
+      const status = upstream.response.status;
+      const route = responseDecision.servingRoute;
+      const revision = route && providerResolver.revisionFor(route.provider);
+      const connectionFailure = status === 401 ? 'invalid_revoked' : status === 403 ? 'restricted' : status === 404 ? 'retired' : null;
+      if (route && revision && connectionFailure) {
+        const { error } = await supabaseClient.rpc('invalidate_user_provider_inventory', {
+          p_subject_id: userId, p_provider: route.provider, p_credential_revision: revision,
+          p_route_id: route.id, p_status: connectionFailure,
+        });
+        if (error) console.warn('[BYOK] provider inventory invalidation failed');
       }
-      return new Response(
-        JSON.stringify({
-          error: 'Upstream provider error',
-          provider: responseDecision.provider,
-          status: upstream.response.status,
-        }),
-        {
-          status: 502,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        },
-      );
+      const error = status === 401 ? 'provider_key_invalid'
+        : status === 403 ? 'provider_access_restricted'
+        : status === 404 ? 'route_unavailable'
+        : status === 402 ? 'provider_quota_exhausted'
+        : status === 429 ? 'provider_rate_limited'
+        : 'provider_temporarily_unavailable';
+      const message = status === 401 ? 'Update this connection’s API key in Provider Settings.'
+        : status === 403 || status === 404 ? 'Check access to this model with your provider and refresh its inventory.'
+        : status === 402 ? 'Check the provider’s credit balance or usage allowance before sending again.'
+        : status === 429 ? 'The provider is limiting requests. Wait before sending another request.'
+        : 'The provider could not complete this request. Your conversation is still available.';
+      await finalizeLedger('failed', error);
+      await upstream.response.body?.cancel().catch(() => undefined);
+      return new Response(JSON.stringify({ error, code: error, message, provider: responseDecision.provider }), {
+        status: status === 429 || status === 402 ? status : connectionFailure ? 409 : 502,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
     }
 
     const effectiveModelId = upstream.effectiveModelId || responseDecision.model;
@@ -3403,6 +2758,7 @@ Deno.serve(async (req: Request) => {
     const proxyStream = createNormalizedProxyStream({
       upstreamBody: upstream.response.body,
       extractDeltas: upstream.extractDeltas,
+      isComplete: upstream.isComplete,
       initialMeta: debateActive && debateParticipants.length > 0
         ? {
             debate_participants: debateParticipants,
@@ -3446,12 +2802,14 @@ Deno.serve(async (req: Request) => {
       },
       onComplete: async () => {
         try {
+          await upstream.usagePromise?.catch(() => undefined);
+          const servedModelId = upstream.effectiveModelId || effectiveModelId;
           const assistantTokenCount = countTokens(assistantText);
           const costBreakdown = calculateCostBreakdown(responseDecision.modelTier, {
             promptTokens: finalPromptTokenCount,
             completionTokens: assistantTokenCount,
             reasoningTokens: 0,
-          });
+          }, responseDecision.servingRoute?.tariff);
 
           // PX07: persist the assistant turn durably. A failure here does NOT
           // abort the (already completed) response; it marks the terminal
@@ -3468,7 +2826,7 @@ Deno.serve(async (req: Request) => {
                 role: 'assistant',
                 content: assistantText,
                 tokenCount: assistantTokenCount,
-                modelUsed: `${responseDecision.provider}:${effectiveModelId}`,
+                modelUsed: `${responseDecision.provider}:${servedModelId}`,
                 attachments: [],
                 metadata: debateActive || (debateReq.requested && Boolean(debateDegradedReason))
                   ? {
@@ -3652,7 +3010,7 @@ Deno.serve(async (req: Request) => {
           const finalizeOk = await finalizeLedger(
             receiptOk ? 'completed' : 'indeterminate',
             receiptOk ? 'ok' : 'receipt_write_failed',
-            effectiveModelId,
+            servedModelId,
           );
           // Auxiliary admission starts after the chat lease is settled.
           if (memoryQueued) keepAlive(runMemoryJobs(storeClient, userId));

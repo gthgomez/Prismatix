@@ -266,10 +266,10 @@ Deno.serve(async (req: Request) => {
   }
   const providerResolver = createProviderResolver(providerConfig, {
     globalEnabled: (provider) => provider === 'google' && envFlag('ENABLE_GOOGLE', true),
-    fetchUserKey: async (provider) => {
+    fetchRouteKey: async (provider, revision, routeId) => {
       const { data: ciphertext, error } = await supabase.rpc(
-        'get_user_provider_key_material',
-        { p_subject_id: ownerId, p_provider: provider },
+        'get_user_provider_dispatch_key',
+        { p_subject_id: ownerId, p_provider: provider, p_credential_revision: revision, p_route_id: routeId },
       );
       if (error) throw new ProviderKeyUnavailableError(provider);
       if (typeof ciphertext !== 'string' || ciphertext === '') return null;
@@ -283,7 +283,8 @@ Deno.serve(async (req: Request) => {
   });
   let googleApiKey: string;
   try {
-    googleApiKey = await providerResolver.resolveKey('google');
+    const route = providerResolver.eligibleRoutes().find((candidate) => candidate.provider === 'google');
+    googleApiKey = await providerResolver.resolveKey('google', route);
   } catch (keyError) {
     if (keyError instanceof ProviderCredentialError) {
       await markJobFailed(
