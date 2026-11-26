@@ -20,6 +20,7 @@ const USER_B = { email: 'qual-b@example.test', password: 'qual-pass-b-1234' };
 // limit even when the acceptance gate and isolation checks run moments earlier.
 const USER_C = { email: 'qual-c@example.test', password: 'qual-pass-c-1234' };
 const USER_D = { email: 'qual-d@example.test', password: 'qual-pass-d-1234' };
+const USER_G = { email: 'qual-g@example.test', password: 'qual-pass-g-1234' };
 
 async function setScenario(scenario: string) {
   const response = await fetch(`${STUB_CONTROL}/__control`, {
@@ -30,16 +31,17 @@ async function setScenario(scenario: string) {
   expect(response.ok, `stub scenario ${scenario}`).toBe(true);
 }
 
-/**
- * Count only assistant chat calls (`stream_options.include_usage` absent).
- * Background memory extraction uses `include_usage: true`, so this isolates
- * the conversation turn from asynchronous maintenance work and makes call
- * counting stable across tests.
- */
+/** Count user-facing chat calls apart from asynchronous memory extraction. */
 async function stubChatRequestCount(): Promise<number> {
   const response = await fetch(`${STUB_CONTROL}/__requests`);
-  const body = (await response.json()) as { requests: Array<{ hasUsageOption?: boolean }> };
-  return body.requests.filter((request) => request.hasUsageOption === false).length;
+  const body = (await response.json()) as { requests: Array<{ workload?: string }> };
+  return body.requests.filter((request) => request.workload === 'chat').length;
+}
+
+async function stubInferenceRequests(): Promise<Array<{ provider?: string; path?: string; protocol?: string; model?: string | null; authMatched?: boolean; kind?: string; workload?: string }>> {
+  const response = await fetch(`${STUB_CONTROL}/__requests`);
+  const body = (await response.json()) as { requests: Array<{ provider?: string; path?: string; protocol?: string; model?: string | null; authMatched?: boolean; kind?: string; workload?: string }> };
+  return body.requests.filter((request) => request.kind !== 'metadata' && request.path?.startsWith('/'));
 }
 
 /**
@@ -60,6 +62,15 @@ async function expectNoNewProviderCalls(baseline: number, label: string, windowM
   expect(await stubChatRequestCount(), label).toBe(baseline);
 }
 
+async function expectNoNewInferenceRequests(baseline: number, label: string, windowMs = 2500) {
+  const deadline = Date.now() + windowMs;
+  while (Date.now() < deadline) {
+    expect((await stubInferenceRequests()).length, label).toBe(baseline);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  expect((await stubInferenceRequests()).length, label).toBe(baseline);
+}
+
 /**
  * The settled cost badge is rendered from the server's receipt event, which is
  * emitted after the transcript and cost log are written. It is the visible
@@ -67,7 +78,7 @@ async function expectNoNewProviderCalls(baseline: number, label: string, windowM
  * fixed delay.
  */
 async function expectServerConfirmedTurn(page: Page) {
-  await expect(page.getByText(/\$\S+ final/).first()).toBeVisible({ timeout: 25000 });
+  await expect(page.getByText(/\$\S+ final/).last()).toBeVisible({ timeout: 25000 });
 }
 
 async function signIn(page: Page, user: { email: string; password: string }) {
@@ -75,6 +86,29 @@ async function signIn(page: Page, user: { email: string; password: string }) {
   await page.locator('#password').fill(user.password);
   await page.getByRole('button', { name: /sign in to prismatix/i }).click();
   await expect(page.getByRole('textbox', { name: 'Message Prismatix' })).toBeVisible({ timeout: 20000 });
+}
+
+async function clearFixtureInferenceKeys(user: { email: string; password: string }) {
+  const auth = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_ANON_KEY, 'content-type': 'application/json' },
+    body: JSON.stringify(user),
+  });
+  expect(auth.ok, 'fresh fixture identity can sign in for account cleanup').toBe(true);
+  const session = (await auth.json()) as { access_token?: string };
+  expect(session.access_token).toBeTruthy();
+  for (const provider of ['openai', 'openrouter']) {
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/provider-settings`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        authorization: `Bearer ${session.access_token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'delete_key', provider }),
+    });
+    expect(response.ok, `clear stale ${provider} fixture key`).toBe(true);
+  }
 }
 
 async function signOut(page: Page) {
@@ -276,5 +310,108 @@ test.describe('real backend', () => {
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     expect(overflow, 'no horizontal document overflow').toBeLessThanOrEqual(1);
+  });
+
+  test('fresh mobile account connects OpenAI, sends an exact route and Auto, then disconnects safely', async ({ page }, testInfo) => {
+    await setScenario('default');
+    await clearFixtureInferenceKeys(USER_G);
+    await page.setViewportSize({ width: 412, height: 915 });
+    await page.goto('/');
+    await signIn(page, USER_G);
+
+    const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await page.getByRole('button', { name: 'Provider plug-ins' }).click();
+
+    const settings = page.getByRole('dialog', { name: 'Provider plug-ins' });
+    await expect(settings).toBeVisible();
+    await expect(settings.locator('.provider-badge--default')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('mobile-before-connection.png') });
+    const initialOpenAICard = settings.locator('.provider-card').filter({ has: page.getByLabel('OpenAI API key') });
+    await initialOpenAICard.getByLabel('OpenAI API key').fill('fixture-openai-provider-key');
+    await initialOpenAICard.getByRole('button', { name: 'Connect', exact: true }).click();
+    await expect(settings.getByText(/gpt-6\.2-sol/i).first()).toBeVisible({ timeout: 25000 });
+    await expect(settings.getByText(/verified model inventory|discovered models are ready/i).first()).toBeVisible();
+    await settings.getByRole('button', { name: 'Close provider plug-ins' }).click();
+
+    const picker = page.locator('.composer-model-pill');
+    const beforeManual = await stubChatRequestCount();
+    await picker.click();
+    const routeOption = page.getByRole('option', { name: /openai:gpt-6\.2-sol/i }).first();
+    await expect(routeOption).toBeVisible();
+    await routeOption.click();
+    await sendPrompt(page, `OpenAI manual route ${Date.now()}`);
+    await expect(page.getByText(STUB_TEXT).first()).toBeVisible({ timeout: 25000 });
+    await expectServerConfirmedTurn(page);
+    expect(await stubChatRequestCount()).toBe(beforeManual + 1);
+
+    const beforeAuto = await stubChatRequestCount();
+    await picker.click();
+    await page.getByRole('button', { name: /Prismatix Smart Router/ }).click();
+    await sendPrompt(page, `OpenAI automatic route ${Date.now()}`);
+    await expect(page.getByText(STUB_TEXT, { exact: true })).toHaveCount(2, { timeout: 25000 });
+    await expect(page.getByText(/\$\S+ final/)).toHaveCount(2, { timeout: 25000 });
+    expect(await stubChatRequestCount()).toBe(beforeAuto + 1);
+    await page.screenshot({ path: testInfo.outputPath('mobile-after-openai-auto.png') });
+
+    // Compare two distinct connections using the same local provider fixture.
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await page.getByRole('button', { name: 'Provider plug-ins' }).click();
+    const extraConnection = page.getByRole('dialog', { name: 'Provider plug-ins' });
+    const openRouterCard = extraConnection.locator('.provider-card').filter({ hasText: 'OpenRouter' }).first();
+    await openRouterCard.getByLabel('OpenRouter API key').fill('fake-byok-provider-key');
+    await openRouterCard.getByRole('button', { name: 'Connect', exact: true }).click();
+    await expect(extraConnection.getByText(/google\/gemini-3\.8-flash/i).first()).toBeVisible({ timeout: 25000 });
+    await extraConnection.getByRole('button', { name: 'Close provider plug-ins' }).click();
+
+    const sidebar = await openHistory(page);
+    await sidebar.getByRole('button', { name: /New Chat/ }).click();
+    await page.getByRole('group', { name: 'Chat workflow' }).getByRole('button', { name: 'Compare', exact: true }).click();
+    await page.getByRole('button', { name: 'Routing details', exact: true }).click();
+    const routingPanel = page.getByRole('complementary', { name: 'Routing details' });
+    await routingPanel.getByText('Model options', { exact: true }).click();
+    const compareA = routingPanel.getByLabel('Model A');
+    const compareB = routingPanel.getByLabel('Model B');
+    await compareA.selectOption('openai:gpt-6.2-sol');
+    await compareB.selectOption('openrouter:google/gemini-3.8-flash');
+    await routingPanel.getByRole('button', { name: 'Close routing details' }).click();
+    const beforeCompare = await stubChatRequestCount();
+    const inferenceBeforeCompare = (await stubInferenceRequests()).length;
+    await sendPrompt(page, `OpenAI and OpenRouter comparison ${Date.now()}`);
+    await expect(page.getByText(/Side-by-side comparison:/).last()).toBeVisible({ timeout: 25000 });
+    expect(await stubChatRequestCount()).toBe(beforeCompare + 2);
+    const comparisonCalls = (await stubInferenceRequests()).slice(inferenceBeforeCompare).filter((request) => request.workload === 'chat');
+    expect(comparisonCalls.map((request) => [request.provider, request.protocol, request.model, request.authMatched]))
+      .toEqual(expect.arrayContaining([
+        ['openai', 'responses', 'gpt-6.2-sol', true],
+        ['openrouter', 'chat_completions', 'google/gemini-3.8-flash', true],
+      ]));
+
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await page.getByRole('button', { name: 'Provider plug-ins' }).click();
+    const settingsAgain = page.getByRole('dialog', { name: 'Provider plug-ins' });
+    const openAICard = settingsAgain.locator('.provider-card').filter({ hasText: 'OpenAI' }).first();
+    await openAICard.getByRole('button', { name: 'Remove', exact: true }).click();
+    const openRouterCardAgain = settingsAgain.locator('.provider-card').filter({ has: page.getByLabel('OpenRouter API key') });
+    await openRouterCardAgain.getByRole('button', { name: 'Remove', exact: true }).click();
+    await expect(openAICard.getByText(/No verified model inventory/i)).toBeVisible();
+    await expect(openRouterCardAgain.getByText(/No verified model inventory/i)).toBeVisible();
+    await settingsAgain.getByRole('button', { name: 'Close provider plug-ins' }).click();
+
+    await picker.click();
+    await expect(page.getByRole('option', { name: /openai:gpt-6\.2-sol/i })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    const beforeForbiddenSend = await stubChatRequestCount();
+    const beforeForbiddenInference = (await stubInferenceRequests()).length;
+    await composer.fill('This should not dispatch after disconnect.');
+    await expect(page.getByRole('button', { name: /^Send message/ })).toBeDisabled();
+    await expectNoNewProviderCalls(beforeForbiddenSend, 'disconnect must not dispatch to OpenAI or another provider');
+    await expectNoNewInferenceRequests(beforeForbiddenInference, 'disconnect must not trigger any provider inference');
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow, 'no horizontal overflow on Galaxy S25 Ultra logical width').toBeLessThanOrEqual(1);
   });
 });

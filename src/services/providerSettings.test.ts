@@ -6,6 +6,7 @@ vi.mock('../lib/supabase', () => ({ supabase: { auth: { getSession } } }));
 import {
   deleteProviderKey,
   fetchProviderSettings,
+  refreshProviderInventory,
   setDefaultProvider,
   setProviderEnabled,
   setProviderKey,
@@ -17,6 +18,7 @@ const operations = [
   ['validate key', () => validateProviderKey('account-a', 'openrouter', 'sk-key')],
   ['save key', () => setProviderKey('openrouter', 'sk-key', 'account-a')],
   ['toggle provider', () => setProviderEnabled('openrouter', true, 'account-a')],
+  ['refresh provider inventory', () => refreshProviderInventory('openrouter', 'account-a')],
   ['remove key', () => deleteProviderKey('openrouter', 'account-a')],
   ['set default', () => setDefaultProvider('openrouter', 'account-a')],
 ] as const;
@@ -36,5 +38,17 @@ describe('provider settings account binding', () => {
 
     await expect(operation()).rejects.toThrow(/account_changed/);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('requires the account route inventory in every successful settings response', async () => {
+    getSession.mockResolvedValue({
+      data: { session: { access_token: 'account-a-token', user: { id: 'account-a' } } },
+      error: null,
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      providers: [], defaultProvider: null,
+    }), { status: 200 }));
+
+    await expect(fetchProviderSettings('account-a')).rejects.toThrow(/routes/);
   });
 });

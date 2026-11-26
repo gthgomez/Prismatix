@@ -2,7 +2,6 @@
 // Main chat interface with multi-file upload support and model selector
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { isHistoricModel } from '../../supabase/functions/_shared/model_lifecycle';
 import {
   classifyBreakdownSource,
   deriveSettledBreakdown,
@@ -139,9 +138,8 @@ import type {
   RouterModel,
   RoutingProfile,
 } from '../types';
-import { MODEL_HIGHLIGHTS, MODEL_ORDER, getCatalogEntry, isKnownModel } from '../modelCatalog';
-import { filterVisibleModels, isModelVisible } from '../providerRegistry';
-import { useProviderPlugins } from '../hooks/useProviderPlugins';
+import { MODEL_ORDER, getCatalogEntry, isKnownModel } from '../modelCatalog';
+import { useProviderPlugins, type ProviderPlugins } from '../hooks/useProviderPlugins';
 import { useModelPickerPreferences } from '../hooks/useModelPickerPreferences';
 import { ProviderSettings } from './ProviderSettings';
 import { MemorySettings } from './MemorySettings';
@@ -351,12 +349,44 @@ function normalizeAttachmentKind(file: FileUploadPayload): FileUploadPayload {
   };
 }
 
+function estimateCatalogModel(model: string | null | undefined, routes: ProviderPlugins['routes'], fallback: RouterModel): RouterModel {
+  if (!model) return fallback;
+  const route = routes.find((candidate) => candidate.id === model);
+  const candidate = route?.canonicalId ?? model;
+  return MODEL_ORDER.includes(candidate as RouterModel) ? candidate as RouterModel : fallback;
+}
+
+function servingRouteFor(model: string | null | undefined, routes: ProviderPlugins['routes']) {
+  return model ? routes.find((route) => route.id === model) : undefined;
+}
+
+function estimateIdentifierCost(model: string | null, contextText: string, imageCount: number, routes: ProviderPlugins['routes']) {
+  const promptTokens = estimateTokenCount(contextText) + Math.max(0, imageCount) * 1600;
+  const projectedOutputTokens = Math.max(64, Math.ceil(promptTokens * 0.35));
+  const inputImages = imageCount > 0;
+  const candidates = (model ? routes.filter((route) => route.id === model) : routes)
+    .filter((route) => (!inputImages || route.supportsImages) && promptTokens + projectedOutputTokens <= route.contextWindow);
+  const price = (route: ProviderPlugins['routes'][number]) =>
+    (promptTokens * route.tariff.inputPerMillion + projectedOutputTokens * route.tariff.outputPerMillion) / 1_000_000
+    + (route.tariff.requestUsd ?? 0);
+  const leastCost = candidates.reduce<ProviderPlugins['routes'][number] | undefined>(
+    (best, route) => !best || price(route) < price(best) ? route : best, undefined,
+  );
+  return {
+    promptTokens,
+    projectedOutputTokens,
+    estimatedUsd: leastCost ? price(leastCost) : 0,
+    pricingVersion: leastCost?.tariff.version,
+    hasUnknownRate: !leastCost,
+  };
+}
+
 interface FailedTurnDraft {
   rawInput: string;
   queryText: string;
   attachments: FileUploadPayload[];
   error?: string;
-  overrideModel?: RouterModel;
+  overrideModel?: string;
   optimisticMessageId?: string;
   optimisticMessageContent?: string;
   restoredFromStorage?: boolean;
@@ -387,7 +417,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   // Server/client tariff skew (PX02 release identity): subtle hint only.
   const [catalogSkewed, setCatalogSkewed] = useState(isCatalogSkewed());
   useEffect(() => subscribeCatalogSkew(() => setCatalogSkewed(isCatalogSkewed())), []);
-  const [manualModelOverride, setManualModelOverride] = useState<RouterModel | null>(null);
+  const [manualModelOverride, setManualModelOverride] = useState<string | null>(null);
   const [geminiFlashThinkingLevel, setGeminiFlashThinkingLevel] = useState<
     GeminiFlashThinkingLevel
   >('high');
@@ -411,6 +441,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     'confirmed' | 'estimated' | 'unavailable' | null
   >(null);
   const [routerPricingVersion, setRouterPricingVersion] = useState<string | undefined>(undefined);
+  const [routerEstimateUsd, setRouterEstimateUsd] = useState<number>();
   const [debateSelection, setDebateSelection] = useState<DebateSelection>('off');
   const [sendValidationError, setSendValidationError] = useState<string | null>(null);
   const [expandedMetadataIdx, setExpandedMetadataIdx] = useState<number | null>(null);
@@ -418,7 +449,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const [firstRunOutcome, setFirstRunOutcome] = useState<FirstRunOutcome | null>(null);
   const [rejectedRoute, setRejectedRoute] = useState<{
     mode: 'chat' | 'compare' | 'debate';
-    manualModel: RouterModel | null;
+    manualModel: string | null;
   } | null>(null);
   const activeUserIdRef = useRef(user?.id);
   const accountGenerationRef = useRef(0);
@@ -452,34 +483,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
   // Single authoritative model preferences store (favorites, hidden models, provider tabs)
   const modelPreferences = useModelPickerPreferences(user?.id);
-
-  // If the active model's provider is turned off OR the manual override model was hidden by the user,
-  // fall back to Auto with a visible default so we never send to a hidden/disabled provider or model.
-  useEffect(() => {
-    if (providerPlugins.loading) return;
-
-    const isCurrentVisible = isModelVisible(currentModel, { enabledProviders });
-    const isOverrideHidden = manualModelOverride !== null && modelPreferences.hiddenModels.includes(manualModelOverride);
-
-    if (isCurrentVisible && !isOverrideHidden && (manualModelOverride !== null || !isHistoricModel(currentModel))) {
-      return;
-    }
-
-    const unhiddenHighlights = filterVisibleModels(MODEL_HIGHLIGHTS, { enabledProviders })
-      .filter((id) => !modelPreferences.hiddenModels.includes(id));
-    const unhiddenOrder = filterVisibleModels(MODEL_ORDER, { enabledProviders })
-      .filter((id) => !isHistoricModel(id) && !modelPreferences.hiddenModels.includes(id));
-
-    const fallback = unhiddenHighlights[0] ?? unhiddenOrder[0];
-    setManualModelOverride(null);
-    if (fallback) setCurrentModel(fallback);
-  }, [
-    providerPlugins.loading,
-    enabledProviders,
-    currentModel,
-    manualModelOverride,
-    modelPreferences.hiddenModels,
-  ]);
 
   const [draftAttachments, setDraftAttachments] = useState<FileUploadPayload[]>([]);
   useLayoutEffect(() => {
@@ -544,7 +547,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     rawInput: string;
     queryText: string;
     attachments: FileUploadPayload[];
-    overrideModel?: RouterModel;
+    overrideModel?: string;
     optimisticMessageId?: string;
     optimisticMessageContent?: string;
   } | null>(null);
@@ -582,8 +585,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setComparisonMode(enabled);
     writeWorkspaceSwitch(user?.id, 'compare', enabled);
   }, [user?.id]);
-  const [comparisonModelA, setComparisonModelA] = useState<RouterModel>('gemini-3.8-flash');
-  const [comparisonModelB, setComparisonModelB] = useState<RouterModel>('gpt-6-sol');
+  const [comparisonModelA, setComparisonModelA] = useState('');
+  const [comparisonModelB, setComparisonModelB] = useState('');
   const [routingPanelOpen, setRoutingPanelOpen] = useState(false);
   const routingPanelRef = useRef<HTMLElement>(null);
   const routingToggleRef = useRef<HTMLButtonElement>(null);
@@ -1059,9 +1062,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   };
 
   // Handle model selection
-  const handleModelSelect = (model: RouterModel) => {
+  const handleModelSelect = (model: string) => {
     setManualModelOverride(model);
-    setCurrentModel(model);
+    const route = providerPlugins.routes.find((candidate) => candidate.id === model);
+    setCurrentModel((route?.canonicalId ?? model) as RouterModel);
     setShowModelSelector(false);
   };
 
@@ -1510,18 +1514,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     history: Message[],
     attachments: FileUploadPayload[],
     model: RouterModel,
+    servingRoute?: ProviderPlugins['routes'][number],
   ) => {
     const historyText = history.map((message) => `${message.role}: ${extractTextContent(message.content)}`).join('\n');
     const prompt = `${historyText}\nuser: ${queryText}`;
     const imageCount = attachments.filter((file) => file.isImage).length;
-    const estimate = debateSelection !== 'off' && debateSelection !== 'auto'
-      ? calculateDebatePreFlightCost(debateSelection, model, prompt, imageCount)
-      : calculatePreFlightCost(model, prompt, imageCount);
+    const estimate = servingRoute || providerPlugins.routes.length > 0
+      ? estimateIdentifierCost(servingRoute?.id ?? null, prompt, imageCount, providerPlugins.routes)
+      : debateSelection !== 'off' && debateSelection !== 'auto'
+        ? calculateDebatePreFlightCost(debateSelection, model, prompt, imageCount)
+        : calculatePreFlightCost(model, prompt, imageCount);
     if (!comparisonMode) return estimate;
-    const a = calculatePreFlightCost(comparisonModelA, prompt, imageCount);
-    const b = calculatePreFlightCost(comparisonModelB, prompt, imageCount);
+    const a = estimateIdentifierCost(comparisonModelA, prompt, imageCount, providerPlugins.routes);
+    const b = estimateIdentifierCost(comparisonModelB, prompt, imageCount, providerPlugins.routes);
     return { ...estimate, estimatedUsd: a.estimatedUsd + b.estimatedUsd };
-  }, [comparisonMode, comparisonModelA, comparisonModelB, debateSelection]);
+  }, [comparisonMode, comparisonModelA, comparisonModelB, debateSelection, providerPlugins.routes]);
 
   const approvePaidTurn = useCallback(async (estimateUsd: number, run: () => Promise<void>) => {
     if (sendLockRef.current || !conversationReadyRef.current) return;
@@ -1655,7 +1662,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     const historyBeforeUser = optimisticIndex >= 0
       ? messages.slice(0, optimisticIndex)
       : messages.filter((message, index) => !(index === messages.length - 1 && message.role === 'assistant' && typeof message.content === 'string' && message.content.startsWith('⚠️')));
-    const estimate = estimatePaidTurn(queryText, historyBeforeUser, attachments, overrideModel ?? manualModelOverride ?? currentModel);
+    const estimate = estimatePaidTurn(queryText, historyBeforeUser, attachments, estimateCatalogModel(overrideModel ?? manualModelOverride, providerPlugins.routes, currentModel), servingRouteFor(overrideModel ?? manualModelOverride, providerPlugins.routes));
 
     await approvePaidTurn(estimate.estimatedUsd, async () => {
       setFailedTurnDraft(null);
@@ -2075,7 +2082,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     queryText: string;
     attachmentsToProcess: FileUploadPayload[];
     historyMessages: Message[];
-    overrideModel?: RouterModel | null;
+    overrideModel?: string | null;
     promptTokenEstimate?: number;
     regenerateTargetMessageId?: string;
     optimisticMessageId?: string;
@@ -2085,7 +2092,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     const originalConversationId = selectedConversationIdRef.current;
     const sendConversationId = getActiveConversationId();
     const requestScope = { userId: requestUserId, conversationId: sendConversationId };
-    const requestRoute: { mode: 'chat' | 'compare' | 'debate'; manualModel: RouterModel | null } = {
+    const requestRoute: { mode: 'chat' | 'compare' | 'debate'; manualModel: string | null } = {
       mode: workspaceMode,
       manualModel: workspaceMode === 'chat' ? manualModelOverride : null,
     };
@@ -2093,7 +2100,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       && activeUserIdRef.current === requestUserId
       && (selectedConversationIdRef.current === originalConversationId || selectedConversationIdRef.current === sendConversationId);
     if (!requestStillCurrent()) return;
-    const estimatedModel = overrideModel || manualModelOverride || currentModel;
+    const estimatedModel = estimateCatalogModel(overrideModel || manualModelOverride, providerPlugins.routes, currentModel);
     const promptTokenEstimate = passedPromptTokenEstimate
       ?? estimatePaidTurn(queryText, historyMessages, attachmentsToProcess, estimatedModel).promptTokens;
 
@@ -2121,11 +2128,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     setIsWaitingFirstToken(true);
     waitingFirstTokenRef.current = true;
     clearCostEstimatorHideTimer();
-    setShowCostEstimator(true);
+    setShowCostEstimator(!comparisonMode);
     setFinalMessageCost(null);
     setFinalMessageBreakdown(null);
     setFinalBreakdownSource(null);
     setRouterPricingVersion(undefined);
+    setRouterEstimateUsd(undefined);
     setCostModel(estimatedModel);
     setReportedCostModel(undefined);
     setCurrentUsage({
@@ -2317,34 +2325,36 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         type SettledCompareResult = PromiseSettledResult<Awaited<ReturnType<typeof askPrismatixSync>>>;
         let compareResults: [SettledCompareResult, SettledCompareResult];
         try {
-          compareResults = await Promise.allSettled([
-          captureCompareResult(askPrismatixSync(
-            queryWithContext,
-            historyForRequest,
-            attachmentsToProcess,
-            comparisonModelA,
-            geminiFlashThinkingLevel,
-            compareRequestOptions,
-            routingProfile,
-            maxSpendCap ?? undefined,
-            abortController.signal,
-            requestScope,
-            (content) => recoveryA.update(content),
-          ), recoveryA),
-          captureCompareResult(askPrismatixSync(
-            queryWithContext,
-            historyForRequest,
-            attachmentsToProcess,
-            comparisonModelB,
-            geminiFlashThinkingLevel,
-            compareRequestOptions,
-            routingProfile,
-            maxSpendCap ?? undefined,
-            abortController.signal,
-            requestScope,
-            (content) => recoveryB.update(content),
-          ), recoveryB),
-          ]);
+          const runComparisonRoute = async (
+            routeId: string,
+            checkpoint: ReturnType<typeof createResponseCheckpoint>,
+          ): Promise<SettledCompareResult> => {
+            if (abortController.signal.aborted) {
+              return { status: 'rejected', reason: abortController.signal.reason };
+            }
+            try {
+              const value = await captureCompareResult(askPrismatixSync(
+                queryWithContext,
+                historyForRequest,
+                attachmentsToProcess,
+                routeId,
+                geminiFlashThinkingLevel,
+                compareRequestOptions,
+                routingProfile,
+                maxSpendCap === null ? undefined : maxSpendCap / 2,
+                abortController.signal,
+                requestScope,
+                (content) => checkpoint.update(content),
+              ), checkpoint);
+              return { status: 'fulfilled', value };
+            } catch (reason) {
+              return { status: 'rejected', reason };
+            }
+          };
+          // Each execution settles and releases its account lease before the next starts.
+          const first = await runComparisonRoute(comparisonModelA, recoveryA);
+          const second = await runComparisonRoute(comparisonModelB, recoveryB);
+          compareResults = [first, second];
         } finally {
           checkpointCompareOnPageHide();
           window.removeEventListener('pagehide', checkpointCompareOnPageHide);
@@ -2356,7 +2366,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         type CompareResult = NonNullable<Message['comparisonResults']>;
         const childResult = (
           result: PromiseSettledResult<Awaited<ReturnType<typeof askPrismatixSync>>>,
-          requestedModel: RouterModel,
+          requestedModel: string,
         ): CompareResult['modelA'] => {
           const value = result.status === 'fulfilled' ? result.value : null;
           const receipt = value?.receipt;
@@ -2382,9 +2392,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             }, requestUserId);
           }
           return {
-              model: value
-                ? value.model ?? (value.reportedModel ? `Unrecognized model (${value.reportedModel})` : 'Unreported model')
-                : requestedModel,
+              model: requestedModel.includes(':')
+                ? requestedModel
+                : value
+                  ? value.model ?? (value.reportedModel ? `Unrecognized model (${value.reportedModel})` : 'Unreported model')
+                  : requestedModel,
             content: value?.content || (stopped ? 'Generation stopped before a response arrived.'
               : result.status === 'rejected' ? describeStreamError(result.reason) : 'No response was received.'),
             cost,
@@ -2461,15 +2473,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         return;
       }
 
-      // F13: Routing profile selection fallback
-      let effectiveOverride = overrideModel || manualModelOverride;
-      if (!effectiveOverride) {
-        if (routingProfile === 'economy') {
-          effectiveOverride = 'gemini-3.8-flash';
-        } else if (routingProfile === 'capability') {
-          effectiveOverride = 'gpt-6-sol';
-        }
-      }
+      const effectiveOverride = overrideModel || manualModelOverride;
 
       const result = await askPrismatix(
         queryWithContext,
@@ -2542,6 +2546,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       setCostModel(model ?? null);
       setReportedCostModel(model ? undefined : reportedModel);
       setRouterPricingVersion(costPricingVersion ?? undefined);
+      setRouterEstimateUsd(costEstimateUsd);
       setCurrentComplexity(complexityScore);
 
       const streamStartMs = Date.now();
@@ -2992,6 +2997,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     // Allow send if there's text OR attachments
     const hasContent = input.trim() || draftAttachments.length > 0;
     if (!hasContent || isStreaming || sendLockRef.current || !conversationReadyRef.current) return;
+    if (!comparisonMode && manualModelOverride && !servingRouteFor(manualModelOverride, providerPlugins.routes)) {
+      setSendValidationError('This model route is unavailable. Choose another route or switch to Auto.');
+      return;
+    }
+    if (comparisonMode && (comparisonModelA === comparisonModelB ||
+      !servingRouteFor(comparisonModelA, providerPlugins.routes) ||
+      !servingRouteFor(comparisonModelB, providerPlugins.routes))) {
+      setSendValidationError('Choose two different available model routes for Compare.');
+      return;
+    }
     if (hasPendingVideoUploads) {
       setSendValidationError('Attachments are still processing. Please wait for completion before sending.');
       return;
@@ -3047,7 +3062,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       }
     }
 
-    const estimate = estimatePaidTurn(queryText, messages, draftAttachments, manualModelOverride || currentModel);
+    const estimate = estimatePaidTurn(queryText, messages, draftAttachments, estimateCatalogModel(manualModelOverride, providerPlugins.routes, currentModel), servingRouteFor(manualModelOverride, providerPlugins.routes));
     await approvePaidTurn(estimate.estimatedUsd, async () => {
       // Build display content for user message
       const attachmentSummary = draftAttachments.length > 0
@@ -3143,7 +3158,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
     const selectedModel = currentModelRef.current;
 
     const overrideModel = modelOverride ?? selectedOverride;
-    const estimate = estimatePaidTurn(userPrompt, historyBeforeUser, attachmentsToProcess, overrideModel ?? selectedModel);
+    const estimate = estimatePaidTurn(userPrompt, historyBeforeUser, attachmentsToProcess, estimateCatalogModel(overrideModel, providerPlugins.routes, selectedModel), servingRouteFor(overrideModel, providerPlugins.routes));
     const run = executeTurnRef.current;
     await approvePaidTurn(estimate.estimatedUsd, async () => {
       setMessages(snapshot.slice(0, userIndex + 1));
@@ -3157,7 +3172,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         regenerateTargetMessageId: snapshot[index]?.id,
       });
     });
-  }, [approvePaidTurn, estimatePaidTurn, resetAutoScroll]);
+  }, [approvePaidTurn, estimatePaidTurn, providerPlugins.routes, resetAutoScroll]);
 
   const handleEditPrompt = useCallback(async (index: number, newPrompt: string) => {
     if (isStreamingRef.current || sendLockRef.current) return;
@@ -3176,7 +3191,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
       timestamp: Date.now(),
     };
 
-    const estimate = estimatePaidTurn(newPrompt, historyBeforeUser, attachmentsToProcess, selectedOverride ?? selectedModel);
+    const estimate = estimatePaidTurn(newPrompt, historyBeforeUser, attachmentsToProcess, estimateCatalogModel(selectedOverride, providerPlugins.routes, selectedModel), servingRouteFor(selectedOverride, providerPlugins.routes));
     const run = executeTurnRef.current;
     await approvePaidTurn(estimate.estimatedUsd, async () => {
       setMessages([...historyBeforeUser, updatedUserMessage]);
@@ -3189,7 +3204,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         promptTokenEstimate: estimate.promptTokens,
       });
     });
-  }, [approvePaidTurn, estimatePaidTurn, resetAutoScroll]);
+  }, [approvePaidTurn, estimatePaidTurn, providerPlugins.routes, resetAutoScroll]);
 
   const handleFeedback = useCallback((index: number, type: 'up' | 'down') => {
     setMessages((prev) => {
@@ -3441,6 +3456,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
 
   // Server-selected IDs can be ahead of the deployed catalog; degrade, never crash.
   const modelConfig = getCatalogEntry(currentModel);
+  const selectedServingRoute = providerPlugins.routes.find((route) => route.id === manualModelOverride);
   const routingDraftText = [
     ...messages.map((message) => `${message.role}: ${extractTextContent(message.content)}`),
     `user: ${input.trim() || (draftAttachments.length ? 'Analyze the attached files.' : '')}`,
@@ -3449,21 +3465,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
   const routingDraftEstimate = input.trim() || draftAttachments.length > 0
     ? comparisonMode
       ? (() => {
-          const estimateA = calculatePreFlightCost(comparisonModelA, routingDraftText, routingImageCount);
-          const estimateB = calculatePreFlightCost(comparisonModelB, routingDraftText, routingImageCount);
+          const estimateA = estimateIdentifierCost(comparisonModelA, routingDraftText, routingImageCount, providerPlugins.routes);
+          const estimateB = estimateIdentifierCost(comparisonModelB, routingDraftText, routingImageCount, providerPlugins.routes);
           return { hasUnknownRate: estimateA.hasUnknownRate || estimateB.hasUnknownRate, estimatedUsd: estimateA.estimatedUsd + estimateB.estimatedUsd, combined: true };
         })()
-      : (() => {
-          const estimate = debateSelection !== 'off' && debateSelection !== 'auto'
-            ? calculateDebatePreFlightCost(debateSelection, manualModelOverride || currentModel, routingDraftText, routingImageCount)
-            : calculatePreFlightCost(manualModelOverride || currentModel, routingDraftText, routingImageCount);
-          return { hasUnknownRate: estimate.hasUnknownRate, estimatedUsd: estimate.estimatedUsd, combined: false };
-        })()
+      : { ...estimateIdentifierCost(manualModelOverride, routingDraftText, routingImageCount, providerPlugins.routes), combined: false }
     : null;
   const routingCostLabel = routingDraftEstimate
     ? routingDraftEstimate.hasUnknownRate
       ? 'Estimate unavailable for selected model pricing'
-      : `About $${routingDraftEstimate.estimatedUsd.toFixed(4)}${routingDraftEstimate.combined ? ' combined for both models' : ' before sending'}`
+      : `${!manualModelOverride && !routingDraftEstimate.combined ? 'From' : 'About'} $${routingDraftEstimate.estimatedUsd.toFixed(4)}${routingDraftEstimate.combined ? ' combined for both models' : ' before sending'}`
     : finalMessageCost !== null
       ? `$${finalMessageCost.toFixed(4)} for the last completed response`
       : 'Shown after you add a draft or attachment.';
@@ -3648,17 +3659,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
               <button
                 type='button'
                 className='model-indicator-button'
-                aria-label={manualModelOverride ? `Choose model: ${modelConfig.name}` : 'Choose routing mode: automatic'}
+                aria-label={manualModelOverride ? `Choose model: ${selectedServingRoute?.name ?? modelConfig.name}` : 'Choose routing mode: automatic'}
                 aria-expanded={showModelSelector}
                 onClick={() => setShowModelSelector(!showModelSelector)}
                 style={{ '--model-color': manualModelOverride ? modelConfig.color : 'var(--color-primary)' } as React.CSSProperties}
                 title={manualModelOverride
-                  ? `Manual: ${modelConfig.name}`
+                  ? `Manual: ${selectedServingRoute?.name ?? modelConfig.name}`
                   : 'Automatic model selection; choose a manual override'}
               >
                 {manualModelOverride && <span className='model-icon' aria-hidden='true'>{modelConfig.icon}</span>}
                 <span className='model-name'>
-                  {manualModelOverride ? modelConfig.name : (
+                  {manualModelOverride ? selectedServingRoute?.name ?? modelConfig.name : (
                     <><span className='routing-label-wide'>Auto routing</span><span className='routing-label-compact'>Auto</span></>
                   )}
                 </span>
@@ -3691,6 +3702,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                   debateSelection={debateSelection}
                   sendValidationError={sendValidationError}
                   enabledProviders={enabledProviders}
+                  routes={providerPlugins.routes}
                   preferences={modelPreferences}
                   onModelSelect={handleModelSelect}
                   onClearOverride={clearModelOverride}
@@ -4173,6 +4185,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                 settledBreakdown={finalMessageBreakdown}
                 breakdownSource={finalBreakdownSource}
                 routerPricingVersion={routerPricingVersion}
+                routerEstimateUsd={routerEstimateUsd}
                 onInteractionStart={clearCostEstimatorHideTimer}
                 onInteractionEnd={() => scheduleCostEstimatorHide(3000)}
                 panelRef={costEstimatorPanelRef}
@@ -4290,27 +4303,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
               <select
                 aria-label='Select comparison model A'
                 value={comparisonModelA}
-                onChange={(e) => setComparisonModelA(e.target.value as RouterModel)}
+                onChange={(e) => setComparisonModelA(e.target.value)}
                 className='routing-profile-select'
               >
-                <option value='gemini-3.8-flash'>Gemini 3.8 Flash</option>
-                <option value='gpt-6-sol'>GPT-6 Sol</option>
-                <option value='deepseek-v4-pro'>DeepSeek V4 Pro</option>
-                <option value='grok-4.6'>Grok 4.6</option>
-                <option value='qwen-3.8-flash'>Qwen 3.8 Flash</option>
+                <option value='' disabled>Choose a route</option>
+                {comparisonModelA.includes(':') && !servingRouteFor(comparisonModelA, providerPlugins.routes) && <option value={comparisonModelA} disabled>{comparisonModelA} (route unavailable)</option>}
+                {providerPlugins.routes.map((route) => <option key={route.id} value={route.id}>{route.name} ({route.id})</option>)}
               </select>
               <span>vs</span>
               <select
                 aria-label='Select comparison model B'
                 value={comparisonModelB}
-                onChange={(e) => setComparisonModelB(e.target.value as RouterModel)}
+                onChange={(e) => setComparisonModelB(e.target.value)}
                 className='routing-profile-select'
               >
-                <option value='gpt-6-sol'>GPT-6 Sol</option>
-                <option value='gemini-3.8-flash'>Gemini 3.8 Flash</option>
-                <option value='deepseek-v4-pro'>DeepSeek V4 Pro</option>
-                <option value='grok-4.6'>Grok 4.6</option>
-                <option value='qwen-3.8-flash'>Qwen 3.8 Flash</option>
+                <option value='' disabled>Choose a route</option>
+                {comparisonModelB.includes(':') && !servingRouteFor(comparisonModelB, providerPlugins.routes) && <option value={comparisonModelB} disabled>{comparisonModelB} (route unavailable)</option>}
+                {providerPlugins.routes.map((route) => <option key={route.id} value={route.id}>{route.name} ({route.id})</option>)}
               </select>
             </div>
           )}
@@ -4400,6 +4409,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         currentModel={currentModel}
         debateSelection={debateSelection}
         enabledProviders={enabledProviders}
+        routes={providerPlugins.routes}
         preferences={modelPreferences}
         geminiFlashThinkingLevel={geminiFlashThinkingLevel}
         onModelSelect={handleModelSelect}
@@ -4419,7 +4429,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
         composerValidationView={composerValidationView}
         providerSetupBlocked={messages.length === 0 && !providerCanAttemptRouterSend}
         providerSetupChecking={providerPlugins.loading}
-        providerSetupNeedsEnable={!providerPlugins.isConfigured && providerPlugins.providers.some((provider) => provider.hasKey && !provider.enabled)}
+        providerSetupNeedsEnable={!providerPlugins.isConfigured && providerPlugins.providers.some((provider) => provider.hasKey && !(provider.userEnabled ?? provider.enabled))}
         providerSetupVerifyAvailable={messages.length === 0 && Boolean(failedTurnDraft) && providerPlugins.isConfigured && !providerPlugins.loading && !providerPlugins.error && !providerVerified}
         onVerifyProviderKeys={() => void handleVerifyProviders()}
         onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
@@ -4577,8 +4587,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           <h3>Selected model</h3>
           <p>{workspaceMode === 'compare'
             ? 'Two selected models'
-            : manualModelOverride ? getCatalogEntry(manualModelOverride).shortName : messages.length ? getCatalogEntry(currentModel).shortName : 'Not chosen yet'}</p>
-          {workspaceMode === 'compare' && <small>A · {getCatalogEntry(comparisonModelA).shortName}<br />B · {getCatalogEntry(comparisonModelB).shortName}</small>}
+            : manualModelOverride ? selectedServingRoute?.name ?? getCatalogEntry(manualModelOverride).shortName : messages.length ? getCatalogEntry(currentModel).shortName : 'Not chosen yet'}</p>
+          {workspaceMode === 'compare' && <small>A · {servingRouteFor(comparisonModelA, providerPlugins.routes)?.name ?? getCatalogEntry(comparisonModelA).shortName}<br />B · {servingRouteFor(comparisonModelB, providerPlugins.routes)?.name ?? getCatalogEntry(comparisonModelB).shortName}</small>}
         </section>
         <section className='arctic-route-field'>
           <h3>Why?</h3>
@@ -4589,7 +4599,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
                 ? 'Debate is set to auto; Prismatix can activate it for a high-complexity request.'
                 : `Debate is enabled with the ${debateSelection} profile.`
               : manualModelOverride
-            ? `You selected ${getCatalogEntry(manualModelOverride).shortName} manually.`
+            ? `You selected ${selectedServingRoute?.name ?? getCatalogEntry(manualModelOverride).shortName} manually.`
               : providerPlugins.isConfigured && providerVerified
               ? 'Prismatix selects a model after you enter a request, based on task complexity, available providers, and attachments.'
                 : providerPlugins.isConfigured
@@ -4610,20 +4620,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
           <summary>Model options</summary>
           {workspaceMode === 'compare' && <div className='arctic-comparison-models'>
             <label htmlFor='arctic-model-a'>Model A</label>
-            <select id='arctic-model-a' value={comparisonModelA} onChange={(event) => setComparisonModelA(event.target.value as RouterModel)}>
-              <option value='gemini-3.8-flash'>Gemini 3.8 Flash</option>
-              <option value='gpt-6-sol'>GPT-6 Sol</option>
-              <option value='deepseek-v4-pro'>DeepSeek V4 Pro</option>
-              <option value='grok-4.6'>Grok 4.6</option>
-              <option value='qwen-3.8-flash'>Qwen 3.8 Flash</option>
+            <select id='arctic-model-a' value={comparisonModelA} onChange={(event) => setComparisonModelA(event.target.value)}>
+              <option value='' disabled>Choose a route</option>
+              {providerPlugins.routes.map((route) => <option key={route.id} value={route.id}>{route.name} ({route.id})</option>)}
             </select>
             <label htmlFor='arctic-model-b'>Model B</label>
-            <select id='arctic-model-b' value={comparisonModelB} onChange={(event) => setComparisonModelB(event.target.value as RouterModel)}>
-              <option value='gpt-6-sol'>GPT-6 Sol</option>
-              <option value='gemini-3.8-flash'>Gemini 3.8 Flash</option>
-              <option value='deepseek-v4-pro'>DeepSeek V4 Pro</option>
-              <option value='grok-4.6'>Grok 4.6</option>
-              <option value='qwen-3.8-flash'>Qwen 3.8 Flash</option>
+            <select id='arctic-model-b' value={comparisonModelB} onChange={(event) => setComparisonModelB(event.target.value)}>
+              <option value='' disabled>Choose a route</option>
+              {providerPlugins.routes.map((route) => <option key={route.id} value={route.id}>{route.name} ({route.id})</option>)}
             </select>
           </div>}
           <button type='button' onClick={() => { setRoutingPanelOpen(false); document.querySelector<HTMLButtonElement>('.composer-model-pill')?.click(); }}>Choose a model or routing profile</button>
@@ -4644,7 +4648,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ user, onSignOut, t
             <option value='capability'>Capability</option>
           </select>
           <label htmlFor='arctic-spend-cap'>Per-turn spend cap</label>
-          <small className='routing-spend-cap-note'>Compare checks the estimated combined cost before sending. The router enforces this cap per request, so the two request totals are not covered by one shared server cap.</small>
+          <small className='routing-spend-cap-note'>Compare divides your per-turn cap between its two requests.</small>
           <select
             id='arctic-spend-cap'
             value={spendCapSelectValue(maxSpendCap)}

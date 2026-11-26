@@ -28,6 +28,7 @@ import {
 } from './execution_store.ts';
 import type { ExecutionOutputBudget } from './admission.ts';
 import type { NormalizedUsage } from './usage.ts';
+import type { ServingRoute } from '../_shared/serving_routes.ts';
 
 export type { NormalizedUsage } from './usage.ts';
 
@@ -51,6 +52,13 @@ export class MeteredCallAccountingError extends Error {
   }
 }
 
+/** A dispatch authorization rejected before any upstream call could be made. */
+export class MeteredDispatchNotSentError extends Error {
+  constructor(readonly dispatchError: unknown) {
+    super('provider_dispatch_not_sent');
+  }
+}
+
 // Server-supplied authoritative price snapshot. Callers cannot choose their own
 // prices: this object is produced by the router's pricing registry, never by a
 // client request.
@@ -59,6 +67,26 @@ export interface PriceSnapshot {
   inputRatePer1M?: number;
   outputRatePer1M?: number;
   thinkingRatePer1M?: number;
+  cachedReadRatePer1M?: number;
+  cachedWriteRatePer1M?: number;
+  requestUsd?: number;
+  billingArrangement?: ServingRoute['tariff']['billing'];
+  tariffSource?: string;
+  servingRouteId?: string;
+  upstreamProtocol?: ServingRoute['protocol'];
+}
+
+export function priceSnapshotForRoute(route: ServingRoute): PriceSnapshot {
+  const { tariff } = route;
+  return {
+    pricingVersion: tariff.version, tariffSource: tariff.source,
+    billingArrangement: tariff.billing, servingRouteId: route.id, upstreamProtocol: route.protocol,
+    inputRatePer1M: tariff.inputPerMillion, outputRatePer1M: tariff.outputPerMillion,
+    thinkingRatePer1M: tariff.reasoningPerMillion ?? tariff.outputPerMillion,
+    cachedReadRatePer1M: tariff.cachedReadPerMillion,
+    cachedWriteRatePer1M: tariff.cachedWritePerMillion,
+    requestUsd: tariff.requestUsd,
+  };
 }
 
 export interface MeteredDispatchResult<T> {
@@ -133,7 +161,10 @@ function normalizeUsage(usage: NormalizedUsage | null | undefined): NormalizedUs
   const outputTokens = normalizeToken(usage.outputTokens);
   const thinkingTokens = normalizeToken(usage.thinkingTokens);
   if (inputTokens === null || outputTokens === null || thinkingTokens === null) return null;
-  return { inputTokens, outputTokens, thinkingTokens };
+  const cachedReadTokens = normalizeToken(usage.cachedReadTokens) ?? 0;
+  const cachedWriteTokens = normalizeToken(usage.cachedWriteTokens) ?? 0;
+  if (cachedReadTokens + cachedWriteTokens > inputTokens) return null;
+  return { inputTokens, outputTokens, thinkingTokens, cachedReadTokens, cachedWriteTokens };
 }
 
 function round6(value: number): number {
@@ -162,7 +193,14 @@ function computeCosts(
     : finiteRate(snapshot.thinkingRatePer1M);
   if (inputRate === null || outputRate === null || thinkingRate === null) return null;
 
-  const inputCost = round6((usage.inputTokens / TOKENS_PER_MILLION) * inputRate);
+  const cacheReadRate = finiteRate(snapshot.cachedReadRatePer1M ?? inputRate);
+  const cacheWriteRate = finiteRate(snapshot.cachedWriteRatePer1M ?? inputRate);
+  const fee = finiteRate(snapshot.requestUsd ?? 0);
+  if (cacheReadRate === null || cacheWriteRate === null || fee === null) return null;
+  const cachedRead = usage.cachedReadTokens ?? 0;
+  const cachedWrite = usage.cachedWriteTokens ?? 0;
+  const uncached = usage.inputTokens - cachedRead - cachedWrite;
+  const inputCost = round6((uncached * inputRate + cachedRead * cacheReadRate + cachedWrite * cacheWriteRate) / TOKENS_PER_MILLION + fee);
   const outputCost = round6((usage.outputTokens / TOKENS_PER_MILLION) * outputRate);
   const thinkingCost = round6((usage.thinkingTokens / TOKENS_PER_MILLION) * thinkingRate);
   return {
@@ -282,6 +320,16 @@ export async function runMeteredCall<T>(
   try {
     outcome = await dispatch();
   } catch (error) {
+    if (error instanceof MeteredDispatchNotSentError) {
+      // The dispatch function rejected before touching the upstream. Account
+      // for zero usage even if an earlier stage of this execution was billed.
+      await safeRecord(input.store, {
+        ...base, status: 'not_dispatched', cost_status: 'settled', total_cost: 0,
+        input_tokens: 0, output_tokens: 0, thinking_tokens: 0,
+        input_cost: 0, output_cost: 0, thinking_cost: 0,
+      });
+      throw error.dispatchError;
+    }
     await safeRecord(input.store, { ...base, status: 'failed' });
     throw error;
   }

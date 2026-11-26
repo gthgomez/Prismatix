@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
+import { selectMockCompareRoutes, setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 test('Compare, Markdown and code remain readable in both Arctic themes', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -27,6 +27,7 @@ test('Compare, Markdown and code remain readable in both Arctic themes', async (
   });
   await signInAsMockUser(page);
   await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  await selectMockCompareRoutes(page);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
   await composer.fill('Render both formatted results.');
   await composer.press('Enter');

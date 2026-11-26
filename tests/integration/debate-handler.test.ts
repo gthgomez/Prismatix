@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FAKE_BYOK_CIPHERTEXT, TEST_BYOK_ENCRYPTION_KEY } from '../helpers/byok-fixtures';
+import { providerRow, servingRouteFixture } from '../helpers/serving-route-fixtures';
 
 const ROUTER_ENTRY = ['../../supabase/functions/router/index.ts'].join('');
 
@@ -18,6 +19,11 @@ const SERVICE_ROLE_KEY = 'test-service-role-key';
 const ANTHROPIC_KEY = 'test-anthropic-key';
 const OPENAI_KEY = 'test-openai-key';
 const OPENCODE_KEY = 'test-opencode-key';
+const DEBATE_ROUTES = [
+  { ...servingRouteFixture('anthropic', 'claude-haiku-5-5'), canonicalId: 'claude-haiku-5-5' },
+  { ...servingRouteFixture('openai', 'gpt-6.2-sol'), canonicalId: 'gpt-6.2-sol' },
+  { ...servingRouteFixture('openrouter', 'anthropic/claude-haiku-5.5'), canonicalId: 'claude-haiku-5-5' },
+];
 
 const BASE_ROUTER_ENV: Record<string, string> = {
   SUPABASE_URL,
@@ -242,17 +248,11 @@ function createSupabaseAndProviderRoutes(options?: RouteOptions) {
       return jsonResponse({
         default_provider: 'openrouter',
         providers: [
-          { provider: 'opencode', enabled: true, has_key: false },
-          { provider: 'anthropic', enabled: true, has_key: true },
-          { provider: 'openai', enabled: true, has_key: true },
-          { provider: 'openrouter', enabled: true, has_key: true },
+          ...DEBATE_ROUTES.map((route) => providerRow(route)),
         ],
       });
     }
-    if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) {
-      return jsonResponse(FAKE_BYOK_CIPHERTEXT);
-    }
-    if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) {
+    if (call.url.includes('/rest/v1/rpc/get_user_provider_dispatch_key')) {
       return jsonResponse(FAKE_BYOK_CIPHERTEXT);
     }
     if (call.url.includes('/rest/v1/conversations')) {
@@ -687,7 +687,7 @@ describe('Deterministic Enabled-Debate Handler Integration', () => {
     const res = await handler(req);
     expect(res.status).toBe(402);
     const data = await res.json();
-    expect(data.error).toBe('budget_exhausted');
+    expect(data.error).toBe('request_cost_limit_exceeded');
 
     // Invariant: ZERO provider inference calls dispatched
     const providerDispatchCalls = calls.filter(

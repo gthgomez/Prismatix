@@ -101,17 +101,21 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
         setNotice('The provider rejected this key. Check the key and try again.');
         return true;
       }
-      const ok = await plugins.setKey(id, value, validation);
-      if (ok) {
-        setNotice(validation.status === 'enabled'
-          ? 'Key saved and verified.'
-          : validation.status === 'unknown'
-          ? `Key saved. ${inconclusiveVerificationMessage(id)}`
-          : 'Key saved. Verification is unavailable. Try testing the saved key again.');
+      const result = await plugins.setKey(id, value, validation);
+      if (result.saved) {
+        setNotice(result.verified
+          ? `Key saved and verified. ${result.qualifiedModelCount} models are ready.`
+          : result.inventoryStatus === 'restricted'
+            ? 'Key saved, but provider access is restricted. Review the provider account.'
+            : result.inventoryStatus === 'unavailable'
+              ? 'Key saved, but model discovery is unavailable. Refresh models to retry.'
+              : result.inventoryStatus === 'verified' && result.qualifiedModelCount === 0
+                ? 'Key saved, but the account has no compatible models for Prismatix yet.'
+                : `Key saved. ${inconclusiveVerificationMessage(id)}`);
       }
       // Only clear the field on success so a failed save never discards the key.
-      if (ok) setDrafts((prev) => ({ ...prev, [id]: '' }));
-      return ok;
+      if (result.saved) setDrafts((prev) => ({ ...prev, [id]: '' }));
+      return result.saved;
     });
 
   return createPortal(
@@ -137,7 +141,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
       </div>
 
       <p className='provider-settings-intro'>
-        Connect and manage your own provider keys. OpenRouter is recommended for access to multiple model providers.
+        Connect and manage your own provider keys. Auto Router can use model routes from your enabled connections.
       </p>
 
       {loading && <div className='provider-settings-note'>Loading providers…</div>}
@@ -158,8 +162,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
         }).map((provider) => {
           if (!isProviderId(provider.id)) return null;
           const plugin = getProviderPlugin(provider.id);
-          const isOpencode = provider.id === 'opencode';
-          const canToggle = !isOpencode && provider.hasKey;
+          const isServerManaged = plugin.keyKind === 'server';
+          const canToggle = !isServerManaged && provider.hasKey;
+          const userEnabled = provider.userEnabled ?? provider.enabled;
           const draft = drafts[provider.id] ?? '';
 
           return (
@@ -170,20 +175,20 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                   {provider.defaultProvider && (
                     <span className='provider-badge provider-badge--default'>Default</span>
                   )}
-                  {isOpencode && (
+                  {isServerManaged && (
                     <span className='provider-badge provider-badge--setup'>
                       Unavailable
                     </span>
                   )}
                 </div>
 
-                {!isOpencode && (
+                {!isServerManaged && (
                   <label className='provider-toggle'>
                     <input
                       type='checkbox'
                       className='provider-switch'
                       role='switch'
-                      checked={provider.enabled}
+                      checked={userEnabled}
                       disabled={!canToggle || busy !== null}
                       aria-label={`Enable ${provider.label}`}
                       onChange={(e) =>
@@ -192,15 +197,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                         )
                       }
                     />
-                    <span>{provider.enabled ? 'On' : 'Off'}</span>
+                    <span>{userEnabled ? 'On' : 'Off'}</span>
                   </label>
                 )}
               </div>
 
-              {isOpencode ? (
+              {isServerManaged ? (
                 <div className='provider-card-note needs-setup'>
-                  OpenCode uses a deployment key and is disabled in BYOK-only mode. Connect your
-                  OpenRouter key to use models available through that provider.
+                  This connection cannot be managed from your account.
                 </div>
               ) : (
                 <>
@@ -226,9 +230,34 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                       ? 'Unavailable'
                       : provider.enabled
                       ? plugins.verifiedProviders?.has(provider.id) ? 'Enabled and verified' : 'Enabled · key unverified'
-                      : 'Disabled'}
+                      : userEnabled
+                        ? provider.inventoryStatus === 'verified' ? 'Enabled · no ready models' : 'Enabled · verification required'
+                        : 'Disabled'}
 
                   </div>
+                  <div className='provider-card-note' aria-live='polite'>
+                    {provider.inventoryStatus === 'verified'
+                      ? `${provider.qualifiedModelCount ?? 0} of ${provider.availableModelCount ?? 0} discovered models are ready for chat.`
+                      : provider.inventoryStatus === 'restricted'
+                        ? 'Provider access is restricted. Review this key or provider account.'
+                        : provider.inventoryStatus === 'unavailable'
+                          ? 'Model inventory is temporarily unavailable. Retry refresh to update it.'
+                          : provider.inventoryStatus === 'invalid_revoked'
+                            ? 'This key was rejected. Update it to restore its model inventory.'
+                            : provider.inventoryStatus === 'unverified'
+                              ? 'Verify this key to load available models.'
+                              : 'No verified model inventory is available yet.'}
+                    {provider.lastSuccessfulRefresh && (
+                      <span> Last refreshed {new Date(provider.lastSuccessfulRefresh).toLocaleString()}.</span>
+                    )}
+                  </div>
+                  {plugins.routes.some((route) => route.provider === provider.id) && (
+                    <ul className='provider-card-note' aria-label={`${provider.label} verified routes`}>
+                      {plugins.routes.filter((route) => route.provider === provider.id).map((route) => (
+                        <li key={route.id}>{route.name} · {route.upstreamId}</li>
+                      ))}
+                    </ul>
+                  )}
                   <div className='provider-key-row'>
                     <input
                       type='password'
@@ -281,6 +310,16 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                     {provider.hasKey && (
                       <button
                         type='button'
+                        className='provider-key-test'
+                        disabled={busy !== null}
+                        onClick={() => void run(`refresh:${provider.id}`, () => plugins.refreshInventory(provider.id))}
+                      >
+                        {busy === `refresh:${provider.id}` ? 'Refreshing…' : 'Refresh models'}
+                      </button>
+                    )}
+                    {provider.hasKey && (
+                      <button
+                        type='button'
                         className='provider-key-remove'
                         disabled={busy !== null}
                         onClick={() =>
@@ -302,7 +341,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({ plugins, pre
                 <button
                   type='button'
                   className='provider-set-default'
-                  disabled={busy !== null || provider.defaultProvider || (!isOpencode && !provider.hasKey)}
+                  disabled={busy !== null || provider.defaultProvider || (plugin.keyKind !== 'server' && (!provider.enabled || provider.inventoryStatus !== 'verified' || (provider.qualifiedModelCount ?? 0) === 0))}
                   onClick={() =>
                     void run(`default:${provider.id}`, () => plugins.setDefault(provider.id))
                   }

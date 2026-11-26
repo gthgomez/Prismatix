@@ -3,17 +3,18 @@
 // which have keys, and which is the default gateway). Owns all mutations so the
 // model picker and the settings panel share one source of truth.
 //
-// Server-authoritative: no optimistic state. A mutation returns a success
-// boolean so callers can avoid discarding input on failure. Reloads when the
-// account changes and drops stale responses.
+// Server-authoritative: no optimistic state. Mutations return their saved
+// payload state so callers can distinguish a saved key from verified inventory.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ProviderKeyStatus, ProviderSettingsPayload, ProviderState } from '../types';
+import type { ServingRoute } from '../../supabase/functions/_shared/serving_routes.ts';
 import type { ProviderId } from '../providerRegistry';
 import {
   deleteProviderKey,
   fetchProviderSettings,
   setDefaultProvider,
+  refreshProviderInventory,
   setProviderEnabled,
   setProviderKey,
   validateProviderKey,
@@ -22,6 +23,7 @@ import {
 
 export interface ProviderPlugins {
   providers: ProviderState[];
+  routes: ServingRoute[];
   defaultProvider: ProviderId | null;
   enabledProviders: ReadonlySet<ProviderId>;
   isConfigured: boolean;
@@ -35,10 +37,19 @@ export interface ProviderPlugins {
   error: string | null;
   refresh: () => Promise<void>;
   setEnabled: (provider: ProviderId, enabled: boolean) => Promise<boolean>;
-  setKey: (provider: ProviderId, apiKey: string, validation?: { status: ProviderKeyStatus; message?: string; stale?: boolean; clientAccountGeneration?: number }) => Promise<boolean>;
+  setKey: (provider: ProviderId, apiKey: string, validation?: { status: ProviderKeyStatus; message?: string; stale?: boolean; clientAccountGeneration?: number }) => Promise<ProviderKeySaveResult>;
   removeKey: (provider: ProviderId) => Promise<boolean>;
+  refreshInventory: (provider: ProviderId) => Promise<boolean>;
   setDefault: (provider: ProviderId) => Promise<boolean>;
   validateKey: (provider: ProviderId, apiKey?: string) => Promise<ProviderValidationResult>;
+}
+
+export interface ProviderKeySaveResult {
+  saved: boolean;
+  verified: boolean;
+  inventoryStatus?: ProviderState['inventoryStatus'];
+  availableModelCount?: number;
+  qualifiedModelCount?: number;
 }
 
 export function useProviderPlugins(userId?: string | null): ProviderPlugins {
@@ -114,19 +125,19 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   }, [refresh, userId]);
 
   const mutate = useCallback(
-    async (fn: () => Promise<ProviderSettingsPayload>): Promise<boolean> => {
+    async (fn: () => Promise<ProviderSettingsPayload>): Promise<ProviderSettingsPayload | null> => {
       const seq = ++seqRef.current;
       const accountGeneration = accountGenerationRef.current;
       try {
         const next = await fn();
-        if (seq !== seqRef.current || accountGeneration !== accountGenerationRef.current || !mountedRef.current) return false;
+        if (seq !== seqRef.current || accountGeneration !== accountGenerationRef.current || !mountedRef.current) return null;
         applyPayload(next);
-        return true;
+        return next;
       } catch (err) {
         if (seq === seqRef.current && accountGeneration === accountGenerationRef.current && mountedRef.current) {
           setError(err instanceof Error ? err.message : 'provider_settings_failed');
         }
-        return false;
+        return null;
       }
     },
     [applyPayload],
@@ -160,16 +171,16 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   }, [providers]);
 
   const enabledKeyProviders = useMemo(
-    () => providers.filter((provider) => provider.hasKey && provider.enabled),
+    () => providers.filter((provider) => provider.hasKey && (provider.userEnabled ?? provider.enabled)),
     [providers],
   );
   const isVerified = enabledKeyProviders.length > 0
     && enabledKeyProviders.every((provider) => statuses[provider.id]?.status === 'enabled');
   const verificationStatus: ProviderPlugins['verificationStatus'] = isVerified
     ? 'verified'
-    : enabledKeyProviders.some((provider) => statuses[provider.id]?.status === 'invalid_revoked')
+    : enabledKeyProviders.some((provider) => provider.status === 'invalid_revoked')
       ? 'invalid'
-      : enabledKeyProviders.some((provider) => statuses[provider.id]?.status === 'unavailable')
+      : enabledKeyProviders.some((provider) => provider.status === 'unavailable')
         ? 'unavailable'
         : 'unverified';
 
@@ -227,18 +238,34 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
   const verifyEnabledProviders = useCallback(async (provider?: ProviderId): Promise<boolean> => {
     const accountGeneration = accountGenerationRef.current;
     const verificationRequest = ++verificationRequestRef.current;
-    const targets = providers.filter((candidate) => candidate.hasKey && candidate.enabled
+    const targets = providers.filter((candidate) => candidate.hasKey && (candidate.userEnabled ?? candidate.enabled)
       && (!provider || candidate.id === provider));
     if (targets.length === 0) return false;
     setVerificationLoading(true);
     try {
-      const results = await Promise.all(targets.map((provider) => validateKeyHandler(provider.id)));
+      const results: ProviderKeyStatus[] = [];
+      for (const target of targets) {
+        if (accountGeneration !== accountGenerationRef.current || verificationRequest !== verificationRequestRef.current || !mountedRef.current) return false;
+        if (target.enabled || target.id === 'brave' || !userId) {
+          results.push((await validateKeyHandler(target.id)).status);
+          continue;
+        }
+        // Refresh a saved connection without an eligible inventory. Checking
+        // metadata alone does not update the routes available for dispatch.
+        const next = await mutate(() => refreshProviderInventory(target.id, userId));
+        const ready = next?.routes.some((route) => route.provider === target.id);
+        if (ready && accountGeneration === accountGenerationRef.current
+            && verificationRequest === verificationRequestRef.current && mountedRef.current) {
+          setStatuses((prev) => ({ ...prev, [target.id]: { status: 'enabled' } }));
+        }
+        results.push(ready ? 'enabled' : 'unknown');
+      }
       if (accountGeneration !== accountGenerationRef.current || verificationRequest !== verificationRequestRef.current || !mountedRef.current) return false;
-      return results.length > 0 && results.every((result) => result.status === 'enabled');
+      return results.length > 0 && results.every((status) => status === 'enabled');
     } finally {
       if (accountGeneration === accountGenerationRef.current && verificationRequest === verificationRequestRef.current && mountedRef.current) setVerificationLoading(false);
     }
-  }, [providers, validateKeyHandler]);
+  }, [mutate, providers, userId, validateKeyHandler]);
 
   const invalidateVerification = useCallback(() => {
     validationSequenceRef.current = {};
@@ -260,19 +287,34 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     provider: ProviderId,
     apiKey: string,
     validation?: { status: ProviderKeyStatus; message?: string; stale?: boolean; clientAccountGeneration?: number },
-  ): Promise<boolean> => {
+  ): Promise<ProviderKeySaveResult> => {
     if (validation && (validation.stale
-      || validation.clientAccountGeneration !== accountGenerationRef.current)) return false;
+      || validation.clientAccountGeneration !== accountGenerationRef.current)) return { saved: false, verified: false };
     const accountGeneration = accountGenerationRef.current;
-    if (!userId) return false;
-    const saved = await mutate(() => setProviderKey(provider, apiKey, userId));
-    if (!saved || accountGeneration !== accountGenerationRef.current) return false;
+    if (!userId) return { saved: false, verified: false };
+    const savedPayload = await mutate(() => setProviderKey(provider, apiKey, userId));
+    if (!savedPayload || accountGeneration !== accountGenerationRef.current) return { saved: false, verified: false };
+    const savedProvider = savedPayload.providers.find((candidate) => candidate.id === provider);
+    const verified = Boolean(savedProvider?.enabled && savedProvider.inventoryStatus === 'verified' && (savedProvider.qualifiedModelCount ?? 0) > 0);
+    const returnedStatus: ProviderKeyStatus = verified ? 'enabled'
+      : savedProvider?.inventoryStatus === 'restricted' ? 'restricted'
+      : savedProvider?.inventoryStatus === 'unavailable' ? 'unavailable'
+      : savedProvider?.inventoryStatus === 'invalid_revoked' ? 'invalid_revoked'
+      : 'unknown';
     validationSequenceRef.current[provider] = (validationSequenceRef.current[provider] ?? 0) + 1;
     setStatuses((prev) => ({
       ...prev,
-      [provider]: validation ? { status: validation.status, message: validation.message } : { status: 'unknown' },
+      [provider]: verified
+        ? { status: 'enabled', message: 'Provider inventory verified after saving the key.' }
+        : { status: returnedStatus, message: savedProvider?.statusMessage ?? validation?.message },
     }));
-    return true;
+    return {
+      saved: true,
+      verified,
+      inventoryStatus: savedProvider?.inventoryStatus,
+      availableModelCount: savedProvider?.availableModelCount,
+      qualifiedModelCount: savedProvider?.qualifiedModelCount,
+    };
   }, [mutate, userId]);
 
   const setEnabledHandler = useCallback(async (provider: ProviderId, enabled: boolean): Promise<boolean> => {
@@ -280,7 +322,7 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     const accountGeneration = accountGenerationRef.current;
     const saved = await mutate(() => setProviderEnabled(provider, enabled, userId));
     if (saved && accountGeneration === accountGenerationRef.current) clearProviderVerification(provider);
-    return saved;
+    return Boolean(saved);
   }, [clearProviderVerification, mutate, userId]);
 
   const removeKeyHandler = useCallback(async (provider: ProviderId): Promise<boolean> => {
@@ -288,11 +330,17 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     const accountGeneration = accountGenerationRef.current;
     const removed = await mutate(() => deleteProviderKey(provider, userId));
     if (removed && accountGeneration === accountGenerationRef.current) clearProviderVerification(provider);
-    return removed;
+    return Boolean(removed);
   }, [clearProviderVerification, mutate, userId]);
+
+  const refreshInventoryHandler = useCallback(async (provider: ProviderId): Promise<boolean> => {
+    if (!userId) return false;
+    return Boolean(await mutate(() => refreshProviderInventory(provider, userId)));
+  }, [mutate, userId]);
 
   return {
     providers,
+    routes: payload?.routes ?? [],
     defaultProvider: payload?.defaultProvider ?? null,
     enabledProviders,
     isConfigured,
@@ -310,7 +358,8 @@ export function useProviderPlugins(userId?: string | null): ProviderPlugins {
     setEnabled: setEnabledHandler,
     setKey: setKeyHandler,
     removeKey: removeKeyHandler,
-    setDefault: (provider) => userId ? mutate(() => setDefaultProvider(provider, userId)) : Promise.resolve(false),
+    refreshInventory: refreshInventoryHandler,
+    setDefault: async (provider) => userId ? Boolean(await mutate(() => setDefaultProvider(provider, userId))) : false,
     validateKey: validateKeyHandler,
   };
 }

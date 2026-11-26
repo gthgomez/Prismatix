@@ -500,6 +500,7 @@ export interface ExecutionOutputBudget {
     outputRatePer1M: number,
     promptTokens?: number,
     inputRatePer1M?: number,
+    requestUsd?: number,
   ): number;
 }
 
@@ -516,14 +517,16 @@ export function createExecutionOutputBudget(admittedBudgetUsd: number): Executio
       outputRatePer1M: number,
       promptTokens: number = 0,
       inputRatePer1M: number = 0,
+      requestUsd: number = 0,
     ): number {
       if (!Number.isFinite(requestedTokens) || requestedTokens <= 0) return requestedTokens;
 
-      const inputCost =
+      const inputCost = requestUsd + (
         Number.isFinite(promptTokens) && promptTokens > 0 &&
         Number.isFinite(inputRatePer1M) && inputRatePer1M > 0
           ? (promptTokens / TOKENS_PER_MILLION) * inputRatePer1M
-          : 0;
+          : 0
+      );
 
       // If the remaining budget cannot even cover the input tokens for this stage,
       // 0 tokens are affordable and the dispatch must be blocked.

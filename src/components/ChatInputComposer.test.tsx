@@ -53,6 +53,7 @@ describe('ChatInputComposer', () => {
     currentModel: 'gemini-3.8-flash' as const,
     debateSelection: 'off' as const,
     enabledProviders: new Set(['opencode' as const]),
+    routes: [],
     preferences: {
       favoriteModels: ['gemini-3.8-flash' as const],
       hiddenModels: [],

@@ -30,6 +30,13 @@ export interface ReceiptCallCosts {
   thinkingUsd: number;
 }
 
+export interface ReceiptRouteTariff {
+  routeId: string;
+  version: string;
+  billingArrangement: 'pay_as_you_go' | 'prepaid_credits' | 'subscription_allowance';
+  basis: 'tariff_estimate';
+}
+
 export interface ReceiptCall {
   stage: string | null;
   participant: string | null;
@@ -45,6 +52,7 @@ export interface ReceiptCall {
   usage?: ReceiptCallUsage;
   /** Ledger-projected component costs for this call, when complete and valid. */
   costs?: ReceiptCallCosts;
+  tariff?: ReceiptRouteTariff;
 }
 
 export interface ReceiptSettlement {
@@ -92,6 +100,7 @@ export interface RawReceiptCall {
   attempt_number: number;
   served_model: string | null;
   cost_status: ReceiptCostStatus;
+  price_snapshot?: unknown;
   total_cost?: number | string | null;
   input_tokens?: number | string | null;
   output_tokens?: number | string | null;
@@ -165,6 +174,14 @@ function parseTokenCount(value: number | string | null | undefined): number | un
     return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
   }
   return undefined;
+}
+
+function projectRouteTariff(snapshot: unknown): ReceiptRouteTariff | undefined {
+  if (!snapshot || typeof snapshot !== 'object') return undefined;
+  const { servingRouteId, pricingVersion, billingArrangement } = snapshot as Record<string, unknown>;
+  if (typeof servingRouteId !== 'string' || !servingRouteId || typeof pricingVersion !== 'string' || !pricingVersion ||
+      (billingArrangement !== 'pay_as_you_go' && billingArrangement !== 'prepaid_credits' && billingArrangement !== 'subscription_allowance')) return undefined;
+  return { routeId: servingRouteId, version: pricingVersion, billingArrangement, basis: 'tariff_estimate' };
 }
 
 function roundUsd(value: number): number {
@@ -252,6 +269,7 @@ export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
       const costs = inputUsd !== undefined && outputUsd !== undefined && thinkingUsd !== undefined
         ? { inputUsd, outputUsd, thinkingUsd }
         : undefined;
+      const tariff = projectRouteTariff(call.price_snapshot);
       return {
         stage: call.stage,
         participant: call.participant,
@@ -261,6 +279,7 @@ export function projectReceipt(payload: RawReceiptPayload): TerminalReceipt {
         totalCost: roundUsd(totalCost),
         ...(usage ? { usage } : {}),
         ...(costs ? { costs } : {}),
+        ...(tariff ? { tariff } : {}),
       };
     }),
     ...(payload.transcript ? { transcript: payload.transcript } : {}),

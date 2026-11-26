@@ -13,17 +13,21 @@
 // estimate handles that case separately). Deno-free and unit-testable.
 
 import type { Provider } from './router_logic.ts';
+import type { InferenceProtocol } from '../_shared/serving_routes.ts';
 import { createSseParser, isDoneData } from '../_shared/sse_parser.ts';
 
 export interface NormalizedUsage {
   inputTokens: number;
   outputTokens: number;
   thinkingTokens: number;
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
 }
 
 export interface UsageTracker {
   observe(payload: unknown): void;
   usage(): NormalizedUsage | null;
+  servedModel?(): string | undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -42,22 +46,29 @@ function nonNegativeInt(value: unknown): number | null {
  * reports are recorded; absent fields stay null and `usage()` returns null when
  * nothing at all was reported.
  */
-export function createUsageTracker(provider: Provider): UsageTracker {
+export function createUsageTracker(provider: Provider, protocol?: InferenceProtocol): UsageTracker {
   let input: number | null = null;
   let output: number | null = null;
   let thinking: number | null = null;
+  let cachedRead: number | null = null;
+  let cachedWrite: number | null = null;
+  let servedModel: string | undefined;
 
   const observe = (payload: unknown): void => {
     const data = asRecord(payload);
     if (!data) return;
+    const model = data.model ?? data.modelVersion ?? asRecord(data.response)?.model ?? asRecord(data.message)?.model;
+    if (typeof model === 'string' && /^[A-Za-z0-9._:/-]{1,250}$/.test(model)) servedModel = model;
 
-    if (provider === 'anthropic' || (provider === 'opencode' &&
+    if (protocol === 'anthropic_messages' || provider === 'anthropic' || (provider === 'opencode' &&
       (data.type === 'message_start' || data.type === 'message_delta'))) {
       if (data.type === 'message_start') {
         const usage = asRecord(asRecord(data.message)?.usage);
         if (usage) {
           input = nonNegativeInt(usage.input_tokens) ?? input;
           output = nonNegativeInt(usage.output_tokens) ?? output;
+          cachedRead = nonNegativeInt(usage.cache_read_input_tokens) ?? cachedRead;
+          cachedWrite = nonNegativeInt(usage.cache_creation_input_tokens) ?? cachedWrite;
         }
       } else if (data.type === 'message_delta') {
         const usage = asRecord(data.usage);
@@ -69,20 +80,23 @@ export function createUsageTracker(provider: Provider): UsageTracker {
       return;
     }
 
-    if (provider === 'google' || (provider === 'opencode' && data.usageMetadata)) {
+    if (protocol === 'google_generate_content' || provider === 'google' || (provider === 'opencode' && data.usageMetadata)) {
       const usage = asRecord(data.usageMetadata);
       if (usage) {
         input = nonNegativeInt(usage.promptTokenCount) ?? input;
         output = nonNegativeInt(usage.candidatesTokenCount) ?? output;
         thinking = nonNegativeInt(usage.thoughtsTokenCount) ?? thinking;
+        cachedRead = nonNegativeInt(usage.cachedContentTokenCount) ?? cachedRead;
       }
       return;
     }
 
-    if (provider === 'opencode' && data.type === 'response.completed') {
+    if ((protocol === 'responses' || provider === 'opencode') &&
+        (data.type === 'response.completed' || data.type === 'response.incomplete')) {
       const usage = asRecord(asRecord(data.response)?.usage);
       if (usage) {
         input = nonNegativeInt(usage.input_tokens) ?? input;
+        cachedRead = nonNegativeInt(asRecord(usage.input_tokens_details)?.cached_tokens) ?? cachedRead;
         const completion = nonNegativeInt(usage.output_tokens);
         if (completion !== null) {
           const reasoning = nonNegativeInt(asRecord(usage.output_tokens_details)?.reasoning_tokens) ?? 0;
@@ -100,6 +114,7 @@ export function createUsageTracker(provider: Provider): UsageTracker {
       const completion = nonNegativeInt(usage.completion_tokens);
       const reasoning = nonNegativeInt(asRecord(usage.completion_tokens_details)?.reasoning_tokens);
       if (prompt !== null) input = prompt;
+      cachedRead = nonNegativeInt(asRecord(usage.prompt_tokens_details)?.cached_tokens) ?? cachedRead;
       if (completion !== null) {
         // Reasoning tokens are a SUBSET of completion tokens: keep them separate
         // so cost computation never bills the reasoning portion twice.
@@ -113,13 +128,16 @@ export function createUsageTracker(provider: Provider): UsageTracker {
   const usage = (): NormalizedUsage | null => {
     if (input === null && output === null && thinking === null) return null;
     return {
-      inputTokens: input ?? 0,
+      inputTokens: (input ?? 0) + ((protocol === 'anthropic_messages' || provider === 'anthropic')
+        ? (cachedRead ?? 0) + (cachedWrite ?? 0) : 0),
+      ...(cachedRead !== null ? { cachedReadTokens: cachedRead } : {}),
+      ...(cachedWrite !== null ? { cachedWriteTokens: cachedWrite } : {}),
       outputTokens: output ?? 0,
       thinkingTokens: thinking ?? 0,
     };
   };
 
-  return { observe, usage };
+  return { observe, usage, servedModel: () => servedModel };
 }
 
 /**

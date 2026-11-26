@@ -22,7 +22,8 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<'success' | 'pending' | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const savedButDisabled = plugins.providers.find((provider) => provider.hasKey && !provider.enabled);
+  const savedButDisabled = plugins.providers.find((provider) => provider.hasKey && !(provider.userEnabled ?? provider.enabled));
+  const savedWithoutRoute = plugins.providers.find((provider) => provider.hasKey && provider.userEnabled && !provider.enabled && provider.id !== 'brave');
 
   const handleQuickConnect = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,16 +49,14 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
         setIsSubmitting(false);
         return;
       }
-      const verified = validation.status === 'enabled';
-
-      const saved = await plugins.setKey('openrouter', apiKey.trim(), validation);
-      if (saved) {
-        const message = verified
+      const saveResult = await plugins.setKey('openrouter', apiKey.trim(), validation);
+      if (saveResult.saved) {
+        const message = saveResult.verified
           ? 'Key saved and verified. You are ready to chat.'
           : 'Key saved, but could not be verified. Chat is paused until you verify this key or update it in Provider Settings.';
         setStatusMessage(message);
-        setStatusTone(verified ? 'success' : 'pending');
-        onSaved?.(message, verified);
+        setStatusTone(saveResult.verified ? 'success' : 'pending');
+        onSaved?.(message, saveResult.verified);
         setApiKey('');
       } else {
         setStatusMessage(null);
@@ -73,14 +72,17 @@ export const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
     }
   };
 
-  if (savedButDisabled) {
+  if (savedButDisabled || savedWithoutRoute) {
     return (
       <section className='first-run-card first-run-card--compact' role='region' aria-label='AI Provider Setup Guide'>
         <p className='first-run-welcome'>Provider setup</p>
-        <h2 className='first-run-title'>{savedButDisabled.label} is saved but turned off</h2>
+        <h2 className='first-run-title'>
+          {savedWithoutRoute ? `${savedWithoutRoute.label} has no ready models` : `${savedButDisabled?.label} is saved but turned off`}
+        </h2>
         <p className='first-run-desc'>
-          A key is already stored for {savedButDisabled.label}, but that provider is disabled.
-          Open Provider Settings to turn it on or choose another provider.
+          {savedWithoutRoute
+            ? 'Open Provider Settings to refresh the model inventory, update the key or choose another provider.'
+            : 'Open Provider Settings to turn it on or choose another provider.'}
         </p>
         <div className='first-run-actions'>
           <button type='button' className='first-run-submit' onClick={onOpenSettings}>

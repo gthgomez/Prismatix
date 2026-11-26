@@ -19,16 +19,18 @@ import {
 import { useModelCatalogFilter } from '../hooks/useModelCatalogFilter';
 import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
 import type { DebateSelection } from '../debateMode';
+import type { ServingRoute } from '../../supabase/functions/_shared/serving_routes.ts';
 
 export interface ComposerModelPickerProps {
   currentModel: RouterModel;
-  manualModelOverride: RouterModel | null;
+  manualModelOverride: string | null;
+  routes?: ServingRoute[];
   enabledProviders: ReadonlySet<ProviderId>;
   preferences: ModelPickerPreferencesHook;
   inputRef?: React.RefObject<HTMLTextAreaElement>;
   geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
   debateSelection?: DebateSelection;
-  onModelSelect: (model: RouterModel) => void;
+  onModelSelect: (model: string) => void;
   onClearOverride: () => void;
   onGeminiThinkingChange?: (level: GeminiFlashThinkingLevel) => void;
   onOpenProviderSettings: () => void;
@@ -38,6 +40,7 @@ export interface ComposerModelPickerProps {
 export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
   currentModel,
   manualModelOverride,
+  routes: accountRoutes,
   enabledProviders,
   preferences,
   inputRef,
@@ -49,6 +52,8 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
   onOpenProviderSettings,
   disabled = false,
 }) => {
+  const accountCatalog = accountRoutes !== undefined;
+  const routes = accountRoutes ?? [];
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [popoverCoords, setPopoverCoords] = useState<{ bottom: number; left: number; width: number } | null>(null);
@@ -73,6 +78,12 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
     activeProviderFilter === 'all' || enabledProviders.has(activeProviderFilter)
       ? activeProviderFilter
       : 'all';
+
+  const query = searchQuery.trim().toLowerCase();
+  const matchingRoutes = routes.filter((route) =>
+    (effectiveProviderFilter === 'all' || effectiveProviderFilter === route.provider) &&
+    `${route.name} ${route.developer} ${route.id}`.toLowerCase().includes(query),
+  );
 
   const {
     filteredModels,
@@ -177,7 +188,8 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
     };
   }, [isOpen]);
 
-  const activeEntry = getCatalogEntry(manualModelOverride ?? currentModel);
+  const activeRoute = routes.find((route) => route.id === manualModelOverride);
+  const activeEntry = getCatalogEntry(activeRoute?.canonicalId ?? manualModelOverride ?? currentModel);
   // Flash thinking level applies only when a Gemini Flash family model is selected
   const activeModelId = manualModelOverride ?? currentModel;
   const isGeminiFlashModel =
@@ -336,6 +348,23 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
         role='listbox'
         aria-label='Available models'
       >
+        {matchingRoutes.length > 0 && (
+          <div className='composer-model-section'>
+            <div className='composer-model-section-title'>Verified account routes</div>
+            <div className='composer-model-list'>
+              {matchingRoutes.map((route) => (
+                <button key={route.id} type='button' role='option' aria-selected={manualModelOverride === route.id}
+                  className={`composer-model-item-btn ${manualModelOverride === route.id ? 'is-selected' : ''}`}
+                  onClick={() => { onModelSelect(route.id); handleClose(); }}>
+                  <div className='composer-model-details'>
+                    <div className='composer-model-title-row'><span className='composer-model-name'>{route.name}</span></div>
+                    <span className='composer-model-desc'>{route.id} · {route.protocol} · ${route.tariff.inputPerMillion}/$1M in, ${route.tariff.outputPerMillion}/$1M out</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {/* Smart Auto-Routing Row */}
         {!searchQuery.trim() && (
           <div className='composer-model-section'>
@@ -357,7 +386,7 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
                   <span className='composer-model-auto-badge'>Auto</span>
                 </div>
                 <span className='composer-model-desc'>
-                  Automatically selects the best model per prompt complexity
+                  Selects an eligible model from your connections
                 </span>
               </div>
             </button>
@@ -365,7 +394,7 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
         )}
 
         {/* Pinned / Favorites */}
-        {!searchQuery.trim() && pinnedModels.length > 0 && activeProviderFilter === 'all' && (
+        {!accountCatalog && !searchQuery.trim() && pinnedModels.length > 0 && activeProviderFilter === 'all' && (
           <div className='composer-model-section'>
             <div className='composer-model-section-title'>Quick Access / Pinned</div>
             <div className='composer-model-list'>
@@ -375,7 +404,10 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
         )}
 
         {/* Grouped or Filtered Models */}
-        {filteredModels.length === 0 ? (
+        {accountCatalog && matchingRoutes.length === 0 && query && (
+          <div className='composer-model-empty' role='status'>No connected routes match your search.</div>
+        )}
+        {!accountCatalog && (filteredModels.length === 0 ? (
           <div className='composer-model-empty' role='status'>
             No models match “{searchQuery}”.
           </div>
@@ -394,7 +426,7 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
               {filteredModels.map((m) => renderModelItem(m, 'filtered'))}
             </div>
           </div>
-        )}
+        ))}
       </div>
 
       <div className='composer-model-popover-footer'>
@@ -426,7 +458,7 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
           aria-controls={listboxId}
           title={
             manualModelOverride
-              ? `Model locked to ${activeEntry.name} (Click to switch)`
+              ? `Model locked to ${activeRoute?.name ?? activeEntry.name} (Click to switch)`
               : `Automatic routing active (Currently ${activeEntry.name})`
           }
           disabled={disabled}
@@ -438,7 +470,7 @@ export const ComposerModelPicker: React.FC<ComposerModelPickerProps> = ({
             className='composer-pill-label'
             style={{ color: manualModelOverride ? activeEntry.color : undefined }}
           >
-            {manualModelOverride ? activeEntry.shortName : 'Auto Router'}
+            {manualModelOverride ? activeRoute?.name ?? activeEntry.shortName : 'Auto Router'}
           </span>
 
           <span className={`composer-pill-badge ${manualModelOverride ? 'manual' : 'auto'}`}>

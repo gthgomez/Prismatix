@@ -410,3 +410,6 @@ verify_jwt = true
 
 [functions.video-worker]
 verify_jwt = false
+
+[functions.catalog-reconcile]
+verify_jwt = true

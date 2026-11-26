@@ -131,6 +131,18 @@ describe('smartFetch debate support', () => {
     expect(body.mode).toBeUndefined();
   });
 
+  it('sends an exact account serving route and the selected routing profile unchanged', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(makeStream(''), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await askPrismatix('Use this route', [], [], 'openai:gpt-4.1', 'high', undefined, undefined, undefined, undefined, 'economy');
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.modelOverride).toBe('openai:gpt-4.1');
+    expect(body.routingProfile).toBe('economy');
+  });
+
   it('retains the server execution identity when Compare stream reading fails', async () => {
     const executionId = '44444444-4444-4444-8444-444444444444';
     const brokenStream = new ReadableStream<Uint8Array>({

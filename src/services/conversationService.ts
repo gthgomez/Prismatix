@@ -112,6 +112,8 @@ function toContentString(content: unknown): string {
 
 const KNOWN_PROVIDERS: ReadonlySet<string> = new Set([
   'opencode',
+  'opencode_go',
+  'commandcode',
   'openrouter',
   'anthropic',
   'openai',

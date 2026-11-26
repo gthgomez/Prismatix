@@ -14,12 +14,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projectReceipt } from '../../supabase/functions/_shared/execution_receipt.ts';
 import { FAKE_BYOK_CIPHERTEXT, TEST_BYOK_ENCRYPTION_KEY } from '../helpers/byok-fixtures';
+import { providerRow, servingRouteFixture } from '../helpers/serving-route-fixtures';
 
 const ROUTER_ENTRY = ['../../supabase/functions/router/index.ts'].join('');
 const SUPABASE_URL = 'http://127.0.0.1:54321';
 const SERVICE_ROLE_KEY = 'px07-test-service-role-key';
 const ANTHROPIC_KEY = 'px07-test-anthropic-key';
 const USER_TOKEN = 'px07-user-token';
+const ANTHROPIC_ROUTE = servingRouteFixture('anthropic', 'haiku');
+const OPENROUTER_HAIKU_ROUTE = { ...servingRouteFixture('openrouter', 'anthropic/claude-haiku-5.5'), canonicalId: 'claude-haiku-5-5' };
 
 const SUBJECT = '11111111-1111-4111-8111-111111111111';
 const CONVERSATION_ID = '33333333-3333-4333-8333-333333333333';
@@ -205,9 +208,9 @@ function makeRoutes(
     }
     if (call.url.includes('/rest/v1/rpc/get_access_grant')) return jsonResponse(grantRow());
     if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-      return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] });
+      return jsonResponse({ default_provider: 'openrouter', providers: [providerRow(ANTHROPIC_ROUTE)] });
     }
-    if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) return jsonResponse(FAKE_BYOK_CIPHERTEXT);
+    if (call.url.includes('/rest/v1/rpc/get_user_provider_dispatch_key')) return jsonResponse(FAKE_BYOK_CIPHERTEXT);
     if (call.url.includes('/rest/v1/conversations')) {
       return jsonResponse({ user_id: SUBJECT, total_tokens: 0 });
     }
@@ -786,7 +789,7 @@ describe('PX07 current-priced OpenRouter persistence path', () => {
       if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
         return jsonResponse({
           default_provider: 'openrouter',
-          providers: [{ provider: 'openrouter', enabled: true, has_key: true }],
+          providers: [providerRow(OPENROUTER_HAIKU_ROUTE)],
         });
       }
       return makeRoutes(() => null, settledReceipt)(call);

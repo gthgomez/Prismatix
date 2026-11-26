@@ -57,6 +57,23 @@ describe('ComposerModelPicker component', () => {
     expect(pill.textContent).toContain('Auto');
   });
 
+  it('shows exact account route IDs in its model list', () => {
+    root = createRoot(container);
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 412 });
+    act(() => root!.render(<ComposerModelPicker {...defaultProps} routes={[{
+      id: 'openai:gpt-4.1', provider: 'openai', upstreamId: 'gpt-4.1', canonicalId: 'gpt-4.1',
+      developer: 'OpenAI', name: 'GPT-4.1 (OpenAI)', protocol: 'responses', contextWindow: 1000,
+      maxOutputTokens: 100, supportsImages: true, supportsTools: true, supportsReasoning: false,
+      tariff: { version: 'test', source: 'test', inputPerMillion: 1, outputPerMillion: 2, billing: 'pay_as_you_go' },
+    }]} />));
+    act(() => container.querySelector<HTMLButtonElement>('.composer-model-pill')!.click());
+    expect(document.body.querySelector<HTMLElement>('.composer-model-popover')?.style.getPropertyValue('--popover-width')).toBe('380px');
+    expect(document.body.textContent).toContain('GPT-4.1 (OpenAI)');
+    expect(document.body.textContent).toContain('openai:gpt-4.1');
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: previousWidth });
+  });
+
   it('renders in Manual mode with model name and clear button', () => {
     const onClearOverride = vi.fn();
     root = createRoot(container);

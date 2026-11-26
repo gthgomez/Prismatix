@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
+import { servingRouteFixture } from '../helpers/serving-route-fixtures.ts';
 
 const executions = [
   '00000000-0000-4000-8000-000000000801',
@@ -10,9 +11,11 @@ const assistantIds = [
   '00000000-0000-4000-8000-000000000812',
 ];
 
-test('enabled Compare reloads both responses and never writes a message', async ({ page }) => {
+test('enabled Compare reloads both responses and leaves message persistence to the server', async ({ page }) => {
   test.skip(process.env.VITE_PX08_COMPARE_DURABILITY !== 'true', 'Requires the opt-in synthetic Compare build');
-  await setupAuthenticatedMock(page, { conversations: [], messages: [] });
+  const routeA = servingRouteFixture('openrouter', 'google/gemini-3.8-flash');
+  const routeB = servingRouteFixture('openrouter', 'openai/gpt-6.2-sol');
+  await setupAuthenticatedMock(page, { conversations: [], messages: [], routes: [routeA, routeB] });
   const requests: Array<Record<string, unknown>> = [];
   const assistantRows: Array<Record<string, unknown>> = [];
   const browserWrites: string[] = [];
@@ -99,6 +102,12 @@ test('enabled Compare reloads both responses and never writes a message', async 
 
   await signInAsMockUser(page);
   await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  const toggle = page.getByRole('button', { name: 'Routing details', exact: true });
+  if (await toggle.isVisible()) await toggle.click();
+  const routingPanel = page.getByRole('complementary', { name: 'Routing details' });
+  await routingPanel.getByText('Model options', { exact: true }).click();
+  await routingPanel.getByLabel('Model A').selectOption(routeA.id);
+  await routingPanel.getByLabel('Model B').selectOption(routeB.id);
   const composer = page.getByRole('textbox', { name: 'Message Prismatix' });
   await composer.fill(prompt);
   await composer.press('Enter');

@@ -2,18 +2,17 @@
 // client and router. src/providerRegistry.ts re-exports this module (same
 // pattern as model_tariff.ts / pricingRegistry.ts).
 //
-// Provider model: every provider is a plug-in. OpenRouter is the default BYOK
-// gateway; every other provider is opt-in BYOK (the user connects a key and
-// turns it on). OpenCode remains in historical model metadata but its
-// deployment-key-only route is disabled in BYOK-only mode. A model
-// owned by an opt-in provider also becomes available when OpenRouter is enabled,
-// provided the model has an OpenRouter route (see OPENROUTER_MODEL_MAP).
+// Provider products and user-owned connection metadata. The legacy static
+// OpenRouter mappings below are used by historical and offline catalog tools.
+// Account inventories are the authority for executable routes.
 //
 // SECURITY: this module carries NO secrets and no Deno APIs so it can be
 // imported by both Supabase Edge Functions and the Node/vitest client.
 
 export type ProviderId =
   | 'opencode'
+  | 'opencode_go'
+  | 'commandcode'
   | 'openrouter'
   | 'anthropic'
   | 'openai'
@@ -45,12 +44,14 @@ export const PROVIDER_PLUGINS: Record<ProviderId, ProviderPlugin> = {
   opencode: {
     id: 'opencode',
     label: 'OpenCode',
-    keyLabel: 'OpenCode API key',
-    keyPlaceholder: 'Unavailable in BYOK-only mode',
-    keyKind: 'server',
-    offeredByDefault: false,
-    docsHint: 'Server-key-only route; disabled in BYOK-only mode.',
+    keyLabel: 'OpenCode Zen API key',
+    keyPlaceholder: 'sk-...',
+    keyKind: 'byok',
+    offeredByDefault: true,
+    docsHint: 'OpenCode Zen API key for Console models.',
   },
+  opencode_go: { id: 'opencode_go', label: 'OpenCode Go', keyLabel: 'OpenCode Go API key', keyPlaceholder: 'sk-...', keyKind: 'byok', offeredByDefault: true },
+  commandcode: { id: 'commandcode', label: 'Command Code', keyLabel: 'Command Code API key', keyPlaceholder: '...', keyKind: 'byok', offeredByDefault: true },
   openrouter: {
     id: 'openrouter',
     label: 'OpenRouter',
@@ -66,7 +67,7 @@ export const PROVIDER_PLUGINS: Record<ProviderId, ProviderPlugin> = {
     keyLabel: 'Anthropic API key',
     keyPlaceholder: 'sk-ant-...',
     keyKind: 'byok',
-    offeredByDefault: false,
+    offeredByDefault: true,
   },
   openai: {
     id: 'openai',
@@ -74,7 +75,7 @@ export const PROVIDER_PLUGINS: Record<ProviderId, ProviderPlugin> = {
     keyLabel: 'OpenAI API key',
     keyPlaceholder: 'sk-...',
     keyKind: 'byok',
-    offeredByDefault: false,
+    offeredByDefault: true,
   },
   google: {
     id: 'google',
@@ -82,7 +83,7 @@ export const PROVIDER_PLUGINS: Record<ProviderId, ProviderPlugin> = {
     keyLabel: 'Google API key',
     keyPlaceholder: 'AIza...',
     keyKind: 'byok',
-    offeredByDefault: false,
+    offeredByDefault: true,
   },
   nvidia: {
     id: 'nvidia',
@@ -90,7 +91,7 @@ export const PROVIDER_PLUGINS: Record<ProviderId, ProviderPlugin> = {
     keyLabel: 'NVIDIA API key',
     keyPlaceholder: 'nvapi-...',
     keyKind: 'byok',
-    offeredByDefault: false,
+    offeredByDefault: true,
   },
   deepinfra: {
     id: 'deepinfra',
@@ -98,7 +99,7 @@ export const PROVIDER_PLUGINS: Record<ProviderId, ProviderPlugin> = {
     keyLabel: 'DeepInfra API key',
     keyPlaceholder: 'di-...',
     keyKind: 'byok',
-    offeredByDefault: false,
+    offeredByDefault: true,
   },
   brave: {
     id: 'brave',
@@ -114,6 +115,8 @@ export const PROVIDER_PLUGINS: Record<ProviderId, ProviderPlugin> = {
 /** Stable display order for provider groups and settings cards. */
 export const PROVIDER_PLUGIN_ORDER: ProviderId[] = [
   'opencode',
+  'opencode_go',
+  'commandcode',
   'openrouter',
   'anthropic',
   'openai',
@@ -124,10 +127,10 @@ export const PROVIDER_PLUGIN_ORDER: ProviderId[] = [
 ];
 
 /** The providers a user may choose as their default gateway. */
-export const DEFAULT_PROVIDER_CHOICES: ProviderId[] = ['openrouter'];
+export const DEFAULT_PROVIDER_CHOICES: ProviderId[] = PROVIDER_PLUGIN_ORDER.filter((provider) => provider !== 'brave');
 
 /** The provider a fresh user starts on when they have no stored preference. */
-export const FALLBACK_DEFAULT_PROVIDER: ProviderId = 'openrouter';
+export const FALLBACK_DEFAULT_PROVIDER = null;
 
 export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(PROVIDER_PLUGINS, value);
@@ -147,6 +150,8 @@ export interface RawUserProviderRow {
   enabled?: unknown;
   has_key?: unknown;
   key_last4?: unknown;
+  inventory?: unknown;
+  credential_revision?: unknown;
 }
 
 export interface RawUserProviderConfig {
@@ -154,49 +159,29 @@ export interface RawUserProviderConfig {
   providers?: unknown;
 }
 
-export function resolveDefaultProvider(config: RawUserProviderConfig | null | undefined): ProviderId {
+export function resolveDefaultProvider(config: RawUserProviderConfig | null | undefined): ProviderId | null {
   const raw = config?.default_provider;
-  return isDefaultProviderChoice(raw) ? raw : FALLBACK_DEFAULT_PROVIDER;
+  return isDefaultProviderChoice(raw) ? raw : null;
 }
 
-function readUserRows(config: RawUserProviderConfig | null | undefined): Map<ProviderId, boolean> {
-  const rows = new Map<ProviderId, boolean>();
-  if (Array.isArray(config?.providers)) {
-    for (const raw of config.providers as RawUserProviderRow[]) {
-      if (isProviderId(raw?.provider)) {
-        rows.set(raw.provider, raw.enabled === true);
-      }
-    }
-  }
-  return rows;
-}
-
-/**
- * The set of provider plug-ins currently ON for a user.
- *
- * - BYOK providers are on only when enabled; OpenRouter defaults on when its
- *   row does not exist and it is the selected default.
- * - The legacy OpenCode route always stays off because it only accepts a
- *   deployment key, which is not permitted in BYOK-only mode.
- */
-export function resolveEnabledProviderIds(
-  config: RawUserProviderConfig | null | undefined,
-): Set<ProviderId> {
-  const rows = readUserRows(config);
-  const fallbackDefault = resolveDefaultProvider(config);
+/** Enabled inference requires explicit enablement, a key and current qualified inventory. */
+export function resolveEnabledProviderIds(config: RawUserProviderConfig | null | undefined): Set<ProviderId> {
   const enabled = new Set<ProviderId>();
-
-  for (const id of PROVIDER_PLUGIN_ORDER) {
-    if (id === 'opencode') continue;
-    const plugin = PROVIDER_PLUGINS[id];
-    if (!plugin.offeredByDefault) {
-      if (rows.get(id) === true) enabled.add(id);
+  if (!Array.isArray(config?.providers)) return enabled;
+  for (const row of config.providers as RawUserProviderRow[]) {
+    const id = row?.provider;
+    if (!isProviderId(id) || row.enabled !== true || row.has_key !== true) continue;
+    if (id === 'brave') {
+      enabled.add(id);
       continue;
     }
-    const on = rows.has(id) ? rows.get(id) === true : id === fallbackDefault;
-    if (on) enabled.add(id);
+    const inventory = row.inventory as { status?: unknown; discoveredAt?: unknown; routes?: unknown; restrictedRouteIds?: unknown } | null;
+    if (inventory?.status !== 'verified' || typeof inventory.discoveredAt !== 'string' || !Array.isArray(inventory.routes)) continue;
+    const age = Date.now() - Date.parse(inventory.discoveredAt);
+    if (!(age >= 0 && age <= 24 * 60 * 60 * 1000)) continue;
+    const restricted = new Set(Array.isArray(inventory.restrictedRouteIds) ? inventory.restrictedRouteIds : []);
+    if (inventory.routes.some((route) => route && typeof route.id === 'string' && !restricted.has(route.id))) enabled.add(id);
   }
-
   return enabled;
 }
 

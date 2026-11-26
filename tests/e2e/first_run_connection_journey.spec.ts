@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import AxeBuilder from '@axe-core/playwright';
-import { setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
+import { MOCK_CHAT_ROUTES, setupAuthenticatedMock, signInAsMockUser } from './fixtures/mockAuth';
 
 const GENERATED_REPLY = 'Fixture generated reply: your synthetic request completed successfully.';
 const EXECUTION_ID = '00000000-0000-4000-8000-000000000701';
@@ -48,9 +48,9 @@ test('verified first-run connection sends once and reloads fixture-persisted out
       fixture.enabled = false;
     }
     const providers = fixture.connected
-      ? [{ id: 'openrouter', label: 'OpenRouter', enabled: fixture.enabled, hasKey: true, keyLast4: '0701', offeredByDefault: true, defaultProvider: true, status: 'enabled' }]
+      ? [{ id: 'openrouter', label: 'OpenRouter', enabled: fixture.enabled, hasKey: true, keyLast4: '0701', offeredByDefault: true, defaultProvider: true, status: 'enabled', inventoryStatus: 'verified', qualifiedModelCount: fixture.enabled ? MOCK_CHAT_ROUTES.length : 0 }]
       : [{ id: 'openrouter', label: 'OpenRouter', enabled: false, hasKey: false, keyLast4: null, offeredByDefault: true, defaultProvider: true, status: 'not_configured' }];
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ providers, defaultProvider: 'openrouter' }) });
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ providers, defaultProvider: null, routes: fixture.enabled ? MOCK_CHAT_ROUTES : [] }) });
   });
 
   await page.route('**/rest/v1/conversations*', async (route) => {
@@ -251,7 +251,8 @@ test('first run directs users to a saved but disabled provider instead of prompt
           defaultProvider: true,
           status: 'disabled',
         }],
-        defaultProvider: 'openrouter',
+        defaultProvider: null,
+        routes: [],
       }),
     });
   });

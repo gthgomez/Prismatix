@@ -1,8 +1,9 @@
 import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { useProviderPlugins, type ProviderPlugins } from './useProviderPlugins';
+import { useProviderPlugins, type ProviderKeySaveResult, type ProviderPlugins } from './useProviderPlugins';
 import type { ProviderSettingsPayload } from '../types';
+import { servingRouteFixture } from '../../tests/helpers/serving-route-fixtures';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -27,8 +28,13 @@ const configuredPayload: ProviderSettingsPayload = {
     offeredByDefault: true,
     defaultProvider: true,
     status: 'enabled',
+    inventoryStatus: 'verified',
+    lastSuccessfulRefresh: new Date().toISOString(),
+    availableModelCount: 1,
+    qualifiedModelCount: 1,
   }],
   defaultProvider: 'openrouter',
+  routes: [servingRouteFixture('openrouter', 'google/gemini-3.8-flash')],
 };
 
 function deferred<T>() {
@@ -120,6 +126,7 @@ describe('useProviderPlugins account-scoped verification', () => {
         },
       ],
       defaultProvider: 'openrouter',
+      routes: [],
     });
     vi.mocked(validateProviderKey).mockImplementation(async (_userId, provider) => ({
       provider,
@@ -149,6 +156,7 @@ describe('useProviderPlugins account-scoped verification', () => {
         offeredByDefault: false, defaultProvider: false, status: 'enabled',
       }],
       defaultProvider: 'openrouter',
+      routes: [],
     });
     vi.mocked(validateProviderKey).mockResolvedValue({ provider: 'nvidia', status: 'enabled', message: 'Key saved' });
     root = createRoot(container);
@@ -186,10 +194,10 @@ describe('useProviderPlugins account-scoped verification', () => {
     expect(validation.status).toBe('enabled');
 
     await act(async () => root!.render(<Harness userId='account-b' />));
-    let saved = true;
+    let saved: ProviderKeySaveResult = { saved: true, verified: false };
     await act(async () => { saved = await result!.setKey('openrouter', 'sk-account-a-key', validation); });
 
-    expect(saved).toBe(false);
+    expect(saved.saved).toBe(false);
     expect(setProviderKey).not.toHaveBeenCalled();
     expect(result?.isVerified).toBe(false);
   });
@@ -199,28 +207,28 @@ describe('useProviderPlugins account-scoped verification', () => {
     root = createRoot(container);
     await act(async () => root!.render(<Harness userId='account-a' />));
 
-    let saved = true;
+    let saved: ProviderKeySaveResult = { saved: true, verified: false };
     await act(async () => {
       saved = await result!.setKey('openrouter', 'sk-unscoped-key', { status: 'enabled' });
     });
 
-    expect(saved).toBe(false);
+    expect(saved.saved).toBe(false);
     expect(setProviderKey).not.toHaveBeenCalled();
     expect(result?.isVerified).toBe(false);
   });
 
-  it('still permits a save without validation while keeping it unverified', async () => {
+  it('uses verified account inventory returned after a save as authoritative readiness', async () => {
     vi.mocked(setProviderKey).mockResolvedValue(configuredPayload);
     root = createRoot(container);
     await act(async () => root!.render(<Harness userId='account-a' />));
 
-    let saved = false;
+    let saved: ProviderKeySaveResult = { saved: false, verified: false };
     await act(async () => { saved = await result!.setKey('openrouter', 'sk-unchecked-key'); });
 
-    expect(saved).toBe(true);
+    expect(saved).toEqual(expect.objectContaining({ saved: true, verified: true, inventoryStatus: 'verified', qualifiedModelCount: 1 }));
     expect(setProviderKey).toHaveBeenCalledWith('openrouter', 'sk-unchecked-key', 'account-a');
-    expect(result?.verificationStatus).toBe('unverified');
-    expect(result?.verifiedProviders?.has('openrouter')).toBe(false);
+    expect(result?.verificationStatus).toBe('verified');
+    expect(result?.verifiedProviders?.has('openrouter')).toBe(true);
   });
 
 });

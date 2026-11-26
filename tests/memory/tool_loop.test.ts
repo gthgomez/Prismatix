@@ -42,8 +42,8 @@ function deps() {
 const args = (f: ReturnType<typeof deps>) => ({
   gateway: "openrouter" as const,
   model: "test/model",
-  baseUrl: "https://provider.example",
-  apiKey: "fake-key",
+  endpoint: "https://provider.example/chat/completions",
+  resolveKey: async () => "fake-key",
   messages: [{ role: "user", content: "What are my preferences?" }],
   maxTokens: 768,
   signal: new AbortController().signal,

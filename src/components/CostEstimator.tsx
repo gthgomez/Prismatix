@@ -33,6 +33,7 @@ interface CostEstimatorProps {
   breakdownSource?: 'confirmed' | 'estimated' | 'unavailable' | null;
   /** Pricing version from the router / stream headers when available. */
   routerPricingVersion?: string | null;
+  routerEstimateUsd?: number;
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
   panelRef?: Ref<HTMLDivElement>;
@@ -51,6 +52,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   settledBreakdown = null,
   breakdownSource = null,
   routerPricingVersion,
+  routerEstimateUsd,
   onInteractionStart,
   onInteractionEnd,
   panelRef,
@@ -93,6 +95,7 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
   // breakdown. The client must say the components are unavailable instead of
   // rendering its own recalculation as if it were the receipt.
   const settledBreakdownUnavailable = serverFinalApplied && !authoritativeBreakdown;
+  const hasRouterEstimate = Number.isFinite(routerEstimateUsd);
   const clientBreakdownUnavailable = breakdown.hasUnknownRate;
   const clientMessageTotal = breakdown.totalCost;
   const messageTotal = serverFinalApplied
@@ -142,7 +145,12 @@ export const CostEstimator: React.FC<CostEstimatorProps> = ({
         {isStreaming ? 'Live message estimate' : serverFinalApplied ? 'Settled total' : 'Estimated total'}
       </div>
 
-      {clientBreakdownUnavailable && !authoritativeBreakdown ? (
+      {clientBreakdownUnavailable && !authoritativeBreakdown && !serverFinalApplied && hasRouterEstimate ? (
+        <div className='cost-estimator-total'>
+          <span>Serving route estimate</span>
+          <span>{formatUsd(routerEstimateUsd!)}</span>
+        </div>
+      ) : clientBreakdownUnavailable && !authoritativeBreakdown && !hasRouterEstimate ? (
         <>
           <p className='cost-estimator-unknown-pricing' role='alert'>
             {breakdown.hasUnknownRate

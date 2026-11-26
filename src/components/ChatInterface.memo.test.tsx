@@ -34,6 +34,7 @@ vi.mock('../smartFetch', async (importOriginal) => {
 });
 
 const providerPlugins = vi.hoisted(() => ({
+  routes: [],
   providers: [{ id: 'openrouter', label: 'OpenRouter', enabled: true, hasKey: true, keyLast4: 'test', offeredByDefault: true, defaultProvider: true }],
   defaultProvider: 'openrouter',
   enabledProviders: new Set(['openrouter']),
@@ -47,8 +48,9 @@ const providerPlugins = vi.hoisted(() => ({
   error: null,
   refresh: vi.fn(async () => {}),
   setEnabled: vi.fn(async () => true),
-  setKey: vi.fn(async () => true),
+  setKey: vi.fn(async () => ({ saved: true, verified: true, inventoryStatus: 'verified', availableModelCount: 1, qualifiedModelCount: 1 })),
   removeKey: vi.fn(async () => true),
+  refreshInventory: vi.fn(async () => true),
   setDefault: vi.fn(async () => true),
 }));
 

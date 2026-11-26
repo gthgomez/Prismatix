@@ -36,6 +36,9 @@ import {
   type ReleaseIdentity,
 } from '../../supabase/functions/_shared/release_identity.ts';
 import { FAKE_BYOK_CIPHERTEXT, TEST_BYOK_ENCRYPTION_KEY } from '../helpers/byok-fixtures';
+import { providerRow, servingRouteFixture } from '../helpers/serving-route-fixtures';
+import { OPENROUTER_MODEL_MAP } from '../../supabase/functions/_shared/provider_registry.ts';
+import { normalizeProviderModels } from '../../supabase/functions/_shared/provider_discovery.ts';
 
 // Computed specifiers keep tsc from type-checking the Deno entrypoints; the
 // `deno-npm-stubs` vite plugin resolves their `npm:` imports under vitest.
@@ -51,6 +54,8 @@ const CONVERSATION_ID = '11111111-1111-4111-8111-111111111111';
 const SUPABASE_URL = 'http://127.0.0.1:54321';
 const SERVICE_ROLE_KEY = 'px02-test-service-role-key';
 const ANTHROPIC_KEY = 'px02-test-anthropic-key';
+const CONTRACT_ANTHROPIC_ROUTE = { ...servingRouteFixture('anthropic', 'haiku'), canonicalId: 'haiku-4.5' };
+const CONTRACT_OPENROUTER_HAIKU_ROUTE = { ...servingRouteFixture('openrouter', 'anthropic/claude-haiku-5.5'), canonicalId: 'claude-haiku-5-5' };
 
 const IDENTITY_ENV: Record<string, string> = {
   PRISMATIX_PROTOCOL_VERSION: 'test-protocol-9',
@@ -370,9 +375,9 @@ function supabaseRoutes(options?: { authOk?: boolean; memoryEntitled?: boolean }
       return jsonResponse({ ...grantRow(), allowed_features: options?.memoryEntitled ? ['chat', 'memory'] : ['chat'] });
     }
     if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-      return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] });
+      return jsonResponse({ default_provider: 'openrouter', providers: [providerRow(CONTRACT_ANTHROPIC_ROUTE)] });
     }
-    if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) {
+    if (call.url.includes('/rest/v1/rpc/get_user_provider_dispatch_key')) {
       return jsonResponse(FAKE_BYOK_CIPHERTEXT);
     }
     if (call.url.includes('/rest/v1/conversations')) {
@@ -617,7 +622,7 @@ describe('capabilities contract (router)', () => {
     });
     expect(Array.isArray(payload.capabilities.models)).toBe(true);
     expect(payload.capabilities.models.length).toBeGreaterThan(0);
-    expect(payload.capabilities.models).toContain('haiku-4.5');
+    expect(payload.capabilities.models).toContain('anthropic:haiku');
     for (const model of payload.capabilities.models) {
       expect(typeof model).toBe('string');
     }
@@ -783,7 +788,7 @@ describe('strict unknown manual model rejection (F17)', () => {
     );
 
     expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'unknown_model', code: 'unknown_model' });
+    expect(await res.json()).toMatchObject({ error: 'unknown_model', code: 'unknown_model' });
     // Fail closed BEFORE any paid dispatch: zero provider calls, ever.
     expect(providerCalls(calls)).toEqual([]);
     // Release identity is stamped even on validation errors.
@@ -802,7 +807,7 @@ describe('strict unknown manual model rejection (F17)', () => {
     );
 
     expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'unknown_model', code: 'unknown_model' });
+    expect(await res.json()).toMatchObject({ error: 'unknown_model', code: 'unknown_model' });
     expect(providerCalls(calls)).toEqual([]);
   });
 
@@ -813,17 +818,21 @@ describe('strict unknown manual model rejection (F17)', () => {
       const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV });
       const res = await handler(routerRequest(chatBody({ platform: 'web', modelOverride }), 'px02-user-token'));
       expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ error: 'unknown_model', code: 'unknown_model' });
+      expect(await res.json()).toMatchObject({ error: 'unknown_model', code: 'unknown_model' });
       expect(providerCalls(calls)).toEqual([]);
     },
   );
 
   it('fails closed on stale legacy direct-provider pricing before any provider call', async () => {
     vi.setSystemTime(new Date('2026-11-21T12:00:00Z'));
+    expect(normalizeProviderModels('google', { models: [{ name: 'models/gemini-2.5-flash', inputTokenLimit: 1048576, outputTokenLimit: 8192 }] })).toEqual([]);
     const happy = supabaseRoutes();
     const calls = installFetchRecorder((call) => {
       if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-        return jsonResponse({ default_provider: 'google', providers: [{ provider: 'google', enabled: true, has_key: true }] });
+        return jsonResponse({ default_provider: null, providers: [providerRow(CONTRACT_ANTHROPIC_ROUTE), {
+          provider: 'google', enabled: true, has_key: true, credential_revision: 'stale-google-revision',
+          inventory: { status: 'verified', discoveredAt: new Date().toISOString(), checkedAt: new Date().toISOString(), modelCount: 1, routes: [] },
+        }] });
       }
       return happy(call);
     });
@@ -835,7 +844,7 @@ describe('strict unknown manual model rejection (F17)', () => {
     ));
 
     expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ error: 'unknown_model_pricing' });
+    expect(await res.json()).toMatchObject({ error: 'route_unavailable' });
     expect(providerCalls(calls)).toEqual([]);
     expect(calls.some((call) => call.url.includes('/rest/v1/rpc/px05_admit_execution'))).toBe(false);
   });
@@ -867,9 +876,9 @@ describe('strict unknown manual model rejection (F17)', () => {
     const happy = supabaseRoutes();
     const calls = installFetchRecorder((call) => {
       if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-        return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'anthropic', enabled: true, has_key: true }] });
+        return jsonResponse({ default_provider: 'openrouter', providers: [providerRow(CONTRACT_ANTHROPIC_ROUTE)] });
       }
-      if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) return keyMaterialResponse();
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_dispatch_key')) return keyMaterialResponse();
       return happy(call);
     });
     const handler = await loadServeHandler(ROUTER_ENTRY, { ...BASE_ROUTER_ENV, ANTHROPIC_API_KEY: 'fake-server-key' });
@@ -895,7 +904,7 @@ describe('strict unknown manual model rejection (F17)', () => {
       chatBody({ platform: 'mobile', modelOverride: 'qwen-3.8-flash' }),
       'px02-user-token',
     ));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(409);
     expect(providerCalls(calls)).toEqual([]);
   });
 
@@ -904,9 +913,8 @@ describe('strict unknown manual model rejection (F17)', () => {
     const calls = installFetchRecorder((call) => {
       if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
         return jsonResponse({ default_provider: 'openrouter', providers: [
-          { provider: 'opencode', enabled: true, has_key: false },
-          { provider: 'openrouter', enabled: true, has_key: true },
-          { provider: 'anthropic', enabled: true, has_key: true },
+          providerRow(CONTRACT_OPENROUTER_HAIKU_ROUTE),
+          providerRow(CONTRACT_ANTHROPIC_ROUTE),
         ] });
       }
       if (call.url === 'https://openrouter.ai/api/v1/chat/completions') {
@@ -918,7 +926,7 @@ describe('strict unknown manual model rejection (F17)', () => {
     const handler = await loadServeHandler(ROUTER_ENTRY, {
       ...BASE_ROUTER_ENV, OPENCODE_API_KEY: 'fixture-opencode', OPENROUTER_API_KEY: 'fixture-openrouter',
     });
-    const res = await handler(routerRequest(chatBody({ modelOverride: 'claude-haiku-5-5' }), 'px02-user-token'));
+    const res = await handler(routerRequest(chatBody({ modelOverride: 'openrouter:anthropic/claude-haiku-5.5' }), 'px02-user-token'));
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('Hello from Prism');
     await flushAsync();
@@ -985,7 +993,7 @@ describe('strict unknown manual model rejection (F17)', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(res.headers.get('X-Model-Override')).toBe('haiku-4.5');
+    expect(res.headers.get('X-Model-Override')).toBe('anthropic:haiku');
     expect(res.headers.get('X-Router-Model')).toBe('haiku-4.5');
     await res.text();
     await flushAsync();
@@ -1002,11 +1010,13 @@ describe('mobile memory isolation (real handler)', () => {
     const { CURATED_OPENCODE_REGISTRY } = await import('../../supabase/functions/router/models_hub.ts');
     const { isHistoricModel } = await import('../../supabase/functions/_shared/model_lifecycle.ts');
     const tier = Object.keys(CURATED_OPENCODE_REGISTRY).find(t => CURATED_OPENCODE_REGISTRY[t]!.displayName.includes('Haiku') && !isHistoricModel(t))!;
+    const modelId = OPENROUTER_MODEL_MAP[tier] ?? 'anthropic/claude-haiku-5.5';
+    const memoryRoute = { ...servingRouteFixture('openrouter', modelId), canonicalId: tier };
     const happy = supabaseRoutes({ memoryEntitled: true });
     let rounds = 0;
     const calls = installFetchRecorder(call => {
-      if (call.url.includes('get_user_provider_config')) return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'openrouter', enabled: true, has_key: true }] });
-      if (call.url.includes('get_user_provider_key_material')) return jsonResponse(FAKE_BYOK_CIPHERTEXT);
+      if (call.url.includes('get_user_provider_config')) return jsonResponse({ default_provider: 'openrouter', providers: [providerRow(memoryRoute)] });
+      if (call.url.includes('get_user_provider_dispatch_key')) return jsonResponse(FAKE_BYOK_CIPHERTEXT);
       if (call.url === 'https://openrouter.ai/api/v1/chat/completions') {
         rounds++;
         const payload = rounds === 1 ? { choices: [{ delta: { tool_calls: [{ index: 0, id: 'recall-1', function: { name: 'search_memory', arguments: '{"query":"preferences"}' } }] } }], usage: { prompt_tokens: 100, completion_tokens: 20 } } : { choices: [{ delta: { content: 'A grounded memory answer.' } }], usage: { prompt_tokens: 120, completion_tokens: 30 } };

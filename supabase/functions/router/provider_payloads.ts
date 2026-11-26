@@ -106,3 +106,30 @@ export function buildGoogleJsonPayload(
     },
   };
 }
+
+export function buildResponsesStreamPayload(
+  decision: RouteDecision,
+  messages: Message[],
+  images: ImageAttachment[],
+): Record<string, unknown> {
+  return {
+    model: decision.model,
+    input: messages.map((message, index) => {
+      if (index !== messages.length - 1 || message.role !== 'user' || !images.length) {
+        return { role: message.role, content: message.content };
+      }
+      return {
+        role: 'user',
+        content: [
+          { type: 'input_text', text: message.content || 'Please analyze these images.' },
+          ...images.map((image) => ({
+            type: 'input_image', image_url: `data:${image.mediaType};base64,${image.data}`, detail: 'auto',
+          })),
+        ],
+      };
+    }),
+    stream: true,
+    max_output_tokens: decision.budgetCap,
+    ...(decision.provider === 'openai' ? { store: false } : {}),
+  };
+}

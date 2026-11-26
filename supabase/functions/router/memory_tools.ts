@@ -7,6 +7,7 @@ import {
 import { createSseParser, isDoneData } from "../_shared/sse_parser.ts";
 import { createUsageTracker, type NormalizedUsage } from "./usage.ts";
 import {
+  MeteredDispatchNotSentError,
   type MeteredCallContext,
   runMeteredCall,
   type RunMeteredCallInput,
@@ -14,6 +15,8 @@ import {
 } from "./metered_call.ts";
 import { CURATED_OPENCODE_REGISTRY } from "./models_hub.ts";
 import type { RouteDecision } from "./router_logic.ts";
+import { openRouterPriceControls } from "./provider_stream.ts";
+import type { ServingRoute } from "../_shared/serving_routes.ts";
 
 export interface MemoryToolContext {
   client: MemoryRpcClient;
@@ -21,6 +24,10 @@ export interface MemoryToolContext {
   maxInputUsd: number;
 }
 export function supportsMemoryTools(decision: RouteDecision): boolean {
+  if (decision.servingRoute) {
+    return decision.servingRoute.provider === "openrouter" && decision.servingRoute.supportsTools &&
+      decision.servingRoute.protocol === "chat_completions";
+  }
   return decision.provider === "openrouter" ||
     (decision.provider === "opencode" &&
       CURATED_OPENCODE_REGISTRY[decision.modelTier]?.protocol ===
@@ -48,8 +55,9 @@ interface ToolCall {
 export async function dispatchMemoryToolStream(params: {
   gateway: "opencode" | "openrouter";
   model: string;
-  baseUrl: string;
-  apiKey: string;
+  endpoint: string;
+  resolveKey: () => Promise<string>;
+  route?: ServingRoute;
   messages: unknown[];
   maxTokens: number;
   signal: AbortSignal;
@@ -113,6 +121,10 @@ export async function dispatchMemoryToolStream(params: {
           outputRate,
           params.meter.priceSnapshot?.thinkingRatePer1M ?? 0,
         ),
+        new TextEncoder().encode(JSON.stringify({ messages, tools: MEMORY_TOOLS })).length,
+        Math.max(params.meter.priceSnapshot?.inputRatePer1M ?? 0,
+          params.meter.priceSnapshot?.cachedReadRatePer1M ?? 0, params.meter.priceSnapshot?.cachedWriteRatePer1M ?? 0),
+        params.meter.priceSnapshot?.requestUsd,
       )
       : cap;
     if (meteredCap < 1) throw new Error("memory_tool_budget_exhausted");
@@ -128,12 +140,18 @@ export async function dispatchMemoryToolStream(params: {
       deferSettlement: true,
     };
     const response = await runMeteredCall(input, async () => {
+      let apiKey: string;
+      try {
+        apiKey = await params.resolveKey();
+      } catch (error) {
+        throw new MeteredDispatchNotSentError(error);
+      }
       const response = await fetch(
-        params.baseUrl.replace(/\/$/, "") + "/chat/completions",
+        params.endpoint,
         {
           method: "POST",
           headers: {
-            Authorization: "Bearer " + params.apiKey,
+            Authorization: "Bearer " + apiKey,
             "Content-Type": "application/json",
             ...(params.gateway === "opencode"
               ? {
@@ -152,10 +170,11 @@ export async function dispatchMemoryToolStream(params: {
             tools: MEMORY_TOOLS,
             tool_choice: used < 2 ? "auto" : "none",
             ...(params.gateway === "openrouter"
-              ? { provider: { require_parameters: true } }
+              ? { provider: params.route ? openRouterPriceControls(params.route) : { require_parameters: true } }
               : {}),
           }),
           signal: abort.signal,
+          redirect: "error",
         },
       );
       if (!response.ok || !response.body) {

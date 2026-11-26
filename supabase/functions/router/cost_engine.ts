@@ -1,5 +1,6 @@
 import { countTokens, type RouterModel } from './router_logic.ts';
 import { getModelPricing, PRICING_VERSION } from './pricing_registry.ts';
+import type { RouteTariff } from '../_shared/serving_routes.ts';
 
 const TOKENS_PER_MILLION = 1_000_000;
 
@@ -48,10 +49,21 @@ export function calculatePreFlightCost(
   contextText: string,
   images: number,
   additionalPromptTokens = 0,
+  tariff?: RouteTariff,
 ): PreFlightCostResult {
   const imageTokens = Math.max(0, images) * 1600;
   const promptTokens = countTokens(contextText) + imageTokens + Math.max(0, additionalPromptTokens);
   const projectedOutputTokens = Math.max(64, Math.ceil(promptTokens * 0.35));
+  if (tariff) {
+    const inputRate = Math.max(tariff.inputPerMillion, tariff.cachedReadPerMillion ?? 0, tariff.cachedWritePerMillion ?? 0);
+    const outputRate = Math.max(tariff.outputPerMillion, tariff.reasoningPerMillion ?? 0);
+    const maximum = (promptTokens * inputRate + projectedOutputTokens * outputRate) / TOKENS_PER_MILLION + (tariff.requestUsd ?? 0);
+    return {
+      tokenEstimate: promptTokens + projectedOutputTokens, promptTokens, projectedOutputTokens,
+      estimatedUsd: Math.ceil(maximum * TOKENS_PER_MILLION) / TOKENS_PER_MILLION,
+      pricingVersion: tariff.version, hasUnknownRate: false,
+    };
+  }
   const pricing = getModelPricing(modelTier);
 
   // Fail-closed: getPricingForModel returns an isUnknown placeholder rather
@@ -123,11 +135,16 @@ export function calculateFinalCost(
 export function calculateCostBreakdown(
   modelTier: RouterModel,
   usage: UsageStats,
+  tariff?: RouteTariff,
 ): CostBreakdownResult {
   const promptTokens = Math.max(0, usage.promptTokens || 0);
   const completionTokens = Math.max(0, usage.completionTokens || 0);
   const reasoningTokens = Math.max(0, usage.reasoningTokens || 0);
-  const pricing = getModelPricing(modelTier);
+  const pricing = tariff ? {
+    isUnknown: false,
+    inputRatePer1M: Math.max(tariff.inputPerMillion, tariff.cachedReadPerMillion ?? 0, tariff.cachedWritePerMillion ?? 0),
+    outputRatePer1M: tariff.outputPerMillion, reasoningRatePer1M: tariff.reasoningPerMillion,
+  } : getModelPricing(modelTier);
 
   if (pricing.isUnknown) {
     return {
@@ -147,7 +164,7 @@ export function calculateCostBreakdown(
   // convention): bill the non-reasoning remainder at the output rate and the
   // reasoning portion at the reasoning rate. Never charge reasoning twice.
   const billableOutputTokens = Math.max(0, completionTokens - reasoningTokens);
-  const inputCost = roundUsd((promptTokens / TOKENS_PER_MILLION) * pricing.inputRatePer1M);
+  const inputCost = roundUsd((promptTokens / TOKENS_PER_MILLION) * pricing.inputRatePer1M + (tariff?.requestUsd ?? 0));
   const outputCost = roundUsd((billableOutputTokens / TOKENS_PER_MILLION) * pricing.outputRatePer1M);
   const reasoningRate = pricing.reasoningRatePer1M ?? pricing.outputRatePer1M;
   const reasoningCost = roundUsd((reasoningTokens / TOKENS_PER_MILLION) * reasoningRate);
@@ -160,7 +177,7 @@ export function calculateCostBreakdown(
     outputCostUsd: outputCost,
     reasoningCostUsd: reasoningCost,
     totalUsd: roundUsd(inputCost + outputCost + reasoningCost),
-    pricingVersion: PRICING_VERSION,
+    pricingVersion: tariff?.version ?? PRICING_VERSION,
     hasUnknownRate: false,
   };
 }

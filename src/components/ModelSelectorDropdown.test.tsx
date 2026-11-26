@@ -80,6 +80,21 @@ describe('ModelSelectorDropdown', () => {
     container.remove();
   });
 
+  it('offers exact account routes alongside catalog models', () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    roots.push(renderInto(container, <ModelSelectorDropdown {...makeProps({ routes: [{
+      id: 'openai:gpt-4.1', provider: 'openai', upstreamId: 'gpt-4.1', canonicalId: 'gpt-4.1',
+      developer: 'OpenAI', name: 'GPT-4.1 (OpenAI)', protocol: 'responses', contextWindow: 1000,
+      maxOutputTokens: 100, supportsImages: true, supportsTools: true, supportsReasoning: false,
+      tariff: { version: 'test', source: 'test', inputPerMillion: 1, outputPerMillion: 2, billing: 'pay_as_you_go' },
+    }] })} />));
+    act(() => container.querySelector<HTMLButtonElement>('[data-selector-tab="models"]')!.click());
+    expect(container.textContent).toContain('GPT-4.1 (OpenAI)');
+    expect(container.textContent).toContain('openai:gpt-4.1');
+    container.remove();
+  });
+
   it('keeps historic models collapsed until requested and selects them only manually', () => {
     localStorage.setItem('prismatix.modelSelector.activeTab', 'models');
     const props = makeProps({ currentModel: 'deepseek-v4-1-flash' });

@@ -55,6 +55,9 @@ import type {
   ExecutionStoreRpcResponse,
 } from '../../supabase/functions/router/execution_store.ts';
 import { FAKE_BYOK_CIPHERTEXT, TEST_BYOK_ENCRYPTION_KEY } from '../helpers/byok-fixtures';
+import { providerRow, servingRouteFixture } from '../helpers/serving-route-fixtures';
+
+const FANOUT_GOOGLE_ROUTE = servingRouteFixture('google', 'gemini-2.5-flash');
 
 // ============================================================================
 // FAKE CLIENTS
@@ -1122,9 +1125,9 @@ describe('video worker budget reconciliation (real handler)', () => {
         });
       }
       if (call.url.includes('/rest/v1/rpc/get_user_provider_config')) {
-        return jsonResponse({ default_provider: 'openrouter', providers: [{ provider: 'google', enabled: true, has_key: true }] });
+        return jsonResponse({ default_provider: 'openrouter', providers: [providerRow(FANOUT_GOOGLE_ROUTE)] });
       }
-      if (call.url.includes('/rest/v1/rpc/get_user_provider_key_material')) {
+      if (call.url.includes('/rest/v1/rpc/get_user_provider_dispatch_key')) {
         return jsonResponse(FAKE_BYOK_CIPHERTEXT);
       }
       if (call.method === 'PATCH' && call.body.includes('"running"')) {

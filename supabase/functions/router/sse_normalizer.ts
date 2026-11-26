@@ -30,6 +30,7 @@ function tryParseJson(input: string): unknown | undefined {
 export interface NormalizedProxyStreamParams {
   upstreamBody: ReadableStream<Uint8Array>;
   extractDeltas: (payload: unknown) => string[];
+  isComplete?: () => boolean;
   onDelta: (delta: string) => void;
   onComplete: () =>
     | Promise<{ receipt?: TerminalReceipt } | void>
@@ -200,7 +201,7 @@ export function createNormalizedProxyStream(
               handleEvent(event);
             }
           }
-          // Upstream completion is the ONLY path to onComplete.
+          if (params.isComplete && !params.isComplete()) throw new Error('provider_stream_incomplete');
           await runComplete();
         } catch (err) {
           await runError(err);

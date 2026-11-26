@@ -8,6 +8,7 @@ import type { DebateSelection } from '../debateMode';
 import type { ProviderId } from '../providerRegistry';
 import type { PromptStarter, SendBlockedReason, StreamOutcomeState } from './chatTypes';
 import type { ModelPickerPreferencesHook } from '../hooks/useModelPickerPreferences';
+import type { ServingRoute } from '../../supabase/functions/_shared/serving_routes.ts';
 export type { PromptStarter };
 
 export interface ChatInputComposerProps {
@@ -30,12 +31,13 @@ export interface ChatInputComposerProps {
   onMultipleFiles: (payloads: FileUploadPayload[]) => void;
   onFilePickerReady?: (openPicker: () => void) => void;
   currentModel: RouterModel;
-  manualModelOverride: RouterModel | null;
+  manualModelOverride: string | null;
   debateSelection: DebateSelection;
   enabledProviders: ReadonlySet<ProviderId>;
+  routes: ServingRoute[];
   preferences: ModelPickerPreferencesHook;
   geminiFlashThinkingLevel?: GeminiFlashThinkingLevel;
-  onModelSelect: (model: RouterModel) => void;
+  onModelSelect: (model: string) => void;
   onClearOverride: () => void;
   onGeminiThinkingChange?: (level: GeminiFlashThinkingLevel) => void;
   onOpenProviderSettings: () => void;
@@ -83,6 +85,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
   manualModelOverride,
   debateSelection,
   enabledProviders,
+  routes,
   preferences,
   geminiFlashThinkingLevel,
   onModelSelect,
@@ -304,6 +307,7 @@ export const ChatInputComposer: React.FC<ChatInputComposerProps> = ({
             currentModel={currentModel}
             manualModelOverride={manualModelOverride}
             enabledProviders={enabledProviders}
+            routes={routes}
             preferences={preferences}
             inputRef={inputRef}
             geminiFlashThinkingLevel={geminiFlashThinkingLevel}

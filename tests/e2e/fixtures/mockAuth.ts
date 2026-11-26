@@ -2,6 +2,8 @@
 // Deterministic mock fixtures for authenticated Playwright testing without paid API calls.
 
 import { expect, type Page } from '@playwright/test';
+import type { ServingRoute } from '../../../supabase/functions/_shared/serving_routes.ts';
+import { servingRouteFixture } from '../../helpers/serving-route-fixtures.ts';
 
 export const MOCK_USER = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -24,8 +26,26 @@ export const MOCK_SESSION = {
   user: MOCK_USER,
 };
 
+export const MOCK_CHAT_ROUTES = [
+  { ...servingRouteFixture('openrouter', 'google/gemini-3.8-flash'), name: 'Gemini 3.8 Flash', canonicalId: 'gemini-3.8-flash', developer: 'Google' },
+  { ...servingRouteFixture('openrouter', 'openai/gpt-6-sol'), name: 'GPT-6 Sol', canonicalId: 'gpt-6-sol', developer: 'OpenAI' },
+];
+
+export async function selectMockCompareRoutes(page: Page) {
+  const toggle = page.getByRole('button', { name: 'Routing details', exact: true });
+  if (await toggle.isVisible()) await toggle.click();
+  const panel = page.getByRole('complementary', { name: 'Routing details' });
+  const summary = panel.getByText('Model options', { exact: true });
+  if (!await summary.evaluate((element) => element.closest('details')?.open)) await summary.click();
+  await panel.getByLabel('Model A').selectOption(MOCK_CHAT_ROUTES[0]!.id);
+  await panel.getByLabel('Model B').selectOption(MOCK_CHAT_ROUTES[1]!.id);
+  const close = panel.getByRole('button', { name: 'Close routing details' });
+  if (await close.isVisible()) await close.click();
+}
+
 export interface MockAppOptions {
   hasProviderKey?: boolean;
+  routes?: ServingRoute[];
   authSession?: typeof MOCK_SESSION;
   additionalAuthStorageKeys?: string[];
   conversations?: Array<{ id: string; title: string; last_activity_at: string; project_id?: string | null }>;
@@ -51,6 +71,7 @@ export interface MockAppOptions {
 
 export async function setupAuthenticatedMock(page: Page, options: MockAppOptions = {}) {
   const hasKey = options.hasProviderKey ?? true;
+  const routes = options.routes ?? MOCK_CHAT_ROUTES;
   const conversations = options.conversations ?? [
     {
       id: 'c1111111-1111-4111-8111-111111111111',
@@ -163,6 +184,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({
+            routes,
             providers: [
               {
                 id: 'openrouter',
@@ -185,6 +207,7 @@ export async function setupAuthenticatedMock(page: Page, options: MockAppOptions
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
+        routes: hasKey ? routes : [],
         providers: [
           {
             id: 'openrouter',

@@ -216,6 +216,12 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                       <span className='item-value'>{message.provider}</span>
                     </div>
                   )}
+                  {message.provider && (message.modelId || message.reportedModel) && (
+                    <div className='metadata-item'>
+                      <span className='item-label'>Serving route ID</span>
+                      <span className='item-value metadata-value-break'>{message.provider}:{message.modelId ?? message.reportedModel}</span>
+                    </div>
+                  )}
                   {message.modelId && (
                     <div className='metadata-item'>
                       <span className='item-label'>API ID</span>
